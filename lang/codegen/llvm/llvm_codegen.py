@@ -890,12 +890,6 @@ class LlvmModuleBuilder:
 		struct_inst = type_table.get_struct_instance(ty_id)
 		field_types = list(struct_inst.field_types) if struct_inst is not None else list(td.param_types)
 		field_lltys = [map_type(ft) for ft in field_types]
-		# Throwing Fn fields are stored fat ({adapter, env}); field-level
-		# codegen must agree via _llvm_field_storage_type_for_typeid.
-		for fi, ft in enumerate(field_types):
-			ftd = type_table.get(ft)
-			if ftd.kind is TypeKind.FUNCTION and ftd.fn_throws:
-				field_lltys[fi] = DRIFT_FAT_FNPTR_TYPE
 		body = ", ".join(field_lltys) if field_lltys else ""
 		self.type_decls.append(f"{llvm_name} = type {{ {body} }}")
 		return llvm_name
@@ -1079,7 +1073,9 @@ class LlvmModuleBuilder:
 		if td.kind is _TK.REF or td.kind is _TK.RAW_PTR:
 			return "ptr"
 		if td.kind is _TK.FUNCTION:
-			return "ptr"
+			# Must mirror _FuncBuilder._llvm_type_for_typeid: throwing Fn is the
+			# fat {adapter, env} pair everywhere; nothrow Fn is a thin fn ptr.
+			return DRIFT_FAT_FNPTR_TYPE if td.can_throw() else "ptr"
 		if td.kind is _TK.STRUCT:
 			def _storage_map(tid: TypeId) -> str:
 				sty = self.llvm_type_for_typeid(tid, type_table)
@@ -1141,6 +1137,9 @@ class LlvmModuleBuilder:
 			return 4
 		if llty in (DRIFT_INT_TYPE, "i64", "double", "ptr"):
 			return 8
+		if llty == DRIFT_FAT_FNPTR_TYPE:
+			# Throwing Fn values are the fat {adapter, env} pair — two ptrs.
+			return 16
 		if llty == DRIFT_STRING_TYPE:
 			return 16
 		if llty == DRIFT_ERROR_PTR:
@@ -1700,6 +1699,8 @@ class _VariantArmLayout:
 	"""Per-constructor payload layout for a concrete variant TypeId."""
 
 	tag: int
+	# Concrete Drift TypeIds for fields; used for representation coercions.
+	field_tys: list[TypeId]
 	# LLVM value types for fields (used when returning values to SSA).
 	field_lltys: list[str]
 	# LLVM storage types for fields inside the payload buffer (Bool stored as i8).
@@ -1756,13 +1757,6 @@ class _FuncBuilder:
 	# lowering contract (it previously masked the typed-catch `Error`-into-
 	# native-field defect into a double free), so it raises instead.
 	variant_field_addr_ptrs: set[str] = field(default_factory=set)
-	# Resolved SSA names (post `_map_value`) produced by `AddrOfField` for
-	# throwing-Fn fields in THIS function.  Such slots hold the fat
-	# %DriftFatFnPtr {adapter, env} pair (see _llvm_field_storage_type_for_typeid),
-	# while the generic thin mapping for FUNCTION is `ptr` — LoadRef/StoreRef/
-	# MoveFromRef consult this set to load/store the full pair instead of
-	# silently truncating it to the adapter word.
-	fat_fn_field_addr_ptrs: set[str] = field(default_factory=set)
 	# Locals whose address is taken via AddrOfLocal. These locals must be
 	# represented as real storage (alloca + load/store) because references
 	# require stable pointer identity.
@@ -3174,6 +3168,10 @@ class _FuncBuilder:
 			# Address-taken locals are materialized as storage. For them, StoreLocal
 			# is a real `store` into the local's alloca slot.
 			val = self._map_value(instr.value)
+			local_ty = self.func.local_types.get(instr.local)
+			orig_val = val
+			if local_ty is not None:
+				val = self._coerce_value_to_typeid(instr.value, val, local_ty, context=f"local '{instr.local}'")
 			if instr.local in self.addr_taken_locals:
 				store_llty = self.local_storage_types.get(instr.local)
 				if store_llty is None:
@@ -3202,7 +3200,10 @@ class _FuncBuilder:
 			else:
 				ssa_name = None
 			if ssa_name:
-				self.aliases[ssa_name] = instr.value
+				if val != orig_val:
+					self.value_map[ssa_name] = val
+				else:
+					self.aliases[ssa_name] = instr.value
 				if val in self.value_types:
 					self.value_types[ssa_name] = self.value_types[val]
 			if instr.local in self.value_types and val in self.value_types:
@@ -3218,15 +3219,6 @@ class _FuncBuilder:
 			if llty is None:
 				raise NotImplementedError(
 					f"LLVM codegen v1: cannot take address of local '{instr.local}' without a known type"
-				)
-			if llty == DRIFT_FAT_FNPTR_TYPE:
-				# The local holds a fat {adapter, env} Fn value (extracted from
-				# a struct field); a reference to it would be loaded thin by
-				# consumers, truncating the pair. Refuse instead of corrupting.
-				raise NotImplementedError(
-					f"LLVM codegen v1: cannot take a reference to '{instr.local}': it holds a "
-					"struct-field Fn value (fat {adapter, env} representation), which references "
-					"cannot carry in v1. Call it directly instead of borrowing it"
 				)
 			alloca_id = self._ensure_local_storage(instr.local, llty)
 			self.aliases[instr.dest] = alloca_id
@@ -3261,10 +3253,6 @@ class _FuncBuilder:
 				f"  {dest} = getelementptr inbounds {struct_llty}, ptr {base_ptr}, i32 0, i32 {instr.field_index}"
 			)
 			self.value_types[dest] = "ptr"
-			if field_llty == DRIFT_FAT_FNPTR_TYPE:
-				# The slot holds the fat {adapter, env} pair; loads/stores
-				# through this pointer must not truncate it to a thin ptr.
-				self.fat_fn_field_addr_ptrs.add(dest)
 		elif isinstance(instr, ConstructIface):
 			self._lower_construct_iface(instr)
 		elif isinstance(instr, ConstructIfaceValue):
@@ -3357,10 +3345,11 @@ class _FuncBuilder:
 					f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, ptr {tmp_ptr}, i32 0, i32 2"
 				)
 				payload_struct_ptr = payload_words_ptr
-				for idx, (arg, want_llty, store_llty) in enumerate(
-					zip(instr.args, arm_layout.field_lltys, arm_layout.field_storage_lltys)
+				for idx, (arg, field_ty, want_llty, store_llty) in enumerate(
+					zip(instr.args, arm_layout.field_tys, arm_layout.field_lltys, arm_layout.field_storage_lltys)
 				):
 					arg_val = self._map_value(arg)
+					arg_val = self._coerce_value_to_typeid(arg, arg_val, field_ty, context=f"variant payload {idx}")
 					have = self.value_types.get(arg_val)
 					autoloaded_from_storage = False
 					if have is not None and have != want_llty:
@@ -3622,10 +3611,7 @@ class _FuncBuilder:
 			emit_store_llty = self._llty(store_llty)
 			ptr_ty = "ptr"
 			dest = self._map_value(instr.dest)
-			if ptr in self.fat_fn_field_addr_ptrs:
-				self.lines.append(f"  {dest} = load {DRIFT_FAT_FNPTR_TYPE}, {ptr_ty} {ptr}")
-				self.value_types[dest] = DRIFT_FAT_FNPTR_TYPE
-			elif self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
+			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
 				raw = self._fresh("bool8")
 				self.lines.append(f"  {raw} = load i8, ptr {ptr}")
 				self._bool_from_storage(raw, dest=dest)
@@ -3640,10 +3626,10 @@ class _FuncBuilder:
 			emit_store_llty = self._llty(store_llty)
 			ptr_ty = "ptr"
 			val = self._map_value(instr.value)
-			if ptr in self.fat_fn_field_addr_ptrs:
+			if self._is_throwing_fn_typeid(instr.inner_ty):
 				val = self._coerce_throwing_fn_to_fat(
 					instr.value, val, instr.inner_ty,
-					context="StoreRef to throwing-Fn field",
+					context="StoreRef to throwing Fn slot",
 				)
 				self.lines.append(f"  store {DRIFT_FAT_FNPTR_TYPE} {val}, {ptr_ty} {ptr}")
 				return
@@ -3692,11 +3678,6 @@ class _FuncBuilder:
 			ptr = self._map_value(instr.ptr)
 			val_llty = self._llvm_type_for_typeid(instr.inner_ty)
 			store_llty = self._llvm_storage_type_for_typeid(instr.inner_ty)
-			if ptr in self.fat_fn_field_addr_ptrs:
-				# Throwing-Fn field slot: move the full fat pair and
-				# tombstone it with a fat zero, not a thin ptr null.
-				val_llty = DRIFT_FAT_FNPTR_TYPE
-				store_llty = DRIFT_FAT_FNPTR_TYPE
 			emit_val_llty = self._llty(val_llty)
 			emit_store_llty = self._llty(store_llty)
 			# Step 1: load *ptr into a fresh temp.  Must precede the
@@ -3821,9 +3802,11 @@ class _FuncBuilder:
 				val = "0"
 			else:
 				val = self._map_value(instr.value)
+				ok_tid = self.module._fnresult_ok_typeid_by_type.get(fnres_llty)
+				if ok_tid is not None and self.type_table is not None:
+					val = self._coerce_value_to_typeid(instr.value, val, ok_tid, context=f"FnResult.Ok in {self.fn_info.name}")
 				val_ty = self.value_types.get(val)
 				if val_ty is not None and val_ty != ok_llty:
-					ok_tid = self.module._fnresult_ok_typeid_by_type.get(fnres_llty)
 					if ok_tid is not None and self.type_table is not None:
 						ok_td = self.type_table.get(ok_tid)
 						if ok_td.kind is TypeKind.SCALAR and ok_td.name == "Bool" and ok_llty == "i8" and val_ty == "i1":
@@ -6221,16 +6204,7 @@ class _FuncBuilder:
 				llty = self._llvm_type_for_typeid(ty_id, allow_void_ok=True)
 				emit_llty = self._llty(llty)
 				arg_val = self._map_value(arg)
-				# If a nothrow function pointer is being passed to a can-throw
-				# callee's function-typed parameter, substitute the pre-generated
-				# can-throw wrapper thunk so the callee can call it with FnResult
-				# ABI safely.  Only rewrite when the parameter is actually a
-				# function/fn-ptr type to avoid corrupting non-callable ptr args.
-				if instr.can_throw and arg_val in self._nothrow_wrap_for:
-					param_td = self.type_table.get(ty_id) if self.type_table is not None else None
-					if param_td is not None and param_td.kind is TypeKind.FUNCTION:
-						arg_val = self._nothrow_wrap_for[arg_val]
-				self._guard_fat_fn_narrowing(arg_val, emit_llty, f"parameter of {callee_sym}")
+				arg_val = self._coerce_value_to_typeid(arg, arg_val, ty_id, context=f"parameter of {callee_sym}")
 				arg_parts.append(f"{emit_llty} {arg_val}")
 		else:
 			# Legacy fallback: assume all args are Ints.
@@ -6361,7 +6335,7 @@ class _FuncBuilder:
 			for ty_id, arg in zip(instr.param_types, instr.args):
 				llty = self._llvm_type_for_typeid(ty_id)
 				arg_val = self._map_value(arg)
-				self._guard_fat_fn_narrowing(arg_val, self._llty(llty), "an indirect call parameter")
+				arg_val = self._coerce_value_to_typeid(arg, arg_val, ty_id, context="an indirect call parameter")
 				arg_parts.append(f"{self._llty(llty)} {arg_val}")
 			args = ", ".join(arg_parts)
 			if instr.dest:
@@ -6384,7 +6358,7 @@ class _FuncBuilder:
 		for ty_id, arg in zip(instr.param_types, instr.args):
 			llty = self._llvm_type_for_typeid(ty_id)
 			arg_val = self._map_value(arg)
-			self._guard_fat_fn_narrowing(arg_val, self._llty(llty), "an indirect call parameter")
+			arg_val = self._coerce_value_to_typeid(arg, arg_val, ty_id, context="an indirect call parameter")
 			arg_parts.append(f"{self._llty(llty)} {arg_val}")
 		args = ", ".join(arg_parts)
 		if instr.dest:
@@ -6455,7 +6429,7 @@ class _FuncBuilder:
 		for ty_id, arg in zip(instr.param_types, instr.args):
 			llty = self._llvm_type_for_typeid(ty_id)
 			arg_val = self._map_value(arg)
-			self._guard_fat_fn_narrowing(arg_val, self._llty(llty), "an interface method parameter")
+			arg_val = self._coerce_value_to_typeid(arg, arg_val, ty_id, context="an interface method parameter")
 			arg_parts.append(f"{self._llty(llty)} {arg_val}")
 		args = ", ".join(arg_parts)
 
@@ -7459,20 +7433,38 @@ class _FuncBuilder:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: function pointer constants require a TypeTable")
 		dest = self._map_value(instr.dest)
-		# With opaque pointers, all function pointers are ptr — just alias.
 		sym = function_ref_symbol(instr.fn_ref)
-		self.value_map[instr.dest] = _llvm_fn_sym(sym)
-		self.value_types[_llvm_fn_sym(sym)] = "ptr"
+		sym_val = _llvm_fn_sym(sym)
+		self.value_types[sym_val] = "ptr"
+		self._value_fn_throws[sym_val] = instr.call_sig.can_throw
+		expected_ty = self.func.local_types.get(instr.dest)
+		if expected_ty is not None and self._is_throwing_fn_typeid(expected_ty):
+			fn_ty = expected_ty
+		elif instr.call_sig.can_throw:
+			fn_ty = self._fn_typeid_from_call_sig(instr.call_sig, can_throw=True)
+		else:
+			fn_ty = None
+		if fn_ty is not None:
+			fat = self._coerce_throwing_fn_to_fat(
+				instr.dest,
+				sym_val,
+				fn_ty,
+				context="throwing Fn pointer constant",
+			)
+			self.value_map[instr.dest] = fat
+			self.value_types[dest] = DRIFT_FAT_FNPTR_TYPE
+			self._value_fn_throws[fat] = True
+			self._value_fn_throws[dest] = True
+			return
+		# Nothrow function values stay as raw function pointers.
+		self.value_map[instr.dest] = sym_val
 		self.value_types[dest] = "ptr"
-		# Track throwness for ConstructStruct fn-ptr adaptation.
-		self._value_fn_throws[_llvm_fn_sym(sym)] = instr.call_sig.can_throw
-		self._value_fn_throws[dest] = instr.call_sig.can_throw
+		self._value_fn_throws[dest] = False
 		# For nothrow functions, pre-generate a can-throw wrapper thunk so the
 		# pointer can be safely passed to generic can-throw call sites.
-		if not instr.call_sig.can_throw:
-			wrap = self._ensure_nothrow_wrap_thunk(sym, instr.call_sig)
-			self._nothrow_wrap_for[_llvm_fn_sym(sym)] = wrap
-			self._nothrow_wrap_for[dest] = wrap
+		wrap = self._ensure_nothrow_wrap_thunk(sym, instr.call_sig)
+		self._nothrow_wrap_for[sym_val] = wrap
+		self._nothrow_wrap_for[dest] = wrap
 
 	def _resolve_call_target_symbol(self, fn_id: FunctionId, callee_info: FnInfo) -> tuple[str, bool]:
 		"""
@@ -7555,8 +7547,13 @@ class _FuncBuilder:
 			# Builtin Array<T> header is a first-class by-value return type in v1.
 			self.lines.append(f"  ret %DriftArrayHeader {val}")
 			return
+		if ty == DRIFT_FAT_FNPTR_TYPE:
+			# Throwing `Fn` values are fat {adapter, env} pairs, returned by
+			# value like other first-class aggregates.
+			self.lines.append(f"  ret {DRIFT_FAT_FNPTR_TYPE} {val}")
+			return
 		raise NotImplementedError(
-			f"LLVM codegen v1: non-can-throw return must be Int, Float, String, Interface, &T, Array, Struct, or Variant, got {ty}"
+			f"LLVM codegen v1: non-can-throw return must be Int, Float, String, Interface, &T, Fn, Array, Struct, or Variant, got {ty}"
 		)
 
 	def _lower_term(self, term: object) -> None:
@@ -7595,13 +7592,22 @@ class _FuncBuilder:
 				return
 
 			val = self._map_value(term.value)
+			sig = self.fn_info.signature
+			ret_tid = sig.return_type_id if sig is not None else None
+			if ret_tid is not None and self.type_table is not None:
+				# Representation coercion at the return boundary: a nothrow fn
+				# returning a throwing `Fn` may hold a thin named-fn pointer
+				# that must be widened to the fat {adapter, env} pair.  The
+				# can-throw path gets the same treatment in ConstructResultOk.
+				val = self._coerce_value_to_typeid(
+					term.value, val, ret_tid, context=f"return of {self.func.name}"
+				)
 			ty = self.value_types.get(val)
 			if ty is None:
 				# Best-effort fallback: some SSA aliases/loads may not carry a type tag
 				# even though the function signature is fully typed.
-				sig = self.fn_info.signature
-				if sig is not None and sig.return_type_id is not None and self.type_table is not None:
-					ty = self._llvm_type_for_typeid(sig.return_type_id)
+				if ret_tid is not None and self.type_table is not None:
+					ty = self._llvm_type_for_typeid(ret_tid)
 					self.value_types[val] = ty
 			self._emit_nothrow_return_value(val, ty)
 			return
@@ -7743,6 +7749,10 @@ class _FuncBuilder:
 			out = (base, word_bytes)
 			self._size_align_cache[ty_id] = out
 			return out
+		if td.kind is TypeKind.FUNCTION:
+			out = (word_bytes * 2, word_bytes) if td.can_throw() else (word_bytes, word_bytes)
+			self._size_align_cache[ty_id] = out
+			return out
 		if td.kind is TypeKind.STRUCT:
 			offset = 0
 			max_align = 1
@@ -7775,16 +7785,9 @@ class _FuncBuilder:
 		"""
 		Size/alignment of `fty` as a struct FIELD.
 
-		Throwing Fn fields are stored fat (%DriftFatFnPtr = {adapter, env},
-		two words; see _llvm_field_storage_type_for_typeid), unlike the thin
-		one-word representation `_size_align_typeid` models for bare FUNCTION
-		values.  Struct layout, array-of-struct strides, and debug-info member
-		records must all size fields through this helper.
+		Kept as the struct-layout call point so member layout and debug-info
+		records stay in sync with storage mapping.
 		"""
-		td = self.type_table.get(fty)
-		if td.kind is TypeKind.FUNCTION and td.can_throw():
-			word_bytes = self.module.word_bits // 8
-			return (word_bytes * 2, word_bytes)
 		return self._size_align_typeid(fty)
 
 	def _variant_layout(self, ty_id: TypeId) -> _VariantLayout:
@@ -7810,12 +7813,14 @@ class _FuncBuilder:
 		arms: list[tuple[str, _VariantArmLayout]] = []
 		arm_by_name: Dict[str, _VariantArmLayout] = {}
 		for arm in inst.arms:
+			field_tys: list[TypeId] = []
 			field_lltys: list[str] = []
 			field_storage_lltys: list[str] = []
 			offset = 0
 			max_align = 1
 			for fty_raw in arm.field_types:
 				fty = self._canonical_codegen_typeid(fty_raw)
+				field_tys.append(fty)
 				llty = self._llvm_type_for_typeid(fty)
 				emit_llty = self._llty(llty)
 				field_lltys.append(llty)
@@ -7836,6 +7841,7 @@ class _FuncBuilder:
 				payload_struct_llty = "{ " + ", ".join(field_storage_lltys) + " }"
 			arm_layout = _VariantArmLayout(
 				tag=arm.tag,
+				field_tys=field_tys,
 				field_lltys=field_lltys,
 				field_storage_lltys=field_storage_lltys,
 				payload_struct_llty=payload_struct_llty,
@@ -7968,9 +7974,10 @@ class _FuncBuilder:
 				f"  {payload_words_ptr} = getelementptr inbounds {variant_llty}, ptr {tmp_ptr}, i32 0, i32 2"
 			)
 			payload_struct_ptr = payload_words_ptr
-			for idx, (arg_val, want_llty, store_llty) in enumerate(
-				zip(args, arm_layout.field_lltys, arm_layout.field_storage_lltys)
+			for idx, (arg_val, field_ty, want_llty, store_llty) in enumerate(
+				zip(args, arm_layout.field_tys, arm_layout.field_lltys, arm_layout.field_storage_lltys)
 			):
+				arg_val = self._coerce_value_to_typeid(None, arg_val, field_ty, context=f"variant payload {idx}")
 				field_ptr = self._fresh("fieldptr")
 				self.lines.append(
 					f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, ptr {payload_struct_ptr}, i32 0, i32 {idx}"
@@ -8030,7 +8037,7 @@ class _FuncBuilder:
 					raise NotImplementedError(
 						f"LLVM codegen v1: function type missing param/return types for {self.func.name}"
 					)
-				return "ptr"
+				return DRIFT_FAT_FNPTR_TYPE if td.can_throw() else "ptr"
 			if td.kind is TypeKind.STRUCT:
 				return self.module.ensure_struct_type(
 					ty_id,
@@ -8091,28 +8098,39 @@ class _FuncBuilder:
 		"""
 		Map a TypeId to its storage type as a struct field.
 
-		Throwing `Fn` fields are normalized to the fat `%DriftFatFnPtr`
-		{adapter, env} pair to match the declared struct layout (see
-		LlvmModule.ensure_struct_type); every struct-field producer/consumer
-		(construct, get, zero, tombstone, copy, clone) must agree with that
-		layout, so the decision lives here. Non-field storage (locals, params,
-		array elements, variant payloads) keeps the thin `ptr` representation
-		from `_llvm_storage_type_for_typeid`.
+		Struct fields now share the same representation as all other storage
+		slots; this wrapper remains as the field-level call point.
 		"""
-		if self.type_table is not None:
-			td = self.type_table.get(field_ty)
-			if td.kind is TypeKind.FUNCTION and td.can_throw():
-				return DRIFT_FAT_FNPTR_TYPE
 		return self._llvm_storage_type_for_typeid(field_ty)
+
+	def _is_throwing_fn_typeid(self, ty_id: TypeId | None) -> bool:
+		if ty_id is None or self.type_table is None:
+			return False
+		td = self.type_table.get(ty_id)
+		return td.kind is TypeKind.FUNCTION and td.can_throw()
+
+	def _fn_typeid_from_call_sig(self, call_sig: CallSig, *, can_throw: bool | None = None) -> TypeId:
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: function pointer constants require a TypeTable")
+		return self.type_table.ensure_function(
+			list(call_sig.param_types),
+			call_sig.user_ret_type,
+			can_throw=call_sig.can_throw if can_throw is None else bool(can_throw),
+		)
+
+	def _coerce_value_to_typeid(self, arg_mir_name: str | None, arg_val: str, target_ty: TypeId, *, context: str) -> str:
+		if self._is_throwing_fn_typeid(target_ty):
+			return self._coerce_throwing_fn_to_fat(arg_mir_name, arg_val, target_ty, context=context)
+		return arg_val
 
 	def _coerce_throwing_fn_to_fat(self, arg_mir_name: str | None, arg_val: str, field_ty: TypeId, *, context: str) -> str:
 		"""
 		Normalize a throwing-Fn value to the fat %DriftFatFnPtr {adapter, env}
-		pair used for struct-field storage.
+		pair used for throwing Fn values.
 
-		Accepts values that are already fat (struct-field extracts, returned
-		as-is), thin throwing fn refs (wrapped via the generic forward thunk),
-		and nothrow fn refs (wrapped via a nothrow→throwing adapter thunk).
+		Accepts values that are already fat, thin throwing fn refs (wrapped via
+		the generic forward thunk), and nothrow fn refs (wrapped via a
+		nothrow→throwing adapter thunk).
 		Throw-state is resolved through _value_fn_throws (populated by
 		FnPtrConst), value_map aliases, then the MIR local's TypeId — with
 		opaque pointers all thin fn values are just "ptr" in value_types.
@@ -8158,23 +8176,6 @@ class _FuncBuilder:
 		self.lines.append(f"  {fat1} = insertvalue {DRIFT_FAT_FNPTR_TYPE} {fat0}, ptr {env_val}, 1")
 		self.value_types[fat1] = DRIFT_FAT_FNPTR_TYPE
 		return fat1
-
-	def _guard_fat_fn_narrowing(self, arg_val: str, emit_llty: str, context: str) -> None:
-		"""
-		Refuse to pass a fat {adapter, env} Fn value where a thin slot is
-		expected, instead of emitting invalid IR or truncating the pair.
-
-		Fat values arise from throwing-Fn struct-field reads; thin slots are
-		everything else (params, array elements, variant payloads). Narrowing
-		would lose the env word, so there is no valid lowering in v1.
-		"""
-		if self.value_types.get(arg_val) == DRIFT_FAT_FNPTR_TYPE and self._llty(emit_llty) == "ptr":
-			raise NotImplementedError(
-				f"LLVM codegen v1: cannot pass a struct-field Fn value to {context}: throwing Fn "
-				"struct fields use the fat {adapter, env} representation, which thin fn-ptr slots "
-				"cannot carry. Call the field directly (val f = s.run; f(...)) instead of passing "
-				"or storing it"
-			)
 
 	def _type_key(self, ty_id: TypeId) -> str:
 		"""Build a stable key string for a TypeId (used for FnResult naming/diagnostics)."""
@@ -8494,6 +8495,12 @@ class _FuncBuilder:
 			# Pointer null as an SSA value.
 			self.lines.append(f"  {dest} = select i1 1, ptr null, ptr null")
 			self.value_types[dest] = "ptr"
+			return
+		if llty == DRIFT_FAT_FNPTR_TYPE:
+			self.lines.append(
+				f"  {dest} = select i1 1, {DRIFT_FAT_FNPTR_TYPE} zeroinitializer, {DRIFT_FAT_FNPTR_TYPE} zeroinitializer"
+			)
+			self.value_types[dest] = DRIFT_FAT_FNPTR_TYPE
 			return
 
 		# Array runtime representation is a fixed 4-field aggregate in v1:
@@ -9062,6 +9069,7 @@ class _FuncBuilder:
 		needs_string_copy = td.kind is TypeKind.SCALAR and td.name == "String"
 		for idx, elem in enumerate(instr.elements):
 			elem_val = self._map_value(elem)
+			elem_val = self._coerce_value_to_typeid(elem, elem_val, instr.elem_ty, context="array literal element")
 			if needs_string_copy:
 				elem_val = self._emit_copy_value(instr.elem_ty, elem_val)
 			if is_bool:
@@ -9111,6 +9119,7 @@ class _FuncBuilder:
 		elem_llty = self._llvm_array_elem_type(instr.elem_ty)
 		arr_llty = self._llvm_array_header_type()
 		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
+		value = self._coerce_value_to_typeid(instr.value, value, instr.elem_ty, context="array element")
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
 		line = f"  store {elem_llty} {value}, ptr {ptr_tmp}"
@@ -9140,6 +9149,7 @@ class _FuncBuilder:
 		self.lines.append(
 			f"  {ptr_tmp} = getelementptr inbounds {elem_llty}, ptr {data_ptr}, {self._llty(DRIFT_INT_TYPE)} {index}"
 		)
+		value = self._coerce_value_to_typeid(instr.value, value, instr.elem_ty, context="array element")
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
 		line = f"  store {elem_llty} {value}, ptr {ptr_tmp}"
@@ -9162,6 +9172,7 @@ class _FuncBuilder:
 			self.lines.append(f"  {old_val} = load {elem_llty}, ptr {ptr_tmp}")
 			self.value_types[old_val] = elem_llty
 			self._emit_drop_value(instr.elem_ty, old_val)
+		value = self._coerce_value_to_typeid(instr.value, value, instr.elem_ty, context="array element")
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
 		line = f"  store {elem_llty} {value}, ptr {ptr_tmp}"
@@ -10177,6 +10188,7 @@ class _FuncBuilder:
 			self.lines.append(f"  {old_val} = load {elem_llty}, ptr {ptr_tmp}")
 			self.value_types[old_val] = elem_val_llty
 			self._emit_drop_value(instr.elem_ty, old_val)
+		value = self._coerce_value_to_typeid(instr.value, value, instr.elem_ty, context="array element")
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
 		self.lines.append(f"  store {elem_llty} {value}, ptr {ptr_tmp}")
@@ -10412,6 +10424,7 @@ class _FuncBuilder:
 		ptr_gep = self._fresh("rawgep")
 		self.lines.append(f"  {ptr_gep} = getelementptr {elem_llty}, ptr {ptr_tmp}, {self._llty(DRIFT_INT_TYPE)} {idx_val}")
 		value = self._map_value(instr.value)
+		value = self._coerce_value_to_typeid(instr.value, value, instr.elem_ty, context="raw buffer element")
 		if self._is_bool_type(instr.elem_ty):
 			value = self._bool_to_storage(value)
 		self.lines.append(f"  store {elem_llty} {value}, ptr {ptr_gep}")
@@ -10483,6 +10496,7 @@ class _FuncBuilder:
 		ptr_val = self._map_value(instr.ptr)
 		val_val = self._map_value(instr.value)
 		elem_llty = self._emit_storage_type_for_typeid(instr.elem_ty)
+		val_val = self._coerce_value_to_typeid(instr.value, val_val, instr.elem_ty, context="pointer write")
 		if self._is_bool_type(instr.elem_ty):
 			val_val = self._bool_to_storage(val_val)
 		self.lines.append(f"  store {elem_llty} {val_val}, ptr {ptr_val}")

@@ -60,6 +60,29 @@ def test_array_type() -> None:
 	assert mod.llvm_type_for_typeid(arr_tid, table) == "%DriftArrayHeader"
 
 
+def test_function_types_mirror_funcbuilder_fat_split() -> None:
+	"""Throwing Fn maps to the fat {adapter, env} pair; nothrow Fn stays thin.
+
+	Must mirror _FuncBuilder._llvm_type_for_typeid — a divergence here lets a
+	module-level caller cache a thin struct/FnResult layout that function-level
+	codegen then contradicts (first caller wins in the type-decl caches).
+	"""
+	table = TypeTable()
+	mod = _make_module()
+	int_tid = table.ensure_int()
+
+	throwing_fn = table.ensure_function([int_tid], int_tid, can_throw=True)
+	assert mod.llvm_type_for_typeid(throwing_fn, table) == "%DriftFatFnPtr"
+
+	nothrow_fn = table.ensure_function([int_tid], int_tid, can_throw=False)
+	assert mod.llvm_type_for_typeid(nothrow_fn, table) == "ptr"
+
+	# The approximate size model (used by the module-level variant layout)
+	# must size the fat pair as two words, not through the ptr fallback.
+	assert mod._llvm_type_size_approx("%DriftFatFnPtr") == 16
+	assert mod._llvm_type_size_approx("ptr") == 8
+
+
 def test_struct_type() -> None:
 	"""Module-level type mapping handles struct types."""
 	table = TypeTable()

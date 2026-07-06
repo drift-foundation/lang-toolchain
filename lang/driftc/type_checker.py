@@ -137,7 +137,6 @@ from lang.driftc.core.type_subst import Subst, apply_subst
 from lang.driftc.core.generic_type_expr import GenericTypeExpr
 from lang.driftc.borrow_checker import (
 	DerefProj,
-	FieldProj,
 	IndexProj,
 	Place,
 	PlaceBase,
@@ -8589,37 +8588,6 @@ class TypeChecker:
 							break
 					borrows_in_stmt.setdefault(place, "shared")
 					borrow_expr_ids_in_stmt.add(expr_id)
-
-				# v1 representation seam: a throwing `Fn` STRUCT FIELD is stored
-				# fat ({adapter, env}) while every other Fn slot (locals, params,
-				# array elements) is a thin fn pointer.  A reference to such a
-				# field crossing a function boundary would be loaded thin by the
-				# callee — the env is lost and the adapter is invoked with the
-				# wrong signature (memory-unsafe).  Reject the borrow until the
-				# representation is unified.
-				if place.projections and isinstance(place.projections[-1], FieldProj):
-					borrowed_td = self.type_table.get(inner_ty) if inner_ty is not None else None
-					if (
-						borrowed_td is not None
-						and borrowed_td.kind is TypeKind.FUNCTION
-						and borrowed_td.can_throw()
-					):
-						diagnostics.append(
-							_tc_diag(
-								message=(
-									"cannot borrow a struct field of throwing function type "
-									"(`Fn(...) -> T` without `nothrow`) in this release: such "
-									"fields use a fat {adapter, env} representation that "
-									"references cannot carry. Read the field into a binding "
-									"and call it directly (`val f = s.run; f(...)`), or "
-									"declare the field `Fn(...) nothrow -> T`"
-								),
-								severity="error",
-								code="E_THROWING_FN_FIELD_BORROW",
-								span=borrow_span,
-							)
-						)
-						return record_expr(expr, self._unknown)
 
 				ref_ty = self.type_table.ensure_ref_mut(inner_ty) if expr.is_mut else self.type_table.ensure_ref(inner_ty)
 				return record_expr(expr, ref_ty)

@@ -18,33 +18,14 @@ declared layout.  Three distinct failures fell out:
    thin word out of the fat slot and called the forwarding thunk without its
    env argument → SIGSEGV.
 
-The fix centralizes the rule in `_llvm_field_storage_type_for_typeid` (used by
-construct/get/zero/tombstone/copy/clone and AddrOfField), sizes struct fields
-accordingly, and makes LoadRef/StoreRef/MoveFromRef fat-aware for pointers
-proven (via AddrOfField provenance) to address a throwing-Fn field slot.
-Nothrow `Fn` fields remain thin — their layout and behavior are unchanged.
-
-Because the fat representation exists ONLY in struct-field slots while every
-other Fn slot is thin, values cannot cross between the two worlds through
-references or by-value passing.  Rather than corrupting memory, those shapes
-are now refused:
-
-- `&s.run` / `&mut s.run` — rejected by the type checker with
-  E_THROWING_FN_FIELD_BORROW (a callee would thin-load the fat slot: env lost,
-  adapter called with the wrong signature → SIGSEGV before the fix).
-- `&g` where `g = s.run` — the local's slot adapts to fat, so a reference to
-  it has the same hazard; refused at codegen (AddrOfLocal guard).
-- `apply(s.run, ...)` — a fat value cannot narrow into a thin fn-ptr param
-  (the env word has nowhere to go); refused at codegen (call-arg guard, which
-  previously surfaced as a raw clang insertvalue/call type error).
-
-KNOWN SEAM (pre-existing, not covered here): merging a field-extracted fat
-value with a thin named-fn reference at one phi (e.g. `match` arms yielding
-`s.run` and a bare fn name) still raises "phi with mixed incoming types".
+The fix centralizes the rule in `_llvm_storage_type_for_typeid` /
+`_llvm_type_for_typeid`: every throwing `Fn(...) -> T` value uses the fat
+representation, including struct fields, params, locals, array elements,
+variant payloads, return values, and phi values.  Nothrow `Fn` values remain
+thin — their layout and behavior are unchanged.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -75,19 +56,6 @@ def _compile_and_run(tmp_path: Path, source: str) -> subprocess.CompletedProcess
 	res = _compile(tmp_path, source)
 	assert res.returncode == 0, f"compile failed:\n{res.stderr[-1500:]}"
 	return subprocess.run([str(tmp_path / "bin")], capture_output=True, text=True, timeout=sanitizer_timeout(20))
-
-
-def _error_diags(tmp_path: Path, source: str) -> list[dict]:
-	"""Compile-only and return the list of error-severity diagnostics (JSON)."""
-	src = tmp_path / "main.drift"
-	src.write_text(source, encoding="utf-8")
-	out = subprocess.run(
-		[sys.executable, "-m", "lang.driftc.driftc", "--stdlib-root",
-		 str(_stdlib()), "--test-build-only", str(src), "--json"],
-		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(40),
-	)
-	payload = json.loads(out.stdout) if out.stdout.strip() else {}
-	return [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
 
 
 _PRELUDE = """\
@@ -217,8 +185,8 @@ def test_nothrow_fn_field_still_thin_and_working(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Representation-seam containment: shapes that would narrow the fat pair into
-# a thin slot are refused instead of corrupting memory.
+# Uniform fat representation: shapes that previously crossed the field-only
+# fat/thin seam must now compile and run.
 # ---------------------------------------------------------------------------
 
 _INVOKE_BY_REF = """
@@ -229,40 +197,40 @@ fn invoke(run_ref: &Fn(Int) -> Int) -> Int {
 """
 
 
-def test_borrow_of_throwing_fn_field_rejected(tmp_path: Path) -> None:
-	"""`&s.run` — was SIGSEGV (callee thin-loads the fat slot); now a checker error."""
+def test_borrow_of_throwing_fn_field_cross_function(tmp_path: Path) -> None:
+	"""`&s.run` — was SIGSEGV when the callee thin-loaded the fat slot."""
 	src = _PRELUDE + _INVOKE_BY_REF + """
 pub fn main() nothrow -> Int {
 	val op = OpBinding(name = "dbl", run = double);
 	return (try invoke(&op.run) catch { -2 }) - 42;
 }
 """
-	diags = _error_diags(tmp_path, src)
-	codes = [d.get("code") for d in diags]
-	assert "E_THROWING_FN_FIELD_BORROW" in codes, codes
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
 
 
-def test_mut_borrow_of_throwing_fn_field_rejected(tmp_path: Path) -> None:
-	"""`&mut s.run` — same rejection (was: compiled and returned garbage)."""
+def test_mut_borrow_of_throwing_fn_field_cross_function(tmp_path: Path) -> None:
+	"""`&mut s.run` stores through a cross-function ref without truncating the pair."""
 	src = _PRELUDE + """
 fn rebind(run_ref: &mut Fn(Int) -> Int) -> Void {
+	run_ref = triple;
 	return;
 }
 
 pub fn main() nothrow -> Int {
 	var op = OpBinding(name = "dbl", run = double);
 	rebind(&mut op.run);
-	return 0;
+	val f = op.run;
+	val n = try f(14) catch { -1 };
+	return n - 42;
 }
 """
-	diags = _error_diags(tmp_path, src)
-	codes = [d.get("code") for d in diags]
-	assert "E_THROWING_FN_FIELD_BORROW" in codes, codes
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
 
 
-def test_borrow_of_local_holding_field_fn_refused(tmp_path: Path) -> None:
-	"""`val g = op.run; invoke(&g)` — the local's slot adapts to fat, so the
-	reference has the same thin-load hazard; refused at codegen (was SIGSEGV)."""
+def test_borrow_of_local_holding_field_fn_cross_function(tmp_path: Path) -> None:
+	"""`val g = op.run; invoke(&g)` — was SIGSEGV through an addr-taken local."""
 	src = _PRELUDE + _INVOKE_BY_REF + """
 pub fn main() nothrow -> Int {
 	val op = OpBinding(name = "dbl", run = double);
@@ -270,14 +238,12 @@ pub fn main() nothrow -> Int {
 	return (try invoke(&g) catch { -2 }) - 42;
 }
 """
-	res = _compile(tmp_path, src)
-	assert res.returncode != 0, "borrowing a fat-valued local must not compile"
-	assert "cannot take a reference" in res.stderr, res.stderr[-600:]
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
 
 
-def test_byval_field_fn_arg_refused(tmp_path: Path) -> None:
-	"""`apply(op.run, ...)` — a fat value cannot narrow into a thin fn-ptr
-	param; refused with a targeted message (was a raw clang type error)."""
+def test_byval_field_fn_arg_cross_function(tmp_path: Path) -> None:
+	"""`apply(op.run, ...)` passes the full adapter/env pair by value."""
 	src = _PRELUDE + """
 fn apply(run: Fn(Int) -> Int, x: Int) -> Int {
 	return try run(x) catch { -1 };
@@ -288,13 +254,12 @@ pub fn main() nothrow -> Int {
 	return (try apply(op.run, 21) catch { -2 }) - 42;
 }
 """
-	res = _compile(tmp_path, src)
-	assert res.returncode != 0, "passing a fat field value by value must not compile"
-	assert "cannot pass a struct-field Fn value" in res.stderr, res.stderr[-600:]
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
 
 
 def test_ref_to_local_named_fn_still_works(tmp_path: Path) -> None:
-	"""`val h = double; invoke(&h)` — all-thin cross-function ref keeps working."""
+	"""`val h = double; invoke(&h)` works with the new throwing-Fn fat local."""
 	src = _PRELUDE + _INVOKE_BY_REF + """
 pub fn main() nothrow -> Int {
 	val h = double;
@@ -306,7 +271,7 @@ pub fn main() nothrow -> Int {
 
 
 def test_optional_fn_named_payload_still_works(tmp_path: Path) -> None:
-	"""Variant payloads stay thin and self-consistent for named fns."""
+	"""Variant payloads carry throwing named fns as fat values."""
 	src = """\
 module main;
 
@@ -319,6 +284,124 @@ pub fn main() nothrow -> Int {
 		None => { -2 }
 	};
 	return n - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_optional_fn_field_payload_works(tmp_path: Path) -> None:
+	"""`Some(op.run)` used to surface a raw ConstructVariant type mismatch."""
+	src = _PRELUDE + """
+pub fn main() nothrow -> Int {
+	val op = OpBinding(name = "dbl", run = double);
+	val maybe: Optional<Fn(Int) -> Int> = Some(op.run);
+	val n = match maybe {
+		Some(f) => { try f(21) catch { -1 } },
+		None => { -2 }
+	};
+	return n - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_array_fn_push_field_payload_works(tmp_path: Path) -> None:
+	"""`Array<Fn>.push(op.run)` used to emit a raw clang store type error."""
+	src = _PRELUDE + """
+pub fn main() nothrow -> Int {
+	val op = OpBinding(name = "tri", run = triple);
+	var runs: Array<Fn(Int) -> Int> = [];
+	runs.push(double);
+	runs.push(op.run);
+	val a = try runs[0](9) catch { -1 };
+	val b = try runs[1](8) catch { -1 };
+	return a + b - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_throwing_fn_return_value_from_field_works(tmp_path: Path) -> None:
+	"""Returning `op.run` used the signature thin slot before uniform fat lowering."""
+	src = _PRELUDE + """
+fn pick(op: OpBinding) -> Fn(Int) -> Int {
+	return op.run;
+}
+
+pub fn main() nothrow -> Int {
+	val op = OpBinding(name = "dbl", run = double);
+	val f = pick(move op);
+	val n = try f(21) catch { -1 };
+	return n - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_nothrow_fn_returns_throwing_fn_from_nothrow_named(tmp_path: Path) -> None:
+	"""A nothrow fn returning a throwing `Fn` must widen a thin nothrow named-fn
+	value to the fat pair at the return boundary (was: ICE, no %DriftFatFnPtr
+	arm in _emit_nothrow_return_value and no coercion on the nothrow path)."""
+	src = """\
+module main;
+
+fn dbl_nt(x: Int) nothrow -> Int { return x * 2; }
+
+fn pick() nothrow -> Fn(Int) -> Int {
+	return dbl_nt;
+}
+
+pub fn main() nothrow -> Int {
+	val f = pick();
+	val n = try f(21) catch { -1 };
+	return n - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_nothrow_fn_returns_throwing_fn_from_field(tmp_path: Path) -> None:
+	"""A nothrow fn returning `op.run` passes the fat pair through `ret` (was:
+	same ICE — the fat llty was not an accepted nothrow return type)."""
+	src = _PRELUDE + """
+fn pick(op: OpBinding) nothrow -> Fn(Int) -> Int {
+	return op.run;
+}
+
+pub fn main() nothrow -> Int {
+	val op = OpBinding(name = "dbl", run = double);
+	val f = pick(move op);
+	val n = try f(21) catch { -1 };
+	return n - 42;
+}
+"""
+	run = _compile_and_run(tmp_path, src)
+	assert run.returncode == 0, f"expected 0, got {run.returncode}: {run.stderr[-400:]}"
+
+
+def test_phi_mixes_field_and_named_throwing_fn(tmp_path: Path) -> None:
+	"""A match yielding `op.run` in one arm and `double` in another used to ICE at phi lowering."""
+	src = _PRELUDE + """
+fn choose(op: OpBinding, want_field: Bool) -> Fn(Int) -> Int {
+	return match want_field {
+		true => { op.run },
+		false => { double }
+	};
+}
+
+pub fn main() nothrow -> Int {
+	val op1 = OpBinding(name = "tri", run = triple);
+	val op2 = OpBinding(name = "tri", run = triple);
+	val f = choose(move op1, true);
+	val g = choose(move op2, false);
+	val a = try f(10) catch { -1 };
+	val b = try g(6) catch { -1 };
+	return a + b - 42;
 }
 """
 	run = _compile_and_run(tmp_path, src)
