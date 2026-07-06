@@ -63,6 +63,98 @@ def validate_lambdas_non_retaining(
 			ty = resolve_projected_capture_type(key, binding_types, type_table)
 			return ty is not None and bool(type_table.copy_status(ty)) and type_table.is_bitcopy(ty)
 
+	def _is_ref_valued_type(ty) -> bool:
+		"""True for `&T` / `&mut T` and `Optional<&T>` / `Optional<&mut T>`."""
+		if ty is None or type_table is None:
+			return False
+		from lang.driftc.core.types_core import TypeKind as _TK
+		td = type_table.get(ty)
+		if td.kind is _TK.REF:
+			return True
+		inst = type_table.get_variant_instance(ty)
+		if inst is None:
+			return False
+		optional_base = type_table.get_variant_base(module_id="lang.core", name="Optional")
+		if optional_base is None or inst.base_id != optional_base or len(inst.type_args) != 1:
+			return False
+		return type_table.get(inst.type_args[0]).kind is _TK.REF
+
+	def _check_boxed_ref_valued_captures(lam: H.HLambda, captures) -> None:
+		"""Reject a boxed (escaping) callback that captures a reference VALUE.
+
+		A MOVE/COPY capture whose captured value is itself `&T` / `&mut T` /
+		`Optional<&T>` copies the raw borrow-pointer into the heap env. A
+		boxed callback is escaping by construction (`capture_as_move` is set
+		exactly for those wraps), and nothing ties the referent's liveness to
+		the closure — invoking it after the frame that supplied the reference
+		unwinds is a use-after-scope. This mirrors the existing v0 rule that
+		rejects explicit `captures(ref/ref_mut ...)` on escaping closures at
+		the wrap site; a ref-VALUED move/copy capture is the same hazard
+		through implicit capture (or explicit `captures(copy ref_param)`,
+		since `&T` is Copy).
+		"""
+		if binding_types is None or type_table is None:
+			return
+		if not getattr(lam, "capture_as_move", False):
+			return
+		from lang.driftc.stage1 import closures as _C
+		for cap in captures or []:
+			if cap.kind in (_C.HCaptureKind.REF, _C.HCaptureKind.REF_MUT):
+				# The v0 rule "closures with borrowed captures are
+				# non-escaping" is enforced for EXPLICIT `captures(ref …)`
+				# at the wrap resolver — but an IMPLICIT borrow (e.g. a
+				# `&self` method call like `x.clone()` on a captured local,
+				# which classifies the capture REF ahead of the boxed
+				# MOVE default) used to slip through in contexts the
+				# borrow checker never visits (nested lambda bodies). The
+				# env would store a raw pointer to the enclosing frame's
+				# slot — a use-after-scope once the box escapes.
+				from lang.driftc.core.diagnostics import Diagnostic
+				span = getattr(cap, "span", None)
+				if span is None or getattr(span, "line", None) is None:
+					span = getattr(lam, "span", None) or span
+				diags.append(
+					Diagnostic(
+						severity="error",
+						code="E_CALLBACK_BORROWED_CAPTURE",
+						message=(
+							"boxed callback implicitly borrows a captured binding; "
+							"closures with borrowed captures are non-escaping in v0. "
+							"Take ownership instead: `captures(move <name>)` (or "
+							"`captures(copy <name>)` for a Copy value)"
+						),
+						phase="typecheck",
+						span=span,
+					)
+				)
+				return
+			if cap.kind not in (_C.HCaptureKind.MOVE, _C.HCaptureKind.COPY):
+				continue
+			if cap.key.proj:
+				ty = resolve_projected_capture_type(cap.key, binding_types, type_table)
+			else:
+				ty = binding_types.get(int(cap.key.root_local))
+			if _is_ref_valued_type(ty):
+				from lang.driftc.core.diagnostics import Diagnostic
+				span = getattr(cap, "span", None)
+				if span is None or getattr(span, "line", None) is None:
+					span = getattr(lam, "span", None) or span
+				diags.append(
+					Diagnostic(
+						severity="error",
+						code="E_ESCAPE_REF_CAPTURE",
+						message=(
+							"boxed callback captures a reference value; the closure would "
+							"carry the raw pointer past the frame that supplied it. "
+							"Capture the owned value instead, or pass the reference as a "
+							"call argument"
+						),
+						phase="typecheck",
+						span=span,
+					)
+				)
+				return
+
 	def _iter_expr_children(e: H.HExpr) -> list:
 		children: list = []
 		for field_name in getattr(e, "__dataclass_fields__", {}) or {}:
@@ -79,6 +171,7 @@ def validate_lambdas_non_retaining(
 		if isinstance(e, H.HLambda):
 			res = discover_captures(e, is_copy_projected_field=is_copy_projected_field)
 			diags.extend(res.diagnostics)
+			_check_boxed_ref_valued_captures(e, e.captures if getattr(e, "captures", None) else res.captures)
 			if e.body_expr is not None:
 				_walk_expr(e.body_expr)
 			if e.body_block is not None:

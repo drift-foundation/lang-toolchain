@@ -449,17 +449,56 @@ class BorrowChecker:
 				ids.add(int(cap.key.root_local))
 		return ids
 
+	def _has_ref_valued_move_or_copy_capture(self, lam: H.HLambda) -> bool:
+		"""True if any MOVE/COPY capture stores a reference VALUE into the env.
+
+		A MOVE/COPY capture whose captured value is itself `&T` / `&mut T` /
+		`Optional<&T>` copies the raw borrow-pointer into the closure env. The
+		loan-based escape computation cannot see it: it tracks only REF/REF_MUT
+		captures, and a `&T` PARAM carries no loan in this function's flow
+		state at all (the borrow happened in the caller). Without a bound, the
+		env carries a pointer whose referent's liveness nothing ties to the
+		closure — a use-after-scope once the closure escapes the frame that
+		supplied the reference.
+		"""
+		for cap in lam.captures or []:
+			if cap.kind not in (C.HCaptureKind.MOVE, C.HCaptureKind.COPY):
+				continue
+			if cap.key.proj:
+				# Projected capture: judge the projected FIELD's type (a `&T`
+				# field is bitcopy, so it passes the Copy-projected gate).
+				place = self._place_from_capture_key(cap.key)
+				ty = self._type_of_place(place) if place is not None else None
+				if ty is None:
+					continue
+				td = self.type_table.get(ty)
+				if td.kind is TypeKind.REF:
+					return True
+				if self._is_optional_ref_type(ty, is_mut=True) or self._is_optional_ref_type(ty, is_mut=False):
+					return True
+			elif self._is_ref_binding_id(int(cap.key.root_local)):
+				return True
+		return False
+
 	def _lambda_escape_level(self, lam: H.HLambda, state: _FlowState) -> EscapeLevel:
 		"""Compute the effective escape level of a lambda based on its captured loans."""
 		self._check_lambda_captures(lam)
+		# Ref-valued MOVE/COPY captures bound the lambda at LOCAL regardless of
+		# the loan-based computation below: immediate/synchronous use stays
+		# legal (required <= LOCAL), while THREAD/STATIC escape sites reject
+		# through the existing _check_lambda_escape_level machinery.
+		ref_valued_bound = self._has_ref_valued_move_or_copy_capture(lam)
 		capture_ids = self._captured_loan_binding_ids(lam)
 		if not capture_ids:
-			return EscapeLevel.STATIC
+			return EscapeLevel.LOCAL if ref_valued_bound else EscapeLevel.STATIC
 		matching = [ln for ln in state.loans if ln.ref_binding_id in capture_ids]
 		if not matching:
 			# Captures exist but no active loans tracked — conservative.
 			return EscapeLevel.LOCAL
-		return min(ln.max_escape for ln in matching)
+		level = min(ln.max_escape for ln in matching)
+		if ref_valued_bound and level > EscapeLevel.LOCAL:
+			return EscapeLevel.LOCAL
+		return level
 
 	def _report_escape_violation(self, lam: H.HLambda, state: _FlowState, required: EscapeLevel, lambda_level: EscapeLevel, span: Span, from_unannotated: bool = False) -> None:
 		"""Emit an escape-level diagnostic for a lambda that cannot meet the required escape level."""
@@ -482,6 +521,17 @@ class BorrowChecker:
 				name = self.binding_names.get(loan.ref_binding_id, "?") if self.binding_names else "?"
 				notes.append(f"captured borrow of `{name}` restricts escape level to {loan.max_escape.name}")
 				break
+		if not notes and self._has_ref_valued_move_or_copy_capture(lam):
+			for cap in lam.captures or []:
+				if cap.kind not in (C.HCaptureKind.MOVE, C.HCaptureKind.COPY):
+					continue
+				if not cap.key.proj and self._is_ref_binding_id(int(cap.key.root_local)):
+					name = self.binding_names.get(int(cap.key.root_local), "?") if self.binding_names else "?"
+					notes.append(
+						f"captured `{name}` holds a reference value; the closure would carry the raw "
+						"pointer past the frame that supplied it"
+					)
+					break
 		if from_unannotated:
 			notes.append("parameter has no escape-level annotation; treated as THREAD in v1")
 		self.diagnostics.append(Diagnostic(

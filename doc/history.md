@@ -1,5 +1,57 @@
 # Drift development history
 
+## 2026-07-06 (0.33.73: nested boxed-callback captures — LANGUAGE_BUG family; ABI stays 20)
+- **A boxed callback built INSIDE another boxed callback's body could not
+  safely capture anything from its enclosing lambda.** Three coupled defects,
+  all pre-existing in certified 0.33.69:
+  1. **SSA ICE for any nested capture of the enclosing lambda's parameter**
+     (`RuntimeError: SSA: load before store for local '__b{id}'`). Both
+     hidden-lambda worklists constructed their `HIRToMIR` lowering instance
+     WITHOUT the typed fn's `binding_names` (the regular-fn path passes it),
+     so nested-lambda env construction resolved the capture root through the
+     `__b{binding_id}` fallback in `_expr_from_capture_key` /
+     `_place_from_capture_key` — a load of a local nothing ever stores.
+     Fixed by passing `binding_names` in both worklist constructions
+     (`driftc.py`).
+  2. **Silent dangling-pointer hazard for reference-VALUED captures**, which
+     the ICE had been shielding: a boxed callback implicitly MOVE-capturing
+     (or explicitly `captures(copy …)`-ing) a `&T` / `&mut T` /
+     `Optional<&T>` binding copies the raw borrow-pointer into the heap env
+     with nothing tying the referent's liveness to the closure. Rejected at
+     the wrap site with `E_ESCAPE_REF_CAPTURE`
+     (`stage1/lambda_validate.py`), mirroring the existing v0 rule for
+     explicit `captures(ref …)`; `borrow_checker_pass.py::_lambda_escape_level`
+     additionally bounds ref-valued MOVE/COPY captures at `LOCAL` so
+     loan-tracked escape positions reject through the existing
+     `E_ESCAPE_*` machinery. Nested lambdas are re-validated from the
+     hidden-lambda worklist because the user-fn validation walk runs before
+     `capture_as_move` is set on nested wraps.
+  3. **Silent use-after-scope for implicit BORROW captures in boxed
+     callbacks** (found while verifying 2 under ASAN/Valgrind): a `&self`
+     method call on a captured outer local (`flag_note.clone()`) classifies
+     the capture REF ahead of the boxed MOVE default, so the env stored a
+     raw pointer to the enclosing lambda's STACK SLOT — dead-frame reads
+     (wrong values, Valgrind invalid reads) once the box escaped. The v0
+     "closures with borrowed captures are non-escaping" rule only covered
+     explicit `captures(ref …)` at the wrap resolver; the implicit path is
+     now rejected with `E_CALLBACK_BORROWED_CAPTURE` and a
+     `captures(move …)`/`captures(copy …)` suggestion. The explicit-move
+     form compiles and runs clean under ASAN and Valgrind.
+- Supported end-to-end after this patch: nested boxed callbacks capturing
+  the enclosing lambda's non-ref params (implicit) and owned locals (via
+  explicit `captures(move …)`/`captures(copy …)`); captureless nesting;
+  synchronous web/rest `CallbackN<&Req, …>` dispatch unchanged.
+- NOT part of this patch (separate pre-existing bug, reproduces without any
+  lambda nesting, confirmed on certified 0.33.69): reading an
+  INTERFACE-typed struct field by value (`val cb = h.cb`) shallow-copies
+  the boxed callback without retaining its env — double-free/UAF on drop.
+  Use direct calls (`h.cb.call()`) or move the holder; tracked for its own
+  regression-first fix.
+- Regressions: `lang/tests/driver/test_nested_boxed_callback_captures.py`
+  (9 cases: ICE→runs, both rejections, explicit-move ASAN row, top-level
+  ref-param rejection, captureless + web/rest controls). `DRIFTC_VERSION`
+  0.33.72 → 0.33.73; `DRIFT_RT_ABI_VERSION` stays 20 (no boundary change).
+
 ## 2026-07-05 (0.33.70: projected lambda-capture lowering — LANGUAGE_BUG; ABI stays 19)
 - **Follow-up to 0.33.69.** That fix conservatively rejected every MOVE-kind
   projected capture (`p.field`, not a whole local) reached via

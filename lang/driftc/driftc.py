@@ -7233,6 +7233,42 @@ def compile_stubbed_funcs(
 					call_info_map[csid] = CallInfo(target=target, sig=new_sig)
 			_patch_hidden_lambda_call_info_from_sigs()
 			type_diags.extend(_typevar_callinfo_diags(hidden_typed_fn, shared_type_table))
+			# Hidden-lambda bodies skip the user-fn lambda-validation walk:
+			# validate_lambdas_non_retaining runs over user fn bodies BEFORE
+			# this worklist, and at that point a NESTED boxed callback's
+			# `capture_as_move` is not yet set (call_resolver sets it while
+			# type-checking the enclosing lambda's body, which happens right
+			# above). Re-validate hidden bodies that build nested lambdas so
+			# the boxed ref-valued-capture rejection (and any capture-kind
+			# diagnostics that depend on final capture kinds) fire for the
+			# nested shapes too — exactly where a nested closure can capture
+			# the ENCLOSING lambda's `&T` param and escape with the raw
+			# pointer.
+			def _hir_contains_lambda(node: object) -> bool:
+				for _fname in getattr(node, "__dataclass_fields__", {}) or {}:
+					_val = getattr(node, _fname, None)
+					if isinstance(_val, H.HLambda):
+						return True
+					if isinstance(_val, (H.HExpr, H.HNode)) and _hir_contains_lambda(_val):
+						return True
+					if isinstance(_val, list):
+						for _item in _val:
+							if isinstance(_item, H.HLambda):
+								return True
+							if isinstance(_item, (H.HExpr, H.HNode)) and _hir_contains_lambda(_item):
+								return True
+				return False
+			if _hir_contains_lambda(lambda_body):
+				_nested_lam_res = validate_lambdas_non_retaining(
+					lambda_body,
+					signatures_by_id=signatures_by_id,
+					call_resolutions=getattr(hidden_typed_fn, "call_resolutions", None),
+					binding_types=getattr(hidden_typed_fn, "binding_types", None),
+					type_table=shared_type_table,
+				)
+				if any(d.severity == "error" for d in _nested_lam_res.diagnostics):
+					type_diags.extend(_nested_lam_res.diagnostics)
+					continue
 			hidden_ret_type = spec.return_type_id
 			if shared_type_table is not None:
 				try:
@@ -7267,6 +7303,15 @@ def compile_stubbed_funcs(
 					can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
 					return_type=hidden_ret_type,
 					binding_types=binding_types,
+					# Regular fns pass the typed fn's binding_names into the
+					# lowering (see the main loop); hidden lambdas historically
+					# did not, leaving _binding_names EMPTY here. That breaks
+					# nested-lambda env construction: a NESTED boxed callback
+					# capturing THIS lambda's param resolves the capture root
+					# via _expr_from_capture_key/_place_from_capture_key, which
+					# fall back to a never-stored `__b{id}` local when the name
+					# is missing → SSA "load before store" ICE.
+					binding_names=getattr(hidden_typed_fn, "binding_names", None),
 					typed_mode=_typed_mode_for(hidden_typed_fn, shared_type_table, not _has_error(hidden_typed.diagnostics)),
 				)
 			lower._lambda_capture_ref_is_value = spec.lambda_capture_ref_is_value
@@ -7655,6 +7700,10 @@ def compile_stubbed_funcs(
 			call_info_by_callsite_id=lambda_call_info or lambda_typed_fn.call_info_by_callsite_id,
 			can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
 			return_type=lambda_ret_type,
+			# Mirror the hidden-lambda worklist: nested-lambda env
+			# construction needs the typed fn's binding names (see the
+			# comment on the hidden-lambda HIRToMIR construction above).
+			binding_names=getattr(lambda_typed_fn, "binding_names", None),
 			typed_mode=_typed_mode_for(lambda_typed_fn, shared_type_table, not _has_error(lambda_result.diagnostics)),
 		)
 		for param in lam.params:
