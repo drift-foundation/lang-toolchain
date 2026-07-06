@@ -1,5 +1,192 @@
 # Drift development history
 
+## 2026-07-05 (0.33.70: projected lambda-capture lowering — LANGUAGE_BUG; ABI stays 19)
+- **Follow-up to 0.33.69.** That fix conservatively rejected every MOVE-kind
+  projected capture (`p.field`, not a whole local) reached via
+  `capture_as_move`, including the safe Copy-typed case (`p.count: Int`),
+  because the lowering itself couldn't actually handle a projected capture
+  correctly yet. This patch does that lowering work and then re-enables the
+  safe case. Scoped to `fix/projected-capture-lowering`; ref-typed callback
+  argument escape diagnostics, the String ownership/classification refactor,
+  and runtime/String representation work are explicitly NOT part of this
+  branch (tracked separately, see `doc/refactor_triggers.md`).
+- **Bug 1 (metadata/prologue): a REF-kind projected capture crashed LLVM
+  codegen outright**, independent of the boxed-callback MOVE path — e.g. a
+  plain immediate-invoked lambda reading `p.count` with no `captures(...)`
+  clause at all. `driftc.py`'s hidden-lambda worklist re-derived a
+  projected capture slot's type from the CAPTURE ROOT's whole-struct type
+  at four sites keyed only by root binding id (ignoring `key.proj`): the
+  `env_field_types[slot]` overwrite, the root-named `_local_types` preseed,
+  the candidate-slot-type preseed fallback, and the name-to-slot fallback
+  table (the last of which also collided when a root had more than one
+  projection). `hir_to_mir.py::_emit_lambda_capture_prologue` then
+  materialized a body-visible local named after the ROOT for every slot,
+  including projected ones, storing the (corrupted) slot value into it —
+  `integer binop requires matching Int/Uint operands (have
+  %Struct_main_Prepared_..., drift.int)`. Fixed by guarding all five
+  driftc.py metadata sites with `if cap.key.proj: continue` (skip the
+  root-type re-derivation for a projected slot — its env slot is already
+  correctly typed by outer lowering) and adding the same guard to the
+  prologue's per-slot loop (a projected capture gets no body-visible
+  local at all; the body's own `p.count` expression resolves directly
+  against the env slot elsewhere, keyed by the exact capture key).
+- **Bug 2 (aliasing, found while fixing bug 1, verified in code not just
+  inferred): two more lowering paths were missing the `_ref_field_temps`
+  aliasing mark applied everywhere else at an ownership-transfer
+  boundary.** `_load_capture_from_env`'s REF/REF_MUT branch did a `LoadRef`
+  into a fresh temp — structurally identical to the general deref path
+  (`_visit_expr_HUnary` DEREF) and the array-index field-projection fast
+  path — but didn't mark the result for a non-bitcopy inner type, so a
+  REF-projected read of e.g. `&String` was invisible to
+  `_copy_if_ref_alias` at every downstream ownership-transfer boundary.
+  Separately, the COPY-kind capture env-construction branch (in both
+  `_lower_lambda_immediate_call` and `_lower_lambda_callback`) never called
+  `_copy_if_ref_alias` before storing the captured value into the closure
+  env, unlike every other ownership-transfer boundary (struct/variant
+  construct, return, assignment, call args). Both fixed by applying the
+  same helper at both sites. Verified with a dedicated ASAN test: a
+  REF-projected capture of a `String` field, returned from the lambda and
+  later dropped alongside the source struct, no longer double-frees.
+  Caveat (found via mutation testing, see below): for `String` specifically,
+  a separate later pass (`string_arc.py`) independently provides the same
+  protection today, so this ASAN test alone does not prove these two sites
+  are load-bearing — they're kept for consistency with the rest of the
+  file's ownership-transfer-boundary contract, not as the sole proven fix.
+- **Enabled Copy-AND-BITCOPY-projected captures now that lowering is
+  correct (scope narrowed during review — see below).**
+  `capture_discovery.py::discover_captures` gained an optional
+  `is_copy_projected_field` resolver: when a MOVE-kind capture of a
+  projected place would otherwise be rejected, a typed caller can consult
+  the resolver and downgrade to a plain COPY capture instead. Every other
+  field — non-Copy, OR Copy-but-non-bitcopy (`String`, or a Copy
+  struct/variant containing one) — is still rejected unconditionally (no
+  lowering support for move-and-zero-back a projected place, and no proven
+  ownership-transfer support for a non-bitcopy Copy read either — see the
+  confirmed UAF below). Untyped callers (this stage runs before
+  type-checking) pass no resolver and keep the old blanket rejection.
+  Wired up at the two typed call sites that actually decide
+  `HLambda.captures` for a real compile: `borrow_checker_pass.py::_check_lambda_captures`
+  (via the existing `_place_from_capture_key`/`_type_of_place` Place model
+  — also fixed to validate a projected COPY capture against the FIELD's
+  type, not the root's, since the root can be non-Copy while the field is)
+  and `driftc.py`'s post-typecheck `validate_lambdas_non_retaining` call
+  (the actual authoritative pre-borrow-check gate for a non-package-mode
+  compile; needed a new lightweight `resolve_projected_capture_type`
+  helper since this caller has `binding_types`/`type_table` but not the
+  borrow checker's `Place` machinery).
+- **CONFIRMED heap-use-after-free, found in review: a Copy struct
+  containing a `String`, captured implicitly via a projected field in a
+  boxed callback, crashed under ASAN** (`Tag(label: String)` marked
+  `implement core.Copy for Tag {}`, captured as `p.tag`, returned from the
+  callback with the source struct also dropped — `heap-use-after-free` in
+  `drift_string_eq`, comparing an already-freed buffer). Unlike the plain
+  `String`-field case, this is NOT saved by `string_arc.py`'s incidental
+  coverage (see the mutation-testing finding below) — it is a real,
+  unfixed defect in the boxed-callback COPY-kind env-construction path for
+  non-bitcopy Copy types. Root cause not isolated (real follow-up lowering
+  work); instead, **the Copy-projected-capture downgrade above was
+  narrowed to require the field be Copy AND bitcopy**
+  (`type_table.is_bitcopy(ty)`), which has no refcount to double-own,
+  sidestepping the bug entirely. `is_bitcopy` is TRANSITIVE for structs
+  (a Copy struct is bitcopy iff every field is, recursively) and never
+  true for variants — so this accepts a Copy struct of entirely-bitcopy
+  fields (e.g. `Point { x: Int, y: Int }`), not only bare scalars; a Copy
+  variant, or a Copy struct with even one non-bitcopy field (`String` or
+  otherwise), remains rejected with the pre-existing diagnostic. (An
+  earlier draft of this note said "scalar bitcopy types" — corrected in a
+  later review round; the implementation was always this broad, only the
+  wording undersold it.) This is a structural narrowing (by
+  bitcopy-ness), not a String-vs-everything-else special case, per
+  standing project policy against String-special-casing in generic
+  lowering.
+- **`--emit-package` was not safe for the new capability — fixed with a
+  dedicated, broader, post-typecheck rejection.** `--emit-package`
+  serializes a pre-typecheck HIR snapshot; the only capture-discovery pass
+  that had run against it was necessarily untyped, and (confirmed via a
+  live repro) also pre-call-resolution — `capture_as_move` isn't set until
+  type-checking, so for a would-be boxed callback that early pass doesn't
+  even see a MOVE-kind capture to reject, silently defaulting to REF. A
+  new check, right after the typed `validate_lambdas_non_retaining` call,
+  walks every typed function's HIR for any lambda capture with a
+  non-empty projection and rejects `--emit-package` outright — broader
+  than just the new Copy-downgrade case, since a pre-existing REF-kind
+  projected capture has the identical "pre-typecheck snapshot doesn't
+  carry the decision" problem and was equally unverified across this
+  boundary before now.
+- **Regression.** New `lang/tests/driver/test_projected_lambda_capture_lowering.py`
+  covers the lowering mechanism directly via immediate-invoked lambdas:
+  REF-projected capture compiles and runs (was an ICE), two projections of
+  the same root don't collide, a bare-root capture plus a projection of the
+  same root both resolve correctly, and the non-bitcopy alias/CopyValue
+  proof case runs clean under `--sanitize=address,undefined`.
+  `test_boxed_callback_projected_move_capture_rejected.py`'s former
+  lock-in test (`test_copy_typed_projected_field_also_currently_rejected`)
+  is now a positive test (`test_copy_typed_projected_field_now_compiles_and_runs`,
+  an `Int` field — bitcopy); the non-Copy rejection and `mem.replace`-control
+  tests are unchanged and still pass. Two more lock-in REJECTION tests
+  cover the narrowed-out non-bitcopy cases:
+  `test_copy_typed_non_bitcopy_string_field_still_rejected` and
+  `test_copy_typed_non_bitcopy_struct_field_still_rejected` (the latter is
+  the confirmed-UAF repro above, now a compile-time rejection instead of a
+  runtime crash). New `lang/tests/packages/test_package_emit_projected_capture_rejected.py`
+  covers the `--emit-package` fix: Copy-projected and REF-projected
+  captures both rejected, a whole-local capture still packages
+  successfully (control). Targeted re-runs post-narrowing: 23/23
+  (capture-focused), 472/472 (`lang/tests/packages/`), and 882/882 across
+  a broader adjacent-risk sweep. Full unfiltered `lang/tests` suite run
+  (final, post all review rounds): 3385 passed, 5 skipped, 3 pre-existing
+  failures unrelated to this branch (entrypoint-`pub` requirement and
+  `/tmp`-root hygiene debt predating this work; none touch a file this
+  branch changed).
+- **Mutation-testing finding (§3's two aliasing-mark fixes, not currently
+  provably load-bearing for String).** Reverting either the
+  `_load_capture_from_env` REF/REF_MUT mark or either COPY-branch
+  `_copy_if_ref_alias` call and re-running the new String ASAN tests (both
+  under `--sanitize=address,undefined` and separately under Valgrind
+  `--leak-check=full`, plus a `DRIFT_STR_TRACE`-instrumented run) produced
+  byte-identical retain/release behavior and zero errors either way: a
+  separate, later MIR pass (`stage2/string_arc.py`, ledger-based ARC
+  insertion — despite the filename, its `_type_needs_drop` walk is generic
+  over STRUCT/VARIANT/ARRAY, not String-specific) independently inserts an
+  equivalent retain regardless of these three sites. The fixes are kept
+  (correct, and consistent with the file's own "must be called at every
+  ownership-transfer boundary" contract on `_copy_if_ref_alias`, matching
+  the general deref and array-index-fast-path sites that already do this),
+  but the ASAN tests should not be read as proof that removing them
+  regresses. The STRUCT/VARIANT-typed case this note flagged as untested
+  was subsequently tested (above) and found to be a confirmed UAF via a
+  DIFFERENT mechanism (the boxed-callback COPY-kind env-construction path,
+  not these two aliasing-mark sites) — resolved via the bitcopy narrowing,
+  not via `string_arc.py` coverage.
+- **Scope-tightening (third review round, no new bugs).** The
+  `--emit-package` projected-capture guard above scanned every `typed_fns`
+  entry rather than excluding dependency HIR merged in for cross-module
+  type-checking (`_pkg_hir_loaded`) — the payload-assembly code a few
+  hundred lines later already excludes those fn_ids for the identical
+  reason (only the current build's own modules are ever serialized), so
+  the guard now matches that same filter. Not reachable via any live
+  round-trip through this toolchain today (a dependency package could
+  never have gotten a projected capture into its own serialized HIR in the
+  first place, since building it would hit this same guard), but correct
+  and worth keeping. Also fixed a stale comment in `capture_discovery.py`
+  that still described the pre-narrowing ("Copy is enough") contract,
+  contradicting the corrected docstring a few lines above it.
+- **Doc/test correction (fourth review round, no behavior change).** Every
+  doc/test description of the bitcopy narrowing above said "scalar bitcopy
+  types (Int, Bool, ...)" — too narrow. The actual `is_bitcopy` check is
+  transitive for structs and already accepted a Copy struct of
+  entirely-bitcopy fields (verified: a `Point { x: Int, y: Int }` case
+  compiles and runs correctly, ASAN-clean). Reworded the docs/tests to
+  state the real contract and added a positive test for the struct case
+  (`test_copy_typed_projected_bitcopy_struct_field_compiles_and_runs`).
+  Also normalized stale/inconsistent package-suite pass counts across the
+  report (480 vs. 472 — the 480 was a differently-scoped combined run,
+  mislabeled) so the release notes read consistently front-to-back.
+- **Versioning.** `DRIFTC_VERSION` 0.33.69 → 0.33.70 (behavior-changing
+  compiler fix — a program that previously failed to compile now compiles).
+  `DRIFT_RT_ABI_VERSION` stays 19: no compiler/runtime boundary layout,
+  signature, or calling-convention change.
+
 ## 2026-07-05 (0.33.69: implicit projected move-capture into a boxed callback — LANGUAGE_BUG; ABI stays 19)
 - **CORE_BUG: a struct field passed by value to a callee inside a boxed-callback
   lambda body, with no explicit `captures(...)` clause naming it, silently

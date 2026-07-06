@@ -20,20 +20,62 @@ projections are not supported yet") only checked `use.move` — set only by
 an explicit `move` expression — so it never fired for this
 `capture_as_move`-defaulted path.
 
-Fix is an intentionally CONSERVATIVE, blanket rejection in
+0.33.69 shipped an intentionally CONSERVATIVE, blanket rejection in
 `capture_discovery.py` (stage1): every MOVE-kind capture of a projected
-place is rejected, regardless of whether the field's type happens to be
-Copy — including a safe case like `p.count: Int`
-(`test_copy_typed_projected_field_also_currently_rejected` below). A
-type-aware variant (downgrade to a plain COPY capture when the field is
-Copy) was prototyped and reverted: it requires the lambda-body prologue
-(`hir_to_mir.py` `_emit_lambda_capture_prologue`) to bind a projected
-capture key as a distinct body-visible binding, which it currently cannot
-do at all (it binds purely by root local id/name) — a real lowering
-feature, not a checker-side enum flip. Deferred as a separate follow-up;
-see `work/callback-env-uaf-ref-args/projected-copy-captures-followup.md`.
-`hir_to_mir.py`'s `cap.key.proj` branches assert if a MOVE+projected
-capture ever reaches lowering unrejected, as a defense-in-depth backstop.
+place was rejected, regardless of whether the field's type happened to be
+Copy — including a safe case like `p.count: Int`. That blanket rule
+required real lowering work first (the lambda-body prologue,
+`hir_to_mir.py` `_emit_lambda_capture_prologue`, bound captures purely by
+root local id/name and had no support for a field-projection capture as
+a distinct body-visible binding), tracked in
+`work/callback-env-uaf-ref-args/projected-copy-captures-followup.md`.
+
+That lowering work landed in the `fix/projected-capture-lowering` branch
+(prologue skips materializing a body-visible local for any projected
+capture; env construction/loads route non-bitcopy values through
+`_copy_if_ref_alias`; see
+`work/callback-env-uaf-ref-args/research-copy-projected-captures.md`).
+`capture_discovery.py` now downgrades a MOVE-kind projected capture to a
+plain COPY read when a typed caller (`borrow_checker_pass.py`, via
+`_type_of_place`) confirms the field is Copy AND bitcopy —
+`test_copy_typed_projected_field_now_compiles_and_runs` below (an `Int`
+field). A non-Copy field (`execute` above) is still rejected: there is no
+lowering support for move-and-zero-back a projected place, only for
+Copy-typed reads. `hir_to_mir.py`'s `cap.key.proj` MOVE-branches still
+assert if a non-Copy MOVE+projected capture ever reaches lowering
+unrejected, as a defense-in-depth backstop.
+
+**Narrowed to bitcopy types (0.33.70 review finding).** A Copy-BUT-NOT-
+bitcopy field — a `String`, or a Copy struct/variant containing one —
+downgraded the same way produced a CONFIRMED heap-use-after-free under
+ASAN for the struct/variant case (`Tag(label: String)` marked
+`implement core.Copy for Tag {}`, captured as `p.tag`): the boxed-callback
+COPY-kind env-construction branch's retain/copy of the field does not
+survive intact once the field's value flows out of the callback and both
+the source struct and the callback env are later dropped. The plain
+`String` field case does not reproduce today, but only because a
+separate, independent pass (`string_arc.py`) happens to provide
+incidental coverage for that one type — not something this lowering path
+can rely on, and not true for the struct/variant case. So the downgrade
+is restricted to Copy-AND-BITCOPY fields (`type_table.is_bitcopy`, which
+have no refcount to double-own in the first place); a Copy-but-non-bitcopy
+field — `String`, or a Copy struct/variant CONTAINING one — remains
+rejected — see `test_copy_typed_non_bitcopy_string_field_still_rejected`
+and `test_copy_typed_non_bitcopy_struct_field_still_rejected` below.
+
+NOTE: "bitcopy" here is NOT "scalar only". `is_bitcopy` is transitive for
+structs — a Copy struct composed entirely of (recursively) bitcopy fields
+(e.g. `Point { x: Int, y: Int }` marked `implement core.Copy for Point
+{}`) is itself bitcopy and IS accepted by this downgrade, same as a plain
+`Int` field — see `test_copy_typed_projected_bitcopy_struct_field_compiles_and_runs`
+below. A Copy VARIANT is never bitcopy regardless of its field types (see
+`types_core.py::TypeTable.is_bitcopy`'s VARIANT case), so a Copy variant
+field is always rejected here, and a Copy struct with even one
+non-bitcopy field (like the `Tag` case above) is rejected too. Extending
+this past bitcopy (accepting `String` itself, say) is real follow-up
+lowering work, not a checker-side relaxation — see
+`work/callback-env-uaf-ref-args/REPORT-0.33.70-projected-capture-lowering.md`
+§10/§15.
 
 The safe, still-supported pattern (used by e.g. mariadb-client's own
 in-repo idiom) is to explicitly extract the field via `std.mem.replace`
@@ -153,12 +195,10 @@ pub fn main() nothrow -> Int {
 """
 
 
-# Still rejected for now (deferred follow-up, not a bug): `p.count` (a Copy
-# `Int` field) is read implicitly — no explicit `captures(...)`, no `move`
-# keyword — inside a `core.callback0(...)` body. The blanket rejection in
-# capture_discovery.py doesn't distinguish this from the unsafe non-Copy
-# `execute` case above; it's intentionally conservative until the lowering
-# feature described in the module docstring lands.
+# `p.count` (a Copy `Int` field) is read implicitly — no explicit
+# `captures(...)`, no `move` keyword — inside a `core.callback0(...)` body.
+# Now downgraded to a COPY capture and compiles/runs correctly (see the
+# module docstring for the lowering work that enabled this).
 _COPY_FIELD_IMPLICIT_CAPTURE_SOURCE = """\
 module main;
 import std.core as core;
@@ -193,16 +233,151 @@ pub fn main() nothrow -> Int {
 """
 
 
-def _compile(tmp_path: Path, source: str, name: str = "test_bin") -> subprocess.CompletedProcess[str]:
+# `p.point` (a `Point` STRUCT field — `implement core.Copy for Point {}`,
+# composed entirely of `Int` fields, hence bitcopy per
+# `types_core.py::TypeTable.is_bitcopy`'s transitive struct case) read
+# implicitly inside a `core.callback0(...)` body. This is deliberately NOT
+# a scalar, to lock in that the Copy-AND-bitcopy downgrade covers a bitcopy
+# STRUCT too, not only scalars like the `Int` case above — see the module
+# docstring.
+_COPY_FIELD_BITCOPY_STRUCT_IMPLICIT_CAPTURE_SOURCE = """\
+module main;
+import std.core as core;
+import std.concurrent as conc;
+
+struct Point(x: Int, y: Int);
+implement core.Copy for Point {}
+
+struct Prepared {
+\tpoint: Point,
+}
+
+fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, payload: String) throws -> Point {
+\tvar p = prepare.call(tk, payload);
+\tvar vt = conc.spawn<type Point>(core.callback0(| | => {
+\t\treturn p.point;
+\t}));
+\tmatch vt.join() {
+\t\tOk(v) => { return v; },
+\t\tErr(_) => { return Point(x = -1, y = -1); },
+\t\tdefault => { return Point(x = -2, y = -2); }
+\t}
+}
+
+pub fn main() nothrow -> Int {
+\tval prepare: core.CallbackThrow2<Int, String, Prepared> = core.callback_throw2(| tk, pl | -> Prepared => {
+\t\treturn Prepared(point = Point(x = tk, y = tk + 1));
+\t});
+\tval result = try driver_handle(prepare, 41, "hello") catch { Point(x = -3, y = -3) };
+\tif result.x == 41 {
+\t\tif result.y == 42 {
+\t\t\treturn 0;
+\t\t}
+\t}
+\treturn 1;
+}
+"""
+
+
+# `p.name` (a `String` field — Copy per project policy, but NOT bitcopy)
+# read implicitly inside a `core.callback0(...)` body. Copy-but-non-bitcopy
+# projected fields are rejected (narrowed scope, 0.33.70 review finding —
+# see the module docstring): the boxed-callback COPY-kind env-construction
+# branch's retain/copy of a non-bitcopy field does not survive intact once
+# the field's value flows out of the callback and both the source struct
+# and the callback env are later dropped (CONFIRMED as a real
+# heap-use-after-free for the struct/variant case below; `String` itself
+# happens not to reproduce, but only via an unrelated independent pass —
+# not something this lowering path can rely on, so it stays conservative
+# for every non-bitcopy Copy type, String included).
+_COPY_FIELD_STRING_IMPLICIT_CAPTURE_SOURCE = """\
+module main;
+import std.core as core;
+import std.concurrent as conc;
+
+struct Prepared {
+\tname: String,
+}
+
+fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, payload: String) throws -> String {
+\tvar p = prepare.call(tk, payload);
+\tvar vt = conc.spawn<type String>(core.callback0(| | => {
+\t\treturn p.name;
+\t}));
+\tmatch vt.join() {
+\t\tOk(v) => { return v; },
+\t\tErr(_) => { return "join-err"; },
+\t\tdefault => { return "join-default"; }
+\t}
+}
+
+pub fn main() nothrow -> Int {
+\tval prepare: core.CallbackThrow2<Int, String, Prepared> = core.callback_throw2(| tk, pl | -> Prepared => {
+\t\treturn Prepared(name = "hello-" + pl);
+\t});
+\tval result = try driver_handle(prepare, 1, "world") catch { "caught" };
+\tif result == "hello-world" {
+\t\treturn 0;
+\t}
+\treturn 1;
+}
+"""
+
+# `p.tag` (a `Tag` struct field, `implement core.Copy for Tag {}`,
+# containing a `String`) read implicitly inside a `core.callback0(...)`
+# body. THIS SHAPE PRODUCED A CONFIRMED heap-use-after-free (`memcmp` on a
+# freed `String` buffer inside `drift_string_eq`, comparing the returned
+# `Tag.label`) when the Copy-downgrade was not restricted to bitcopy types
+# — found during 0.33.70 review, before the narrowing landed. Locks in the
+# rejection so this exact shape can never silently regress back to
+# miscompiling.
+_COPY_FIELD_STRUCT_CONTAINING_STRING_IMPLICIT_CAPTURE_SOURCE = """\
+module main;
+import std.core as core;
+import std.concurrent as conc;
+
+struct Tag(label: String);
+implement core.Copy for Tag {}
+
+struct Prepared {
+\ttag: Tag,
+}
+
+fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, payload: String) throws -> Tag {
+\tvar p = prepare.call(tk, payload);
+\tvar vt = conc.spawn<type Tag>(core.callback0(| | => {
+\t\treturn p.tag;
+\t}));
+\tmatch vt.join() {
+\t\tOk(v) => { return v; },
+\t\tErr(_) => { return Tag(label = "join-err"); },
+\t\tdefault => { return Tag(label = "join-default"); }
+\t}
+}
+
+pub fn main() nothrow -> Int {
+\tval prepare: core.CallbackThrow2<Int, String, Prepared> = core.callback_throw2(| tk, pl | -> Prepared => {
+\t\treturn Prepared(tag = Tag(label = "hello-" + pl));
+\t});
+\tval result = try driver_handle(prepare, 1, "world") catch { Tag(label = "caught") };
+\tif result.label == "hello-world" {
+\t\treturn 0;
+\t}
+\treturn 1;
+}
+"""
+
+
+def _compile(tmp_path: Path, source: str, name: str = "test_bin", *, sanitize: str | None = None) -> subprocess.CompletedProcess[str]:
 	src = tmp_path / "main.drift"
 	src.write_text(source)
 	out = tmp_path / name
-	return subprocess.run(
-		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
-		 "--stdlib-root", str(ROOT / "stdlib"),
-		 str(src), "--entry", "main::main", "-o", str(out)],
-		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120),
-	)
+	cmd = [sys.executable, "-m", "lang.driftc.driftc", "--dev",
+	 "--stdlib-root", str(ROOT / "stdlib")]
+	if sanitize:
+		cmd += [f"--sanitize={sanitize}"]
+	cmd += [str(src), "--entry", "main::main", "-o", str(out)]
+	return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(120))
 
 
 def test_implicit_projected_move_capture_into_boxed_callback_rejected(tmp_path: Path) -> None:
@@ -229,20 +404,67 @@ def test_projected_move_capture_via_mem_replace_still_compiles(tmp_path: Path) -
 	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-500:]}"
 
 
-def test_copy_typed_projected_field_also_currently_rejected(tmp_path: Path) -> None:
-	"""Locks in the current, intentional scope: a Copy-typed field (`Int`)
-	read implicitly inside a boxed-callback lambda is ALSO rejected right
-	now, same as the non-Copy case — the blanket rejection doesn't (yet)
-	distinguish them. This is expected to change once the deferred
-	lowering follow-up lands (see the module docstring); when it does,
-	update this test rather than silently losing coverage of the scope
-	decision."""
+def test_copy_typed_projected_field_now_compiles_and_runs(tmp_path: Path) -> None:
+	"""A Copy-typed field (`Int`) read implicitly inside a boxed-callback
+	lambda is downgraded from the unsupported MOVE-projected path to a
+	plain COPY capture, and compiles and runs correctly — the lowering
+	follow-up referenced in the module docstring."""
 	res = _compile(tmp_path, _COPY_FIELD_IMPLICIT_CAPTURE_SOURCE)
+	assert res.returncode == 0, f"compile failed: {res.stderr[-1500:]}"
+	out = tmp_path / "test_bin"
+	assert out.exists()
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
+	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-500:]}"
+
+
+def test_copy_typed_projected_bitcopy_struct_field_compiles_and_runs(tmp_path: Path) -> None:
+	"""A Copy struct field composed entirely of bitcopy fields (`Point { x:
+	Int, y: Int }`, `implement core.Copy for Point {}`) read implicitly
+	inside a boxed-callback lambda is downgraded the same way as a scalar
+	bitcopy field (the `Int` case above) — `is_bitcopy` is transitive for
+	structs, so the Copy-AND-bitcopy downgrade is not scalar-only. See the
+	module docstring."""
+	res = _compile(tmp_path, _COPY_FIELD_BITCOPY_STRUCT_IMPLICIT_CAPTURE_SOURCE)
+	assert res.returncode == 0, f"compile failed: {res.stderr[-1500:]}"
+	out = tmp_path / "test_bin"
+	assert out.exists()
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
+	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-500:]}"
+
+
+def test_copy_typed_non_bitcopy_string_field_still_rejected(tmp_path: Path) -> None:
+	"""A Copy-but-non-bitcopy field (`String`) read implicitly inside a
+	boxed-callback body must still be rejected — the Copy-projected-capture
+	downgrade is narrowed to bitcopy types only (0.33.70 review finding;
+	see the module docstring). Locks in the narrowed scope so it cannot
+	silently widen back to a known-unsafe shape."""
+	res = _compile(tmp_path, _COPY_FIELD_STRING_IMPLICIT_CAPTURE_SOURCE)
 	assert res.returncode != 0, (
-		"expected the projected-move-capture rejection (Copy-projected capture "
-		"support is deferred, not yet implemented) — if this now compiles, the "
-		"deferred follow-up may have landed; update this test's expectations "
-		"instead of deleting it"
+		"expected the projected-move-capture rejection for a non-bitcopy "
+		"Copy field (String) — if this now compiles, either the narrowing "
+		"was removed or the underlying UAF was actually fixed; update this "
+		"test's expectations instead of deleting it"
+	)
+	assert "lambda move captures of projections are not supported yet" in res.stderr, (
+		f"expected the projected-move-capture rejection diagnostic, got:\n{res.stderr[-1000:]}"
+	)
+
+
+def test_copy_typed_non_bitcopy_struct_field_still_rejected(tmp_path: Path) -> None:
+	"""A Copy struct field containing a `String` (`Tag`, `implement
+	core.Copy for Tag {}`) read implicitly inside a boxed-callback body
+	must be rejected. This is the CONFIRMED-crashing shape found during
+	0.33.70 review (a real heap-use-after-free under ASAN before the
+	bitcopy-only narrowing landed — see the module docstring); this test
+	locks in the rejection so it cannot silently regress back to
+	miscompiling."""
+	res = _compile(tmp_path, _COPY_FIELD_STRUCT_CONTAINING_STRING_IMPLICIT_CAPTURE_SOURCE)
+	assert res.returncode != 0, (
+		"expected the projected-move-capture rejection for a non-bitcopy "
+		"Copy struct field (Tag containing String) — this shape is a "
+		"CONFIRMED heap-use-after-free if it compiles via the Copy-downgrade "
+		"path; do not widen the bitcopy-only narrowing without fixing that "
+		"UAF first"
 	)
 	assert "lambda move captures of projections are not supported yet" in res.stderr, (
 		f"expected the projected-move-capture rejection diagnostic, got:\n{res.stderr[-1000:]}"

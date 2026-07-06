@@ -634,3 +634,183 @@ opportunistic uplifts)" for the full rule.
   - If the matrix exposes further defects, fix root causes in the same
     subsystem rather than narrowing the tests around them — that is the
     point of firing the trigger.
+
+- **Resolved in 0.33.70 (`fix/projected-capture-lowering`).** Found during
+  research (2026-07-05) as a THIRD parallel lowering path missing the same
+  `_ref_field_temps` aliasing mark, and fixed as part of the
+  projected-capture-lowering feature landing (was tracked here as a
+  prerequisite while that feature was still pending; the feature has now
+  landed so this note is historical, not open work).
+  `hir_to_mir.py::_load_capture_from_env`'s REF/REF_MUT branch did a
+  `LoadRef` into a fresh temp — structurally identical to the general deref
+  path (`_visit_expr_HUnary` DEREF) and the array-index field-projection
+  fast path — but did NOT add the result to `_ref_field_temps` for a
+  non-bitcopy inner type, unlike both of those; now fixed. Separately (a
+  distinct gap, same root confusion): the COPY-kind lambda-capture
+  env-construction site, in both `_lower_lambda_immediate_call` and
+  `_lower_lambda_callback`, never called `_copy_if_ref_alias()` before
+  storing the captured field's value into the heap-allocated closure env,
+  unlike every other ownership-transfer boundary (struct/variant construct,
+  return, assignment, call args); now fixed at both sites. Confirms the
+  standing lesson yet again: "any two lowering paths that read a
+  field/element must apply the SAME `_ref_field_temps` aliasing rule" — was
+  three paths, now consistent.
+  **Caveat added post-landing (mutation-testing finding, 0.33.70 review):**
+  for `String` specifically, `stage2/string_arc.py`'s later, independent
+  ledger-based ARC-insertion pass was found to already provide equivalent
+  protection at all three sites — reverting any of the three fixes and
+  re-running under ASAN and Valgrind produced no observable difference.
+  The fixes are kept (correct, and consistent with the rest of the file's
+  ownership-transfer-boundary contract), but are not proven load-bearing
+  for String today. Whether they're load-bearing for a STRUCT/VARIANT-typed
+  projected capture (outside what was mutation-tested) is untested — see
+  `work/callback-env-uaf-ref-args/REPORT-0.33.70-projected-capture-lowering.md`.
+
+- **Found during 0.33.70 review, NOT fixed (out of this branch's scope,
+  pre-existing, whole-root capture — not the projected `p.field` path this
+  branch targets):** a FOURTH parallel lowering path with the same shape.
+  `hir_to_mir.py`'s `HVar` visitor has its own inline REF/REF_MUT capture
+  read (the exact-`HVar` capture-slot branch that does its own `LoadRef`
+  when the captured key is a bare root, not a projection) that bypasses
+  `_load_capture_from_env()` entirely and does not apply the
+  `_ref_field_temps` alias mark. This is whole-root capture behavior
+  (`captures(&p)`/implicit REF of a bare local), independent of the
+  projected-capture (`p.field`) work in this branch. Fold into a future
+  pass ONLY if the `_ref_field_temps`/`_copy_if_ref_alias` alias-helper
+  claim ("must be called at every ownership-transfer boundary") is being
+  made complete/audited end-to-end — not a standalone priority given the
+  0.33.70 mutation-testing finding above (a later independent pass already
+  covers String; the practical risk surface, if any, is STRUCT/VARIANT).
+
+---
+
+## Unify String/Arc ownership under one central transfer-policy classification
+
+- **Improvement:** define one central transfer-policy classification
+  (bitcopy / retain-copy / structural-copy / move-only) and make
+  `String` always classify as **retain-copy + needs-drop**, as a fixed
+  property of the type, independent of whether the stdlib's Copy-trait
+  query has been installed (`TypeTable._copy_query`). Route `String`,
+  `Arc<T>`, and future refcounted handles through the same
+  `CopyValue`/`DropValue` ownership path where possible, instead of
+  `String` being a `TypeKind.SCALAR` with scattered special cases across
+  Copy-status, drop-policy, and lowering. This is broader than — and a
+  superset trigger of — "Consolidate ownership-authoring" above: that
+  entry is about the DROP/CLEANUP passes re-deriving ownership per exit
+  path; this one is about the TYPE-CLASSIFICATION layer itself having
+  two disagreeing authorities for the same question (see below), which
+  no amount of cleanup-pass consolidation fixes on its own.
+
+- **Why deferred (2026-07-05):** identified as a research question, not
+  yet as a scoped patch — see the paired research doc requirement
+  below. Do not fold into the 0.33.69 UAF fix (checker-only diagnostic,
+  already scoped and landing) or the projected-capture follow-up's
+  narrow alias-bookkeeping fixes (§4e in
+  `research-copy-projected-captures.md`, which mirror an EXISTING
+  lowering path rather than redesign the classification). Escalating
+  either of those in-flight patches to this refactor would be exactly
+  the kind of scope creep the "no partial moves" / minimal-fix
+  discipline exists to prevent. This trigger is registered so the NEXT
+  bug in this shape (see Triggers) escalates instead of yet another
+  isolated patch — three is the pattern-recognition threshold this repo
+  uses elsewhere (see "Consolidate borrow-checker walkers": "Three
+  users is the minimum for a correctly-shaped abstraction").
+
+- **Mandatory first step when triggered: a standalone research/design-impact
+  doc, NOT implementation.** `String` is used everywhere; the current
+  special-casing may be load-bearing for ergonomics (implicit copies at
+  call sites, literals, concat, field projection, diagnostics/JSON
+  payloads) that a strict Arc-like model would make more ceremonious
+  (explicit `.clone()`/`move`/`&` at sites that currently just work).
+  The research doc must cover, before any code changes are proposed:
+  - **Current String semantics map:** every place String is treated as
+    scalar/primitive/special-cased (checker, borrow-checker, lowering,
+    codegen, runtime ABI helpers); where it's treated as Copy; where it
+    needs drop/retain/`CopyValue`; where behavior differs between
+    isolated-`TypeTable`/unit-test mode and full-stdlib/post-link mode
+    (the `_copy_query` disagreement found in this research pass is one
+    concrete instance — there may be others).
+  - **UX dependency audit:** what ergonomic wins the current special
+    treatment buys (implicit copies, argument passing, field
+    projection, literals, concat, formatting, diagnostics, JSON/error
+    payloads, package boundaries) and which of those a user would
+    directly feel the loss of (more explicit `clone`/`move`/`copy`/`&`)
+    if String became "just Arc-like."
+  - **Compiler/runtime impact map:** every touched code path (type
+    checker, borrow checker, MIR lowering, ownership ledger,
+    `string_arc.py`, codegen, runtime ABI helpers); what ABI/runtime
+    boundary changes are actually required to do this right — **ABI
+    preservation is explicitly NOT a goal here** (2026-07-05 direction:
+    "zero effort to preserve it"); map the impact so the ABI bump is
+    sized correctly, don't contort the design to avoid one; what tests
+    are likely to churn.
+  - **Risk matrix:** what gets simpler, what gets stricter/less
+    ergonomic, what might break downstream packages/consumers, and
+    what should REMAIN intentionally special-cased even after the
+    refactor (not everything special about String is necessarily a
+    defect).
+  Only after that doc exists and is reviewed does this trigger's "Scope
+  when triggered" (implementation) become actionable. Research doc:
+  `work/string-ownership-refactor/research-string-semantics-audit.md`
+  (commissioned 2026-07-05, research-only, no implementation).
+
+- **Triggers:**
+
+  - Any bug where a NEW lowering/checker path independently
+    mis-classifies `String` (or a future refcounted-Copy handle) as
+    bitcopy, or forgets it needs drop/retain — i.e., a THIRD distinct
+    instance of the "String ownership-authoring conformance matrix"
+    trigger's recurring-defect class (that trigger already has two
+    fired instances plus the projected-capture research's finding
+    above; a further NEW one — not just another cell in the SAME
+    subsystem's matrix, but a genuinely new code path — is this
+    trigger's threshold, not that one's).
+  - Discovery of a SECOND place (beyond `copy_status()`'s
+    query-vs-structural-fallback split, found 2026-07-05) where
+    isolated/unit-test type-table state and full-stdlib-loaded state
+    disagree about a core type's ownership properties.
+  - A future refcounted handle type (beyond `String`/`Arc<T>`) needing
+    its own bespoke Copy/drop special-casing, rather than fitting the
+    existing `Arc<T>`-style model — evidence that "String is special"
+    isn't actually about String, but about a missing general category.
+
+- **Scope when triggered — DECIDED (2026-07-05), research doc landed:**
+  the audit (`research-string-semantics-audit.md`) split "unify
+  String/Arc" into two genuinely different projects, Scope A
+  (classification + centralization, ABI-neutral) and Scope B
+  (runtime-representation reshape toward `ArcBox`, ABI bump). **Target
+  Scope A only for the next compiler refactor:**
+  1. Make `String`'s retain-copy + needs-drop classification structural
+     and mode-independent (closes the `copy_status()`
+     query-vs-structural-fallback split and its downstream propagation
+     into `DropPolicy.is_cheap_copy`/`_should_copy_value`).
+  2. Centralize the MIR helper paths that mark borrowed String/
+     non-bitcopy aliases (`_ref_field_temps`) and apply `CopyValue` at
+     ownership-transfer boundaries (`_copy_if_ref_alias`), so new
+     lowering paths are forced through the shared helpers instead of
+     each re-implementing the marking. **Both steps are required** —
+     per the audit's corrected risk-matrix framing, classification alone
+     fixes the policy split but does NOT by itself close the recurring
+     missed-retain/missed-alias bug class; that requires this
+     centralization step too.
+  3. **Keep `String` Copy.** The improvement is unifying the mechanism,
+     not removing Copy-ness — Copy-removal is a separately-justified,
+     much larger decision this trigger does not mandate (see the
+     audit's UX dependency audit: ~80 Copy-dependent read sites,
+     300+ by-value String params).
+  4. **Do NOT reshape the runtime representation (Scope B) as part of
+     this work.**
+
+  Scope B (`DriftString` toward an `ArcBox`-style representation) is an
+  explicitly SEPARATE, later project, not bundled into Scope A or into
+  the projected-capture follow-up. ABI preservation is not a constraint
+  for Scope B when/if it's taken up (2026-07-05 direction: "zero effort
+  to preserve it") — if the correct representation requires an ABI bump
+  (likely — the audit enumerates the ABI-visible surface: the
+  `DriftString` by-value calling convention, all `drift_string_*`
+  exports, static-literal layout, `DRIFT_RT_ABI_VERSION`), take it. But
+  Scope B's UX/source blast radius (every by-value String param, every
+  Copy-dependent call site) is still a real scope constraint on THAT
+  project, separate from ABI — keep the three tracks (0.33.69 UAF fix,
+  projected-capture follow-up, Scope A) separate from Scope B even
+  though they share root cause.

@@ -7102,7 +7102,13 @@ def compile_stubbed_funcs(
 						slot = remapped_capture_map.get(cap.key)
 						if slot is not None and slot < len(spec.env_field_types):
 							candidate = spec.env_field_types[slot]
-							if shared_type_table.has_typevar(cap_ty) or shared_type_table.get(cap_ty).kind is TypeKind.UNKNOWN:
+							# For a PROJECTED capture (cap.key.proj non-empty), `candidate`
+							# is the projected FIELD's type (e.g. `&Int`), not a valid
+							# stand-in for the ROOT's own type (`Prepared`) — the checker
+							# needs the root's whole-struct type to type-check `p.count`
+							# as a field projection (see the preseed below). Only borrow
+							# `candidate` here for a whole-local capture.
+							if not cap.key.proj and (shared_type_table.has_typevar(cap_ty) or shared_type_table.get(cap_ty).kind is TypeKind.UNKNOWN):
 								cap_ty = candidate
 							if drift_debug.enabled("lambda_capture"):
 								import sys
@@ -7280,11 +7286,33 @@ def compile_stubbed_funcs(
 							continue
 						if shared_type_table.get(cap_ty).kind is TypeKind.UNKNOWN:
 							continue
+						# A projected capture's slot is already correctly typed
+						# by outer lowering (the projected field/ref type, e.g.
+						# `&Int`) -- overwriting it with the ROOT's whole-struct
+						# type here is exactly the metadata bug that crashed
+						# codegen (research-copy-projected-captures.md §2). Only
+						# a whole-local capture's slot gets re-typed from the
+						# (root) preseed.
+						if cap.key.proj:
+							continue
 						env_field_types[slot] = cap_ty
 				lower._lambda_env_field_types = env_field_types
 				lower._lambda_capture_slots = remapped_capture_map
+				# Roots that have at least one WHOLE-LOCAL (non-projected)
+				# capture -- only these get a body-visible local at all (see
+				# the prologue skip in hir_to_mir.py and the preseed loop
+				# below). A bare-name fallback lookup (hir_to_mir.py:3041-3044,
+				# used only for a binding-id-less HVar read) must never
+				# resolve to a projected slot: with >1 projection of the same
+				# root, the name-keyed dict would collide on one entry ("last
+				# write wins"), silently picking an arbitrary slot.
+				roots_with_whole_capture = {
+					int(cap.key.root_local) for cap in (lam.captures or []) if not cap.key.proj
+				}
 				name_to_slot: dict[str, int] = {}
 				for key, slot in remapped_capture_map.items():
+					if key.proj:
+						continue
 					name = preseed_binding_names.get(int(key.root_local))
 					if name:
 						name_to_slot[name] = slot
@@ -7293,6 +7321,16 @@ def compile_stubbed_funcs(
 				for bid, name in preseed_binding_names.items():
 					lower._binding_names[bid] = name
 				for bid, ty in preseed_binding_types.items():
+					if bid not in roots_with_whole_capture:
+						# No whole-local capture of this root exists -- the
+						# prologue skips materializing a body-visible local
+						# for a projected-only root, so seeding _local_types
+						# here would describe a local nothing ever stores
+						# into; a stray bare-root read (which per discovery
+						# shouldn't exist without its own capture, see design
+						# doc §6) must not silently resolve against the
+						# whole-struct type.
+						continue
 					name = preseed_binding_names.get(bid, f"__b{bid}")
 					local_name = lower._canonical_local(bid, name)
 					if local_name not in lower._local_types:
@@ -7342,6 +7380,11 @@ def compile_stubbed_funcs(
 						for idx, cap in enumerate(lam.captures):
 							if idx >= len(inst.field_types):
 								continue
+							# Same metadata bug as the preseed loop above: a
+							# projected slot's type is the FIELD's type, not a
+							# valid type for the ROOT-named local. Skip.
+							if cap.key.proj:
+								continue
 							bid = int(cap.key.root_local)
 							name = preseed_binding_names.get(bid, f"__b{bid}")
 							local_name = lower._canonical_local(bid, name)
@@ -7354,6 +7397,8 @@ def compile_stubbed_funcs(
 								elif cur_ty is None or cur_ty == unknown_ty:
 									lower._local_types[local_name] = ty
 					for key, slot in remapped_capture_map.items():
+						if key.proj:
+							continue
 						bid = int(key.root_local)
 						name = preseed_binding_names.get(bid, f"__b{bid}")
 						local_name = lower._canonical_local(bid, name)
@@ -11245,9 +11290,52 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# BEFORE the pre-typecheck snapshot.  Without this, package consumers
 	# receive HLambda nodes with explicit_captures but empty captures, causing
 	# closure environment struct field mismatches during MIR lowering.
+	#
+	# This call is necessarily untyped (pre-typecheck: no binding_types/
+	# type_table exist yet) AND pre-call-resolution (`capture_as_move` is
+	# set later, by `call_resolver.py` during type-checking, when a lambda
+	# is wrapped as a boxed callback) — so for a projected capture inside a
+	# would-be boxed callback specifically, this pass cannot yet tell it
+	# needs MOVE/COPY semantics at all and defaults the implicit read to
+	# REF, same as any other lambda. It is NOT the check that catches the
+	# package-emit projected-capture problem for that shape (see the
+	# dedicated, broader, post-typecheck check further down, right after
+	# the typed `validate_lambdas_non_retaining` call, which runs once the
+	# real decision is known and catches every projected capture — REF or
+	# Copy-downgraded-COPY alike — regardless of capture_as_move timing).
+	#
+	# What THIS early call's diagnostics previously caught — capture-name
+	# collisions, "value used but not captured" errors, overlapping
+	# captures, an explicit non-projected `move` misuse — were silently
+	# discarded entirely in package-emit mode (a latent, unrelated bug: the
+	# return value was never used). Surfacing them as a hard failure here
+	# is still a real, independent fix, just not the fix for the
+	# projected-capture boundary problem specifically.
 	if getattr(args, "emit_package", None):
+		_pkg_capture_diags: list[Diagnostic] = []
 		for _fn_id, _block in normalized_hirs_by_id.items():
-			validate_lambdas_non_retaining(_block)
+			_pkg_capture_diags.extend(validate_lambdas_non_retaining(_block).diagnostics)
+		if _pkg_capture_diags:
+			if args.json:
+				payload = {
+					"exit_code": 1,
+					"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in _pkg_capture_diags],
+				}
+				_emit_compile_json(payload)
+			else:
+				for d in _pkg_capture_diags:
+					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(
+						f"{_source_label()}: note: implicit projected lambda captures "
+						"(e.g. `p.field` with no `captures(...)` clause) are not yet "
+						"supported with --emit-package, even for a Copy-typed field; "
+						"extract the field via `std.mem.replace` into a local first, "
+						"then `captures(move <local>)`",
+						file=sys.stderr,
+					)
+			return 1
 
 	# Build LinkedWorld BEFORE the _pre_typecheck_hirs snapshot so that
 	# ConstShare structural synthesis can run before snapshot capture.
@@ -12093,6 +12181,8 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			typed_fn.body,
 			signatures_by_id=signatures_by_id_all,
 			call_resolutions=getattr(typed_fn, "call_resolutions", None),
+			binding_types=typed_fn.binding_types,
+			type_table=type_table,
 		)
 		lambda_diags.extend(res.diagnostics)
 	if lambda_diags:
@@ -12109,6 +12199,83 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
+
+	# `--emit-package` serializes `_pre_typecheck_hirs`, a deep-copy of the
+	# HIR taken BEFORE type-checking (see the snapshot site above). The
+	# capture-discovery pass that has run on that pre-typecheck HIR
+	# (earlier in this function, gated on `emit_package`) is necessarily
+	# untyped — no `binding_types`/`type_table` exist that early — AND, for
+	# a lambda that will become a boxed callback, `capture_as_move` is not
+	# set yet either (it's set by `call_resolver.py` during type-checking,
+	# which hasn't run). So that early pass cannot make the correct
+	# MOVE-vs-COPY decision for a projected capture (`p.field`), and
+	# whatever decision it DOES lock into `HLambda.captures` at that point
+	# is exactly what gets serialized — independent of the correct decision
+	# the typed pass above just finished computing on the live (in-process)
+	# HIR. A package consumer loading this HIR only re-discovers EXPLICIT
+	# captures on load, not implicit ones, and has no typed resolver of its
+	# own either. Until package serialization/loading is taught to carry
+	# the typed capture decision through, reject ANY projected lambda
+	# capture in a function that will be serialized, rather than silently
+	# shipping a package whose consumers cannot correctly rebuild the
+	# closure env. This is deliberately broader than just the new
+	# Copy-downgrade case landing in 0.33.70: a pre-existing REF-kind
+	# projected capture is equally unverified across this exact boundary,
+	# so it is rejected here too until that's audited.
+	if getattr(args, "emit_package", None):
+		def _find_projected_captures(node: object, found: list) -> None:
+			if isinstance(node, H.HLambda):
+				for cap in (node.captures or []):
+					if cap.key.proj:
+						found.append((node, cap))
+			for _fname in getattr(node, "__dataclass_fields__", {}) or {}:
+				_val = getattr(node, _fname, None)
+				if isinstance(_val, (H.HExpr, H.HNode)):
+					_find_projected_captures(_val, found)
+				elif isinstance(_val, list):
+					for _item in _val:
+						if isinstance(_item, (H.HExpr, H.HNode, H.HStmt)):
+							_find_projected_captures(_item, found)
+		_pkg_projected: list = []
+		for _fn_id, typed_fn in typed_fns.items():
+			# Only functions actually authored in THIS source build end up in
+			# the emitted payload (see `source_module_ids` below, which
+			# excludes `_pkg_hir_loaded` the same way) — a dependency
+			# package's HIR gets merged into `typed_fns` for cross-module
+			# type-checking but is never re-serialized here, so a projected
+			# capture in a dependency function must not block this build.
+			if _fn_id in _pkg_hir_loaded:
+				continue
+			_find_projected_captures(typed_fn.body, _pkg_projected)
+		if _pkg_projected:
+			_pkg_proj_diags = [
+				Diagnostic(
+					message=(
+						"lambda captures a struct field (not a whole local) inside a "
+						"function compiled with --emit-package; projected lambda "
+						"captures are not yet supported across package serialization "
+						"(the typed capture decision does not survive the "
+						"pre-typecheck HIR snapshot) — extract the field via "
+						"`std.mem.replace` into a standalone local first, then "
+						"`captures(move <local>)`, or drop --emit-package for this build"
+					),
+					severity="error",
+					phase="typecheck",
+					span=getattr(node, "span", None) or Span(),
+				)
+				for node, _cap in _pkg_projected
+			]
+			if args.json:
+				payload = {
+					"exit_code": 1,
+					"diagnostics": [_diag_to_json(d, "typecheck", source_path) for d in _pkg_proj_diags],
+				}
+				_emit_compile_json(payload)
+			else:
+				for d in _pkg_proj_diags:
+					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+			return 1
 
 	# Checker (stub) enforces language-level rules (e.g., nothrow) after typecheck
 	# so we can use CallInfo for method-call throw analysis.

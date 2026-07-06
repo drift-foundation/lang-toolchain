@@ -1309,6 +1309,24 @@ class HIRToMIR:
 				inner_ty = td.param_types[0]
 			dest = self.b.new_temp()
 			self.b.emit(M.LoadRef(dest=dest, ptr=field_val, inner_ty=inner_ty))
+			# Same aliasing mark as the general deref path (_visit_expr_HUnary
+			# DEREF) and the array-index field-projection fast path: a
+			# LoadRef of a non-bitcopy inner type is a borrowed view, not an
+			# owned value, until `_copy_if_ref_alias` upgrades it at an
+			# ownership-transfer boundary (return, binding, call arg).
+			# NOTE: verified via mutation testing (revert + rerun under ASAN
+			# and Valgrind) that `string_arc.py`'s later, independent
+			# ledger-based ARC-insertion pass currently provides an
+			# equivalent safety net for String specifically — this mark is
+			# not provably load-bearing today. Kept for internal consistency
+			# with the other two `_ref_field_temps`-marking sites (this
+			# pass predates/duplicates that ledger analysis by design, per
+			# the file's own "must be called at every ownership-transfer
+			# boundary" contract on `_copy_if_ref_alias`), and because
+			# STRUCT/VARIANT-typed projected fields (not just String) are
+			# untested against `string_arc.py`'s coverage.
+			if not self._drop_policy(inner_ty).is_bitcopy:
+				self._ref_field_temps.add(dest)
 			return dest
 		return field_val
 
@@ -5049,8 +5067,24 @@ class HIRToMIR:
 					)
 				else:
 					env_val = self.lower_expr(expr)
+					val_ty = self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown
+					# COPY-kind capture storing into the heap/stack-allocated
+					# closure env is an ownership-transfer boundary exactly
+					# like struct/variant construction and call args above —
+					# a raw &T field read must be upgraded to an owned value
+					# before it's stored, or the env outlives (or is dropped
+					# alongside) the aliased source field.
+					# NOTE: mutation-tested (revert + rerun under ASAN and
+					# Valgrind) — `string_arc.py`'s later, independent
+					# ledger-based ARC-insertion pass currently inserts an
+					# equivalent retain on its own for String, so this call
+					# is not provably load-bearing today for that type. Kept
+					# for consistency with every other ownership-transfer
+					# boundary in this file and because it is not yet
+					# verified redundant for STRUCT/VARIANT-typed captures.
+					env_val = self._copy_if_ref_alias(env_val, val_ty)
 					env_vals.append(env_val)
-					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+					env_field_types.append(val_ty)
 			for idx, val in enumerate(env_vals):
 				val_ty = self._local_types.get(val)
 				if val_ty is None or idx >= len(env_field_types):
@@ -5281,8 +5315,22 @@ class HIRToMIR:
 					)
 				else:
 					env_val = self.lower_expr(expr)
+					val_ty = self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown
+					# Same ownership-transfer-boundary upgrade as the matching
+					# branch in `_lower_lambda_immediate_call` — storing into
+					# the heap env must not persist a raw &T-field alias.
+					# NOTE: mutation-tested (revert + rerun under ASAN and
+					# Valgrind, see the boxed-callback String ASAN test) —
+					# `string_arc.py`'s later, independent ledger-based
+					# ARC-insertion pass currently inserts an equivalent
+					# retain on its own for String, so this call is not
+					# provably load-bearing today. Kept for consistency with
+					# every other ownership-transfer boundary in this file
+					# and because it is not yet verified redundant for
+					# STRUCT/VARIANT-typed captures.
+					env_val = self._copy_if_ref_alias(env_val, val_ty)
 					env_vals.append(env_val)
-					env_field_types.append(self._local_types.get(env_val) or self._infer_capture_type(expr, cap.key) or unknown)
+					env_field_types.append(val_ty)
 			for idx, val in enumerate(env_vals):
 				val_ty = self._local_types.get(val)
 				if val_ty is None or idx >= len(env_field_types):
@@ -5414,6 +5462,16 @@ class HIRToMIR:
 		if self._lambda_env_local is None or self._lambda_env_ty is None or self._lambda_env_field_types is None:
 			return
 		for key, slot in sorted(self._lambda_capture_slots.items(), key=lambda item: item[1]):
+			if key.proj:
+				# A projected capture (e.g. `p.count`) does not get a
+				# body-visible local named after the ROOT — that would
+				# materialize a bogus `p`-typed local holding just the
+				# projected field's value (or collide with a second
+				# projection of the same root under one local name). The
+				# body's own `p.count` expression is lowered directly
+				# against the env slot elsewhere; see
+				# work/callback-env-uaf-ref-args/research-copy-projected-captures.md.
+				continue
 			bid = int(key.root_local)
 			name = self._binding_names.get(bid, f"__b{bid}")
 			local_name = self._canonical_local(bid, name)

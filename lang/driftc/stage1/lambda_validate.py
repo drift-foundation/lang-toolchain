@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lang.driftc.stage1.capture_discovery import discover_captures
+from lang.driftc.stage1.capture_discovery import discover_captures, resolve_projected_capture_type
 from lang.driftc.stage1 import hir_nodes as H
 
 
@@ -17,6 +17,8 @@ def validate_lambdas_non_retaining(
 	*,
 	signatures_by_id=None,
 	call_resolutions=None,
+	binding_types=None,
+	type_table=None,
 ) -> LambdaValidationResult:
 	"""
 	Walk the HIR to discover and validate lambda captures (item 1 only).
@@ -33,8 +35,33 @@ def validate_lambdas_non_retaining(
 
 	The signatures_by_id and call_resolutions parameters are accepted for
 	backward compatibility with callers but are no longer used.
+
+	`binding_types`/`type_table`, when both given (post-typecheck callers
+	only — `driftc.py`'s post_check_analysis phase has real types here),
+	let a MOVE-kind capture of a Copy-AND-bitcopy projected field (e.g.
+	`p.count: Int`) downgrade to a plain COPY read instead of being
+	rejected — see `capture_discovery.py::discover_captures`'s
+	`is_copy_projected_field`. Without both, this call is the earliest
+	lambda-capture pass in the pipeline and has no type information of its
+	own, so it keeps the conservative blanket rejection.
+
+	Narrowed to bitcopy types only (0.33.70 review finding): a
+	Copy-but-non-bitcopy field (`String`, or a Copy struct/variant
+	containing one) produced a confirmed heap-use-after-free for the
+	struct/variant case when captured this way — see
+	`borrow_checker_pass.py::_is_copy_projected_field`'s docstring for the
+	full explanation. Bitcopy types have no refcount to double-own, so
+	they sidestep the issue entirely. Note `is_bitcopy` is transitive for
+	structs (a Copy struct of entirely-bitcopy fields is itself bitcopy)
+	and never true for variants — this accepts a bitcopy Copy STRUCT field
+	too, not only scalars.
 	"""
 	diags: list = []
+	is_copy_projected_field = None
+	if binding_types is not None and type_table is not None:
+		def is_copy_projected_field(key):
+			ty = resolve_projected_capture_type(key, binding_types, type_table)
+			return ty is not None and bool(type_table.copy_status(ty)) and type_table.is_bitcopy(ty)
 
 	def _iter_expr_children(e: H.HExpr) -> list:
 		children: list = []
@@ -50,7 +77,7 @@ def validate_lambdas_non_retaining(
 
 	def _walk_expr(e: H.HExpr) -> None:
 		if isinstance(e, H.HLambda):
-			res = discover_captures(e)
+			res = discover_captures(e, is_copy_projected_field=is_copy_projected_field)
 			diags.extend(res.diagnostics)
 			if e.body_expr is not None:
 				_walk_expr(e.body_expr)

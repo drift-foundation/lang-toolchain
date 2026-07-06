@@ -584,9 +584,52 @@ class BorrowChecker:
 				continue
 			self._force_move_place_use(state, place, cap.span)
 
+	def _is_copy_projected_field(self, key: C.HCaptureKey) -> bool:
+		"""Type-aware check used to let `discover_captures` downgrade a
+		MOVE-kind capture of a Copy-typed projected field (e.g. `p.count`)
+		to a plain COPY read instead of rejecting it outright. Only called
+		with real field types available (post type-check).
+
+		Narrowed to BITCOPY types only (0.33.70 review finding): a
+		Copy-but-non-bitcopy field (a `String`, or a Copy struct/variant
+		containing one) captured this way produced a CONFIRMED
+		heap-use-after-free under ASAN for the struct/variant case — the
+		boxed-callback COPY-kind env-construction branch's retain/copy of
+		the field does not survive intact once the field's own value later
+		flows out of the callback and both the source struct and the
+		callback env are dropped. The plain-`String` case happens to not
+		reproduce today only because a separate, independent pass
+		(`string_arc.py`) provides incidental coverage — not something this
+		lowering path can rely on. Restricting to bitcopy types sidesteps
+		the whole retain/alias question: a bitcopy value has no refcount to
+		double-own in the first place.
+
+		`type_table.is_bitcopy()` is NOT just scalars — it is TRANSITIVE
+		for structs: a Copy struct is bitcopy iff every one of its fields
+		is (recursively) bitcopy too (`types_core.py::TypeTable.is_bitcopy`).
+		So this accepts `p.count: Int` AND e.g. `p.point: Point` where
+		`Point { x: Int, y: Int }` is marked `implement core.Copy for Point
+		{}` — both are equally safe (no refcount anywhere in the value's
+		closure), and this is intentional, not an oversight to be narrowed
+		further. Variants are NEVER bitcopy regardless of field types (see
+		`is_bitcopy`'s VARIANT case), so a Copy variant field is always
+		rejected here. Extending this past bitcopy — accepting a
+		Copy-but-non-bitcopy field like `String` — is a real follow-up, not
+		a checker-side one-line change — see
+		`work/callback-env-uaf-ref-args/REPORT-0.33.70-projected-capture-lowering.md`
+		§10/§15."""
+		place = self._place_from_capture_key(key)
+		if place is None:
+			return False
+		field_ty = self._type_of_place(place)
+		if field_ty is None:
+			return False
+		return self._is_copy(field_ty) and self.type_table.is_bitcopy(field_ty)
+
 	def _check_lambda_captures(self, lam: H.HLambda) -> None:
 		if not lam.captures:
-			result = discover_captures(lam)
+			resolver = self._is_copy_projected_field if self.binding_types is not None else None
+			result = discover_captures(lam, is_copy_projected_field=resolver)
 			lam.captures = result.captures
 			for d in result.diagnostics:
 				self.diagnostics.append(d)
@@ -595,7 +638,10 @@ class BorrowChecker:
 		for cap in lam.captures:
 			if cap.kind is not C.HCaptureKind.COPY:
 				continue
-			ty = self.binding_types.get(cap.key.root_local)
+			# A projected COPY capture (e.g. `p.count`) must be validated
+			# against the PROJECTED FIELD's type, not the root's — the root
+			# (`Prepared`) may itself be non-Copy while the field is.
+			ty = self._type_of_place(self._place_from_capture_key(cap.key)) if cap.key.proj else self.binding_types.get(cap.key.root_local)
 			if ty is None or not self._is_copy(ty):
 				base = self._base_for_binding(int(cap.key.root_local))
 				name = base.name if base is not None else str(cap.key.root_local)

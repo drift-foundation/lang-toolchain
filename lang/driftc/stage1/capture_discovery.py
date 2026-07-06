@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Set
+from typing import Callable, Set
 
 from lang.driftc.core.diagnostics import Diagnostic
 
@@ -33,9 +33,50 @@ class _CaptureUsage:
 	span: Span = Span()
 
 
-def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
+def resolve_projected_capture_type(key: "C.HCaptureKey", binding_types, type_table):
+	"""Resolve a capture key's type by walking its field-projection chain
+	from the root binding's type (captures only support field chains — see
+	`discover_captures`'s docstring). Lets a typed but Place-model-less
+	caller (e.g. `lambda_validate.py`, which only has `binding_types` +
+	`type_table`) build an `is_copy_projected_field` resolver without
+	needing the borrow checker's `Place`/`PlaceBase` machinery."""
+	ty = binding_types.get(int(key.root_local))
+	if ty is None:
+		return None
+	for proj in key.proj:
+		info = type_table.struct_field_info(ty, proj.field)
+		if info is None:
+			return None
+		_, field_ty, _is_pub = info
+		ty = field_ty
+	return ty
+
+
+def discover_captures(
+	lambda_expr: H.HLambda,
+	*,
+	is_copy_projected_field: "Callable[[C.HCaptureKey], bool] | None" = None,
+) -> CaptureDiscoveryResult:
 	"""
 	Discover captures for a lambda (v0: locals/params + field projections only).
+
+	`is_copy_projected_field`, when given, is consulted only for a MOVE-kind
+	capture of a PROJECTED place (see below): this stage runs before type
+	checking and has no type information of its own, so a typed caller
+	(currently `borrow_checker_pass.py`, which has real field types via
+	`_type_of_place`) can opt in to downgrading a Copy-typed projected field
+	from the unsupported MOVE path to a plain COPY read. Callers with no type
+	context (or that want the conservative blanket rejection) pass nothing.
+
+	CONTRACT (narrowed 0.33.70, review finding): the resolver must return
+	True only for a field that is BOTH Copy AND bitcopy — this includes a
+	Copy struct composed entirely of (recursively) bitcopy fields, not
+	just scalars; a Copy variant is never bitcopy regardless of its field
+	types. A Copy-but-non-bitcopy field (`String`, or a Copy struct/variant
+	containing one) downgraded this way produced a confirmed
+	heap-use-after-free for the struct/variant case — see
+	`borrow_checker_pass.py::_is_copy_projected_field`'s docstring. A
+	resolver that returns True for a non-bitcopy type reopens that bug.
 
 	- Allowed capture roots: locals/params (BindingId)
 	- Allowed projections: field chain (no index/deref)
@@ -471,20 +512,24 @@ def discover_captures(lambda_expr: H.HLambda) -> CaptureDiscoveryResult:
 		# `core.callback0(...)`-boxed lambda, with no `captures(...)`
 		# clause) — checking only `use.move` here missed that path.
 		#
-		# SCOPE DECISION (intentional, deferred — not an oversight): this
-		# rejects EVERY MOVE+projected capture unconditionally, including a
-		# Copy-typed field (e.g. `p.count: Int`) where the underlying copy-
-		# read would actually be safe (no ownership to zero-back). Making
-		# that case work requires more than a Copy check here: the lambda-
-		# body prologue (hir_to_mir.py `_emit_lambda_capture_prologue`)
-		# binds captures purely by ROOT LOCAL NAME and has no support at
-		# all for a field-projection capture as a distinct body-visible
-		# binding — teaching it that is a real lowering feature, not a
-		# checker-side enum flip, and is deliberately NOT bundled into this
-		# UAF fix. `hir_to_mir.py`'s `cap.key.proj` branches assert if a
-		# MOVE+projected capture ever reaches them, as a defense-in-depth
-		# backstop for this rejection.
-		if kind is C.HCaptureKind.MOVE and key.proj:
+		# A Copy-AND-BITCOPY-typed projected field (e.g. `p.count: Int`) is
+		# safe to downgrade to a plain COPY read instead — there is no
+		# ownership to zero back, and a bitcopy value has no refcount to
+		# double-own. The lambda-body prologue skips materializing a
+		# body-visible local for any projected capture regardless of kind
+		# (see `_emit_lambda_capture_prologue`'s `if key.proj: continue`).
+		# NOTE: a Copy-but-NON-bitcopy field (`String`, or a Copy
+		# struct/variant containing one) is NOT safe this way — routing it
+		# through `_copy_if_ref_alias` at env construction/loads was tried
+		# and produced a CONFIRMED heap-use-after-free for the struct case
+		# (0.33.70 review); see `is_copy_projected_field`'s contract above
+		# and `borrow_checker_pass.py::_is_copy_projected_field`'s
+		# docstring. Only a typed caller (borrow_checker_pass.py, via
+		# `_type_of_place`) can make this call, and it MUST also check
+		# bitcopy-ness — untyped callers keep the blanket rejection.
+		if kind is C.HCaptureKind.MOVE and key.proj and is_copy_projected_field is not None and is_copy_projected_field(key):
+			kind = C.HCaptureKind.COPY
+		elif kind is C.HCaptureKind.MOVE and key.proj:
 			diags.append(
 				_cap_diag(
 					message="lambda move captures of projections are not supported yet",
