@@ -1,9 +1,13 @@
 # Drift development history
 
-## 2026-07-06 (0.33.73: nested boxed-callback captures — LANGUAGE_BUG family; ABI stays 20)
-- **A boxed callback built INSIDE another boxed callback's body could not
-  safely capture anything from its enclosing lambda.** Three coupled defects,
-  all pre-existing in certified 0.33.69:
+## 2026-07-06 (0.33.74: nested boxed-callback captures + interface-field copies — LANGUAGE_BUG family; ABI stays 20)
+- Combined release: contains the nested boxed-callback capture work
+  (developed as internal candidate 0.33.73, which failed its full gate on an
+  over-rejection and was never released) plus the interface-field-copy
+  rejection. All defects pre-existing in certified 0.33.69.
+- **Nested boxed-callback captures.** A boxed callback built INSIDE another
+  boxed callback's body could not safely capture anything from its
+  enclosing lambda:
   1. **SSA ICE for any nested capture of the enclosing lambda's parameter**
      (`RuntimeError: SSA: load before store for local '__b{id}'`). Both
      hidden-lambda worklists constructed their `HIRToMIR` lowering instance
@@ -16,41 +20,53 @@
   2. **Silent dangling-pointer hazard for reference-VALUED captures**, which
      the ICE had been shielding: a boxed callback implicitly MOVE-capturing
      (or explicitly `captures(copy …)`-ing) a `&T` / `&mut T` /
-     `Optional<&T>` binding copies the raw borrow-pointer into the heap env
-     with nothing tying the referent's liveness to the closure. Rejected at
-     the wrap site with `E_ESCAPE_REF_CAPTURE`
-     (`stage1/lambda_validate.py`), mirroring the existing v0 rule for
-     explicit `captures(ref …)`; `borrow_checker_pass.py::_lambda_escape_level`
-     additionally bounds ref-valued MOVE/COPY captures at `LOCAL` so
-     loan-tracked escape positions reject through the existing
-     `E_ESCAPE_*` machinery. Nested lambdas are re-validated from the
-     hidden-lambda worklist because the user-fn validation walk runs before
-     `capture_as_move` is set on nested wraps.
-  3. **Silent use-after-scope for implicit BORROW captures in boxed
-     callbacks** (found while verifying 2 under ASAN/Valgrind): a `&self`
-     method call on a captured outer local (`flag_note.clone()`) classifies
-     the capture REF ahead of the boxed MOVE default, so the env stored a
-     raw pointer to the enclosing lambda's STACK SLOT — dead-frame reads
-     (wrong values, Valgrind invalid reads) once the box escaped. The v0
-     "closures with borrowed captures are non-escaping" rule only covered
-     explicit `captures(ref …)` at the wrap resolver; the implicit path is
-     now rejected with `E_CALLBACK_BORROWED_CAPTURE` and a
-     `captures(move …)`/`captures(copy …)` suggestion. The explicit-move
-     form compiles and runs clean under ASAN and Valgrind.
-- Supported end-to-end after this patch: nested boxed callbacks capturing
-  the enclosing lambda's non-ref params (implicit) and owned locals (via
-  explicit `captures(move …)`/`captures(copy …)`); captureless nesting;
-  synchronous web/rest `CallbackN<&Req, …>` dispatch unchanged.
-- NOT part of this patch (separate pre-existing bug, reproduces without any
-  lambda nesting, confirmed on certified 0.33.69): reading an
-  INTERFACE-typed struct field by value (`val cb = h.cb`) shallow-copies
-  the boxed callback without retaining its env — double-free/UAF on drop.
-  Use direct calls (`h.cb.call()`) or move the holder; tracked for its own
-  regression-first fix.
+     `Optional<&T>` binding copies the raw borrow-pointer into the heap env.
+  3. **Silent use-after-scope for implicit BORROW captures**: a `&self`
+     method call on a captured outer local (`x.clone()`) classifies the
+     capture REF ahead of the boxed MOVE default, so the env stored the
+     address of the enclosing lambda's STACK SLOT — dead-frame reads once
+     the box escaped.
+- **Enforcement for 2/3 is USE-AWARE, not wrap-site-unconditional** (the
+  0.33.73 candidate rejected at the wrap unconditionally, which broke the
+  sound synchronous pattern — e.g. a `for`-binder `&T` captured via
+  `captures(copy item)` and only `.call()`-ed within the iteration — caught
+  by its full gate). `stage1/lambda_validate.py` now runs an escape scan
+  per validated body: a hazardous wrap is ACCEPTED when its value provably
+  stays local (invoked in place, or let-bound with every use in method-call
+  receiver position) and REJECTED in any escaping position (returned,
+  constructor/call/method argument, assignment, moved, or captured by
+  another lambda) with `E_ESCAPE_REF_CAPTURE` /
+  `E_CALLBACK_BORROWED_CAPTURE` and migration guidance. Nested lambdas are
+  re-validated from the hidden-lambda worklist (the user-fn walk runs
+  before `capture_as_move` is set on nested wraps);
+  `borrow_checker_pass.py::_lambda_escape_level` additionally bounds
+  ref-valued MOVE/COPY captures at `LOCAL` for loan-tracked positions.
+  Supported end-to-end: nested captures of non-ref params (implicit) and
+  owned locals (explicit `captures(move …)`, ASAN/Valgrind-clean);
+  captureless nesting; synchronous web/rest dispatch unchanged.
+- **Interface-typed struct-field copies rejected (`E_IFACE_FIELD_COPY`).**
+  `val cb = h.cb` — reading an INTERFACE-typed field by value from an OWNED
+  subject — compiled and corrupted memory: owned-subject field reads lower
+  as a semantic deep copy (`_emit_copy_value` recursion), but INTERFACE has
+  no copy arm (dynamic payload with a drop hook, no clone hook), so a bare
+  interface field lowered to a raw aliased extract (double-free/UAF), and
+  an interface nested in a struct/variant/array field ICE'd. Interfaces are
+  already non-Copy at every other boundary (whole-local, ref-subject,
+  array-element reads all reject); the checker's owned-subject HField gate
+  now rejects when the field type is or transitively contains an interface
+  value (`_contains_interface_value`, mirroring `_emit_copy_value`'s
+  recursion; refs/pointers to interfaces stay fine): borrow the field, call
+  through it directly (`h.cb.call()`), or move the whole struct.
+  Owned-subject deep copies of non-Copy struct fields WITHOUT interface
+  content are unchanged.
 - Regressions: `lang/tests/driver/test_nested_boxed_callback_captures.py`
-  (9 cases: ICE→runs, both rejections, explicit-move ASAN row, top-level
-  ref-param rejection, captureless + web/rest controls). `DRIFTC_VERSION`
-  0.33.72 → 0.33.73; `DRIFT_RT_ABI_VERSION` stays 20 (no boundary change).
+  (11 cases) and `lang/tests/driver/test_interface_field_copy_rejected.py`
+  (10 cases: struct, variant, and array recursion arms all pinned), plus
+  the pre-existing
+  `test_match_arm_lambda_capture.py::test_for_binder_capturable_by_inner_lambda`
+  pins the sound synchronous pattern. `DRIFTC_VERSION` 0.33.72 → 0.33.74
+  (0.33.73 internal-only, not released); `DRIFT_RT_ABI_VERSION` stays 20
+  (checker/lowering only, no boundary change).
 
 ## 2026-07-05 (0.33.70: projected lambda-capture lowering — LANGUAGE_BUG; ABI stays 19)
 - **Follow-up to 0.33.69.** That fix conservatively rejected every MOVE-kind

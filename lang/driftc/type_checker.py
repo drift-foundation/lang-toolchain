@@ -3257,6 +3257,42 @@ class TypeChecker:
 				)
 			)
 
+		def _contains_interface_value(ty_id: TypeId | None, _seen: set | None = None) -> bool:
+			"""True if `ty_id` is an INTERFACE value or transitively contains one
+			by value (struct/variant fields, array elements).
+
+			Mirrors the recursion of codegen's `_emit_copy_value`: those are the
+			shapes an owned-subject field read would try to deep-copy, and
+			INTERFACE is the kind that recursion cannot copy (no clone hook for
+			dynamic payloads). References/pointers to interfaces are fine — the
+			pointer itself is trivially copyable.
+			"""
+			if ty_id is None:
+				return False
+			seen = _seen if _seen is not None else set()
+			if ty_id in seen:
+				return False
+			seen.add(ty_id)
+			td = self.type_table.get(ty_id)
+			if td.kind is TypeKind.INTERFACE:
+				return True
+			if td.kind is TypeKind.STRUCT:
+				inst = self.type_table.get_struct_instance(ty_id)
+				fields = list(inst.field_types) if inst is not None else list(td.param_types or [])
+				return any(_contains_interface_value(f, seen) for f in fields)
+			if td.kind is TypeKind.VARIANT:
+				inst = self.type_table.get_variant_instance(ty_id)
+				if inst is None:
+					return False
+				return any(
+					_contains_interface_value(f, seen)
+					for arm in inst.arms
+					for f in (arm.field_types or [])
+				)
+			if td.kind is TypeKind.ARRAY and td.param_types:
+				return _contains_interface_value(td.param_types[0], seen)
+			return False
+
 		def _require_int_index_type(idx_ty: TypeId | None, *, span: Span) -> bool:
 			if idx_ty is None:
 				return True
@@ -9655,6 +9691,33 @@ class TypeChecker:
 							return record_expr(expr, self._unknown)
 						if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
 							_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
+						elif used_as_value and _contains_interface_value(field_ty):
+							# Owned-subject field reads are lowered as a SEMANTIC
+							# deep copy (struct/array/String recursion in
+							# _emit_copy_value) — the subject keeps ownership, so
+							# the extracted value must be independently owned.
+							# INTERFACE values have no copy path: the payload is
+							# dynamic (a boxed-callback env, a flag-2 heap block)
+							# with a drop hook but no clone hook. A bare interface
+							# field used to slip through as a raw aliased extract
+							# (double-free/UAF at drop); an interface nested in a
+							# struct/variant/array field ICE'd inside
+							# _emit_copy_value. Reject both up front.
+							pretty = self._pretty_type_name(field_ty, current_module=current_module_name)
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										f"cannot copy field '{expr.name}' out of an owned struct: type "
+										f"'{pretty}' contains an interface value, which is not Copy and "
+										"cannot be cloned. Borrow the field, call through it directly "
+										f"(e.g. subject.{expr.name}.method(...)), or move the whole struct"
+									),
+									severity="error",
+									code="E_IFACE_FIELD_COPY",
+									span=_best_effort_span_for_expr(expr),
+								)
+							)
+							return record_expr(expr, self._unknown)
 						return record_expr(expr, field_ty)
 				if expr.name in ("len", "cap", "capacity", "gen"):
 					# Array/String length/capacity/gen sugar returns Int.

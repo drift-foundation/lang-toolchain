@@ -13,16 +13,22 @@ defects (all pre-existing in certified 0.33.69; triage
    Fixed by passing `binding_names` in both worklist constructions
    (driftc.py), mirroring the regular-fn path.
 2. **Silent dangling-pointer hazard** once (1) is fixed: a nested (or
-   top-level) boxed callback implicitly MOVE-capturing a reference-typed
-   binding (`&T` param) copies the raw borrow-pointer into the heap env with
-   no liveness tie — invoking the escaped closure after the supplying frame
-   unwinds is a use-after-scope. Rejected at the wrap site with
-   E_ESCAPE_REF_CAPTURE (`lambda_validate.py`), mirroring the existing v0
-   rule for explicit `captures(ref ...)`; the borrow checker's
-   `_lambda_escape_level` additionally bounds ref-valued MOVE/COPY captures
-   at LOCAL for loan-tracked positions. Nested wraps are validated from the
-   hidden-lambda worklist (user-fn validation runs before `capture_as_move`
-   is set on nested lambdas).
+   top-level) boxed callback capturing a reference VALUE (implicit MOVE of a
+   `&T` binding, or explicit `captures(copy ref)`) — or implicitly BORROWING
+   a captured binding (a `&self` method call classifies the capture REF
+   ahead of the boxed MOVE default) — puts a raw frame pointer into the heap
+   env with no liveness tie. Enforcement is USE-AWARE
+   (`lambda_validate.py::_check_boxed_capture_escapes`), not
+   wrap-site-unconditional: the wrap is ACCEPTED when its value provably
+   stays local (invoked in place, or let-bound with every use in
+   method-call receiver position — this keeps the sound synchronous
+   pattern pinned by test_match_arm_lambda_capture.py's for-binder case
+   compiling) and REJECTED in any escaping position (returned,
+   constructor/call/method argument, assignment, moved, or captured by
+   another lambda) with E_ESCAPE_REF_CAPTURE / E_CALLBACK_BORROWED_CAPTURE.
+   The borrow checker's `_lambda_escape_level` additionally bounds
+   ref-valued MOVE/COPY captures at LOCAL for loan-tracked positions.
+   Nested wraps are also re-validated from the hidden-lambda worklist.
 3. NOT part of this slice: `val cb = h.cb` (reading an INTERFACE-typed
    struct field by value) shallow-copies the boxed callback without
    retaining its env — double-free/UAF on drop. Pre-existing on certified
