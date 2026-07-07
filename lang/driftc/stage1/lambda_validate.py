@@ -99,8 +99,24 @@ def validate_lambdas_non_retaining(
 			return None
 		from lang.driftc.stage1 import closures as _C
 		caps = lam.captures or discover_captures(lam, is_copy_projected_field=is_copy_projected_field).captures
+		# EXPLICIT `captures(&x)` / `captures(ref_mut x)` clauses already have
+		# owners with better diagnostics: the wrap resolver rejects them on
+		# plain boxed wraps ("closures with borrowed captures are non-escaping
+		# in v0"), and escape-annotated call sites (conc.spawn & friends) get
+		# the borrow checker's precise loan-based E_ESCAPE_THREAD/STATIC — the
+		# codegen e2e fixtures pin those exact messages. This validator's
+		# borrowed-capture arm exists for the IMPLICIT borrow (a `&self`
+		# method call on a captured local classifying the capture REF), which
+		# those owners never see in nested/stored positions — so skip the arm
+		# entirely when the lambda declares explicit ref captures.
+		has_explicit_ref_clause = any(
+			getattr(c, "kind", None) in ("ref", "ref_mut")
+			for c in (getattr(lam, "explicit_captures", None) or [])
+		)
 		for cap in caps or []:
 			if cap.kind in (_C.HCaptureKind.REF, _C.HCaptureKind.REF_MUT):
+				if has_explicit_ref_clause:
+					continue
 				return (
 					"E_CALLBACK_BORROWED_CAPTURE",
 					"boxed callback implicitly borrows a captured binding and escapes its "

@@ -1,5 +1,13 @@
 # Projected Copy Captures Follow-up
 
+> **STATUS: HISTORICAL (2026-07-07).** The `Copy && is_bitcopy` projected-capture
+> surface shipped in 0.33.70 (see `REPORT-0.33.70-projected-capture-lowering.md`).
+> The one remaining piece — widening to Copy-but-NON-bitcopy (String-bearing)
+> fields — is NOT a standalone slice: it is the final step of the String
+> Scope A transfer-policy work (`work/string-ownership-refactor/NEXT-PHASE-PLAN.md`),
+> because relaxing the gate without Scope A's alias centralization produced a
+> confirmed ASAN UAF during 0.33.70 review.
+
 ## Decision
 
 Split the work.

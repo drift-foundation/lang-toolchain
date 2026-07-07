@@ -1,5 +1,23 @@
 # Research: reference-typed callback generic args — are they unsound, and if so when?
 
+> **STATUS: CLOSED / SUPERSEDED BY 0.33.74 (certified 2026-07-07).**
+> The dangerous path this doc researched (scenario 4a — a nested escaping boxed
+> callback capturing the outer callback's `&T` param) is fixed:
+> `E_ESCAPE_REF_CAPTURE` / `E_CALLBACK_BORROWED_CAPTURE` reject the escaping
+> shapes; the SSA `load before store '__b{id}'` ICE (§7's blocker) was
+> root-caused (hidden-lambda worklists missing `binding_names=`) and fixed.
+> **The shipped enforcement is NOT this doc's §6 design** (`_lambda_escape_level`
+> bounding alone): that machinery only attaches to syntactically-direct lambda
+> arguments and never sees nested bodies or let-bound boxes, so enforcement
+> went into a use-aware wrap-site scan in
+> `stage1/lambda_validate.py::_check_boxed_capture_escapes` (receiver-only local
+> use allowed; every escaping position rejected), with the §6 LOCAL-bound kept
+> as a supplement for loan-tracked positions and explicit `captures(ref …)`
+> left to its existing owners. Do not implement §6 as written. See
+> `REPORT-0.33.74-nested-captures-and-iface-field-copy.md` in this directory.
+> Binding-level escape dataflow (tracking a box's level through `val cb = …`)
+> remains the open follow-up this doc's design would have needed anyway.
+
 Scope: RESEARCH ONLY. No code changed. Prep for a possible future fix while the
 primary UAF fix (`fix/callback-env-uaf-ref-args`, commit `dee458cc`) is in cert
 review. All file:line references are against the tree at that commit.

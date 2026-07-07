@@ -36,9 +36,16 @@
   receiver position) and REJECTED in any escaping position (returned,
   constructor/call/method argument, assignment, moved, or captured by
   another lambda) with `E_ESCAPE_REF_CAPTURE` /
-  `E_CALLBACK_BORROWED_CAPTURE` and migration guidance. Nested lambdas are
-  re-validated from the hidden-lambda worklist (the user-fn walk runs
-  before `capture_as_move` is set on nested wraps);
+  `E_CALLBACK_BORROWED_CAPTURE` and migration guidance. EXPLICIT
+  `captures(&x)` / `captures(ref_mut x)` clauses keep their existing
+  owners — the wrap resolver's "non-escaping in v0" rejection and the
+  borrow checker's loan-based `E_ESCAPE_THREAD`/`E_ESCAPE_STATIC` at
+  annotated sites (pinned by the `borrow_escape_spawn_rejected` /
+  `implicit_callback_borrowed_capture_rejected` e2e fixtures) — the
+  validator's borrowed-capture arm covers only the IMPLICIT borrow those
+  owners never see. Nested lambdas are re-validated from the
+  hidden-lambda worklist (the user-fn walk runs before `capture_as_move`
+  is set on nested wraps);
   `borrow_checker_pass.py::_lambda_escape_level` additionally bounds
   ref-valued MOVE/COPY captures at `LOCAL` for loan-tracked positions.
   Supported end-to-end: nested captures of non-ref params (implicit) and
