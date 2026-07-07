@@ -2729,7 +2729,7 @@ class TypeTable:
 								_assert_structural_cacheable(tid)
 								cache_structural[tid] = False
 								return False
-				ok = all(_is_copy_structural(f) for f in inst.field_types)
+				ok = all(_field_propagates_structural_copy(f) for f in inst.field_types)
 				_assert_structural_cacheable(tid)
 				cache_structural[tid] = ok
 				return ok
@@ -2742,7 +2742,7 @@ class TypeTable:
 				ok = True
 				for arm in inst.arms:
 					for f in arm.field_types:
-						if not _is_copy_structural(f):
+						if not _field_propagates_structural_copy(f):
 							ok = False
 							break
 					if not ok:
@@ -2751,6 +2751,30 @@ class TypeTable:
 				cache_structural[tid] = ok
 				return ok
 			return False
+
+		def _field_propagates_structural_copy(fid: TypeId) -> bool:
+			"""Field-level rule for the STRUCT/VARIANT structural recursion.
+
+			A SCALAR `String` field does NOT propagate structural Copy into
+			its containing composite, even though `String` itself is
+			structurally Copy (Scope A). Composite Copy-ness is
+			declared-impl territory — the trait query proves it via
+			`implement core.Copy` — and the structural walker must not
+			auto-Copy undeclared String-bearing structs/variants: that
+			would be a language change, and it flipped real production
+			behavior when tried (certified 0.33.74 rejects a later borrow
+			of a `mem.replace`-consumed `Box { x: String }`; the
+			unrestricted recursion accepted it — see
+			work/string-ownership-refactor/ and the 2026-07-07 composite
+			Copy-widening finding). String's structural True is for DIRECT
+			classification only (`copy_status(String)`, `is_cheap_copy`,
+			binder/array/ctor copy decisions); inside composites the legacy
+			poison rule stands.
+			"""
+			ftd = self.get(fid)
+			if ftd.kind is TypeKind.SCALAR and ftd.name == "String":
+				return False
+			return _is_copy_structural(fid)
 
 		if hasattr(self, "_copy_query"):
 			query = getattr(self, "_copy_query")  # type: ignore[attr-defined]

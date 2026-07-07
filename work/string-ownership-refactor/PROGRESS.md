@@ -98,3 +98,33 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
      tombstoned no-op on the Some path). New pins: no drops in match_dispatch, ≤1 variant drop per
      block, tombstone store on the consumed source path, both binders CopyValue, String binder cleaned
      exactly once across the CFG.
+  Full `lang/tests/stage2` suite after the sweep: **311 passed, 0 failed** (302 prior + 7 fixed +
+  2 new String-contract companions), lane audit clean. Handed to maintainer for the full serial gate.
+- 2026-07-07: full-gate round 3 — 2 driver failures
+  (`test_replace_consumes_noncopy_arg_and_rejects_later_borrow`,
+  `test_string_kind_implicit_const_share_rewrite_into_generic_field`). **NOT stale carriers —
+  CANARIES for an unintended production semantic change.** Decisive experiment: `Box { x: String }`
+  (no declared Copy impl) + `mem.replace` + later `&b` — certified 0.33.74 full build REJECTS
+  (`cannot borrow from moved or uninitialized 'b'`); working-tree 0.33.75 full build ACCEPTS.
+  Mechanism: `_is_copy_structural`'s STRUCT/VARIANT recursion propagates String's new structural
+  True upward → undeclared String-bearing composites auto-Copy wherever the structural answer is
+  authoritative (no-hook contexts AND the hook-mode structural fallback, whose eligibility gate
+  checks resolvability only, not declared impls). Finding + proposed surgical fix (stop String
+  propagation in the two composite arms only; keep SCALAR String True):
+  `/tmp/drift-announce/2026-07-07T182113Z-scope-a-composite-copy-widening-finding.md`.
+  NO PATCH APPLIED — awaiting maintainer decision per instruction.
+- 2026-07-07: maintainer agreed (blocking) — surgical composite-boundary fix APPLIED:
+  `_field_propagates_structural_copy` helper in `types_core.py::copy_status`; the STRUCT/VARIANT
+  structural recursion now evaluates SCALAR-String fields under the legacy poison rule (String does
+  not propagate structural Copy into undeclared composites) while direct `copy_status(String)` stays
+  structurally True. Scope-B escalation NOT needed — the narrow patch preserves all four required
+  properties. Verification ladder ALL GREEN:
+  1. Canaries UNCHANGED: `test_intrinsic_move_borrowcheck` + `test_constshare_generic_field_frontend`
+     + projected file — 11 passed.
+  2. Box production repro REJECTS again (`cannot borrow from moved or uninitialized 'b'`), matching
+     certified 0.33.74.
+  3. Declared-Copy Tag positives: projected ASAN row in-suite + standalone probe 3×exit-0,
+     Valgrind clean, ASAN clean.
+  4. stage2 suite: **311 passed**.
+  5. Drop-policy battery: **15 passed** (direct String mode-independence intact).
+  Handed to maintainer for the full serial gate.

@@ -10,7 +10,15 @@
      was structural, so `copy_status` / `DropPolicy.is_cheap_copy` /
      `_should_copy_value` flipped between isolated TypeTables and real
      compiles. All of String's ownership facts (Copy=True, needs-drop=True,
-     bitcopy=False) are now mode-independent.
+     bitcopy=False) are now mode-independent. BOUNDARY: this is DIRECT
+     classification only — the STRUCT/VARIANT structural recursion
+     (`_field_propagates_structural_copy`) keeps the legacy poison rule for
+     String fields, so UNDECLARED String-bearing composites stay non-Copy
+     exactly as in 0.33.74 (an unrestricted recursion flipped
+     `Box { x: String }` to auto-Copy in production builds — caught by the
+     `test_intrinsic_move_borrowcheck` / const-share canaries during the
+     gate and fixed before release). Composite Copy-ness remains
+     declared-impl territory (`implement core.Copy` + trait query).
   2. **Centralized alias-to-owned transfer handling**
      (`hir_to_mir.py::_mark_ref_alias_if_non_bitcopy`): one contract helper
      for every read path that yields a view of memory owned elsewhere;
