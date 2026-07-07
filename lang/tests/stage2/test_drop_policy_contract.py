@@ -107,38 +107,44 @@ def test_drop_policy_int_is_pod() -> None:
 
 
 def test_drop_policy_string_unshortcut_classification() -> None:
-	"""`String` classified WITHOUT a Copy hook — baseline policy.
+	"""`String` classified WITHOUT a Copy hook — Scope A structural policy.
 
-	In a unit-test `TypeTable` with no Copy query hook installed,
-	`copy_status(String)` returns None (there is no trait-impl
-	graph to walk).  The Copy shortcut in `_drop_policy` only
-	fires on `copy_status is True`, so None falls through to
-	`has_drop`:
-	  - needs_drop          = True   (has_drop fires)
-	  - is_bitcopy          = False
-	  - is_cheap_copy       = False  (`copy_status is True` is False)
+	Since String Scope A (work/string-ownership-refactor/), String's
+	ownership facts are STRUCTURAL and mode-independent:
+	`_is_copy_structural(String)` returns True (retain-copy — an ARC
+	handle whose copy bumps the refcount), so `copy_status(String)` is
+	True even in a unit-test `TypeTable` with no Copy query hook
+	installed. The isolated table now agrees with the real-deployment
+	classification:
+	  - needs_drop          = True   (has_drop is structural too)
+	  - is_bitcopy          = False  (copy is a retain, never memcpy-only)
+	  - is_cheap_copy       = True   (Copy + SCALAR kind: one retain)
 	  - is_destructible     = False
 	  - has_structural_drop = True
 
-	This is the SAFE baseline — any compiler pass that reads the
-	policy without a Copy hook installed sees String as fully
-	drop-requiring and move-transfer.  The real-deployment
-	classification (with trait-impl graph resolved) differs and is
-	exercised by
-	`test_drop_policy_string_with_copy_hook_pins_shortcut_behaviour`
-	below, which covers the Copy-trait shortcut explicitly.
+	Pre-Scope-A, `copy_status(String)` was None here (query-dependent),
+	which made `is_cheap_copy` flip between isolated tables and real
+	compiles — the two-authority split the Scope A audit closed. The
+	Copy-hook variant below
+	(`test_drop_policy_string_with_copy_hook_pins_shortcut_behaviour`)
+	must now observe the SAME policy, which is the point.
 	"""
 	type_table = TypeTable()
 	string_ty = type_table.ensure_string()
 	p = _policy(type_table, string_ty)
 	assert p.needs_drop is True, (
-		"String.needs_drop without a Copy hook must be True — "
-		"there is no trait-impl graph to short-circuit, so the "
-		"policy falls through to `has_drop` and correctly reports "
-		"the refcount needs cleanup."
+		"String.needs_drop must be True in every mode — Copy-ness "
+		"does not remove the refcount cleanup; for String, Copy and "
+		"needs-drop are BOTH true (the design's core tension, made "
+		"structural by Scope A)."
 	)
 	assert p.is_bitcopy is False
-	assert p.is_cheap_copy is False
+	assert p.is_cheap_copy is True, (
+		"String.is_cheap_copy must be True without a Copy hook — "
+		"Scope A made String structurally Copy (retain-copy), so the "
+		"isolated-table classification no longer diverges from real "
+		"compiles."
+	)
 	assert p.is_destructible is False
 	assert p.has_structural_drop is True, (
 		"String.has_structural_drop must be True — the refcount "

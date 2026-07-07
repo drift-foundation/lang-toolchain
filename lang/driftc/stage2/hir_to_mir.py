@@ -825,6 +825,29 @@ class HIRToMIR:
 		policy = self._drop_policy(ty)
 		return "copy" if policy.is_cheap_copy else "move"
 
+	def _mark_ref_alias_if_non_bitcopy(self, value: M.ValueId, ty: TypeId) -> M.ValueId:
+		"""Central alias-marking contract (Scope A).
+
+		Every read path that yields a VIEW of memory owned elsewhere — a
+		deref of `&T`, a field projection reached through a ref, the
+		array-index field fast path, a lambda capture-slot read — MUST route
+		its result through here. Non-bitcopy views are registered in
+		`_ref_field_temps` so `_copy_if_ref_alias` upgrades them to
+		independently-owned values at every ownership-transfer boundary
+		(struct/variant construction, return, variable binding, call args).
+
+		History: this used to be an inline `_ref_field_temps.add` copied at
+		each site, and three separate memory bugs came from a new read path
+		forgetting the copy (see doc/refactor_triggers.md and the Scope A
+		probe in work/string-ownership-refactor/PROGRESS.md, where the
+		COPY-kind capture-slot read passed an unmarked env-field alias to a
+		by-value call arg → double release of `Tag.label`). Add new read
+		paths through this helper, never with a bare `add`.
+		"""
+		if not self._drop_policy(ty).is_bitcopy:
+			self._ref_field_temps.add(value)
+		return value
+
 	def _copy_if_ref_alias(self, value: M.ValueId, ty: TypeId) -> M.ValueId:
 		"""If *value* is an aliased temp from a &T field read, emit a deep copy
 		so the caller receives a freshly-owned value.  Otherwise return *value*
@@ -1318,16 +1341,19 @@ class HIRToMIR:
 			# and Valgrind) that `string_arc.py`'s later, independent
 			# ledger-based ARC-insertion pass currently provides an
 			# equivalent safety net for String specifically — this mark is
-			# not provably load-bearing today. Kept for internal consistency
-			# with the other two `_ref_field_temps`-marking sites (this
-			# pass predates/duplicates that ledger analysis by design, per
-			# the file's own "must be called at every ownership-transfer
-			# boundary" contract on `_copy_if_ref_alias`), and because
-			# STRUCT/VARIANT-typed projected fields (not just String) are
-			# untested against `string_arc.py`'s coverage.
-			if not self._drop_policy(inner_ty).is_bitcopy:
-				self._ref_field_temps.add(dest)
-			return dest
+			# not provably load-bearing today for String. It IS load-bearing
+			# for STRUCT/VARIANT-typed projected fields (see the Scope A
+			# probe: an unmarked Tag{label: String} view double-released).
+			return self._mark_ref_alias_if_non_bitcopy(dest, inner_ty)
+		if kind is C.HCaptureKind.COPY:
+			# COPY-kind slot read (projected MOVE→COPY downgrade, or explicit
+			# `captures(copy …)`): the StructGetField extract is a SHALLOW
+			# view of the env's field — the env still owns it and will drop
+			# it. Scope A probe: leaving this unmarked let the view flow into
+			# a by-value call arg uncopied; the callee's drop plus the env's
+			# drop double-released the field's String. Bitcopy fields no-op
+			# inside the helper.
+			return self._mark_ref_alias_if_non_bitcopy(field_val, field_ty)
 		return field_val
 
 	def _load_capture_slot_value(self, slot: int) -> M.ValueId:
@@ -3054,7 +3080,12 @@ class HIRToMIR:
 							inner_ty = td.param_types[0]
 					dest = self.b.new_temp()
 					self.b.emit(M.LoadRef(dest=dest, ptr=ptr_val, inner_ty=inner_ty))
-					return dest
+					# Fourth parallel read path from the Scope A audit: this
+					# inline whole-root REF/REF_MUT capture read duplicated
+					# `_load_capture_from_env`'s LoadRef WITHOUT the alias
+					# mark — a borrowed view escaping unmarked. Same central
+					# contract as every other view-producing read.
+					return self._mark_ref_alias_if_non_bitcopy(dest, inner_ty)
 				return self._load_capture_from_env(slot)
 		if expr.binding_id is None and self._lambda_capture_name_to_slot is not None:
 			slot = self._lambda_capture_name_to_slot.get(expr.name)
@@ -3421,13 +3452,9 @@ class HIRToMIR:
 			inner_ty = td.param_types[0]
 			dest = self.b.new_temp()
 			self.b.emit(M.LoadRef(dest=dest, ptr=ptr_val, inner_ty=inner_ty))
-			# Mark as ref-aliased if the inner type requires runtime
-			# clone-on-read-from-ref (contains refcounted fields).
-			# _copy_if_ref_alias will emit CopyValue at ownership
-			# transfer boundaries (return, binding, call arg).
-			if not self._drop_policy(inner_ty).is_bitcopy:
-				self._ref_field_temps.add(dest)
-			return dest
+			# Central alias-marking contract: _copy_if_ref_alias emits
+			# CopyValue at ownership-transfer boundaries for marked views.
+			return self._mark_ref_alias_if_non_bitcopy(dest, inner_ty)
 		operand = self.lower_expr(expr.expr)
 		dest = self.b.new_temp()
 		self.b.emit(M.UnaryOpInstr(dest=dest, op=expr.op, operand=operand))
@@ -3569,11 +3596,9 @@ class HIRToMIR:
 							# (unflagged), then the `.s` read treats `inner` as an owned
 							# rvalue and emits a spurious drop of its String that frees
 							# the live element (heap String double-free — the
-							# nested-struct-array case).  Mirrors the general field
-							# path's `_ref_field_temps` add.
-							if not self._drop_policy(field_ty).is_bitcopy:
-								self._ref_field_temps.add(dest)
-							return dest
+							# nested-struct-array case).  Routed through the
+							# central alias-marking contract.
+							return self._mark_ref_alias_if_non_bitcopy(dest, field_ty)
 		subject = self.lower_expr(expr.subject)
 		subj_ty = self._infer_expr_type(expr.subject)
 		if subj_ty is None:
@@ -3772,7 +3797,7 @@ class HIRToMIR:
 				elif hasattr(H, "HPlaceExpr") and isinstance(expr.subject, getattr(H, "HPlaceExpr")) and not expr.subject.projections:
 					subject_is_alias = True
 			if subject_is_alias:
-				self._ref_field_temps.add(dest)
+				self._mark_ref_alias_if_non_bitcopy(dest, field_ty)
 		return dest
 
 	def _visit_expr_HIndex(self, expr: H.HIndex) -> M.ValueId:

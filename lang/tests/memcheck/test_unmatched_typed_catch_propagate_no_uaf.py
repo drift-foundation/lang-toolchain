@@ -12,7 +12,7 @@ Repro shape:
       try { throw A(); } catch B(e) { return 999; }
   }
 
-  fn main() nothrow -> Int {
+  pub fn main() nothrow -> Int {
       return try inner() catch { 0 };
   }
 
@@ -69,7 +69,7 @@ fn inner() -> Int {
 \ttry { throw A(); } catch B(e) { return 999; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try inner() catch { 0 };
 }
 """
@@ -93,7 +93,7 @@ fn inner() -> Int {
 \t}
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try inner() catch { 0 };
 }
 """
@@ -108,7 +108,7 @@ fn inner() -> Int {
 \ttry { throw MyExn(code = 42); } catch UnrelatedExn(e) { return 999; }
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try inner() catch { 0 };
 }
 """
@@ -131,7 +131,7 @@ fn inner() -> Int {
 \treturn x;
 }
 
-fn main() nothrow -> Int {
+pub fn main() nothrow -> Int {
 \treturn try inner() catch { 0 };
 }
 """

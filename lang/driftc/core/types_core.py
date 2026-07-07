@@ -2668,7 +2668,21 @@ class TypeTable:
 			td = self.get(tid)
 			if td.kind in {TypeKind.SCALAR, TypeKind.REF, TypeKind.RAW_PTR, TypeKind.FUNCTION, TypeKind.VOID}:
 				if td.kind is TypeKind.SCALAR and td.name == "String":
-					return False
+					# String is STRUCTURALLY Copy (retain-copy: an ARC handle
+					# whose copy bumps the refcount) — the same fact the
+					# stdlib `implement Copy for String` proves through the
+					# trait query. Scope A decision (see
+					# work/string-ownership-refactor/): this used to return
+					# False, making String's Copy-ness query-DEPENDENT while
+					# its needs-drop was structural — so `copy_status`,
+					# `DropPolicy.is_cheap_copy`, and `_should_copy_value`
+					# flipped between isolated TypeTables and real compiles.
+					# String's ownership facts are compiler-privileged and
+					# mode-independent: Copy=True, needs-drop=True,
+					# bitcopy=False, everywhere.
+					_assert_structural_cacheable(tid)
+					cache_structural[tid] = True
+					return True
 				if td.kind is TypeKind.REF and bool(td.ref_mut):
 					_assert_structural_cacheable(tid)
 					cache_structural[tid] = False

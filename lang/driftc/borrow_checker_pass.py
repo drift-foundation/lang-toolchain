@@ -640,41 +640,35 @@ class BorrowChecker:
 		to a plain COPY read instead of rejecting it outright. Only called
 		with real field types available (post type-check).
 
-		Narrowed to BITCOPY types only (0.33.70 review finding): a
-		Copy-but-non-bitcopy field (a `String`, or a Copy struct/variant
-		containing one) captured this way produced a CONFIRMED
-		heap-use-after-free under ASAN for the struct/variant case — the
-		boxed-callback COPY-kind env-construction branch's retain/copy of
-		the field does not survive intact once the field's own value later
-		flows out of the callback and both the source struct and the
-		callback env are dropped. The plain-`String` case happens to not
-		reproduce today only because a separate, independent pass
-		(`string_arc.py`) provides incidental coverage — not something this
-		lowering path can rely on. Restricting to bitcopy types sidesteps
-		the whole retain/alias question: a bitcopy value has no refcount to
-		double-own in the first place.
+		Accepts the full Copy surface — including Copy-but-NON-bitcopy
+		fields (`String`, or a Copy struct like `Tag { label: String }`)
+		— since String Scope A (work/string-ownership-refactor/). 0.33.70
+		had narrowed this to `Copy && is_bitcopy` because the non-bitcopy
+		case produced a confirmed heap-use-after-free: the COPY-kind
+		capture-slot READ (`hir_to_mir.py::_load_capture_from_env`)
+		returned a shallow, UNMARKED view of the env's field, so a
+		downstream ownership boundary (a by-value call arg) consumed the
+		alias without a deep copy and the callee's drop plus the env's
+		drop double-released the field's String. Scope A centralized the
+		alias-marking contract (`_mark_ref_alias_if_non_bitcopy`) and
+		routed the COPY-kind slot read through it, so the view is now
+		deep-copied at every transfer boundary — the class of bug the
+		narrowing guarded against is closed at its root, not at the gate.
 
-		`type_table.is_bitcopy()` is NOT just scalars — it is TRANSITIVE
-		for structs: a Copy struct is bitcopy iff every one of its fields
-		is (recursively) bitcopy too (`types_core.py::TypeTable.is_bitcopy`).
-		So this accepts `p.count: Int` AND e.g. `p.point: Point` where
-		`Point { x: Int, y: Int }` is marked `implement core.Copy for Point
-		{}` — both are equally safe (no refcount anywhere in the value's
-		closure), and this is intentional, not an oversight to be narrowed
-		further. Variants are NEVER bitcopy regardless of field types (see
-		`is_bitcopy`'s VARIANT case), so a Copy variant field is always
-		rejected here. Extending this past bitcopy — accepting a
-		Copy-but-non-bitcopy field like `String` — is a real follow-up, not
-		a checker-side one-line change — see
-		`work/callback-env-uaf-ref-args/REPORT-0.33.70-projected-capture-lowering.md`
-		§10/§15."""
+		The projected-capture positives (bitcopy scalar/struct, String
+		field, Tag-struct field under ASAN/Valgrind) and the still-negative
+		non-Copy cases live in
+		`lang/tests/driver/test_boxed_callback_projected_move_capture_rejected.py`.
+		Interface-containing fields cannot reach this accept: interface
+		values are non-Copy at every boundary (E_IFACE_FIELD_COPY family),
+		so a Copy impl cannot cover them."""
 		place = self._place_from_capture_key(key)
 		if place is None:
 			return False
 		field_ty = self._type_of_place(place)
 		if field_ty is None:
 			return False
-		return self._is_copy(field_ty) and self.type_table.is_bitcopy(field_ty)
+		return self._is_copy(field_ty)
 
 	def _check_lambda_captures(self, lam: H.HLambda) -> None:
 		if not lam.captures:

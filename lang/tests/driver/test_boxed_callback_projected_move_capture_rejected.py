@@ -58,24 +58,18 @@ separate, independent pass (`string_arc.py`) happens to provide
 incidental coverage for that one type — not something this lowering path
 can rely on, and not true for the struct/variant case. So the downgrade
 is restricted to Copy-AND-BITCOPY fields (`type_table.is_bitcopy`, which
-have no refcount to double-own in the first place); a Copy-but-non-bitcopy
-field — `String`, or a Copy struct/variant CONTAINING one — remains
-rejected — see `test_copy_typed_non_bitcopy_string_field_still_rejected`
-and `test_copy_typed_non_bitcopy_struct_field_still_rejected` below.
-
-NOTE: "bitcopy" here is NOT "scalar only". `is_bitcopy` is transitive for
-structs — a Copy struct composed entirely of (recursively) bitcopy fields
-(e.g. `Point { x: Int, y: Int }` marked `implement core.Copy for Point
-{}`) is itself bitcopy and IS accepted by this downgrade, same as a plain
-`Int` field — see `test_copy_typed_projected_bitcopy_struct_field_compiles_and_runs`
-below. A Copy VARIANT is never bitcopy regardless of its field types (see
-`types_core.py::TypeTable.is_bitcopy`'s VARIANT case), so a Copy variant
-field is always rejected here, and a Copy struct with even one
-non-bitcopy field (like the `Tag` case above) is rejected too. Extending
-this past bitcopy (accepting `String` itself, say) is real follow-up
-lowering work, not a checker-side relaxation — see
-`work/callback-env-uaf-ref-args/REPORT-0.33.70-projected-capture-lowering.md`
-§10/§15.
+have no refcount to double-own in the first place). String Scope A
+(work/string-ownership-refactor/) then lifted the 0.33.70 bitcopy-only
+narrowing: Copy-but-NON-bitcopy fields — `String`, or a Copy struct
+CONTAINING one (`Tag { label: String }`) — are accepted too, because the
+root cause of the narrowing (the COPY-kind capture-slot read returning an
+UNMARKED shallow view of the env's field, double-released once it crossed
+a by-value boundary) is fixed by the central alias-marking contract
+(`hir_to_mir._mark_ref_alias_if_non_bitcopy`). See
+`test_copy_typed_non_bitcopy_string_field_compiles_and_runs` and the ASAN
+proof `test_copy_typed_non_bitcopy_struct_field_runs_clean_asan` below.
+Non-Copy projected MOVE captures remain rejected, as does the
+`--emit-package` projected-capture path.
 
 The safe, still-supported pattern (used by e.g. mariadb-client's own
 in-repo idiom) is to explicitly extract the field via `std.mem.replace`
@@ -432,40 +426,35 @@ def test_copy_typed_projected_bitcopy_struct_field_compiles_and_runs(tmp_path: P
 	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-500:]}"
 
 
-def test_copy_typed_non_bitcopy_string_field_still_rejected(tmp_path: Path) -> None:
-	"""A Copy-but-non-bitcopy field (`String`) read implicitly inside a
-	boxed-callback body must still be rejected — the Copy-projected-capture
-	downgrade is narrowed to bitcopy types only (0.33.70 review finding;
-	see the module docstring). Locks in the narrowed scope so it cannot
-	silently widen back to a known-unsafe shape."""
+def test_copy_typed_non_bitcopy_string_field_compiles_and_runs(tmp_path: Path) -> None:
+	"""FLIPPED by String Scope A (was `…_still_rejected`): a Copy-but-
+	non-bitcopy field (`String`) read implicitly inside a boxed-callback
+	body now compiles and runs correctly. The 0.33.70 bitcopy narrowing
+	existed because the COPY-kind capture-slot read returned an unmarked
+	shallow view of the env's field; Scope A routes that read through the
+	central alias-marking contract (`_mark_ref_alias_if_non_bitcopy`), so
+	transfer boundaries deep-copy the view (see
+	`borrow_checker_pass._is_copy_projected_field`'s docstring)."""
 	res = _compile(tmp_path, _COPY_FIELD_STRING_IMPLICIT_CAPTURE_SOURCE)
-	assert res.returncode != 0, (
-		"expected the projected-move-capture rejection for a non-bitcopy "
-		"Copy field (String) — if this now compiles, either the narrowing "
-		"was removed or the underlying UAF was actually fixed; update this "
-		"test's expectations instead of deleting it"
-	)
-	assert "lambda move captures of projections are not supported yet" in res.stderr, (
-		f"expected the projected-move-capture rejection diagnostic, got:\n{res.stderr[-1000:]}"
-	)
+	assert res.returncode == 0, f"compile failed: {res.stderr[-1500:]}"
+	out = tmp_path / "test_bin"
+	assert out.exists()
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
+	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-500:]}"
 
 
-def test_copy_typed_non_bitcopy_struct_field_still_rejected(tmp_path: Path) -> None:
-	"""A Copy struct field containing a `String` (`Tag`, `implement
-	core.Copy for Tag {}`) read implicitly inside a boxed-callback body
-	must be rejected. This is the CONFIRMED-crashing shape found during
-	0.33.70 review (a real heap-use-after-free under ASAN before the
-	bitcopy-only narrowing landed — see the module docstring); this test
-	locks in the rejection so it cannot silently regress back to
-	miscompiling."""
-	res = _compile(tmp_path, _COPY_FIELD_STRUCT_CONTAINING_STRING_IMPLICIT_CAPTURE_SOURCE)
-	assert res.returncode != 0, (
-		"expected the projected-move-capture rejection for a non-bitcopy "
-		"Copy struct field (Tag containing String) — this shape is a "
-		"CONFIRMED heap-use-after-free if it compiles via the Copy-downgrade "
-		"path; do not widen the bitcopy-only narrowing without fixing that "
-		"UAF first"
-	)
-	assert "lambda move captures of projections are not supported yet" in res.stderr, (
-		f"expected the projected-move-capture rejection diagnostic, got:\n{res.stderr[-1000:]}"
-	)
+def test_copy_typed_non_bitcopy_struct_field_runs_clean_asan(tmp_path: Path) -> None:
+	"""FLIPPED by String Scope A (was `…_still_rejected`): the CONFIRMED-
+	UAF shape from 0.33.70 review — a Copy struct field containing a
+	`String` (`Tag`, `implement core.Copy for Tag {}`) captured implicitly
+	into a boxed callback and moved across `conc.spawn` — now compiles and
+	runs CLEAN UNDER ASAN. This is the Scope A ownership proof: the env's
+	field view is deep-copied at every ownership-transfer boundary instead
+	of double-releasing `Tag.label`."""
+	res = _compile(tmp_path, _COPY_FIELD_STRUCT_CONTAINING_STRING_IMPLICIT_CAPTURE_SOURCE, sanitize="address,undefined")
+	assert res.returncode == 0, f"compile failed: {res.stderr[-1500:]}"
+	out = tmp_path / "test_bin"
+	assert out.exists()
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
+	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-800:]}"
+	assert "ERROR: AddressSanitizer" not in run.stderr, run.stderr[-800:]

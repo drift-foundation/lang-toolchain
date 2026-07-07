@@ -1,5 +1,48 @@
 # Drift development history
 
+## 2026-07-07 (0.33.75: String Scope A — structural transfer policy + centralized alias marking; ABI stays 20)
+- **Scope A of the String ownership refactor**
+  (`work/string-ownership-refactor/NEXT-PHASE-PLAN.md`), regression-first on
+  branch `refactor/string-transfer-policy-scope-a`:
+  1. **Structural classification** (`types_core.py::_is_copy_structural`):
+     `String` is now structurally Copy (retain-copy) — previously its
+     Copy-ness was query-DEPENDENT (stdlib trait proof) while its needs-drop
+     was structural, so `copy_status` / `DropPolicy.is_cheap_copy` /
+     `_should_copy_value` flipped between isolated TypeTables and real
+     compiles. All of String's ownership facts (Copy=True, needs-drop=True,
+     bitcopy=False) are now mode-independent.
+  2. **Centralized alias-to-owned transfer handling**
+     (`hir_to_mir.py::_mark_ref_alias_if_non_bitcopy`): one contract helper
+     for every read path that yields a view of memory owned elsewhere;
+     converted the three pre-existing bare `_ref_field_temps.add` sites
+     (deref, array-index field fast path, capture-slot REF branch) and added
+     the two MISSING paths: the COPY-kind capture-slot read (probe-confirmed
+     the 0.33.70-era `Tag(label: String)` heap-use-after-free: the unmarked
+     shallow env-field view crossed a by-value call-arg boundary uncopied,
+     and the callee's drop plus the env's drop double-released the field's
+     String) and the HVar visitor's inline whole-root REF/REF_MUT capture
+     read (the audit's fourth parallel path).
+  3. **Projected-capture gate widened** from `Copy && is_bitcopy` to the full
+     Copy surface (`_is_copy_projected_field` + the `lambda_validate.py`
+     resolver mirror): `String` fields and Copy structs containing one
+     (`Tag`) are now accepted; the confirmed-UAF shape runs clean under ASAN
+     and Valgrind. Non-Copy projected MOVE captures remain rejected;
+     `--emit-package` projected captures remain rejected; interface-carrying
+     types cannot reach the accept (`E_COPY_IMPL_NONCOPY_TARGET` blocks Copy
+     impls on non-structurally-Copy targets).
+- Out of scope, on purpose: String runtime representation (Scope B),
+  `string_arc.py`→ledger merge, ref-typed callback args (0.33.74).
+- Verification (serial): probe UAF→clean under ASAN + Valgrind; flipped
+  lock-ins (`test_copy_typed_non_bitcopy_string_field_compiles_and_runs`,
+  `test_copy_typed_non_bitcopy_struct_field_runs_clean_asan`);
+  projected-capture battery 13/13; capture suites 25/25; ownership matrix
+  ASAN + high-risk memcheck subset clean; `lang/tests/memcheck` 91 passed
+  with the SAME 4 pre-existing failures as unmodified HEAD
+  (`test_unmatched_typed_catch_propagate_no_uaf.py` — compile failures,
+  bisected to pre-date this branch; memcheck is outside the normal gate);
+  `lang/tests/packages` 472/472. `DRIFTC_VERSION` 0.33.74 → 0.33.75;
+  `DRIFT_RT_ABI_VERSION` stays 20 (compiler-internal only).
+
 ## 2026-07-06 (0.33.74: nested boxed-callback captures + interface-field copies — LANGUAGE_BUG family; ABI stays 20)
 - Combined release: contains the nested boxed-callback capture work
   (developed as internal candidate 0.33.73, which failed its full gate on an

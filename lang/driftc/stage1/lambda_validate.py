@@ -60,8 +60,12 @@ def validate_lambdas_non_retaining(
 	is_copy_projected_field = None
 	if binding_types is not None and type_table is not None:
 		def is_copy_projected_field(key):
+			# Full Copy surface since String Scope A (mirror of
+			# borrow_checker_pass._is_copy_projected_field — see its
+			# docstring for why the 0.33.70 `is_bitcopy` narrowing could
+			# be lifted).
 			ty = resolve_projected_capture_type(key, binding_types, type_table)
-			return ty is not None and bool(type_table.copy_status(ty)) and type_table.is_bitcopy(ty)
+			return ty is not None and bool(type_table.copy_status(ty))
 
 	def _is_ref_valued_type(ty) -> bool:
 		"""True for `&T` / `&mut T` and `Optional<&T>` / `Optional<&mut T>`."""
