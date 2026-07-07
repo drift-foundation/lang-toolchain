@@ -113,6 +113,12 @@ def test_array_index_load_inserts_copyvalue_for_copy_elems():
 
 
 def test_array_literal_reuses_copy_value_for_string_lvalues():
+	"""String Scope A: each String LVALUE element of an array literal is
+	retained via its own CopyValue — the local `s` stays live and the
+	array owns independent handles. Pre-Scope-A, an isolated stage2
+	TypeTable classified String non-Copy (no structural Copy status), so
+	this shape emitted NO CopyValue here and relied on later passes; the
+	isolated behavior now matches real compiles."""
 	table, _int_ty = _make_type_table()
 	string_ty = table._string_type  # type: ignore[attr-defined]
 	block = HBlock(
@@ -128,8 +134,8 @@ def test_array_literal_reuses_copy_value_for_string_lvalues():
 	lowerer = HIRToMIR(builder, type_table=table)
 	lowerer.lower_block(normalize_hir(block))
 	entry = builder.func.blocks[builder.func.entry]
-	copy_vals = [instr for instr in entry.instructions if isinstance(instr, CopyValue)]
-	assert len(copy_vals) == 0
+	copy_vals = [instr for instr in entry.instructions if isinstance(instr, CopyValue) and instr.ty == string_ty]
+	assert len(copy_vals) == 2
 
 
 def test_array_index_borrow_lowers_to_addrof_elem():
@@ -150,6 +156,10 @@ def test_array_index_borrow_lowers_to_addrof_elem():
 
 
 def test_array_literal_single_string_lvalue_emits_copyvalue():
+	"""String Scope A: a single String LVALUE element emits exactly one
+	CopyValue (retain) — the name of this test finally matches its
+	assertion; pre-Scope-A the isolated-table classification made this 0
+	(see the reuses-variant above for the divergence explanation)."""
 	table, _int_ty = _make_type_table()
 	string_ty = table._string_type  # type: ignore[attr-defined]
 	block = HBlock(
@@ -165,5 +175,5 @@ def test_array_literal_single_string_lvalue_emits_copyvalue():
 	lowerer = HIRToMIR(builder, type_table=table)
 	lowerer.lower_block(normalize_hir(block))
 	entry = builder.func.blocks[builder.func.entry]
-	copy_vals = [instr for instr in entry.instructions if isinstance(instr, CopyValue)]
-	assert len(copy_vals) == 0
+	copy_vals = [instr for instr in entry.instructions if isinstance(instr, CopyValue) and instr.ty == string_ty]
+	assert len(copy_vals) == 1

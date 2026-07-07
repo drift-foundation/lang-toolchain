@@ -9,7 +9,7 @@ from lang.driftc.core.types_core import TypeId, TypeTable, VariantArmSchema, Var
 from lang.driftc.parser.ast import TypeExpr
 from lang.driftc.stage1 import assign_callsite_ids, assign_node_ids
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget
-from lang.driftc.stage2 import CopyValue, DropValue, HIRToMIR, VariantGetFieldAddr, make_builder
+from lang.driftc.stage2 import CopyValue, DropValue, HIRToMIR, StoreLocal, TombstoneValue, VariantGetFieldAddr, make_builder
 
 
 def _collect_ctor_callinfo(hir: H.HBlock, type_table: TypeTable, var_tid: TypeId) -> dict[int, CallInfo]:
@@ -35,14 +35,26 @@ def _collect_ctor_callinfo(hir: H.HBlock, type_table: TypeTable, var_tid: TypeId
 
 
 def test_match_copy_payload_emits_copyvalue_and_has_single_scrutinee_drop_across_cfg() -> None:
-	"""Phase 4 site-1 patch 3 update: `lower_block`'s end-of-block
-	scope drop now emits a `M.CleanupHook` marker rather than an
-	inline `DropValue`; the materialised drop is authored by
-	`cleanup_authoring.author_cleanup` after the ledger build.
-	The semantic invariant pinned here — exactly one `DropValue`
-	of the variant type across the post-match CFG, never in
-	`match_dispatch` — is unchanged.  Same update pattern as
-	`test_scope_drop_swap.test_emission_definite_live_string_...`.
+	"""Tombstone-safe scrutinee cleanup across the match CFG.
+
+	String Scope A reframe: the old pin here ("exactly one
+	`DropValue(variant)` across the whole CFG") was an artifact of
+	isolated-mode String being non-Copy — the `msg` binder partial-moved
+	the payload, which suppressed the Some-arm's whole-variant drop.
+	With String structurally Copy (matching real compiles), both binders
+	COPY and the authored MIR legitimately carries TWO variant drops on
+	EXCLUSIVE paths, coordinated by tombstoning:
+
+	  - `match_arm_0`: `MoveOut(x)` into the scrut tmp, then a
+	    `TombstoneValue` stored back into `x` (the consumed source
+	    path), binders CopyValue, and ONE drop of the scrut tmp;
+	  - `match_join`: the scope-exit drop of `x` — live on the
+	    None-arm path, tombstoned (no-op) on the Some-arm path.
+
+	The real invariants pinned: no drops in `match_dispatch`, at most
+	one variant drop per block (no live duplicate on any single path),
+	the tombstone store precedes the join on the consumed path, and the
+	copied String binder is cleaned exactly once.
 	"""
 	from lang.driftc.stage2.ownership_ledger import build_ledger
 	from lang.driftc.stage2.cleanup_authoring import author_cleanup
@@ -82,12 +94,31 @@ def test_match_copy_payload_emits_copyvalue_and_has_single_scrutinee_drop_across
 	some_arm = next((block for block in arm_blocks if any(isinstance(instr, VariantGetFieldAddr) and instr.ctor == "Some" for instr in block.instructions)), None)
 	assert some_arm is not None
 	assert any(isinstance(instr, CopyValue) and instr.ty == int_ty for instr in some_arm.instructions)
-	total_variant_drops = 0
+	string_ty = type_table.ensure_string()
+	assert any(isinstance(instr, CopyValue) and instr.ty == string_ty for instr in some_arm.instructions), (
+		"the String `msg` binder must COPY the payload (String is structurally Copy since Scope A)"
+	)
 	for block in builder.func.blocks.values():
 		drops = [instr for instr in block.instructions if isinstance(instr, DropValue) and instr.ty == var_tid]
-		total_variant_drops += len(drops)
-		if block.name.startswith("match_arm_"):
-			assert len(drops) <= 1
+		# No block carries a duplicate variant drop, and dispatch never drops.
+		assert len(drops) <= 1, f"duplicate variant drop in block {block.name!r}"
 		if block.name == "match_dispatch":
 			assert not drops
-	assert total_variant_drops == 1
+	# The consumed source path is tombstone-guarded: the Some arm stores a
+	# TombstoneValue back into `x` (so the join-block scope-exit drop of
+	# `x` is a no-op on that path), and drops only the moved-out scrut tmp.
+	tomb_dests = {instr.dest for instr in some_arm.instructions if isinstance(instr, TombstoneValue)}
+	assert any(
+		isinstance(instr, StoreLocal) and instr.local == "x" and instr.value in tomb_dests
+		for instr in some_arm.instructions
+	), "consumed source path must store a tombstone back into the scrutinee local"
+	# The copied String binder is cleaned exactly once across the CFG.
+	string_drops = [
+		instr
+		for block in builder.func.blocks.values()
+		for instr in block.instructions
+		if isinstance(instr, DropValue) and instr.ty == string_ty
+	]
+	assert len(string_drops) == 1, (
+		f"expected exactly one String binder drop across the CFG; got {len(string_drops)}"
+	)

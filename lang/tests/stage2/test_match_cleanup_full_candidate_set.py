@@ -58,24 +58,31 @@ from lang.driftc.stage2.ownership_ledger import build_ledger
 
 def _build_two_field_string_string_match_hir(type_table: TypeTable):
 	"""Construct the HIR for a statement-context match on a two-field
-	String/String variant `Pair(a: String, b: String)`:
+	Array/Array variant `Pair(a: Array<Int>, b: Array<Int>)`:
 
-	    val a0: String = "a";
-	    val a1: String = "b";
+	    val a0: Array<Int> = [1];
+	    val a1: Array<Int> = [2];
 	    val p: Pair = Pair::Pair(a = a0, b = a1);
 	    match p {
 	        Pair(x, _y) => { ... }
 	    }
 
 	The Some-equivalent arm binds `x` (real binder) and `_y` (discard),
-	both String.  In statement-context match (per
-	`_visit_expr_HMatchExpr`, line 1546), `_ensure_arm_scrut_ptr`
-	fires unconditionally and arm_scrut_local is set.  Without a Copy
-	hook installed, `_should_copy_value(String)=False` so binders take
-	the MOVE branch — `arm_scrut_payload_moved=True`, both field
-	indices land in `moved_field_indices` (or did, pre-migration).
+	both Array<Int>.  In statement-context match (per
+	`_visit_expr_HMatchExpr`), `_ensure_arm_scrut_ptr` fires
+	unconditionally and arm_scrut_local is set.  Array<Int> is non-Copy,
+	so binders take the MOVE branch — `arm_scrut_payload_moved=True`,
+	both field indices land in `moved_field_indices` (or did,
+	pre-migration).
+
+	Carrier note (String Scope A): these fields were originally String —
+	valid then only because an ISOLATED TypeTable gave String no
+	structural Copy status. String is now structurally Copy in every
+	mode, so it can no longer drive the MOVE branch; Array<Int> is the
+	canonical non-Copy droppable carrier.
 	"""
-	field_ty = type_table.ensure_string()
+	field_ty = type_table.new_array(type_table.ensure_int())
+	arr_int_ge = GenericTypeExpr.named("Array", [GenericTypeExpr.named("Int")])
 	pair_base = type_table.declare_variant(
 		module_id="main",
 		name="Pair",
@@ -84,8 +91,8 @@ def _build_two_field_string_string_match_hir(type_table: TypeTable):
 			VariantArmSchema(
 				name="Pair",
 				fields=[
-					VariantFieldSchema(name="a", type_expr=GenericTypeExpr.named("String")),
-					VariantFieldSchema(name="b", type_expr=GenericTypeExpr.named("String")),
+					VariantFieldSchema(name="a", type_expr=arr_int_ge),
+					VariantFieldSchema(name="b", type_expr=arr_int_ge),
 				],
 			),
 		],
@@ -93,17 +100,18 @@ def _build_two_field_string_string_match_hir(type_table: TypeTable):
 	pair_ty = type_table.ensure_instantiated(pair_base, [])
 
 	pair_te = TypeExpr(name="Pair", module_id="main")
+	arr_int_te = TypeExpr(name="Array", args=[TypeExpr(name="Int")])
 	let_a0 = H.HLet(
 		name="a0",
-		value=H.HLiteralString("a"),
-		declared_type_expr=TypeExpr(name="String"),
+		value=H.HArrayLiteral(elements=[H.HLiteralInt(value=1)]),
+		declared_type_expr=arr_int_te,
 		is_mutable=False,
 		binding_id=None,
 	)
 	let_a1 = H.HLet(
 		name="a1",
-		value=H.HLiteralString("b"),
-		declared_type_expr=TypeExpr(name="String"),
+		value=H.HArrayLiteral(elements=[H.HLiteralInt(value=2)]),
+		declared_type_expr=arr_int_te,
 		is_mutable=False,
 		binding_id=None,
 	)
@@ -155,23 +163,29 @@ def _build_two_field_string_string_match_hir(type_table: TypeTable):
 
 
 def _build_string_int_match_hir(type_table: TypeTable):
-	"""Construct the HIR for a statement-context match on a
-	String/Int-mixed variant `Pair2(s: String, n: Int)`:
+	"""Construct the HIR for a statement-context match on an
+	Array/Int-mixed variant `Pair2(s: Array<Int>, n: Int)`:
 
-	    val s0: String = "x";
+	    val s0: Array<Int> = [9];
 	    val n0: Int = 7;
 	    val p: Pair2 = Pair2::Pair2(s = s0, n = n0);
 	    match p {
 	        Pair2(s_b, n_b) => { ... }
 	    }
 
-	The String binder triggers MOVE (non-Copy in unit scope) →
+	The Array binder triggers MOVE (non-Copy) →
 	`arm_scrut_payload_moved=True`.  The Int binder is a POD/Copy —
 	pre-migration, Filter B would skip the Int field entirely from
 	the candidate set.  Post-migration, the Int field appears as a
 	candidate and authoring skips it via MUST_NOT_DROP.
+
+	Carrier note (String Scope A): the moving field was originally
+	String — valid then only because an ISOLATED TypeTable gave String
+	no structural Copy status. String is now structurally Copy in every
+	mode, so it can no longer drive the MOVE branch; Array<Int> is the
+	canonical non-Copy droppable carrier.
 	"""
-	string_ty = type_table.ensure_string()
+	moved_ty = type_table.new_array(type_table.ensure_int())
 	int_ty = type_table.ensure_int()
 	pair_base = type_table.declare_variant(
 		module_id="main",
@@ -181,7 +195,7 @@ def _build_string_int_match_hir(type_table: TypeTable):
 			VariantArmSchema(
 				name="Pair2",
 				fields=[
-					VariantFieldSchema(name="s", type_expr=GenericTypeExpr.named("String")),
+					VariantFieldSchema(name="s", type_expr=GenericTypeExpr.named("Array", [GenericTypeExpr.named("Int")])),
 					VariantFieldSchema(name="n", type_expr=GenericTypeExpr.named("Int")),
 				],
 			),
@@ -192,8 +206,8 @@ def _build_string_int_match_hir(type_table: TypeTable):
 	pair_te = TypeExpr(name="Pair2", module_id="main")
 	let_s0 = H.HLet(
 		name="s0",
-		value=H.HLiteralString("x"),
-		declared_type_expr=TypeExpr(name="String"),
+		value=H.HArrayLiteral(elements=[H.HLiteralInt(value=9)]),
+		declared_type_expr=TypeExpr(name="Array", args=[TypeExpr(name="Int")]),
 		is_mutable=False,
 		binding_id=None,
 	)
@@ -247,7 +261,7 @@ def _build_string_int_match_hir(type_table: TypeTable):
 	csid = getattr(let_p.value, "callsite_id", None)
 	if isinstance(csid, int):
 		call_info_by_callsite_id[csid] = info
-	return hir, pair_ty, string_ty, int_ty, call_info_by_callsite_id
+	return hir, pair_ty, moved_ty, int_ty, call_info_by_callsite_id
 
 
 def _collect_match_cleanup_hooks(builder) -> List[M.MatchCleanupHook]:
@@ -266,7 +280,7 @@ def test_match_cleanup_hook_carries_full_field_set_including_moved() -> None:
 	`moved_field_indices`) has been retired; the chain-aware ledger
 	walker is the authority on Move-vs-Live per-field state.
 
-	Carrier: a 2-field String/String variant where both binders take
+	Carrier: a 2-field Array/Array variant where both binders take
 	the MOVE branch.  Pre-migration, the hook would have ZERO
 	candidates (both fields filtered by Filter A).  Post-migration,
 	the hook has BOTH fields as candidates; authoring then queries
@@ -278,7 +292,7 @@ def test_match_cleanup_hook_carries_full_field_set_including_moved() -> None:
 	the sole MovedOut authority.
 	"""
 	type_table = TypeTable()
-	hir, pair_ty, _string_ty, call_info = _build_two_field_string_string_match_hir(type_table)
+	hir, pair_ty, _moved_ty, call_info = _build_two_field_string_string_match_hir(type_table)
 
 	builder = make_builder(FunctionId(module="main", name="main", ordinal=0))
 	HIRToMIR(
@@ -323,7 +337,7 @@ def test_match_cleanup_hook_includes_pod_field_and_authoring_skips() -> None:
 	AND no DropValue is emitted for `Int` after authoring runs.
 	"""
 	type_table = TypeTable()
-	hir, pair_ty, string_ty, int_ty, call_info = _build_string_int_match_hir(type_table)
+	hir, pair_ty, _moved_ty, int_ty, call_info = _build_string_int_match_hir(type_table)
 
 	builder = make_builder(FunctionId(module="main", name="main", ordinal=0))
 	HIRToMIR(
@@ -348,9 +362,9 @@ def test_match_cleanup_hook_includes_pod_field_and_authoring_skips() -> None:
 	)
 
 	# Half 2: run authoring, assert NO DropValue(ty=Int) is emitted.
-	# (DropValue(ty=String) would still be emitted iff the String
-	# field's chain-aware verdict resolves to MUST_DROP — that's a
-	# separate carrier; here we focus on the Int-skip contract.)
+	# (A drop of the moved Array field would still be emitted iff its
+	# chain-aware verdict resolves to MUST_DROP — that's a separate
+	# carrier; here we focus on the Int-skip contract.)
 	func = builder.func
 	ledger = build_ledger(func, drop_policy=lambda _t: None)
 	setattr(func, "_ownership_ledger", ledger)

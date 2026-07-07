@@ -78,3 +78,23 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
      is_cheap_copy=True, has_structural_drop=True` (structurally Copy), and the docstring documents
      that the isolated and Copy-hook classifications must now AGREE. Drop-policy battery
      (contract + copy-short-circuit + pkg copy-status divergence + match-scrut CopyValue): **15 passed**.
+- 2026-07-07: full-gate round 2 — 7 stage2 unit failures, all pinning the pre-Scope-A ISOLATED-mode
+  String classification. Updated BY INTENT per maintainer:
+  1. Non-Copy/MoveOut/partial-move machinery tests keep true non-Copy coverage via the canonical
+     non-Copy droppable carrier `Array<Int>` (String can no longer drive the MOVE branch anywhere):
+     `test_constructor_noncopy_arg_moves_out_local`,
+     `test_match_by_value_noncopy_binder_moves_payload_and_zeros_source`, and both
+     `test_match_cleanup_full_candidate_set.py` builders (Pair Array/Array, Pair2 Array/Int) — the
+     Filter-A/Filter-B retirement pins are preserved unchanged.
+  2. String-specific tests now assert Scope-A behavior: array-literal String lvalues emit CopyValue in
+     isolated stage2 (1 for single, 2 for the two-element reuse case); new companions
+     `test_constructor_string_arg_copies` (LoadLocal no-MoveOut + CleanupHook keeps `s` a live drop
+     candidate; the balancing retain is authored by later ledger passes) and
+     `test_match_by_value_string_binder_copies_payload` (binder CopyValue, no MoveOut).
+  3. `test_match_copy_payload_emits_copyvalue_and_has_single_scrutinee_drop_across_cfg` REFRAMED (the
+     old "exactly one DropValue(variant) across CFG" was an isolated-mode artifact — the String `msg`
+     binder partial-moved, suppressing the Some-arm whole drop). Authored MIR verified tombstone-safe:
+     arm MoveOut→scrut-tmp + TombstoneValue stored back to `x`; join drops `x` (live on the None path,
+     tombstoned no-op on the Some path). New pins: no drops in match_dispatch, ≤1 variant drop per
+     block, tombstone store on the consumed source path, both binders CopyValue, String binder cleaned
+     exactly once across the CFG.

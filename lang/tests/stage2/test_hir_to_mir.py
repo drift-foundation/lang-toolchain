@@ -38,6 +38,7 @@ from lang.driftc.stage1 import (
 	HExprStmt,
 	HQualifiedMember,
 	HKwArg,
+	HArrayLiteral,
 	BinaryOp,
 	assign_node_ids,
 	assign_callsite_ids,
@@ -343,6 +344,46 @@ def test_loop_and_break_continue():
 
 
 def test_constructor_noncopy_arg_moves_out_local() -> None:
+	# Non-Copy exemplar is Array<Int>: since String Scope A
+	# (work/string-ownership-refactor/) String is structurally Copy even
+	# in an isolated TypeTable, so it no longer exercises the move-out
+	# path — see test_constructor_string_arg_copies below for the String
+	# contract.
+	block = HBlock(
+		statements=[
+			HLet(name="s", value=HArrayLiteral(elements=[HLiteralInt(1)])),
+			HReturn(
+				value=HCall(
+					fn=HQualifiedMember(
+						base_type_expr=TypeExpr(
+							name="Optional",
+							args=[TypeExpr(name="Array", args=[TypeExpr(name="Int")])],
+						),
+						member="Some",
+					),
+					args=[HVar("s")],
+					kwargs=[],
+				)
+			),
+		]
+	)
+	type_table = TypeTable()
+	func = _lower_with_call_info(block, type_table)
+	entry = func.blocks[func.entry]
+	assert any(isinstance(op, MoveOut) and op.local == "s" for op in entry.instructions)
+	assert any(isinstance(op, ConstructVariant) for op in entry.instructions)
+
+
+def test_constructor_string_arg_copies() -> None:
+	"""String Scope A contract: a String local passed to a constructor is
+	NOT moved — String is structurally Copy in every mode, isolated
+	TypeTables included. Raw lowering keeps the local owned: `LoadLocal`
+	(no MoveOut) feeds the ctor and the scope `CleanupHook` still lists
+	`s` as a live drop candidate; the retain that balances the variant's
+	copy is authored by the later ledger passes, not inline here.
+	Pre-Scope-A this shape emitted MoveOut in isolated mode (String had
+	no structural Copy status there) while real compiles copied — the
+	divergence Scope A closed."""
 	block = HBlock(
 		statements=[
 			HLet(name="s", value=HLiteralString("x")),
@@ -361,8 +402,13 @@ def test_constructor_noncopy_arg_moves_out_local() -> None:
 	type_table = TypeTable()
 	func = _lower_with_call_info(block, type_table)
 	entry = func.blocks[func.entry]
-	assert any(isinstance(op, MoveOut) and op.local == "s" for op in entry.instructions)
+	assert not any(isinstance(op, MoveOut) and op.local == "s" for op in entry.instructions)
 	assert any(isinstance(op, ConstructVariant) for op in entry.instructions)
+	hooks = [op for op in entry.instructions if type(op).__name__ == "CleanupHook"]
+	assert hooks and any(c[0] == "s" for hook in hooks for c in hook.candidates), (
+		"the String local must remain an owned drop candidate after being "
+		"copy-consumed by the constructor (no MoveOut, no tombstone)"
+	)
 
 
 def test_calls():
