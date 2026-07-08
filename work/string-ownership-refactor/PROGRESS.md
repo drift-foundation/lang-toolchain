@@ -1,5 +1,27 @@
 # String Scope A — progress log
 
+> 2026-07-08: Scope B PLAN written (`SCOPE-B-PLAN.md`, plan-only, no code). Headline: "Scope B"
+> splits into B-arch (string_arc→ledger authority unification, ABI-NEUTRAL — the real debt) and
+> B-repr (representation reshape, ABI bump + pool recert + downstream migration — no current
+> correctness driver). v1 recommendation: defer B-repr; adopt B-arch sequenced after the
+> ledger-cache-safety slice; enter via a differential reporter (B-arch-0).
+> 2026-07-08 v2 (maintainer relaxed constraints: ABI breakage acceptable; C direct-field
+> interop non-sacred): re-ranked in §10. Order UNCHANGED and forced by dependency structure —
+> String stays implicit-copy, so no representation removes the stake-authoring problem
+> (`_emit_copy_value` already unifies at codegen; Arc avoids a string_arc-equivalent only by
+> being clone-EXPLICIT). What changes: B-repr graduates from deferred to a COMMITTED follow-on
+> slice targeting **B5 "RcBytes"** ({len, ptr→{strong,flags}+bytes} — header at offset 0,
+> inline len kept, accessor-based C API, static-empty singleton retires {0,NULL}); SSO stays
+> rejected (re-forks Scope A's classification). Final sequence (v2.1 — ledger-cache-safety
+> verified ALREADY IN-TREE, plan §11.1): B-arch-0 reporter → B-arch-1..n (string_arc deleted) →
+> B-repr(B5) with ABI 20→21 + pool recert.
+> 2026-07-08 v2.1: §11 added per maintainer review — ledger-cache prerequisite confirmed
+> satisfied (stage2/ledger_cache.py + dirty-bit/mutation-audit tests in-tree); B-arch-0 reporter
+> contract pinned (closed StringStakeEvent model tagged at emission sites, L_pre/L_post only,
+> divergence classes C1-C4 + capped UNCLASSIFIED, DRIFT_STRING_ARC_AUDIT=1 gated,
+> observational-only gate, no-fixes rule). Substance ACCEPTED by maintainer; cleared to start
+> B-arch-0.
+
 Branch: `refactor/string-transfer-policy-scope-a` (cut 2026-07-07 from post-0.33.74-cert main).
 Plan: `NEXT-PHASE-PLAN.md` in this directory. Scope per maintainer: structural String/non-bitcopy Copy
 classification → centralized alias-to-owned transfer handling → projected-capture widening only after
