@@ -251,6 +251,29 @@ def test_fresh_ref_arg_widens_asan(tmp_path: Path) -> None:
 	assert "ERROR: AddressSanitizer" not in run.stderr, run.stderr[-800:]
 
 
+def _run_ok_asan(tmp_path: Path, source: str) -> None:
+	res = _compile(tmp_path, source, "--sanitize=address,undefined")
+	assert res.returncode == 0, f"compile failed:\n{res.stderr[-1500:]}"
+	out = tmp_path / "test_bin"
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(30))
+	assert run.returncode == 0, f"expected exit 0, got {run.returncode}; stderr:\n{run.stderr[-800:]}"
+	assert "ERROR: AddressSanitizer" not in run.stderr, run.stderr[-800:]
+
+
+def test_multi_instance_owned_dispatch_asan(tmp_path: Path) -> None:
+	"""ASAN row for the miscompile fix: two owned instance views on one
+	struct — instance-keyed dispatch plus both fat-value drops must be
+	clean (no leak, no double-drop) under address+UB sanitizers."""
+	_run_ok_asan(tmp_path, _MULTI_INSTANCE_OWNED_SOURCE)
+
+
+def test_multi_instance_widened_dispatch_asan(tmp_path: Path) -> None:
+	"""ASAN row: widened views of both instances — borrowed fat values
+	own nothing, their drops are no-ops, the viewed Boxes drop exactly
+	once in the caller's scope."""
+	_run_ok_asan(tmp_path, _MULTI_INSTANCE_WIDENED_SOURCE)
+
+
 def test_non_implementing_ref_arg_pretty_diagnostic(tmp_path: Path) -> None:
 	"""Fallback diagnostic: names the types and the missing implements
 	relation; never leaks raw TypeIds like `args [2133]`."""
