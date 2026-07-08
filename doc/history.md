@@ -1,5 +1,49 @@
 # Drift development history
 
+## 2026-07-08 (0.33.77 follow-up: generic interface-instance widening + multi-instance dispatch miscompile fix; ABI stays 20)
+- **Generic interface INSTANCES now participate in reference widening**:
+  `implement Sink<Int> for Box` lets `&Box` widen to `&Sink<Int>` — and never
+  to `&Sink<String>`. Identity everywhere is the canonical
+  `type_key_string` of the exact interface INSTANCE (carries
+  package/module + name + args, so `pkgA`'s `Sink<Int>` cannot collide
+  with a local or foreign one). Impl-parametric forms
+  (`implement<T> Sink<T> for ...`) remain deferred (no interface
+  impl-applicability solver); the targeted diagnostic says so precisely.
+- **MISCOMPILE FIXED (present on ≤certified 0.33.77, owned path):** with
+  TWO instance impls on one struct, codegen's impl index —
+  `(iface_BASE, target_tid)`-keyed with first-impl-wins method merge —
+  silently dispatched one instance through the other's methods (wrong
+  result, no diagnostic). The index and the vtable lookup are now keyed on
+  the canonical instance (`_iface_impl_index_key`). Regression-first: the
+  owned multi-instance pin was red before the fix, green after; a widened
+  twin pins the borrowed path.
+- **Coherence is per instance, not per base**: the trait-world duplicate
+  check (`E-IMPL-DUPLICATE`) no longer rejects concrete impls of the same
+  trait/interface with DIFFERENT trait args on one target (found via the
+  package-emit path: per-module worlds classify imported-interface impls
+  as trait impls, so the check cannot rely on `world.interfaces` —
+  arg-sensitivity is the module-local truth).
+- **Checker relation hardening** (root cause of the initial 0.33.77
+  deferral, now lifted): `validate_interface_impls` records the
+  implements relation BEFORE its `schema is None` gate (instance tids
+  have no `interface_bases` entry, so generic-instance impls were skipped
+  in the stubbed-compile checker → widen-then-re-reject splits), and the
+  recorder takes the already-resolved trait tid instead of re-resolving.
+- **Package-loaded impls now seed the checker's implements relation**:
+  `module_exports` holds source-parsed modules only — impls arriving from
+  packages live in `semantic_world.external_impl_metas`, which the lazy
+  relation seed now also walks. Without this, an impl living IN a package
+  (`implement pkgA.Sink<Int> for Box` inside pkg B) was invisible to
+  widening even though owned dispatch worked (codegen's index reads the
+  combined exports directly).
+- Three-package topology pinned (`test_ref_to_interface_pkg_topology.py`,
+  full v1 trust chain via `publish_v1_pkg` + a new additive
+  `cert_dep_graph` helper param for dep-bearing packages): interface in
+  pkg A, struct + BOTH instance impls in pkg B, app C exercising owned
+  AND widened dispatch for BOTH instances across the boundary — the case
+  where a base-keyed index would silently recur. ABI stays 20 (packages
+  ship HIR; the consumer emits all vtables/drop helpers itself).
+
 ## 2026-07-08 (0.33.77: borrowed interface views — `&Concrete` widens to `&Interface`; pretty overload diagnostics; ABI stays 20)
 - **`&Concrete` → `&Interface` reference widening** (DriftQuery report
   2026-07-08; previously every working pattern required OWNING a value to

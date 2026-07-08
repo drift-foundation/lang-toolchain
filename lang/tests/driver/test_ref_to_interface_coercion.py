@@ -323,14 +323,12 @@ def test_widened_ref_cannot_escape_in_aggregate(tmp_path: Path) -> None:
 	assert "borrowed aggregate return must derive from a reference parameter" in err, err[-800:]
 
 
-# GENERIC INTERFACE INSTANCES ARE DEFERRED for reference widening: the
-# implements relation's instance identity is not yet reliable across
-# resolution contexts, and a base-keyed fallback would be a cross-instance
-# soundness hole (`&Sink<String>` accepting a `Sink<Int>` impl) — so
-# `implement Sink<Int> for Box` does NOT widen `&Box` to `&Sink<Int>`
-# (deterministic rejection), and `&Sink<String>` rejects identically.
-# OWNED upcasts of generic instances keep working (certified-0.33.76
-# behavior; implements-verification defers for them).
+# GENERIC INTERFACE INSTANCES participate in widening (0.33.77 follow-up):
+# `implement Sink<Int> for Box` widens `&Box` to `&Sink<Int>` — the
+# implements relation AND the codegen impl index are keyed on the exact
+# canonical interface instance (type_key_string: package/module + name +
+# args), so `&Sink<String>` must never accept a `Sink<Int>` impl.
+# Impl-parametric forms (`implement<T> Sink<T> for ...`) remain deferred.
 _GENERIC_IFACE_COMMON = """\
 module main;
 
@@ -370,6 +368,163 @@ pub fn main() nothrow -> Int {
 """
 
 
+# TWO instance impls on one struct: dispatch must route each interface
+# instance through ITS OWN impl. Pre-fix, codegen's impl index was keyed on
+# (iface_BASE, target) with first-impl-wins method merge — the Sink<String>
+# view silently dispatched through the Sink<Int> impl (wrong result, no
+# diagnostic; reproduced on certified 0.33.76). The index is now keyed on
+# the canonical interface INSTANCE (type_key_string — includes
+# package/module identity, so pkgA's Sink<Int> can never collide with a
+# local or foreign Sink<Int>).
+_MULTI_INSTANCE_COMMON = """\
+module main;
+
+interface Sink<T> {
+\tfn put(self: &Self, v: T) nothrow -> Int;
+}
+
+struct Box { n: Int }
+
+implement Sink<Int> for Box {
+\tfn put(self: &Box, v: Int) nothrow -> Int { return self.n + v; }
+}
+
+implement Sink<String> for Box {
+\tfn put(self: &Box, v: String) nothrow -> Int { return self.n * 100; }
+}
+
+fn use_int_sink(s: &Sink<Int>) nothrow -> Int { return s.put(2); }
+fn use_str_sink(s: &Sink<String>) nothrow -> Int { return s.put("x"); }
+"""
+
+_MULTI_INSTANCE_OWNED_SOURCE = _MULTI_INSTANCE_COMMON + """
+pub fn main() nothrow -> Int {
+\tval b1 = Box(n = 40);
+\tval s1: Sink<Int> = move b1;
+\tval b2 = Box(n = 40);
+\tval s2: Sink<String> = move b2;
+\tval r1 = use_int_sink(&s1);
+\tval r2 = use_str_sink(&s2);
+\tif r1 == 42 {
+\t\tif r2 == 4000 { return 0; }
+\t\treturn 2;
+\t}
+\treturn 1;
+}
+"""
+
+
+def test_multi_instance_owned_dispatch_correct(tmp_path: Path) -> None:
+	"""Each owned interface-instance view dispatches through its own impl
+	(r1=42 via Sink<Int>, r2=4000 via Sink<String>) — pins the
+	base-keyed-index miscompile fix."""
+	_run_ok(tmp_path, _MULTI_INSTANCE_OWNED_SOURCE)
+
+
+# Coherence: a duplicate concrete instance impl must reject even when it is
+# NOT the first impl in source order (review finding: the arg-sensitive
+# duplicate check must compare against ALL previously-seen concrete
+# (target, trait_args) pairs, not only the group's first impl — otherwise
+# [String, Int, Int] lets the exact-duplicate Int pair slip through and
+# codegen's first-wins merge inside the exact key recreates ambiguous
+# dispatch). Uses the cross-module shape: impls of an IMPORTED interface
+# are the ones classified onto the trait-coherence path per-module.
+_DUP_IFACE_MOD = """\
+module sinkmod;
+
+export { Sink };
+
+pub interface Sink<T> {
+\tfn put(self: &Self, v: T) nothrow -> Int;
+}
+"""
+
+_DUP_NOT_FIRST_MAIN = """\
+module main;
+import sinkmod;
+
+struct Box { n: Int }
+
+implement sinkmod.Sink<String> for Box {
+\tfn put(self: &Box, v: String) nothrow -> Int { return self.n * 100; }
+}
+
+implement sinkmod.Sink<Int> for Box {
+\tfn put(self: &Box, v: Int) nothrow -> Int { return self.n + v; }
+}
+
+implement sinkmod.Sink<Int> for Box {
+\tfn put(self: &Box, v: Int) nothrow -> Int { return self.n - v; }
+}
+
+pub fn main() nothrow -> Int {
+\tval b = Box(n = 40);
+\tval s: sinkmod.Sink<Int> = move b;
+\treturn 0;
+}
+"""
+
+_DUP_COEXIST_MAIN = """\
+module main;
+import sinkmod;
+
+struct Box { n: Int }
+
+implement sinkmod.Sink<String> for Box {
+\tfn put(self: &Box, v: String) nothrow -> Int { return self.n * 100; }
+}
+
+implement sinkmod.Sink<Int> for Box {
+\tfn put(self: &Box, v: Int) nothrow -> Int { return self.n + v; }
+}
+
+fn use_int(s: &sinkmod.Sink<Int>) nothrow -> Int { return s.put(2); }
+fn use_str(s: &sinkmod.Sink<String>) nothrow -> Int { return s.put("x"); }
+
+pub fn main() nothrow -> Int {
+\tval b3 = Box(n = 40);
+\tval b4 = Box(n = 40);
+\tif use_int(&b3) == 42 {
+\t\tif use_str(&b4) == 4000 { return 0; }
+\t\treturn 2;
+\t}
+\treturn 1;
+}
+"""
+
+
+def _compile_two_modules(tmp_path: Path, mod_src: str, main_src: str) -> subprocess.CompletedProcess[str]:
+	(tmp_path / "sinkmod.drift").write_text(mod_src)
+	(tmp_path / "main.drift").write_text(main_src)
+	out = tmp_path / "test_bin"
+	return subprocess.run(
+		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
+		 "--stdlib-root", str(ROOT / "stdlib"),
+		 "-M", str(tmp_path), str(tmp_path / "main.drift"), str(tmp_path / "sinkmod.drift"),
+		 "--entry", "main::main", "-o", str(out)],
+		cwd=ROOT, capture_output=True, text=True, timeout=sanitizer_timeout(240),
+	)
+
+
+def test_duplicate_instance_impl_not_first_rejected(tmp_path: Path) -> None:
+	"""[Sink<String>, Sink<Int>, Sink<Int>] — the exact-duplicate pair is
+	not in first position and must still reject with E-IMPL-DUPLICATE."""
+	res = _compile_two_modules(tmp_path, _DUP_IFACE_MOD, _DUP_NOT_FIRST_MAIN)
+	assert res.returncode != 0, "duplicate-not-first must reject"
+	err = res.stderr + res.stdout
+	assert "E-IMPL-DUPLICATE" in err, err[-800:]
+
+
+def test_distinct_instance_impls_cross_module_coexist(tmp_path: Path) -> None:
+	"""Sink<String> + Sink<Int> for one type (imported interface, the
+	trait-coherence-path classification) coexist and dispatch correctly."""
+	res = _compile_two_modules(tmp_path, _DUP_IFACE_MOD, _DUP_COEXIST_MAIN)
+	assert res.returncode == 0, f"coexist compile failed:\n{res.stderr[-1200:]}"
+	out = tmp_path / "test_bin"
+	run = subprocess.run([str(out)], capture_output=True, text=True, timeout=sanitizer_timeout(10))
+	assert run.returncode == 0, f"dispatch wrong (exit {run.returncode})"
+
+
 _GENERIC_IFACE_OWNED_SOURCE = _GENERIC_IFACE_COMMON + """
 fn use_int_sink(s: &Sink<Int>) nothrow -> Int {
 \treturn s.put(2);
@@ -384,15 +539,69 @@ pub fn main() nothrow -> Int {
 """
 
 
-def test_generic_interface_instance_widening_deferred(tmp_path: Path) -> None:
-	"""Reference widening to a generic interface INSTANCE is deferred:
-	`&Box` does not widen to `&Sink<Int>` even with a concrete
-	`implement Sink<Int> for Box` — deterministic rejection with the
-	targeted note."""
-	res = _compile(tmp_path, _GENERIC_IFACE_INSTANCE_SOURCE)
-	assert res.returncode != 0, "generic-instance widening is deferred; must reject"
-	err = res.stderr + res.stdout
-	assert "Sink<Int>" in err and "Box" in err, err[-1000:]
+def test_generic_interface_instance_widens(tmp_path: Path) -> None:
+	"""`implement Sink<Int> for Box` lets `&Box` widen to `&Sink<Int>` —
+	compiles and dispatches correctly (was deferred in initial 0.33.77)."""
+	_run_ok(tmp_path, _GENERIC_IFACE_INSTANCE_SOURCE)
+
+
+_MULTI_INSTANCE_WIDENED_SOURCE = _MULTI_INSTANCE_COMMON + """
+pub fn main() nothrow -> Int {
+\tval b3 = Box(n = 40);
+\tval b4 = Box(n = 40);
+\tval r3 = use_int_sink(&b3);
+\tval r4 = use_str_sink(&b4);
+\tif r3 == 42 {
+\t\tif r4 == 4000 { return 0; }
+\t\treturn 2;
+\t}
+\treturn 1;
+}
+"""
+
+
+def test_multi_instance_widened_dispatch_correct(tmp_path: Path) -> None:
+	"""Widened views route each interface instance through ITS OWN impl —
+	the borrowed-view twin of the owned multi-instance dispatch pin."""
+	_run_ok(tmp_path, _MULTI_INSTANCE_WIDENED_SOURCE)
+
+
+_GENERIC_MUT_VIEW_SOURCE = """\
+module main;
+
+interface Store<T> {
+\tfn set(self: &mut Self, v: T) nothrow -> Void;
+\tfn get(self: &Self) nothrow -> Int;
+}
+
+struct Cell { n: Int }
+
+implement Store<Int> for Cell {
+\tfn set(self: &mut Cell, v: Int) nothrow -> Void {
+\t\tself.n = v;
+\t\treturn;
+\t}
+\tfn get(self: &Cell) nothrow -> Int { return self.n; }
+}
+
+fn bump(s: &mut Store<Int>, v: Int) nothrow -> Void {
+\ts.set(v);
+\treturn;
+}
+
+pub fn main() nothrow -> Int {
+\tvar c = Cell(n = 1);
+\tbump(&mut c, 42);
+\tif c.n == 42 { return 0; }
+\treturn 1;
+}
+"""
+
+
+def test_generic_instance_mut_ref_widens_and_aliases(tmp_path: Path) -> None:
+	"""`&mut Cell` → `&mut Store<Int>`: the mutation lands in the caller's
+	value through the generic-instance view."""
+	_run_ok(tmp_path, _GENERIC_MUT_VIEW_SOURCE)
 
 
 def test_generic_interface_cross_instance_rejected(tmp_path: Path) -> None:

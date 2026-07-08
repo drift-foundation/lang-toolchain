@@ -202,6 +202,7 @@ def publish_v1_pkg(
 	trust_store_for_build: Path | None = None,
 	core_trust_for_build: Path | None = None,
 	required_deps: tuple = (),
+	cert_dep_graph: tuple = (),
 	package_deps: tuple[tuple[str, str], ...] = (),
 	dep_pins: tuple[tuple[str, str], ...] = (),
 	stdlib_root_override: Path | None = None,
@@ -380,7 +381,7 @@ def publish_v1_pkg(
 			source_content_id=sci,
 			target=target,
 			toolchain=Toolchain(driftc_version="0.31.0", drift_rt_abi=1, driftc_commit="test"),
-			dep_graph=(),
+			dep_graph=tuple(cert_dep_graph),
 			cert_suite=CertSuite(
 				id="drift-deploy/test", version="1.0", result="pass",
 				result_evidence_sha256="sha256:" + ("f" * 64),

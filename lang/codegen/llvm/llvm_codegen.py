@@ -314,13 +314,32 @@ def lower_ssa_func_to_llvm(
 	return mod.render()
 
 
+def _iface_impl_index_key(type_table: TypeTable, iface_ty: TypeId, value_ty: TypeId) -> tuple[str, str]:
+	"""Canonical key for the interface impl index: the exact interface
+	INSTANCE (or bare base for non-generic interfaces) plus the target
+	type, both as `type_key_string`s. Instance-keying is load-bearing:
+	the old `(iface_base, target_tid)` key merged multi-instance impls
+	(`implement Sink<Int> for Box` + `implement Sink<String> for Box`)
+	first-impl-wins, silently dispatching one instance through the
+	other's methods (miscompile on ≤0.33.77). Key strings also carry
+	package/module identity, so `pkgA`'s `Sink<Int>` can never collide
+	with a local or foreign interface of the same name."""
+	inst = type_table.get_interface_instance(iface_ty)
+	if inst is not None and getattr(inst, "type_args", None):
+		ikey = type_table.type_key_string(iface_ty)
+	else:
+		base = inst.base_id if inst is not None else iface_ty
+		ikey = type_table.type_key_string(base)
+	return (ikey, type_table.type_key_string(value_ty))
+
+
 def _build_interface_impl_index(
 	module_exports: Mapping[str, dict[str, object]] | None,
 	type_table: Optional[TypeTable],
-) -> Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]]:
+) -> Dict[tuple[str, str], Dict[str, FunctionId]]:
 	if module_exports is None or type_table is None:
 		return {}
-	index: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = {}
+	index: Dict[tuple[str, str], Dict[str, FunctionId]] = {}
 	for exp in module_exports.values():
 		if not isinstance(exp, dict):
 			continue
@@ -342,7 +361,7 @@ def _build_interface_impl_index(
 			iface_base = inst.base_id if inst is not None else trait_ty
 			if type_table.get(iface_base).kind is not TypeKind.INTERFACE:
 				continue
-			key = (iface_base, impl.target_type_id)
+			key = _iface_impl_index_key(type_table, trait_ty, impl.target_type_id)
 			method_map = index.setdefault(key, {})
 			for method in list(getattr(impl, "methods", []) or []):
 				method_map.setdefault(method.name, method.fn_id)
@@ -699,7 +718,7 @@ class LlvmModuleBuilder:
 	const_array_cache: Dict[tuple, tuple[str, str, int]] = field(default_factory=dict)
 	iface_vtables: Dict[str, str] = field(default_factory=dict)
 	iface_thunks: Dict[str, str] = field(default_factory=dict)
-	iface_impls: Dict[tuple[TypeId, TypeId], Dict[str, FunctionId]] = field(default_factory=dict)
+	iface_impls: Dict[tuple[str, str], Dict[str, FunctionId]] = field(default_factory=dict)
 	iface_vtable_sizes: Dict[str, int] = field(default_factory=dict)
 	nothrow_thunk_cache: Dict[tuple[str, str], str] = field(default_factory=dict)
 	_variant_type_cache: Dict[str, bool] = field(default_factory=dict)
@@ -6947,7 +6966,7 @@ class _FuncBuilder:
 		drop_name = f"__drift_iface_drop_{suffix}"
 		self._emit_iface_drop_thunk(drop_name, value_ty)
 		drop_ptr = f"ptr @{drop_name}"
-		method_map = self.module.iface_impls.get((iface_base, value_ty))
+		method_map = self.module.iface_impls.get(_iface_impl_index_key(self.type_table, iface_ty, value_ty))
 		if method_map is None:
 			raise NotImplementedError("interface impl not found for interface value")
 		linear = self.type_table.interface_linearization(iface_base)

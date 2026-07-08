@@ -976,9 +976,47 @@ def build_trait_world(
 		if len(impl_ids) <= 1:
 			continue
 		first = world.impls[impl_ids[0]]
+		# DISTINCT TRAIT/INTERFACE INSTANCES are NOT duplicates:
+		# `implement Sink<Int> for Box` and `implement Sink<String> for
+		# Box` coexist — each instance dispatches through its own impl
+		# (the codegen impl index and the checker implements relation are
+		# keyed on the exact canonical instance). Coherence is per
+		# instance, not per base: a CONCRETE impl collides iff ANY
+		# previous concrete impl in the group has the same
+		# (target, trait_args) — tracked in `seen_concrete`, NOT
+		# compared only against `first` (review finding: with
+		# arg-sensitivity, a duplicate pair that is not in first
+		# position would otherwise slip through, and codegen's
+		# first-wins method merge inside the exact key would recreate
+		# ambiguous dispatch for the invalid program). Generic /
+		# type-parametric impls keep the legacy conservative
+		# vs-first behavior. (Imported interfaces are classified as
+		# trait impls in per-module worlds and reclassified after
+		# linking, so this check cannot rely on `world.interfaces` —
+		# arg-sensitivity is the module-local truth either way.)
+		seen_concrete: set = set()
+		first_concrete = not getattr(first, "type_params", None)
+		if first_concrete:
+			seen_concrete.add((first.target, tuple(first.trait_args)))
 		for other_id in impl_ids[1:]:
 			other = world.impls[other_id]
+			other_concrete = not getattr(other, "type_params", None)
+			if other_concrete:
+				concrete_key = (other.target, tuple(other.trait_args))
+				if concrete_key in seen_concrete:
+					world.diagnostics.append(diag(
+						f"duplicate impl for trait '{_trait_key_str(trait_key)}' on '{_type_key_str(head_key)}'",
+						other.loc,
+						code="E-IMPL-DUPLICATE",
+					))
+					continue
+				seen_concrete.add(concrete_key)
 			if other.target == first.target:
+				if other_concrete and first_concrete:
+					# Concrete pair, same target: same trait_args was
+					# caught by `seen_concrete` above; different
+					# trait_args = distinct instances, allowed.
+					continue
 				msg = f"duplicate impl for trait '{_trait_key_str(trait_key)}' on '{_type_key_str(head_key)}'"
 				code = "E-IMPL-DUPLICATE"
 			else:

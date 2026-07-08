@@ -103,7 +103,7 @@ def _iface_ref_widen_hint(ctx: object, candidates, arg_types) -> str:
 					f"interface '{ctx.pretty_type_name(p_inner, current_module=cm)}', so "
 					f"'{ctx.pretty_type_name(a_ty, current_module=cm)}' cannot widen to "
 					f"'{ctx.pretty_type_name(p_ty, current_module=cm)}' "
-					f"(reference widening requires a non-generic `implement` of that exact interface instance)"
+					f"(reference widening needs a concrete `implement` of that exact interface instance; `implement<T>` forms cannot prove a specific instance yet)"
 				)
 	except Exception:
 		pass

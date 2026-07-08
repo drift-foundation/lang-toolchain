@@ -1371,14 +1371,22 @@ class TypeChecker:
 			return
 		self._iface_impl_relation_seeded = True
 		exports = getattr(self.semantic_world, "module_exports", None)
-		if not isinstance(exports, dict):
-			return
-		for exp in exports.values():
-			if not isinstance(exp, dict):
-				continue
-			for impl in exp.get("impls", []) or []:
-				if isinstance(impl, ImplMeta):
-					self._record_iface_impl_relation(impl)
+		if isinstance(exports, dict):
+			for exp in exports.values():
+				if not isinstance(exp, dict):
+					continue
+				for impl in exp.get("impls", []) or []:
+					if isinstance(impl, ImplMeta):
+						self._record_iface_impl_relation(impl)
+		# PACKAGE-loaded impls are NOT in `module_exports` (that map holds
+		# source-parsed modules only) — they arrive as `external_impl_metas`
+		# on the world (driftc CLI sets it after package loading). Without
+		# this walk, `implement pkgA.Sink<Int> for Box` living in pkg B was
+		# invisible to the relation and cross-package widening rejected
+		# (the A/B/C topology pin).
+		for impl in getattr(self.semantic_world, "external_impl_metas", None) or []:
+			if isinstance(impl, ImplMeta):
+				self._record_iface_impl_relation(impl)
 
 	def validate_interface_impls(
 		self,
@@ -1412,12 +1420,17 @@ class TypeChecker:
 				trait_td = self.type_table.get(trait_type_id)
 				if trait_td.kind is not TypeKind.INTERFACE:
 					continue
+			# Record the implements relation for coercion checking
+			# (borrowed views + owned-upcast verification) BEFORE the
+			# schema gate: generic-INSTANCE trait tids have no entry in
+			# `interface_bases` (keyed by base), so the `schema is None`
+			# continue below would skip them and the relation would be
+			# missing in this checker (the widen-then-reject split the
+			# 0.33.77 research traced).
+			self._record_iface_impl_relation(impl, resolved_trait_ty=_rel_trait_ty)
 			schema = self.type_table.interface_bases.get(trait_type_id)
 			if schema is None:
 				continue
-			# Record the implements relation for coercion checking
-			# (borrowed views + owned-upcast verification).
-			self._record_iface_impl_relation(impl, resolved_trait_ty=_rel_trait_ty)
 			interface_type_args = list(getattr(interface_inst, "type_args", []) or [])
 			try:
 				linear = self.type_table.interface_linearization(trait_type_id)
@@ -2513,16 +2526,12 @@ class TypeChecker:
 			if self.type_table.get(a_inner).kind is TypeKind.INTERFACE:
 				return None
 			inst = self.type_table.get_interface_instance(p_inner)
-			if inst is not None and getattr(inst, "type_args", None):
-				# GENERIC INTERFACE INSTANCES ARE DEFERRED for reference
-				# widening (`&Box` to `&Sink<Int>`): the implements
-				# relation's instance identity is not yet reliable across
-				# resolution contexts, and a base-keyed fallback would be a
-				# cross-instance soundness hole (`&Sink<String>` accepting a
-				# `Sink<Int>` impl). Deterministic rejection until the
-				# relation is instance-canonical. Owned upcasts of generic
-				# instances are unaffected (verification defers below).
-				return None
+			# Generic interface INSTANCES participate (0.33.77 follow-up):
+			# the relation is keyed on the exact canonical instance
+			# (`implement Sink<Int> for Box` widens `&Box` to `&Sink<Int>`
+			# and NEVER to `&Sink<String>`), and the codegen impl index is
+			# instance-keyed to match. Impl-parametric `implement<T>` forms
+			# remain deferred (no interface impl-applicability solver).
 			self._ensure_iface_impl_relation()
 			iface_base = inst.base_id if inst is not None else p_inner
 			_a_key = self._iface_rel_key(a_inner)
