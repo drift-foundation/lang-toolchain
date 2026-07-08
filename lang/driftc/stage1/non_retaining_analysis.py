@@ -188,6 +188,14 @@ def analyze_non_retaining_params(
 			return None
 
 		def _plain_param_index(expr: H.HExpr) -> int | None:
+			if isinstance(expr, H.HMove):
+				# `move body` forwarding transfers ownership into the callee
+				# param — the non-retaining proof obligation is identical to
+				# plain forwarding, so look through the move to the place.
+				# Without this, the generic walk reaches the HPlaceExpr arm
+				# and marks the param RETAINING, poisoning proven chains
+				# like `delegate(h, move body)` → `with_handle(h, body)`.
+				expr = expr.subject
 			if isinstance(expr, H.HVar):
 				bid = _binding_id_for_var(expr)
 				return binding_to_index.get(bid) if bid is not None else None
@@ -219,8 +227,17 @@ def analyze_non_retaining_params(
 
 		def _walk_expr(expr: H.HExpr) -> None:
 			if isinstance(expr, H.HLambda):
-				res = discover_captures(expr)
-				for cap in res.captures:
+				# Use the checker-final capture list when present.
+				# `discover_captures` MUTATES `expr.captures` (it re-assigns
+				# the discovered list), and this analysis also runs
+				# post-check right before the borrow-check loop — a fresh
+				# discovery there would overwrite call-resolver adjustments
+				# (implicit-move capture kinds on boxed callbacks) and
+				# corrupt the already-extracted hidden-lambda env contract
+				# (surfaced as an SSA return-type contract failure on the
+				# hidden fn). Discover only when captures were never set.
+				caps = expr.captures or discover_captures(expr).captures
+				for cap in caps or []:
 					idx = binding_to_index.get(int(cap.key.root_local))
 					if idx is not None:
 						usages[idx].has_retain = True

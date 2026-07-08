@@ -5883,15 +5883,37 @@ def compile_stubbed_funcs(
 									span=None,
 								)
 							)
+	# Non-retaining proofs for escape checking; None when the analysis has
+	# not run (run_borrow_check=False paths keep conservative behavior).
+	# Consumed by the borrow-check loop below AND by the hidden-lambda
+	# worklist's nested-wrap revalidation (which executes later, during
+	# lowering, and needs the same proofs — review finding on 0.33.76).
+	_nonretaining_sigs: dict | None = None
 	if run_borrow_check and not any(d.severity == "error" for d in checked.diagnostics):
 		_apply_stdlib_escape_annotations(signatures_by_id, semantic_world=semantic_world)
+		# Prove non-retaining callable params for ESCAPE CHECKING ONLY:
+		# `_effective_escape_level` must see LOCAL for helper params that
+		# only ever `.call()` their callback (`with_handle(h, body)` — the
+		# DriftQuery 2026-07-08 regression); otherwise the requirement
+		# defaults to THREAD and the 0.33.74 LOCAL bound on ref-valued
+		# captures rejects the sound higher-order pattern. The analysis
+		# returns REPLACED FnSignature objects in no-world mode, so the
+		# enriched dict is scoped to the escape checks — the ambient
+		# `signatures_by_id` used by MIR lowering keeps its originals.
+		_nonretaining_sigs = analyze_non_retaining_params(
+			typed_fns_by_id,
+			signatures_by_id,
+			type_table=shared_type_table,
+			semantic_world=semantic_world,
+		)
+		_bc_signatures = _nonretaining_sigs
 		borrow_diags: list[Diagnostic] = []
 		with _timed("borrow_check"):
 			for _fn_id, typed_fn in typed_fns_by_id.items():
 				bc = BorrowChecker.from_typed_fn(
 					typed_fn,
 					type_table=shared_type_table,
-					signatures_by_id=signatures_by_id,
+					signatures_by_id=_bc_signatures,
 					enable_auto_borrow=True,
 					semantic_world=semantic_world,
 				)
@@ -7261,10 +7283,18 @@ def compile_stubbed_funcs(
 			if _hir_contains_lambda(lambda_body):
 				_nested_lam_res = validate_lambdas_non_retaining(
 					lambda_body,
-					signatures_by_id=signatures_by_id,
+					# Prefer the analysis-enriched signatures (computed
+					# before the borrow-check loop, which precedes this
+					# worklist) so nested wraps passed to PROVEN
+					# non-retaining params are exempt exactly like
+					# top-level ones — review finding on 0.33.76: without
+					# this the nested revalidation saw unannotated sigs
+					# and re-rejected the sound one-level-deeper shape.
+					signatures_by_id=(_nonretaining_sigs if _nonretaining_sigs is not None else signatures_by_id),
 					call_resolutions=getattr(hidden_typed_fn, "call_resolutions", None),
 					binding_types=getattr(hidden_typed_fn, "binding_types", None),
 					type_table=shared_type_table,
+					semantic_world=semantic_world,
 				)
 				if any(d.severity == "error" for d in _nested_lam_res.diagnostics):
 					type_diags.extend(_nested_lam_res.diagnostics)
@@ -8560,8 +8590,11 @@ def _diag_to_json(diag: Diagnostic, phase: str, source: Path) -> dict:
 	file = None
 	if diag.span is not None:
 		file = getattr(diag.span, "file", None)
-	if file is None:
-		file = "<source>"
+	if file is None or (isinstance(file, str) and file.startswith("<") and file.endswith(">")):
+		# No span file (or a normalized placeholder from a harness relabel):
+		# fall back to the primary source path so the JSON `file` field
+		# stays useful for real compiles.
+		file = str(source) if source is not None else "<source>"
 	phase = getattr(diag, "phase", None) or phase
 	notes = list(getattr(diag, "notes", []) or [])
 	return {
@@ -8578,6 +8611,26 @@ def _diag_to_json(diag: Diagnostic, phase: str, source: Path) -> dict:
 
 def _source_label() -> str:
 	return "<source>"
+
+
+def _diag_label(diag: "Diagnostic | None", source: "Path | str | None") -> str:
+	"""File label for a TEXT diagnostic line.
+
+	Prefer the diagnostic span's own file (multi-file compiles report the
+	file the span belongs to); fall back to the user-provided primary
+	source path; only print the `<source>` placeholder when the compiler
+	truly has no file. Normalized placeholder labels (`<source>`,
+	`<module>`-style) coming from the parser's test-harness relabel maps
+	are treated as absent so a real CLI compile never renders them.
+	"""
+	span_file = None
+	if diag is not None and getattr(diag, "span", None) is not None:
+		span_file = getattr(diag.span, "file", None)
+	if span_file and not (span_file.startswith("<") and span_file.endswith(">")):
+		return str(span_file)
+	if source is not None:
+		return str(source)
+	return _source_label()
 
 
 def _package_label() -> str:
@@ -10005,7 +10058,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 								}
 							)
 					else:
-						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+						print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 					return 1
 		if args.output or args.emit_ir:
 			dep_main = _find_dependency_main(loaded_pkgs)
@@ -10194,7 +10247,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				if args.json:
 					_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "package", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 				else:
-					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+					print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 			for _path, _tid_map, _tt_obj in zip(_pkg_paths, _maps, _pkg_tt_objs):
 				pkg_typeid_maps[_path] = _tid_map
@@ -10243,6 +10296,10 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			test_build_only=bool(getattr(args, "test_build_only", False)),
 			word_bits=getattr(args, "target_word_bits", None),
 			semantic_world=semantic_world,
+			# Real CLI compile: keep the real per-file span paths on parse
+			# diagnostics (the normalizing `<source>` relabel is for test
+			# harnesses that call the parser entry points directly).
+			normalize_source_labels=False,
 		)
 	# Update world with parser outputs.
 	semantic_world.type_table = type_table
@@ -10301,7 +10358,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in parse_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	_input_source_paths = {path.resolve() for path in source_paths}
@@ -10330,7 +10387,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		if args.json:
 			_emit_compile_json({"exit_code": 1, "diagnostics": [_diag_to_json(diag, "typecheck", source_path)]})
 		else:
-			print(f"{_source_label()}:1:1: error: {diag.message} [{diag.code}]", file=sys.stderr)
+			print(f"{_diag_label(diag, source_path)}:1:1: error: {diag.message} [{diag.code}]", file=sys.stderr)
 		return 1
 
 	_required_modules_main: set[str] = {m for m in modules.keys() if isinstance(m, str)}
@@ -10371,7 +10428,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json({"exit_code": 1, "diagnostics": [_diag_to_json(d, "package", source_path) for d in diags]})
 			else:
 				for d in diags:
-					print(f"{_source_label()}:?:?: {d.severity}: {d.message}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:?:?: {d.severity}: {d.message}", file=sys.stderr)
 			return 1
 
 	method_wrapper_specs: list[MethodWrapperSpec] = []
@@ -10406,7 +10463,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 						}
 					)
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 
 	# Prime builtins so TypeTable IDs are stable for package compatibility checks.
@@ -10518,7 +10575,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					if name in local_display_names or name in external_signatures_by_name:
 						continue
@@ -10542,7 +10599,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					if module_name is not None and "::" not in name and not bool(sd.get("is_extern_c", False)):
 						name = f"{module_name}::{name}"
@@ -10565,7 +10622,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					param_type_ids = sd.get("param_type_ids")
 					if isinstance(param_type_ids, list):
@@ -10596,7 +10653,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 
 					symbol = str(sym)
@@ -10620,7 +10677,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					if module_name is not None and fn_id.module != module_name:
 						msg = f"package signature '{name}' fn_id module mismatch ({fn_id.module} vs {module_name})"
@@ -10641,7 +10698,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 									}
 								)
 						else:
-							print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+							print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 						return 1
 					type_param_names = sd.get("type_params")
 					if not isinstance(type_param_names, list):
@@ -11299,7 +11356,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 							}
 						)
 				else:
-					print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+					print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 				return 1
 			origin_tid, origin_val = origin_entry
 			prev = type_table.lookup_const(dst_sym)
@@ -11323,7 +11380,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 								}
 							)
 					else:
-						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+						print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 					return 1
 				continue
 			type_table.define_const(module_id=exporting_mid, name=local_name, type_id=origin_tid, value=origin_val)
@@ -11375,9 +11432,9 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				for d in _pkg_capture_diags:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 					print(
-						f"{_source_label()}: note: implicit projected lambda captures "
+						f"{_diag_label(d, source_path)}: note: implicit projected lambda captures "
 						"(e.g. `p.field` with no `captures(...)` clause) are not yet "
 						"supported with --emit-package, even for a Copy-typed field; "
 						"extract the field via `std.mem.replace` into a local first, "
@@ -12203,7 +12260,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in type_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
 	# `post_check_analysis` covers post-typecheck infrastructure work:
@@ -12232,6 +12289,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			call_resolutions=getattr(typed_fn, "call_resolutions", None),
 			binding_types=typed_fn.binding_types,
 			type_table=type_table,
+			semantic_world=semantic_world,
 		)
 		lambda_diags.extend(res.diagnostics)
 	if lambda_diags:
@@ -12246,7 +12304,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in lambda_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# `--emit-package` serializes `_pre_typecheck_hirs`, a deep-copy of the
@@ -12323,7 +12381,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			else:
 				for d in _pkg_proj_diags:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 			return 1
 
 	# Checker (stub) enforces language-level rules (e.g., nothrow) after typecheck
@@ -12363,7 +12421,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in checked.diagnostics:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	# Reconcile method call CallInfo with checker-inferred throw behavior.
@@ -12478,7 +12536,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in trait_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 
 	intrinsic_diags: list[Diagnostic] = []
@@ -12498,7 +12556,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in intrinsic_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 	_events.phase_end("post_check_analysis")
 
@@ -12534,7 +12592,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			for d in borrow_diags:
 				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-				print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
 	_events.phase_end("borrow_check_cli")
 
@@ -12561,7 +12619,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 						}
 					)
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		if package_id is None:
 			msg = "--emit-package requires a non-empty package id"
@@ -12582,7 +12640,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 						}
 					)
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 
 		signatures_for_pkg = signatures_by_id_all if loaded_pkgs else signatures_by_id
@@ -12625,7 +12683,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				for d in checked_pkg.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 	
 		pkg_signatures_by_symbol: dict[str, FnSignature] = {
@@ -12917,7 +12975,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 										}
 									)
 							else:
-								print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+								print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 							return 1
 						sig_env[local_sym] = replace(
 							origin_sig,
@@ -13016,7 +13074,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 								}
 							)
 					else:
-						print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+						print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 					return 1
 				iface_sigs[sym] = sd
 	
@@ -13395,7 +13453,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				for d in checked_src.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 
 		# Option B: all package functions compiled from HIR through
@@ -13599,7 +13657,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			if args.json:
 				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 	else:
 		ir, _checked = compile_to_llvm_ir_for_tests(
@@ -13628,7 +13686,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				for d in _checked.diagnostics:
 					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
-					print(f"{_source_label()}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
+					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
 		if args.emit_instantiation_index is not None and not args.emit_instantiation_index.exists():
 			compile_stubbed_funcs(
@@ -13665,7 +13723,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		if args.json:
 			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
-			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 		return 1
 
 		if package_id is None:
@@ -13687,7 +13745,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 						}
 					)
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 
 	# Normal-link path: the IR is written to disk so clang can consume
@@ -13817,7 +13875,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		if args.json:
 			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
-			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 		return 1
 	runtime_archive = str(archive_path)
 
@@ -13846,7 +13904,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			if args.json:
 				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 			else:
-				print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 		link_cmd = [
 			clang,
@@ -13920,7 +13978,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		if args.json:
 			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg + abi_hint, "severity": "error", "file": "<source>", "line": None, "column": None}]})
 		else:
-			print(f"{_source_label()}:?:?: error: {msg}", file=sys.stderr)
+			print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			if abi_hint:
 				print(abi_hint, file=sys.stderr)
 		return 1

@@ -2402,6 +2402,7 @@ def parse_drift_workspace_to_hir(
 	word_bits: int | None = None,
 	type_table: "TypeTable | None" = None,
 	semantic_world: "Any | None" = None,
+	normalize_source_labels: bool = True,
 	) -> Tuple[
 	Dict[str, ModuleLowered],
 	"TypeTable",
@@ -2507,7 +2508,15 @@ def parse_drift_workspace_to_hir(
 		return (digest,)
 
 	paths = sorted({p.resolve() for p in paths}, key=_sort_key_for_path)
-	label_by_path_all = {str(p): "<source>" for p in paths}
+	# Deterministic-output normalization for test harnesses (the historical
+	# default). The CLI passes normalize_source_labels=False so parse
+	# diagnostics keep their REAL per-file span paths — text and JSON
+	# output then name the actual file instead of the `<source>`
+	# placeholder.
+	if normalize_source_labels:
+		label_by_path_all = {str(p): "<source>" for p in paths}
+	else:
+		label_by_path_all = {}
 
 	def _effective_module_id(p: parser_ast.Program) -> str:
 		return getattr(p, "module", None) or "main"
@@ -2690,9 +2699,10 @@ def parse_drift_workspace_to_hir(
 			by_module.setdefault(mid, []).append((path, prog))
 
 	label_by_path = dict(label_by_path_all)
-	label_by_path.update(
-		{str(path): f"<{mid}>" for mid, files in by_module.items() for path, _prog in files}
-	)
+	if normalize_source_labels:
+		label_by_path.update(
+			{str(path): f"<{mid}>" for mid, files in by_module.items() for path, _prog in files}
+		)
 	_relabel_diagnostics(diagnostics, label_by_path)
 	if any(d.severity == "error" for d in diagnostics):
 		table = TypeTable()

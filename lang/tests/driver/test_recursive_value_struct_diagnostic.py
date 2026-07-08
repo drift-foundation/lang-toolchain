@@ -76,16 +76,19 @@ _DIAG_LINE_RE = None
 def _diag_has_real_span(stderr: str) -> bool:
 	"""True iff at least one recursive-value-type diagnostic in stderr is
 	anchored at a real source location (file:line:col), not the
-	`<source>:?:?:` or `<source>:None:None:` sentinel that means "no span".
+	`?:?:` or `None:None:` sentinel that means "no span".
 
 	Pre-fix shape: every diagnostic was emitted with `span=Span()` and
-	rendered as `<source>:None:None:`. Post-fix: the diagnostic is anchored
-	at the containing struct/variant declaration loc.
+	rendered with a `None:None` location. Post-fix: the diagnostic is
+	anchored at the containing struct/variant declaration loc. The file
+	label itself is now the REAL source path for CLI compiles (the
+	`<source>` placeholder is reserved for synthetic sources), so this
+	matcher keys on the `line:col: error:` anchor rather than the label.
 	"""
 	import re
-	pattern = re.compile(r"<source>:(\d+):(\d+):\s+error:\s+recursive value type")
+	pattern = re.compile(r":(\d+):(\d+):\s+error:\s+recursive value type")
 	# Also accept "infinitely recursive" wording for the single-node case.
-	pattern2 = re.compile(r"<source>:(\d+):(\d+):\s+error:.*infinitely recursive")
+	pattern2 = re.compile(r":(\d+):(\d+):\s+error:.*infinitely recursive")
 	for line in stderr.splitlines():
 		if pattern.search(line) or pattern2.search(line):
 			return True

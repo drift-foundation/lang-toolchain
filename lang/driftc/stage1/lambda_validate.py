@@ -19,6 +19,7 @@ def validate_lambdas_non_retaining(
 	call_resolutions=None,
 	binding_types=None,
 	type_table=None,
+	semantic_world=None,
 ) -> LambdaValidationResult:
 	"""
 	Walk the HIR to discover and validate lambda captures (item 1 only).
@@ -33,8 +34,13 @@ def validate_lambdas_non_retaining(
 	Note: function-pointer coercion checks for REF/REF_MUT captures remain in
 	type_checker.py and are not affected by this change.
 
-	The signatures_by_id and call_resolutions parameters are accepted for
-	backward compatibility with callers but are no longer used.
+	`signatures_by_id`/`call_resolutions` feed the boxed-capture escape scan's
+	call-ARGUMENT exemption (DriftQuery regression, 2026-07-08): a wrap passed
+	as an argument counts as LOCAL — not escaping — iff the callee's target
+	parameter is PROVEN non-retaining (param_escape_level LOCAL/IMMEDIATE) by
+	`analyze_non_retaining_params()`, which runs before this pass in
+	driftc.py's post_check_analysis phase. Callers without that metadata get
+	the conservative behavior (every argument position escapes).
 
 	`binding_types`/`type_table`, when both given (post-typecheck callers
 	only — `driftc.py`'s post_check_analysis phase has real types here),
@@ -151,19 +157,29 @@ def validate_lambdas_non_retaining(
 		they provably stay local.
 
 		A wrap (`core.callbackN(lambda)`) is LOCAL iff its value is only ever
-		used as a method-call receiver: either invoked in place
+		used as a method-call receiver — invoked in place
 		(`callback0(...).call(...)`) or bound with `val cb = callback0(...)`
-		where every use of `cb` is a receiver position (`cb.call(...)`).
-		Every other position — return value, constructor/call/method
-		argument, assignment into a place, array literal element, `move` into
-		anything — lets the box (and its raw pointer) outlive or leave the
-		frame, which is exactly the use-after-scope this gate exists to stop.
-		The receiver-only rule is what keeps the sound synchronous pattern
-		(e.g. a `for`-binder `&T` captured by `captures(copy item)` and
-		called within the iteration) compiling.
+		where every use of `cb` is a receiver position (`cb.call(...)`) — OR
+		passed as a call argument to a parameter PROVEN non-retaining
+		(param_escape_level LOCAL/IMMEDIATE, computed by
+		`analyze_non_retaining_params()` before this pass; resolved here via
+		`signatures_by_id` + `call_resolutions`). That exemption is what keeps
+		the pervasive higher-order resource pattern compiling
+		(`with_handle(h, core.callback1(...))` where the helper only ever
+		`.call()`s its callback param — the DriftQuery 2026-07-08 regression).
+		Every other position — return value, constructor argument, argument
+		at an UNPROVEN param, assignment into a place, array literal element,
+		`move` into anything — lets the box (and its raw pointer) outlive or
+		leave the frame, which is exactly the use-after-scope this gate
+		exists to stop.
 		"""
+		from lang.driftc.borrow_checker import EscapeLevel as _EL
+		from lang.driftc.method_registry import CallableDecl as _CDecl
+		from lang.driftc.method_resolver import MethodResolution as _MRes
+
 		wrapper_nodes: list[tuple[H.HCall, H.HLambda]] = []
 		receiver_wrap_ids: set[int] = set()
+		local_arg_wrap_ids: set[int] = set()
 		let_bound: dict[int, tuple[H.HCall, H.HLambda]] = {}
 		binding_uses: dict[int, list[str]] = {}
 
@@ -179,6 +195,75 @@ def validate_lambdas_non_retaining(
 			elif call.kwargs and isinstance(call.kwargs[0].value, H.HLambda):
 				inner = call.kwargs[0].value
 			return inner
+
+		def _fn_and_sig_for_call(call: object):
+			"""Callee (FunctionId, FnSignature) via call_resolutions, mirroring
+			`non_retaining_analysis._resolve_sig_for_call`. (None, None) → unproven."""
+			if signatures_by_id is None or call_resolutions is None:
+				return None, None
+			res = call_resolutions.get(getattr(call, "node_id", -1))
+			if isinstance(res, _CDecl):
+				if res.fn_id is None:
+					return None, None
+				return res.fn_id, signatures_by_id.get(res.fn_id)
+			if isinstance(res, _MRes):
+				if res.decl.fn_id is not None:
+					return res.decl.fn_id, signatures_by_id.get(res.decl.fn_id)
+				return None, None
+			return None, None
+
+		def _param_proved_local(call: object, *, arg_index: int | None = None, kw_name: str | None = None) -> bool:
+			"""True iff the callee param this argument lands in is PROVEN
+			LOCAL/IMMEDIATE by the non-retaining analysis. Any resolution
+			failure means unproven — conservative reject.
+
+			Production writes the analysis results to the SemanticWorld
+			OVERLAY only (`analyze_non_retaining_params` does not mutate
+			FnSignature objects when a world is present), so the overlay is
+			the authority when available — same split as
+			`borrow_checker_pass._effective_escape_level`."""
+			fn_id, sig = _fn_and_sig_for_call(call)
+			if sig is None:
+				return False
+			if kw_name is not None:
+				if not sig.param_names or kw_name not in sig.param_names:
+					return False
+				idx = sig.param_names.index(kw_name)
+			elif arg_index is not None:
+				idx = arg_index + 1 if getattr(sig, "is_method", False) else arg_index
+			else:
+				return False
+			try:
+				if semantic_world is not None and fn_id is not None:
+					lvl = semantic_world.effective_param_escape_level(fn_id, idx)
+				else:
+					lvl = sig.effective_param_escape_level(idx)
+			except Exception:
+				return False
+			return lvl in (_EL.IMMEDIATE, _EL.LOCAL)
+
+		def _scan_call_arg(call: object, arg: object, *, arg_index: int | None = None, kw_name: str | None = None) -> None:
+			"""Classify one argument of a non-wrapper call, then descend."""
+			inner = _wrap_lambda(arg)
+			if inner is not None and _param_proved_local(call, arg_index=arg_index, kw_name=kw_name):
+				local_arg_wrap_ids.add(id(arg))
+				_scan(arg)
+				return
+			# Plain binding read, or `move cb` (HMove canonicalizes its
+			# operand to an HPlaceExpr place) — resolve to the binding id.
+			target = arg
+			if isinstance(target, H.HMove):
+				target = target.subject
+			if isinstance(target, H.HPlaceExpr) and not target.projections:
+				target = target.base
+			if (
+				isinstance(target, H.HVar)
+				and getattr(target, "binding_id", None) is not None
+				and _param_proved_local(call, arg_index=arg_index, kw_name=kw_name)
+			):
+				binding_uses.setdefault(int(target.binding_id), []).append("local_arg")
+				return
+			_scan(arg)
 
 		def _scan(node: object, receiver_of_methodcall: bool = False) -> None:
 			if isinstance(node, H.HLambda):
@@ -203,6 +288,15 @@ def validate_lambdas_non_retaining(
 					wrapper_nodes.append((node, lam))
 					if receiver_of_methodcall:
 						receiver_wrap_ids.add(id(node))
+				else:
+					# Non-wrapper call: arguments landing in PROVEN
+					# non-retaining params are local uses, not escapes.
+					_scan(node.fn)
+					for i, a in enumerate(node.args):
+						_scan_call_arg(node, a, arg_index=i)
+					for kw in node.kwargs:
+						_scan_call_arg(node, kw.value, kw_name=kw.name)
+					return
 			if isinstance(node, H.HVar) and getattr(node, "binding_id", None) is not None:
 				binding_uses.setdefault(int(node.binding_id), []).append(
 					"receiver" if receiver_of_methodcall else "other"
@@ -217,10 +311,10 @@ def validate_lambdas_non_retaining(
 				return
 			if isinstance(node, H.HMethodCall):
 				_scan(node.receiver, receiver_of_methodcall=True)
-				for a in node.args:
-					_scan(a)
+				for i, a in enumerate(node.args):
+					_scan_call_arg(node, a, arg_index=i)
 				for kw in node.kwargs:
-					_scan(kw.value)
+					_scan_call_arg(node, kw.value, kw_name=kw.name)
 				return
 			for _fname in getattr(node, "__dataclass_fields__", {}) or {}:
 				_val = getattr(node, _fname, None)
@@ -239,11 +333,13 @@ def validate_lambdas_non_retaining(
 				continue
 			if id(call) in receiver_wrap_ids:
 				continue  # invoked in place — never leaves the expression
+			if id(call) in local_arg_wrap_ids:
+				continue  # argument at a PROVEN non-retaining param
 			if id(call) in let_wrap_ids:
 				bid = next(b for b, (c, _) in let_bound.items() if id(c) == id(call))
 				uses = binding_uses.get(bid, [])
-				if uses and all(u == "receiver" for u in uses):
-					continue  # bound locally and only ever called
+				if uses and all(u in ("receiver", "local_arg") for u in uses):
+					continue  # bound locally; only called or passed to proven-local params
 				if not uses:
 					continue  # bound and never used — cannot escape
 			code, message = hazard

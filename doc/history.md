@@ -1,5 +1,56 @@
 # Drift development history
 
+## 2026-07-08 (0.33.76: escape-scan gap — callback args to proven non-retaining params; ABI stays 20)
+- **Fixed the DriftQuery-reported `E_ESCAPE_REF_CAPTURE` false positive** on the
+  pervasive higher-order resource pattern (`with_handle(h, core.callback1(...))`
+  where the helper only ever `.call()`s its callback param — accepted on
+  certified 0.33.72, rejected by 0.33.74's use-aware escape scan, which treated
+  EVERY call-argument position as escaping). Three coordinated changes:
+  1. `stage1/lambda_validate.py::_check_boxed_capture_escapes` — a wrap passed
+     as a call argument (directly, let-bound, or via `move cb`) counts as LOCAL
+     iff the callee's target parameter is PROVEN non-retaining
+     (param_escape_level LOCAL/IMMEDIATE) by the existing
+     `analyze_non_retaining_params()` metadata, resolved via
+     `signatures_by_id` + `call_resolutions` + the SemanticWorld overlay (the
+     analysis writes to the overlay only in production — the validator now
+     receives `semantic_world`). Unresolvable callee/param → conservative
+     reject, so retaining helpers and forwards-to-unproven still reject.
+  2. `driftc.py` — the non-retaining analysis now also runs immediately before
+     the borrow-check loop (BC-scoped signature dict; the ambient
+     `signatures_by_id` keeps its original FnSignature objects, which MIR
+     lowering depends on), so `_check_lambda_escape_level`'s requirement for
+     such params is LOCAL, not the THREAD default — the 0.33.74 LOCAL bound on
+     ref-valued captures made that requirement load-bearing.
+  3. `stage1/non_retaining_analysis.py` — reads checker-final `lam.captures`
+     instead of re-running `discover_captures` (which MUTATES the lambda and,
+     post-check, corrupted the hidden-lambda env contract → SSA return-type
+     ICE), and `_plain_param_index` looks through `HMove` so `move body`
+     forwarding chains prove like plain forwarding.
+- Regression file `test_callback_arg_nonretaining_param.py` (6): the verbatim
+  DriftQuery repro, forward-chain-to-local, let-bound + `move`, and the
+  NESTED variant (review finding: the hidden-lambda worklist revalidation at
+  `driftc.py` saw unannotated signatures and re-rejected the sound
+  one-nesting-deeper shape — it now receives the analysis-enriched
+  signatures, which are computed before the borrow-check loop and hoisted
+  for the worklist, plus `semantic_world`); retaining-helper and
+  forward-to-retaining negatives. Verified with nested-boxed-callback
+  captures (11), match-arm/for-binder (8), `lang/tests/borrow_checker` (90),
+  and the six capture-diagnostic e2e fixtures.
+- **Diagnostics now name the real source file.** CLI text output rendered
+  every diagnostic as `<source>:line:col` — `_source_label()` was hardcoded
+  — even though spans carried real paths. New `_diag_label(diag, source)`
+  prefers `diag.span.file` (per-file fidelity in multi-file compiles), falls
+  back to the primary source path, and prints `<source>` only when the
+  compiler truly has no file; all diagnostic-bearing print sites in
+  `_run_compile_cli` route through it. The parser's normalizing relabel of
+  parse diagnostics (`<source>` / `<module>` maps) is now opt-out via
+  `parse_drift_workspace_to_hir(normalize_source_labels=...)` — harness
+  callers keep the deterministic default; the CLI passes False. JSON `file`
+  fields treat placeholder labels as absent and fall back to the primary
+  source. Regression: `test_diagnostic_file_labels.py` (text typecheck,
+  JSON, and parse-phase all assert the real path); diagnostics-focused
+  driver slice + parser suite 207 passed.
+
 ## 2026-07-07 (0.33.75: String Scope A — structural transfer policy + centralized alias marking; ABI stays 20)
 - **Scope A of the String ownership refactor**
   (`work/string-ownership-refactor/NEXT-PHASE-PLAN.md`), regression-first on
