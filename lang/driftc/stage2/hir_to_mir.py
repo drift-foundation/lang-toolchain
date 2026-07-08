@@ -2676,6 +2676,12 @@ class HIRToMIR:
 				self._local_types[view] = iface_ty
 				self._iface_view_counter += 1
 				view_local = f"__iface_view{self._iface_view_counter}{self.b.new_temp()}"
+				# materialize-audit: allow non-owning borrowed interface
+				# view — the fat value carries the BORROWED flag bit, its
+				# drop is a complete no-op (no payload drop thunk, no
+				# free), and the caller keeps ownership of the viewed
+				# storage; registering it for scope cleanup would be
+				# harmless but misleading.
 				self.b.ensure_local(view_local)
 				self._local_types[view_local] = iface_ty
 				self.b.emit(M.StoreLocal(local=view_local, value=view))
