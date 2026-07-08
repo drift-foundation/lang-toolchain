@@ -227,6 +227,10 @@ def validate_mir_basic_hygiene(funcs: Mapping[FunctionId, M.MirFunc]) -> None:
 						raise AssertionError(
 							f"MIR invariant violation: unknown local '{instr.local}' in {instr_name}.local for {function_symbol(fn_id)}"
 						)
+				elif isinstance(instr, M.ConstructIfaceBorrowed):
+					# Borrowed view: the data pointer must be a valid,
+					# defined SSA value (it aliases caller-owned storage).
+					_check_value(instr.data_ref, instr_name, "data_ref")
 				elif isinstance(instr, M.LoadRef):
 					_check_value(instr.ptr, instr_name, "ptr")
 				elif isinstance(instr, M.StoreRef):
@@ -588,8 +592,10 @@ def validate_mir_concrete_layout_types(
 				if isinstance(instr, (M.ConstructVariant,)):
 					_check_type(fn_id, instr.variant_ty, instr.__class__.__name__)
 					continue
-				if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue)):
+				if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue, M.ConstructIfaceBorrowed)):
 					_check_type(fn_id, instr.iface_ty, instr.__class__.__name__)
+					if isinstance(instr, M.ConstructIfaceBorrowed):
+						_check_type(fn_id, instr.value_ty, instr.__class__.__name__)
 					continue
 				if isinstance(instr, (M.ZeroValue, M.CopyValue, M.MoveOut, M.DropValue)):
 					_check_type(fn_id, instr.ty, instr.__class__.__name__)
@@ -831,7 +837,7 @@ def validate_mir_iface_init_invariants(
 					continue
 				defs[dest] = instr
 				ty_id: TypeId | None = None
-				if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue)):
+				if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue, M.ConstructIfaceBorrowed)):
 					ty_id = instr.iface_ty
 				elif isinstance(instr, M.ZeroValue):
 					ty_id = instr.ty
@@ -929,7 +935,7 @@ def validate_mir_iface_init_invariants(
 						cur_values.add(instr.dest)
 						cur_locals.add(instr.local)
 						continue
-					if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue)):
+					if isinstance(instr, (M.ConstructIface, M.ConstructIfaceValue, M.ConstructIfaceBorrowed)):
 						cur_values.add(instr.dest)
 						continue
 					if isinstance(instr, M.ZeroValue) and _is_iface(instr.ty):

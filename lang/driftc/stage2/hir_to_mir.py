@@ -364,6 +364,7 @@ class HIRToMIR:
 		param_types: Mapping[str, TypeId] | None = None,
 		expr_types: Mapping[int, TypeId] | None = None,
 		iface_coercions: Mapping[int, TypeId] | None = None,
+		borrowed_iface_coercions: Mapping[int, TypeId] | None = None,
 		ptr_to_ref_coercions: Mapping[int, TypeId] | None = None,
 		signatures_by_id: Mapping[FunctionId, FnSignature] | None = None,
 		current_fn_id: FunctionId | None = None,
@@ -449,6 +450,12 @@ class HIRToMIR:
 						self._type_param_subst[name] = arg
 		self._expr_types: dict[int, TypeId] = dict(expr_types) if expr_types else {}
 		self._iface_coercions: dict[int, TypeId] = dict(iface_coercions) if iface_coercions else {}
+		# Borrowed interface views (0.33.77): node_id -> target REF(Interface).
+		# Consumed in `lower_expr`: the &Concrete arg is lowered to a pointer,
+		# a non-owning fat view (ConstructIfaceBorrowed) is materialized into
+		# a synthesized local, and the local's address is passed instead.
+		self._borrowed_iface_coercions: dict[int, TypeId] = dict(borrowed_iface_coercions) if borrowed_iface_coercions else {}
+		self._iface_view_counter: int = 0
 		# Explicit, unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T` constructor-arg
 		# conversions recorded by the checker (node_id -> target ref TypeId).
 		# Consumed in `lower_expr`: the source pointer is lowered, the contract is
@@ -2632,6 +2639,49 @@ class HIRToMIR:
 					)
 				)
 				self._local_types[dest] = target_iface
+				return dest
+			if getattr(expr, "node_id", None) in self._borrowed_iface_coercions:
+				# Borrowed interface view (0.33.77): widen `&Concrete` to
+				# `&Interface` without taking ownership. Materialize a
+				# non-owning fat view into a synthesized local and pass the
+				# local's address. The view owns nothing (BORROWED flag bit;
+				# its drop is a no-op), so the local is deliberately NOT
+				# registered for scope cleanup, and the source stays owned
+				# by the caller. Lifetime: the local lives for the enclosing
+				# function scope, strictly outliving the call it feeds; the
+				# pointee it aliases is the source ref's pointee, whose loan
+				# the borrow checker already tracks on the original arg.
+				target_ref = self._borrowed_iface_coercions[expr.node_id]
+				ptr_val = self._lower_expr_raw(expr, expected_type=None)
+				src_ty = self._infer_expr_type(expr)
+				if src_ty is None:
+					raise AssertionError("borrowed iface view missing source type (checker bug)")
+				src_def = self._type_table.get(src_ty)
+				if src_def.kind is not TypeKind.REF or not src_def.param_types:
+					raise AssertionError("borrowed iface view source is not a reference (checker bug)")
+				concrete_ty = src_def.param_types[0]
+				tgt_def = self._type_table.get(target_ref)
+				if tgt_def.kind is not TypeKind.REF or not tgt_def.param_types:
+					raise AssertionError("borrowed iface view target is not a reference (checker bug)")
+				iface_ty = tgt_def.param_types[0]
+				view = self.b.new_temp()
+				self.b.emit(
+					M.ConstructIfaceBorrowed(
+						dest=view,
+						iface_ty=iface_ty,
+						data_ref=ptr_val,
+						value_ty=concrete_ty,
+					)
+				)
+				self._local_types[view] = iface_ty
+				self._iface_view_counter += 1
+				view_local = f"__iface_view{self._iface_view_counter}{self.b.new_temp()}"
+				self.b.ensure_local(view_local)
+				self._local_types[view_local] = iface_ty
+				self.b.emit(M.StoreLocal(local=view_local, value=view))
+				dest = self.b.new_temp()
+				self.b.emit(M.AddrOfLocal(dest=dest, local=view_local, is_mut=bool(tgt_def.ref_mut)))
+				self._local_types[dest] = target_ref
 				return dest
 			if getattr(expr, "node_id", None) in self._ptr_to_ref_coercions:
 				# Explicit, unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T` conversion

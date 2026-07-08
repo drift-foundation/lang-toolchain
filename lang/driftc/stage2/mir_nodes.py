@@ -218,6 +218,23 @@ class ConstructIfaceValue(MInstr):
 
 
 @dataclass
+class ConstructIfaceBorrowed(MInstr):
+	"""dest = NON-OWNING interface view over caller-owned storage.
+
+	`data_ref` is a pointer (`&Concrete` / `&mut Concrete`) into storage the
+	caller keeps owning; the fat value's flag byte carries the BORROWED bit
+	so its drop is a complete no-op (no payload destroy, no free). Emitted
+	only for checker-recorded `borrowed_iface_coercions` — the view temp is
+	compiler-synthesized and used exclusively in `&temp` argument position,
+	so it can never escape its constructing frame as an owned value
+	(interfaces are non-Copy; no move-through-ref)."""
+	dest: ValueId
+	iface_ty: TypeId
+	data_ref: ValueId
+	value_ty: TypeId
+
+
+@dataclass
 class IfaceUpcast(MInstr):
 	"""dest = interface value with vtable pointer retargeted to parent segment."""
 	dest: ValueId
@@ -1736,6 +1753,7 @@ __all__ = [
 	"FnPtrConst",
 	"ConstructIface",
 	"ConstructIfaceValue",
+	"ConstructIfaceBorrowed",
 	"IfaceUpcast",
 	"ZeroValue",
 	"StringRetain",

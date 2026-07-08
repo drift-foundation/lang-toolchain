@@ -1,5 +1,70 @@
 # Drift development history
 
+## 2026-07-08 (0.33.77: borrowed interface views — `&Concrete` widens to `&Interface`; pretty overload diagnostics; ABI stays 20)
+- **`&Concrete` → `&Interface` reference widening** (DriftQuery report
+  2026-07-08; previously every working pattern required OWNING a value to
+  upcast, forcing per-type borrowing-wrapper structs). At call arguments, a
+  `&Concrete` (fresh borrow, existing ref param, or `&mut` for
+  `&mut Interface`) now widens when Concrete has a NON-generic
+  `implement Interface for Concrete`: the compiler synthesizes a BORROWED
+  interface view — a fat interface value whose flag byte carries the new
+  BORROWED bit (4): data slot points at the caller's storage, its drop is a
+  complete no-op (no payload drop thunk, no free). Mechanics:
+  checker `_borrowed_iface_view_target` + `borrowed_iface_coercions`
+  (sibling of `iface_coercions`), backed by an implements relation
+  (`_iface_impl_pairs`) populated from ImplMetas — non-generic impls only,
+  generic-impl bases defer (same posture as codegen's vtable index and the
+  trait solver's phase-1 interface proving); MIR `ConstructIfaceBorrowed`;
+  codegen writes flag=4 (dispatch reads bit0 only — unchanged) and the
+  per-module drop helper gained a borrowed early-out; the iface impl-method
+  SEEDING scan learned the new op (without it, pkg-boundary widening
+  referenced unemitted impl fns). ABI stays 20: packages ship HIR
+  (`hir_funcs`) that the consumer's compiler lowers, so every drop
+  helper/dispatch in a final binary comes from ONE compiler — validated
+  empirically with a certified-0.33.76-emitted package consumed by this
+  compiler, widened view dispatching through the package's `&Interface` fn.
+- **Escape discipline unchanged:** widened refs inherit the MVP
+  reference-escape rules (return and borrowed-aggregate-return rejections
+  pinned); the view temp is compiler-synthesized, used only at `&temp`
+  argument position, and interfaces are non-Copy — it cannot escape as an
+  owned value.
+- **Owned upcast of a NON-implementing type is now a clean checker
+  diagnostic** (`'Silent' does not implement interface 'Greeter'`) instead
+  of a codegen ICE (`NotImplementedError: interface impl not found`).
+- **Overload diagnostics render type names, never raw TypeIds** (the
+  `no matching overload ... with args [2133]` bug): all emitters in
+  `type_checker.py` (TC5000/TC5174/TC5425), `method_resolver.py` (MR128),
+  and `checker/call_resolver.py` (9 sites) now pretty-print, and
+  candidate-bearing failures append a targeted note when a `&Concrete` arg
+  cannot widen to a `&Interface` param (names the missing implements
+  relation).
+- Regression file `test_ref_to_interface_coercion.py` (11): owned-local
+  kept green; fresh-ref, passthrough, `&mut` aliasing (mutation observed in
+  caller's value), repeat-use + source-alive, ASAN row, package-boundary
+  widening (seeding pin); escape negatives ×2; non-implementing ref and
+  owned diagnostics. Verified with interface-adjacent driver suites (25),
+  type_checker + traits (176), `lang/tests/packages` (472).
+- Known deferrals (review finding — precise wording): BOTH generic-impl
+  forms are deferred for reference widening: impls with impl-level type
+  params (`implement<T> Interface for X<T>`) AND concrete impls of
+  **generic interface instances** (`implement Sink<Int> for Box` does not
+  widen `&Box` to `&Sink<Int>`). Rationale: the implements relation's
+  instance identity is not yet reliable across resolution contexts, and a
+  base-keyed fallback would be a cross-instance soundness hole
+  (`&Sink<String>` accepting a `Sink<Int>` impl) — pinned both ways in the
+  regression file. OWNED upcasts of generic interface instances keep
+  working exactly as on certified 0.33.76 (the new implements-verification
+  defers for them). Also still deferred: `require T is Interface` bounds
+  do not grant method dispatch through `&T` (separate follow-up).
+- Review hardening: `ConstructIfaceBorrowed` is wired into MIR validation
+  (type-id checks for `iface_ty`/`value_ty`, interface-init tracking, and
+  a basic-hygiene `data_ref` defined-SSA-value check) with a validator pin
+  (`test_mir_validate_iface_borrowed.py`); the implements relation is
+  keyed on canonical type-key strings (raw instantiation TypeIds differ
+  across resolution contexts), and `validate_interface_impls` passes its
+  already-resolved trait tid into the relation recorder instead of
+  re-resolving.
+
 ## 2026-07-08 (0.33.76: escape-scan gap — callback args to proven non-retaining params; ABI stays 20)
 - **Fixed the DriftQuery-reported `E_ESCAPE_REF_CAPTURE` false positive** on the
   pervasive higher-order resource pattern (`with_handle(h, core.callback1(...))`

@@ -52,6 +52,64 @@ FIXED_WIDTH_TYPE_NAMES = {
 }
 
 
+def _fmt_overload_args(ctx: object, tys) -> str:
+	"""Human-readable arg list for overload diagnostics — NEVER raw TypeIds
+	(the `args [2133]` bug, DriftQuery 2026-07-08)."""
+	try:
+		cm = getattr(ctx, "current_module_name", None)
+		return "[" + ", ".join(ctx.pretty_type_name(t, current_module=cm) for t in tys) + "]"
+	except Exception:
+		return str(tys)
+
+
+def _iface_ref_widen_hint(ctx: object, candidates, arg_types) -> str:
+	"""Targeted note for the `&Concrete` → `&Interface` shape: when a
+	candidate has a `&Interface` param where the arg is a `&Concrete`, name
+	the missing implements relation instead of leaving a bare overload
+	failure (reference widening requires a non-generic implement)."""
+	try:
+		tt = ctx.type_table
+		cm = getattr(ctx, "current_module_name", None)
+		for decl in candidates or []:
+			params = None
+			sig = None
+			fn_id = getattr(decl, "fn_id", None)
+			sigs = getattr(ctx, "signatures_by_id", None)
+			if fn_id is not None and sigs is not None:
+				sig = sigs.get(fn_id)
+			if sig is not None and getattr(sig, "param_type_ids", None) is not None:
+				params = list(sig.param_type_ids)
+			if params is None:
+				params = list(getattr(getattr(decl, "signature", None), "param_types", []) or [])
+			if len(params) != len(arg_types):
+				continue
+			for p_ty, a_ty in zip(params, arg_types):
+				if p_ty is None or a_ty is None:
+					continue
+				pdef = tt.get(p_ty)
+				adef = tt.get(a_ty)
+				if getattr(pdef, "kind", None) is not TypeKind.REF or getattr(adef, "kind", None) is not TypeKind.REF:
+					continue
+				if not pdef.param_types or not adef.param_types:
+					continue
+				p_inner = pdef.param_types[0]
+				a_inner = adef.param_types[0]
+				if tt.get(p_inner).kind is not TypeKind.INTERFACE:
+					continue
+				if tt.get(a_inner).kind is TypeKind.INTERFACE:
+					continue
+				return (
+					f"; note: '{ctx.pretty_type_name(a_inner, current_module=cm)}' does not implement "
+					f"interface '{ctx.pretty_type_name(p_inner, current_module=cm)}', so "
+					f"'{ctx.pretty_type_name(a_ty, current_module=cm)}' cannot widen to "
+					f"'{ctx.pretty_type_name(p_ty, current_module=cm)}' "
+					f"(reference widening requires a non-generic `implement` of that exact interface instance)"
+				)
+	except Exception:
+		pass
+	return ""
+
+
 def _best_effort_span(*items: object | None) -> Span:
 	for item in items:
 		if item is None:
@@ -5147,7 +5205,7 @@ def resolve_call_expr(
 					return record_expr(expr, ctx.unknown_ty)
 				td = ctx.type_table.get(arg_ty)
 				if td.kind is not TypeKind.REF or not td.param_types or td.param_types[0] != ctx.string_ty:
-					diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types_local}", severity="error", span=getattr(expr, "loc", Span())))
+					diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types_local)}", severity="error", span=getattr(expr, "loc", Span())))
 					return record_expr(expr, ctx.unknown_ty)
 			record_call_info(expr, param_types=param_types, return_type=ctx.int_ty, can_throw=False, target=CallTarget.intrinsic(IntrinsicKind.BYTE_LENGTH))
 			return record_expr(expr, ctx.int_ty)
@@ -5168,10 +5226,10 @@ def resolve_call_expr(
 				return record_expr(expr, ctx.unknown_ty)
 			td0 = ctx.type_table.get(arg0_ty)
 			if td0.kind is not TypeKind.REF or not td0.param_types or td0.param_types[0] != ctx.string_ty:
-				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types_local}", severity="error", span=getattr(expr, "loc", Span())))
+				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types_local)}", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 			if arg1_ty != ctx.int_ty:
-				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types_local}", severity="error", span=getattr(expr, "loc", Span())))
+				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types_local)}", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 			record_call_info(expr, param_types=[arg0_ty, arg1_ty], return_type=ctx.byte_ty, can_throw=False, target=CallTarget.intrinsic(IntrinsicKind.STRING_BYTE_AT))
 			return record_expr(expr, ctx.byte_ty)
@@ -5180,7 +5238,7 @@ def resolve_call_expr(
 				diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects 2 arguments", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 			if arg_types_local[0] != ctx.string_ty or arg_types_local[1] != ctx.string_ty:
-				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types_local}", severity="error", span=getattr(expr, "loc", Span())))
+				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types_local)}", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 			ret_ty = ctx.string_ty if expr.fn.name == "string_concat" else ctx.bool_ty
 			intrinsic = IntrinsicKind.STRING_CONCAT if expr.fn.name == "string_concat" else IntrinsicKind.STRING_EQ
@@ -5809,7 +5867,7 @@ def resolve_call_expr(
 					if len(param_types) != len(expr.args):
 						if drift_debug.enabled("call_resolve"):
 							print(f"[call_resolve] binding mismatch name={expr.fn.name} param_len={len(param_types)} arg_len={len(expr.args)} arg_types={arg_types}", file=_debug_stderr)
-						diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {arg_types}", severity="error", span=getattr(expr, "loc", Span())))
+						diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types)}", severity="error", span=getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
 					if drift_debug.enabled("call_resolve"):
 						print(f"[call_resolve] binding resolved name={expr.fn.name} csid={getattr(expr, 'callsite_id', None)} return={ret_type}", file=_debug_stderr)
@@ -6011,7 +6069,7 @@ def resolve_call_expr(
 						winners.append(item)
 				return winners
 			if callable_registry is None:
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload for function '{name}' with args {_fmt_overload_args(ctx, arg_types)}")
 			include_private = current_module if module_name is None else None
 			candidates = callable_registry.get_free_candidates(name=name, visible_modules=_visible_modules_for_free_call(module_name), include_private_in=include_private)
 			viable: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
@@ -6208,7 +6266,7 @@ def resolve_call_expr(
 					res = InferResult(ok=False, subst=None, inst_params=None, inst_return=None, error=InferError(kind=InferErrorKind.CANNOT_INFER), context=ctx_fail)
 					msg, notes = _format_infer_failure(ctx_fail, res)
 					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
-					raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+					raise ResolutionError(f"no matching overload for function '{name}' with args {_fmt_overload_args(ctx, arg_types)}{_iface_ref_widen_hint(ctx, candidates, arg_types)}")
 			world = None
 			applicable: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			require_rejected: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []
@@ -6312,13 +6370,13 @@ def resolve_call_expr(
 					if failure is not None:
 						raise ResolutionError(_format_failure_message(failure), code=_failure_code(failure), span=call_type_args_span, notes=ctx.requirement_notes(failure) if ctx.requirement_notes is not None else list(getattr(failure.obligation, "notes", []) or []))
 					raise ResolutionError(f"trait requirements not met for function '{name}'")
-				raise ResolutionError(f"no matching overload for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload for function '{name}' with args {_fmt_overload_args(ctx, arg_types)}{_iface_ref_widen_hint(ctx, candidates, arg_types)}")
 			applicable = _dedupe_by_key(applicable, lambda item: _candidate_key_for_decl(item[0]))
 			if len(applicable) == 1:
 				return applicable[0][0], applicable[0][1], applicable[0][2], None
 			winners = _pick_most_specific_items(applicable, lambda item: _candidate_key_for_decl(item[0]), require_info)
 			if len(winners) != 1:
-				raise ResolutionError(f"ambiguous call to function '{name}' with args {arg_types}")
+				raise ResolutionError(f"ambiguous call to function '{name}' with args {_fmt_overload_args(ctx, arg_types)}")
 			return winners[0][0], winners[0][1], winners[0][2], None
 		if call_kwargs_issues("constructors", kw_pairs):
 			first = (kw_pairs or [None])[0]

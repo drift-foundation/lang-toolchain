@@ -124,10 +124,17 @@ def resolve_function_call(
 			continue
 		if all(p == a for p, a in zip(params, arg_types)):
 			viable.append(decl)
+	def _fmt_args(tys: List[TypeId]) -> str:
+		# Human-readable arg list — never raw TypeIds (`args [2133]` bug).
+		try:
+			return "[" + ", ".join(type_table.type_key_string(t) for t in tys) + "]"
+		except Exception:
+			return str(tys)
+
 	if not viable:
-		raise ResolutionError(f"no matching overload [MR128] for function '{name}' with args {arg_types}")
+		raise ResolutionError(f"no matching overload [MR128] for function '{name}' with args {_fmt_args(arg_types)}")
 	if len(viable) > 1:
-		raise ResolutionError(f"ambiguous call to function '{name}' with args {arg_types}")
+		raise ResolutionError(f"ambiguous call to function '{name}' with args {_fmt_args(arg_types)}")
 	return viable[0]
 
 

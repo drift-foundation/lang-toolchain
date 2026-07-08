@@ -2077,6 +2077,11 @@ def _seed_iface_dispatch_targets(
 			for instr in blk.instructions:
 				if isinstance(instr, M.ConstructIfaceValue):
 					iface_value_tys.add(instr.value_ty)
+				elif isinstance(instr, M.ConstructIfaceBorrowed):
+					# Borrowed views (0.33.77) dispatch through the same
+					# vtable thunks as owned iface values — their impl
+					# methods must be seeded identically.
+					iface_value_tys.add(instr.value_ty)
 				elif isinstance(instr, M.ArcAsInterface):
 					iface_value_tys.add(instr.concrete_ty)
 	if iface_value_tys:
@@ -6322,6 +6327,7 @@ def compile_stubbed_funcs(
 				param_types=param_types,
 				expr_types=getattr(typed_fns_by_id.get(fn_id), "expr_types", None),
 				iface_coercions=getattr(typed_fns_by_id.get(fn_id), "iface_coercions", None),
+				borrowed_iface_coercions=getattr(typed_fns_by_id.get(fn_id), "borrowed_iface_coercions", None),
 				ptr_to_ref_coercions=getattr(typed_fns_by_id.get(fn_id), "ptr_to_ref_coercions", None),
 				signatures_by_id=signatures_by_id,
 				current_fn_id=fn_id,
@@ -7325,6 +7331,7 @@ def compile_stubbed_funcs(
 					param_types=param_types,
 					expr_types=getattr(hidden_typed_fn, "expr_types", None),
 					iface_coercions=getattr(hidden_typed_fn, "iface_coercions", None),
+					borrowed_iface_coercions=getattr(hidden_typed_fn, "borrowed_iface_coercions", None),
 					ptr_to_ref_coercions=getattr(hidden_typed_fn, "ptr_to_ref_coercions", None),
 					signatures_by_id=signatures_by_id,
 					current_fn_id=spec.fn_id,
@@ -7723,6 +7730,7 @@ def compile_stubbed_funcs(
 			param_types=param_types,
 			expr_types=getattr(lambda_typed_fn, "expr_types", None),
 			iface_coercions=getattr(lambda_typed_fn, "iface_coercions", None),
+			borrowed_iface_coercions=getattr(lambda_typed_fn, "borrowed_iface_coercions", None),
 			ptr_to_ref_coercions=getattr(lambda_typed_fn, "ptr_to_ref_coercions", None),
 			signatures_by_id=signatures_by_id,
 			current_fn_id=spec.fn_id,

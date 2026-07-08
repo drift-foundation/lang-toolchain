@@ -230,6 +230,11 @@ class TypedFn:
 	instantiations_by_callsite_id: Dict[int, "CallInstantiation"] = field(default_factory=dict)
 	instantiations_by_node_id: Dict[int, "CallInstantiation"] = field(default_factory=dict)
 	iface_coercions: Dict[int, TypeId] = field(default_factory=dict)
+	# Borrowed interface views (0.33.77): call-argument `&Concrete` widened
+	# to `&Interface` (node_id -> target REF(Interface) TypeId). Lowering
+	# materializes a non-owning fat view temp (flag byte BORROWED bit) and
+	# passes its address; the caller keeps ownership of the concrete value.
+	borrowed_iface_coercions: Dict[int, TypeId] = field(default_factory=dict)
 	# Explicit, unsafe `Ptr<T> -> &T` / `Ptr<T> -> &mut T` constructor-arg
 	# conversions (node_id -> target ref TypeId).  Recorded in checked HIR so the
 	# acceptance of a raw pointer in a reference slot is an audited, unsafe-gated
@@ -333,6 +338,22 @@ class TypeChecker:
 		# user sees `E_TYPED_CATCH_FIELD_NOT_IN_SCHEMA` for fields that
 		# ARE declared on the underlying pub-error.
 		self._typed_catch_binders: dict[int, str] = {}
+		# Implements relation for interface coercions (0.33.77): the set of
+		# (iface_base, target_type_id) pairs with a NON-generic
+		# `implement Iface for Target` — populated by
+		# `validate_interface_impls`, mirroring codegen's vtable index
+		# (`_build_interface_impl_index`) and the trait solver's phase-1
+		# interface proving. Bases with any generic impl are tracked
+		# separately so implements-verification DEFERS for them (no
+		# impl-applicability solver for interfaces yet).
+		# Keys are CANONICAL type-key strings (`type_table.type_key_string`),
+		# not raw TypeIds: the same written type (`Sink<Int>`) can resolve to
+		# different instantiation tids in different resolution contexts
+		# (impl metadata vs fn-body), and the vtable layer already uses the
+		# string keys as its canonical identity.
+		self._iface_impl_pairs: set[tuple[str, str]] = set()
+		self._iface_generic_impl_bases: set[str] = set()
+		self._iface_impl_relation_seeded: bool = False
 		# Binding ids (params and locals) share a single id-space.
 		self._next_binding_id: int = 1
 		self._defaulted_phase_count: int = 0
@@ -1298,6 +1319,67 @@ class TypeChecker:
 							)
 						)
 
+	def _iface_rel_key(self, ty: TypeId) -> str:
+		try:
+			return self.type_table.type_key_string(ty)
+		except Exception:
+			return f"tid:{ty}"
+
+	def _record_iface_impl_relation(self, impl: "ImplMeta", *, resolved_trait_ty: TypeId | None = None) -> None:
+		"""Record one impl into the implements relation used by interface
+		coercions (borrowed views + owned-upcast verification). Non-generic
+		impls yield an exact (iface_base, target_type_id) pair; generic
+		impls mark the base as defer-verify (no impl-applicability solver
+		for interfaces yet) — same posture as codegen's vtable index and
+		the trait solver's phase-1 interface proving."""
+		if impl.trait_expr is None:
+			return
+		trait_ty = resolved_trait_ty
+		if trait_ty is None:
+			# Lazy world-seed path resolves for itself; the
+			# validate_interface_impls path passes its already-resolved
+			# tid (re-resolving here proved fragile in the
+			# stubbed-compile context — the local generic instance
+			# failed to resolve and the impl silently went unrecorded).
+			try:
+				trait_ty = resolve_opaque_type(impl.trait_expr, self.type_table, module_id=impl.def_module)
+			except Exception:
+				return
+		inst = self.type_table.get_interface_instance(trait_ty)
+		iface_base = inst.base_id if inst is not None else trait_ty
+		if self.type_table.get(iface_base).kind is not TypeKind.INTERFACE:
+			return
+		if getattr(impl, "impl_type_params", None):
+			self._iface_generic_impl_bases.add(self._iface_rel_key(iface_base))
+		elif inst is not None and getattr(inst, "type_args", None):
+			# Concrete impl of a GENERIC INTERFACE INSTANCE
+			# (`implement Sink<Int> for Box`): key on the exact instance
+			# so `&Box` widens to `&Sink<Int>` but NEVER to
+			# `&Sink<String>` — collapsing to the base here would be a
+			# cross-instance soundness hole.
+			self._iface_impl_pairs.add((self._iface_rel_key(trait_ty), self._iface_rel_key(impl.target_type_id)))
+		else:
+			self._iface_impl_pairs.add((self._iface_rel_key(iface_base), self._iface_rel_key(impl.target_type_id)))
+
+	def _ensure_iface_impl_relation(self) -> None:
+		"""Lazily seed the implements relation from the semantic world's
+		module exports. The CLI's main-flow checker never runs
+		`validate_interface_impls` (that happens in the stubbed-compile
+		instance), so without this its relation would be empty and every
+		interface coercion would wrongly reject."""
+		if self._iface_impl_relation_seeded:
+			return
+		self._iface_impl_relation_seeded = True
+		exports = getattr(self.semantic_world, "module_exports", None)
+		if not isinstance(exports, dict):
+			return
+		for exp in exports.values():
+			if not isinstance(exp, dict):
+				continue
+			for impl in exp.get("impls", []) or []:
+				if isinstance(impl, ImplMeta):
+					self._record_iface_impl_relation(impl)
+
 	def validate_interface_impls(
 		self,
 		impls: Sequence[ImplMeta],
@@ -1321,6 +1403,7 @@ class TypeChecker:
 				type_params=impl_type_param_ids or None,
 			)
 			interface_inst = self.type_table.get_interface_instance(trait_type_id)
+			_rel_trait_ty = trait_type_id  # pre-rebase tid for the implements relation
 			trait_td = self.type_table.get(trait_type_id)
 			if trait_td.kind is not TypeKind.INTERFACE:
 				if interface_inst is None:
@@ -1332,6 +1415,9 @@ class TypeChecker:
 			schema = self.type_table.interface_bases.get(trait_type_id)
 			if schema is None:
 				continue
+			# Record the implements relation for coercion checking
+			# (borrowed views + owned-upcast verification).
+			self._record_iface_impl_relation(impl, resolved_trait_ty=_rel_trait_ty)
 			interface_type_args = list(getattr(interface_inst, "type_args", []) or [])
 			try:
 				linear = self.type_table.interface_linearization(trait_type_id)
@@ -2152,6 +2238,7 @@ class TypeChecker:
 		scope_bindings: List[Dict[str, int]] = [dict()]
 		expr_types: Dict[int, TypeId] = {}
 		iface_coercions: Dict[int, TypeId] = {}
+		borrowed_iface_coercions: Dict[int, TypeId] = {}
 		ptr_to_ref_coercions: Dict[int, TypeId] = {}
 		binding_for_var: Dict[int, int] = {}
 		binding_types: Dict[int, TypeId] = {}
@@ -2398,6 +2485,54 @@ class TypeChecker:
 				return None
 			return bool(pdef.ref_mut), pdef.param_types[0]
 
+		def _borrowed_iface_view_target(param_ty: TypeId, arg_ty: TypeId) -> TypeId | None:
+			"""`&Concrete` → `&Interface` borrowed-view eligibility (0.33.77).
+
+			Returns the target REF(Interface) TypeId when `arg_ty` is a
+			reference to a concrete type with a proven NON-generic
+			`implement Interface for Concrete` and `param_ty` is a
+			reference to that interface with compatible mutability
+			(`&mut` arg reborrows to `&` param; never the reverse).
+			Iface-to-iface reference widening is out of scope here
+			(owned iface values already upcast via IfaceUpcast; a ref
+			view of a different segment needs its own design). Returns
+			None (no match) in every other case — conservative.
+			"""
+			pdef = self.type_table.get(param_ty)
+			adef = self.type_table.get(arg_ty)
+			if pdef.kind is not TypeKind.REF or adef.kind is not TypeKind.REF:
+				return None
+			if not pdef.param_types or not adef.param_types:
+				return None
+			if bool(pdef.ref_mut) and not bool(adef.ref_mut):
+				return None
+			p_inner = pdef.param_types[0]
+			a_inner = adef.param_types[0]
+			if self.type_table.get(p_inner).kind is not TypeKind.INTERFACE:
+				return None
+			if self.type_table.get(a_inner).kind is TypeKind.INTERFACE:
+				return None
+			inst = self.type_table.get_interface_instance(p_inner)
+			if inst is not None and getattr(inst, "type_args", None):
+				# GENERIC INTERFACE INSTANCES ARE DEFERRED for reference
+				# widening (`&Box` to `&Sink<Int>`): the implements
+				# relation's instance identity is not yet reliable across
+				# resolution contexts, and a base-keyed fallback would be a
+				# cross-instance soundness hole (`&Sink<String>` accepting a
+				# `Sink<Int>` impl). Deterministic rejection until the
+				# relation is instance-canonical. Owned upcasts of generic
+				# instances are unaffected (verification defers below).
+				return None
+			self._ensure_iface_impl_relation()
+			iface_base = inst.base_id if inst is not None else p_inner
+			_a_key = self._iface_rel_key(a_inner)
+			if (
+				(self._iface_rel_key(p_inner), _a_key) not in self._iface_impl_pairs
+				and (self._iface_rel_key(iface_base), _a_key) not in self._iface_impl_pairs
+			):
+				return None
+			return param_ty
+
 		def _dealias_zero_param_type(ty: TypeId, *, _seen: set[tuple[str | None, str]] | None = None) -> TypeId:
 			seen = _seen if _seen is not None else set()
 			td = self.type_table.get(ty)
@@ -2478,6 +2613,11 @@ class TypeChecker:
 					and arg_def.param_types and param_def.param_types
 					and arg_def.param_types[0] == param_def.param_types[0]
 				):
+					continue
+				# Borrowed interface view: &Concrete matches &Interface
+				# (and &mut → &mut) when Concrete implements Interface —
+				# `_coerce_args_for_params` records the view coercion.
+				if _borrowed_iface_view_target(param_cmp, arg_cmp) is not None:
 					continue
 				return False
 			return True
@@ -2664,7 +2804,49 @@ class TypeChecker:
 							updated_types[idx] = param_ty
 							continue
 					else:
+						# Verify the implements relation BEFORE recording
+						# (0.33.77): an unverified record used to surface
+						# as a codegen ICE ("interface impl not found for
+						# interface value"). Defer for bases with generic
+						# impls (no impl-applicability solver yet) and for
+						# unresolved/typevar args; only reject concrete
+						# nominal/scalar args with no impl.
+						self._ensure_iface_impl_relation()
+						_arg_cmp_v = _dealias_zero_param_type(arg_ty)
+						_arg_rel_key = self._iface_rel_key(_arg_cmp_v)
+						_param_inst_v = self.type_table.get_interface_instance(param_ty)
+						if (
+							not (_param_inst_v is not None and getattr(_param_inst_v, "type_args", None))
+							and (self._iface_rel_key(param_ty), _arg_rel_key) not in self._iface_impl_pairs
+							and (self._iface_rel_key(base_id), _arg_rel_key) not in self._iface_impl_pairs
+							and self._iface_rel_key(base_id) not in self._iface_generic_impl_bases
+							and not self.type_table.has_typevar(_arg_cmp_v)
+							and self.type_table.get(_arg_cmp_v).kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.SCALAR)
+						):
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										f"'{self._pretty_type_name(_arg_cmp_v, current_module=current_module_name)}' does not implement "
+										f"interface '{self._pretty_type_name(param_ty, current_module=current_module_name)}'"
+									),
+									severity="error",
+									phase="typecheck",
+									span=getattr(arg_expr, "loc", span),
+								)
+							)
+							had_error = True
+							continue
 						record_iface_coercion(arg_expr, param_ty)
+						updated_types[idx] = param_ty
+						continue
+				if arg_ty is not None and arg_ty != param_ty:
+					# Borrowed interface view (0.33.77): `&Concrete` widens
+					# to `&Interface` when Concrete implements Interface.
+					# Lowering materializes a non-owning fat view temp and
+					# passes its address; the caller keeps ownership.
+					_view_target = _borrowed_iface_view_target(param_ty, arg_ty)
+					if _view_target is not None:
+						record_borrowed_iface_coercion(arg_expr, _view_target)
 						updated_types[idx] = param_ty
 						continue
 				ref_info = _ref_param_info(param_ty)
@@ -5219,6 +5401,57 @@ class TypeChecker:
 		def _fn_id_for_decl(decl: CallableDecl) -> FunctionId | None:
 			return decl.fn_id
 
+		def _format_arg_types(arg_types: List[TypeId]) -> str:
+			"""Human-readable arg list for overload diagnostics — NEVER raw
+			TypeIds (the `args [2133]` bug, DriftQuery 2026-07-08)."""
+			try:
+				return "[" + ", ".join(self._pretty_type_name(a, current_module=current_module_name) for a in arg_types) + "]"
+			except Exception:
+				return str(arg_types)
+
+		def _overload_mismatch_hint(candidates, arg_types: List[TypeId]) -> str:
+			"""Targeted note for the `&Concrete` → `&Interface` shape: when a
+			candidate fails ONLY because a concrete ref does not implement the
+			interface behind a `&Interface` param, say so — instead of leaving
+			the user to decode a generic overload failure."""
+			try:
+				for decl in candidates or []:
+					params = None
+					if decl.fn_id is not None and signatures_by_id is not None:
+						sig = signatures_by_id.get(decl.fn_id)
+						if sig is not None and sig.param_type_ids is not None:
+							params = list(sig.param_type_ids)
+					if params is None:
+						params = list(getattr(decl.signature, "param_types", []) or [])
+					if len(params) != len(arg_types):
+						continue
+					for p_ty, a_ty in zip(params, arg_types):
+						if p_ty is None or a_ty is None:
+							continue
+						pdef = self.type_table.get(p_ty)
+						adef = self.type_table.get(a_ty)
+						if pdef.kind is not TypeKind.REF or adef.kind is not TypeKind.REF:
+							continue
+						if not pdef.param_types or not adef.param_types:
+							continue
+						p_inner = pdef.param_types[0]
+						a_inner = adef.param_types[0]
+						if self.type_table.get(p_inner).kind is not TypeKind.INTERFACE:
+							continue
+						if self.type_table.get(a_inner).kind is TypeKind.INTERFACE:
+							continue
+						if _borrowed_iface_view_target(p_ty, a_ty) is not None:
+							continue  # would have coerced — mismatch is elsewhere
+						return (
+							f"; note: '{self._pretty_type_name(a_inner, current_module=current_module_name)}' does not implement "
+							f"interface '{self._pretty_type_name(p_inner, current_module=current_module_name)}', so "
+							f"'{self._pretty_type_name(a_ty, current_module=current_module_name)}' cannot widen to "
+							f"'{self._pretty_type_name(p_ty, current_module=current_module_name)}'"
+						)
+			except Exception:
+				pass
+			return ""
+
 		def _resolve_free_call_with_require(
 			*,
 			name: str,
@@ -5229,7 +5462,7 @@ class TypeChecker:
 			expected_type: TypeId | None = None,
 		) -> tuple[CallableDecl, CallableSignature, Subst | None]:
 			if callable_registry is None:
-				raise ResolutionError(f"no matching overload [TC5000] for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5000] for function '{name}' with args {_format_arg_types(arg_types)}")
 			include_private = current_module if module_name is None else None
 			candidates = callable_registry.get_free_candidates(
 				name=name,
@@ -5403,7 +5636,7 @@ class TypeChecker:
 					)
 					msg, notes = _format_infer_failure(ctx, res)
 					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
-				raise ResolutionError(f"no matching overload [TC5174] for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5174] for function '{name}' with args {_format_arg_types(arg_types)}{_overload_mismatch_hint(candidates, arg_types)}")
 			world = None
 			applicable: List[tuple[CallableDecl, CallableSignature, Subst | None]] = []
 			require_info: dict[object, tuple[parser_ast.TraitExpr, dict[object, object], str, dict[TypeParamId, tuple[str, int]]]] = {}
@@ -5654,7 +5887,7 @@ class TypeChecker:
 							notes=_requirement_notes(failure),
 						)
 					raise ResolutionError(f"trait requirements not met for function '{name}'")
-				raise ResolutionError(f"no matching overload [TC5425] for function '{name}' with args {arg_types}")
+				raise ResolutionError(f"no matching overload [TC5425] for function '{name}' with args {_format_arg_types(arg_types)}{_overload_mismatch_hint(candidates, arg_types)}")
 			applicable = _dedupe_by_key(applicable, lambda item: _candidate_key_for_decl(item[0]))
 			if len(applicable) == 1:
 				return applicable[0][0], applicable[0][1], applicable[0][2]
@@ -5743,6 +5976,9 @@ class TypeChecker:
 
 		def record_iface_coercion(expr: H.HExpr, target_iface: TypeId) -> None:
 			iface_coercions[expr.node_id] = target_iface
+
+		def record_borrowed_iface_coercion(expr: H.HExpr, target_ref: TypeId) -> None:
+			borrowed_iface_coercions[expr.node_id] = target_ref
 
 		def record_ptr_to_ref_coercion(expr: H.HExpr, target_ref: TypeId) -> None:
 			ptr_to_ref_coercions[expr.node_id] = target_ref
@@ -11188,7 +11424,36 @@ class TypeChecker:
 									# iface_coercion over the failed slot.
 									pass
 								else:
-									record_iface_coercion(stmt.value, declared_ty)
+									# Verify the implements relation BEFORE
+									# recording (0.33.77): an unverified record
+									# used to surface as a codegen ICE
+									# ("interface impl not found"). Defer for
+									# generic-impl bases and typevar sources.
+									self._ensure_iface_impl_relation()
+									_decl_inst_v = self.type_table.get_interface_instance(declared_ty)
+									_decl_base_v = _decl_inst_v.base_id if _decl_inst_v is not None else declared_ty
+									_src_cmp_v = _dealias_zero_param_type(inferred_ty)
+									_src_rel_key = self._iface_rel_key(_src_cmp_v)
+									if (
+										not (_decl_inst_v is not None and getattr(_decl_inst_v, "type_args", None))
+										and (self._iface_rel_key(declared_ty), _src_rel_key) not in self._iface_impl_pairs
+										and (self._iface_rel_key(_decl_base_v), _src_rel_key) not in self._iface_impl_pairs
+										and self._iface_rel_key(_decl_base_v) not in self._iface_generic_impl_bases
+										and not self.type_table.has_typevar(_src_cmp_v)
+										and self.type_table.get(_src_cmp_v).kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.SCALAR)
+									):
+										diagnostics.append(
+											_tc_diag(
+												message=(
+													f"'{self._pretty_type_name(_src_cmp_v, current_module=current_module_name)}' does not implement "
+													f"interface '{self._pretty_type_name(declared_ty, current_module=current_module_name)}'"
+												),
+												severity="error",
+												span=getattr(stmt, "loc", Span()),
+											)
+										)
+									else:
+										record_iface_coercion(stmt.value, declared_ty)
 						else:
 							is_int_lit = isinstance(stmt.value, H.HLiteralInt)
 							is_uint_lit = hasattr(H, "HLiteralUint") and isinstance(stmt.value, getattr(H, "HLiteralUint"))
@@ -12570,6 +12835,7 @@ class TypeChecker:
 			instantiations_by_callsite_id=instantiations_by_callsite_id,
 			instantiations_by_node_id=instantiations_by_node_id,
 			iface_coercions=iface_coercions,
+			borrowed_iface_coercions=borrowed_iface_coercions,
 			ptr_to_ref_coercions=ptr_to_ref_coercions,
 			preseed_type_params=dict(preseed_type_params or {}),
 		)

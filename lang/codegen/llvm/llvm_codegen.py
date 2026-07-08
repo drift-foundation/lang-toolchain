@@ -140,6 +140,7 @@ from lang.driftc.stage2 import (
 	FnPtrConst,
 	ConstructIface,
 	ConstructIfaceValue,
+	ConstructIfaceBorrowed,
 	IfaceUpcast,
 	ArcAsInterface,
 	ArcFatGet,
@@ -225,6 +226,12 @@ DRIFT_IFACE_DATA_IDX = 0
 DRIFT_IFACE_VTABLE_IDX = 1
 DRIFT_IFACE_INLINE_IDX = 2
 DRIFT_IFACE_INLINE_FLAG_IDX = 3
+# Interface value flag byte is a BITFIELD: bit0 = payload stored inline,
+# bit1 = owns a drift_iface_alloc heap block, bit2 = BORROWED view over
+# caller-owned storage (0.33.77 — drop is a complete no-op: no payload
+# drop thunk, no free). Dispatch reads bit0 only, so borrowed views
+# (bit0 clear) dispatch through the data slot with unchanged code.
+DRIFT_IFACE_FLAG_BORROWED = 4
 
 # --- LLVM identifier helpers ---
 #
@@ -3257,6 +3264,8 @@ class _FuncBuilder:
 			self._lower_construct_iface(instr)
 		elif isinstance(instr, ConstructIfaceValue):
 			self._lower_construct_iface_value(instr)
+		elif isinstance(instr, ConstructIfaceBorrowed):
+			self._lower_construct_iface_borrowed(instr)
 		elif isinstance(instr, IfaceUpcast):
 			self._lower_iface_upcast(instr)
 		elif isinstance(instr, ArcAsInterface):
@@ -7091,6 +7100,40 @@ class _FuncBuilder:
 		self.lines.append(f"  {dest} = load {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}")
 		self.value_types[dest] = DRIFT_IFACE_TYPE
 
+	def _lower_construct_iface_borrowed(self, instr: ConstructIfaceBorrowed) -> None:
+		"""Non-owning interface view (0.33.77): fat value whose data slot
+		points at CALLER-owned storage. Flag byte = BORROWED (4): bit0
+		clear, so existing dispatch code selects the data slot unchanged;
+		the drop helper's borrowed early-out skips both the payload drop
+		thunk and the free. Never crosses out of its constructing frame as
+		an owned value (see the MIR node's docstring), which is what keeps
+		this ABI-neutral: only drop helpers emitted by THIS compiler ever
+		see the bit."""
+		if self.type_table is None:
+			raise NotImplementedError("LLVM codegen v1: interface views require a TypeTable")
+		vtable_name, _slot_count = self._ensure_interface_vtable(instr.iface_ty, instr.value_ty)
+		dest = self._map_value(instr.dest)
+		data_val = self._map_value(instr.data_ref)
+		tmp_ptr = self._ensure_iface_tmp_alloca()
+		self.lines.append(f"  store {DRIFT_IFACE_TYPE} zeroinitializer, ptr {tmp_ptr}")
+		vtable_ptr = self._fresh("iface_vtable_ptr")
+		self.lines.append(
+			f"  {vtable_ptr} = getelementptr inbounds {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}, i32 0, i32 {DRIFT_IFACE_VTABLE_IDX}"
+		)
+		self.lines.append(f"  store ptr @{vtable_name}, ptr {vtable_ptr}")
+		flag_ptr = self._fresh("iface_flag_ptr")
+		self.lines.append(
+			f"  {flag_ptr} = getelementptr inbounds {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}, i32 0, i32 {DRIFT_IFACE_INLINE_FLAG_IDX}"
+		)
+		self.lines.append(f"  store i8 {DRIFT_IFACE_FLAG_BORROWED}, ptr {flag_ptr}")
+		data_slot = self._fresh("iface_data_ptr")
+		self.lines.append(
+			f"  {data_slot} = getelementptr inbounds {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}, i32 0, i32 {DRIFT_IFACE_DATA_IDX}"
+		)
+		self.lines.append(f"  store ptr {data_val}, ptr {data_slot}")
+		self.lines.append(f"  {dest} = load {DRIFT_IFACE_TYPE}, ptr {tmp_ptr}")
+		self.value_types[dest] = DRIFT_IFACE_TYPE
+
 	def _lower_construct_iface_value(self, instr: ConstructIfaceValue) -> None:
 		if self.type_table is None:
 			raise NotImplementedError("LLVM codegen v1: ConstructIfaceValue requires a TypeTable")
@@ -10098,6 +10141,15 @@ class _FuncBuilder:
 			"  br i1 %iface_vtable_null, label %__bb_iface_free_done, label %__bb_iface_vtable_ok",
 			"__bb_iface_vtable_ok:",
 			f"  %iface_inline = extractvalue {iface_llty} %src, {DRIFT_IFACE_INLINE_FLAG_IDX}",
+			# Borrowed view (bit 2): the value owns NOTHING — skip both the
+			# payload drop thunk and the free. Only this compiler's own
+			# helpers ever see the bit (borrowed views cannot escape their
+			# constructing frame as owned values), so older artifacts need
+			# no rebuild.
+			f"  %iface_borrowed_bit = and i8 %iface_inline, {DRIFT_IFACE_FLAG_BORROWED}",
+			"  %iface_is_borrowed = icmp ne i8 %iface_borrowed_bit, 0",
+			"  br i1 %iface_is_borrowed, label %__bb_iface_free_done, label %__bb_iface_owned",
+			"__bb_iface_owned:",
 			"  %iface_inline_bit = and i8 %iface_inline, 1",
 			"  %iface_owns_bit = and i8 %iface_inline, 2",
 			"  %iface_is_inline = icmp ne i8 %iface_inline_bit, 0",
