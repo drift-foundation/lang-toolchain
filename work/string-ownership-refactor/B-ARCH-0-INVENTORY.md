@@ -116,15 +116,17 @@ release face, and every one is the downstream shadow of a C2 stake feeding a
 return-reaching composite. There is no isolated return-stake slice. Full evidence:
 `/tmp/drift-announce/2026-07-09T170000Z-barch1-stop-rescope-return-stake.md`.
 
-1. **C2 stake materialization, one mechanism** (114,107 stakes; zeroes C4's 106,620 as
-   a byproduct) — every C2 stake is an `_ensure_owned` copy; materialize the stake as
-   ledger-visible MIR (CopyValue-style) where `_ensure_owned` would retain, and let
-   string_arc consume the owned value. Optionally split by position (call_arg 58,680
-   first) for review granularity — both halves are the same rewrite point.
-2. **C1 uninit-release elision** (136,407 + 11,951 path-dependent) — after (1), swap
-   site-3 string scope-exit to ledger authority.
-3. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — ledger event-model
-   extension; may stay allowlisted.
+PROGRESS (2026-07-09): **B-arch-1a DONE** — call_arg_retain 58,680 → 0 (zero residuals).
+**B-arch-1b DONE** — value_position_retain 47,803 → 20,103; C4 106,620 → 82,728 with the
+−23,892 converting exactly into c1_agree (boundary releases now ledger-agreed). Remaining:
+
+1. **Field-extraction producers** (20,103 value_position residuals — `throw_self` envelope
+   builders + `StrictJsonCursor::field`-style shapes whose String operands come from
+   `self`-field reads, not LoadLocal) — extend the producer criterion; closes most of the
+   remaining C4 (82,728, same mechanism).
+2. **store_value_retain** (7,624) — the deferred store slice.
+3. **C1 uninit-release elision** (136,407 + 11,951 path-dependent) — after stakes are done.
+4. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — may stay allowlisted.
 
 ## 5. Corpus caveats
 

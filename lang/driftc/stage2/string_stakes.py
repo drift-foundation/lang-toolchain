@@ -26,12 +26,21 @@ as an owned single-use value and MOVES it into the call
 (`_can_move_owned_once`), emitting no `call_arg_retain` — the stake now
 predates the ledger snapshot instead of trailing it.
 
-SCOPE (B-arch-1a): call arguments ONLY — `Call`, `CallIndirect`,
-`CallIface` (all three share the same argument-boundary logic:
-positional `param_types`/signature ids, by-ref params skipped,
-by-value String params candidates). `value_position_retain`
-(ctor fields, payloads, exc-ABI) and `store_value_retain` are later
-slices.
+SCOPE: B-arch-1a covered call arguments (`Call`, `CallIndirect`,
+`CallIface` — shared argument-boundary logic: positional
+`param_types`/signature ids, by-ref params skipped, by-value String
+params candidates). B-arch-1b extends the SAME criterion to VALUE
+POSITIONS: ctor fields (`ConstructStruct`/`ConstructVariant`), array
+literals/element writes (`ArrayLit`/`ArrayElemInit`/
+`ArrayElemInitUnchecked`/`ArrayElemAssign`), interface boxing
+(`ConstructIfaceValue`), Result payloads (`ConstructResultOk`),
+exception-ABI strings (`ConstructError.event_fqn`,
+`ExcSetParamsJson.json_text`, `ExcAppendContextFrame.frame_json`).
+For value positions no signature is needed: the candidate test —
+producer chain ends at a `LoadLocal` of a semantically-String local —
+already implies the operand is a String in a by-value position.
+`store_value_retain` (StoreLocal/StoreRef/ArrayIndexStore values)
+remains a later slice.
 
 DECISION CRITERION — mirror `string_arc`, copy only where it would
 RETAIN: string_arc moves an arg iff it is an owned single-use value
@@ -97,6 +106,26 @@ def materialize_call_arg_stakes(
 		return None
 
 	local_types: Dict[str, TypeId] = func.local_types
+
+	def _local_is_string(name: str) -> bool:
+		ty = local_types.get(name)
+		return ty is not None and _param_is_string(ty)
+
+	# B-arch-1b value positions: (node type, operand attr, is_list).
+	_VALUE_POSITIONS: tuple = (
+		(M.ConstructStruct, "args", True),
+		(M.ConstructVariant, "args", True),
+		(M.ArrayLit, "elements", True),
+		(M.ArrayElemInit, "value", False),
+		(M.ArrayElemInitUnchecked, "value", False),
+		(M.ArrayElemAssign, "value", False),
+		(M.ConstructIfaceValue, "value", False),
+		(M.ConstructResultOk, "value", False),
+		(M.ConstructError, "event_fqn", False),
+		(M.ExcSetParamsJson, "json_text", False),
+		(M.ExcAppendContextFrame, "frame_json", False),
+	)
+
 	changed = False
 	stake_counter = 0
 	for block in func.blocks.values():
@@ -105,7 +134,45 @@ def materialize_call_arg_stakes(
 		# are left alone (conservative residual).
 		producers: Dict[str, M.MInstr] = {}
 		new_instrs: list[M.MInstr] = []
+
+		def _resolve_load(arg: str) -> Optional[M.LoadLocal]:
+			"""The producer-chain criterion shared by call args and
+			value positions: follow AssignSSA to the producer; a stake
+			is materialized only for a plain LoadLocal of a
+			semantically-String local (mirrors string_arc's
+			move-vs-retain decision — creators/MoveOut dests move)."""
+			alias = arg
+			seen = 0
+			while seen < 64:
+				prod = producers.get(alias)
+				if isinstance(prod, M.AssignSSA):
+					alias = prod.src
+					seen += 1
+					continue
+				break
+			prod = producers.get(alias)
+			if isinstance(prod, M.LoadLocal) and _local_is_string(prod.local):
+				return prod
+			return None
+
+		def _stake(arg: str, anchor: M.MInstr) -> str:
+			nonlocal stake_counter, changed
+			stake_counter += 1
+			tmp = f".stake{stake_counter}"
+			while tmp in local_types:
+				stake_counter += 1
+				tmp = f".stake{stake_counter}"
+			copy = M.CopyValue(dest=tmp, value=arg, ty=string_ty)
+			if hasattr(anchor, "span"):
+				setattr(copy, "span", getattr(anchor, "span"))
+			new_instrs.append(copy)
+			producers[tmp] = copy
+			local_types[tmp] = string_ty
+			changed = True
+			return tmp
+
 		for instr in block.instructions:
+			replaced = None
 			param_tys = _call_param_types(instr)
 			if param_tys is not None and getattr(instr, "args", None):
 				new_args: list[str] = []
@@ -115,57 +182,51 @@ def materialize_call_arg_stakes(
 						not _param_is_string(ty_id)
 						or _param_is_ref(ty_id)
 						or not isinstance(arg, str)
+						or _resolve_load(arg) is None
 					):
 						new_args.append(arg)
 						continue
-					# Resolve the producer chain through AssignSSA.
-					alias = arg
-					seen = 0
-					while seen < 64:
-						prod = producers.get(alias)
-						if isinstance(prod, M.AssignSSA):
-							alias = prod.src
-							seen += 1
-							continue
-						break
-					prod = producers.get(alias)
-					if not isinstance(prod, M.LoadLocal):
-						new_args.append(arg)
-						continue
-					stake_counter += 1
-					tmp = f".stake{stake_counter}"
-					while tmp in local_types:
-						stake_counter += 1
-						tmp = f".stake{stake_counter}"
-					copy = M.CopyValue(dest=tmp, value=arg, ty=string_ty)
-					if hasattr(instr, "span"):
-						setattr(copy, "span", getattr(instr, "span"))
-					new_instrs.append(copy)
-					producers[tmp] = copy
-					local_types[tmp] = string_ty
-					new_args.append(tmp)
+					new_args.append(_stake(arg, instr))
 					call_changed = True
-					changed = True
 				if call_changed:
 					# Extra args beyond the signature (should not
 					# happen; zip is defensive) are preserved verbatim.
 					if len(instr.args) > len(new_args):
 						new_args.extend(instr.args[len(new_args):])
-					new_call = _dc_replace(instr, args=new_args)
-					if hasattr(instr, "span"):
-						setattr(new_call, "span", getattr(instr, "span"))
-					new_instrs.append(new_call)
-					dest = getattr(new_call, "dest", None)
-					if isinstance(dest, str):
-						producers[dest] = new_call
-					continue
+					replaced = _dc_replace(instr, args=new_args)
+			else:
+				for node_ty, attr, is_list in _VALUE_POSITIONS:
+					if not isinstance(instr, node_ty):
+						continue
+					if is_list:
+						ops = list(getattr(instr, attr) or [])
+						pos_changed = False
+						for i, op in enumerate(ops):
+							if isinstance(op, str) and _resolve_load(op) is not None:
+								ops[i] = _stake(op, instr)
+								pos_changed = True
+						if pos_changed:
+							replaced = _dc_replace(instr, **{attr: ops})
+					else:
+						op = getattr(instr, attr, None)
+						if isinstance(op, str) and _resolve_load(op) is not None:
+							replaced = _dc_replace(instr, **{attr: _stake(op, instr)})
+					break
+			if replaced is not None:
+				if hasattr(instr, "span"):
+					setattr(replaced, "span", getattr(instr, "span"))
+				new_instrs.append(replaced)
+				dest = getattr(replaced, "dest", None)
+				if isinstance(dest, str):
+					producers[dest] = replaced
+				continue
 			dest = getattr(instr, "dest", None)
 			if isinstance(dest, str):
 				producers[dest] = instr
 			new_instrs.append(instr)
 		block.instructions = new_instrs
 	if changed:
-		mark_ledger_dirty(func, "string_stakes.materialize_call_arg_stakes")
+		mark_ledger_dirty(func, "string_stakes.materialize_stakes")
 	return changed
 
 

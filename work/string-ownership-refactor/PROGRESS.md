@@ -195,3 +195,19 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   all 0; every other counter byte-identical. Events −58,680 exactly. Report:
   /tmp/drift-announce/2026-07-09T200000Z-barch1a-call-arg-stakes.md. Awaiting review;
   B-arch-1b (value_position) not started per direction.
+
+- 2026-07-09: **B-arch-1b (value-position String stakes) IMPLEMENTED + audited.**
+  `string_stakes.py` generalized: shared LoadLocal-producer criterion applied via a
+  value-position table (ConstructStruct/Variant args, ArrayLit elements,
+  ArrayElemInit/InitUnchecked/Assign, ConstructIfaceValue, ConstructResultOk,
+  ConstructError.event_fqn, ExcSetParamsJson, ExcAppendContextFrame). Pins 10/10
+  (ctor+ASAN, variant, Result-Ok, exc-params+ASAN, array+ASAN, audit acceptance, pkg-boundary
+  ctor); stage2+memcheck+1a-pins 424 passed/1 skipped; matrices 51/51+51/51; pkgb clean.
+  CORPUS three-way (543/647,943 identical universe): value_position 47,803 → 20,103 (−27,700,
+  events −27,700 exactly); **C4 106,620 → 82,728, the −23,892 converting EXACTLY into
+  c1_agree** (CopyValue breaks Return-as-move; boundary releases now ledger-agreed);
+  pre_post_verdict_drift +23,892 (same locals, post-ledger zero-store reinit — explained,
+  not a gate); gates all 0; store_value + every untouched counter byte-identical. RESIDUALS
+  characterized: field-extraction producers (throw_self envelope builders, JSON cursor field
+  paths) — the documented conservative boundary; next-slice candidate. Report:
+  /tmp/drift-announce/2026-07-09T230000Z-barch1b-value-position-stakes.md. Awaiting review.
