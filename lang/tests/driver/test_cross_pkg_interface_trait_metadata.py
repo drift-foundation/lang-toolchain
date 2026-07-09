@@ -5,7 +5,7 @@
 resolver.
 
 Reported as app-team `compiler-findings.md` #1 (2026-05-17);
-deterministic 5-line carrier at `/tmp/sgw-repro1/REPRO.drift`
+deterministic 5-line carrier at `/tmp/sgw-repro1/REPRO.drift`  ## drift-tmp-root-audit: allow docs repro-path reference
 against the cert'd `mariadb-rpc` package -- their case is
 `pool.ConnectionPool.close()` where `close` is declared by
 `ConnectionSource: pub interface` in

@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
+
+from lang.test_support.drift_tmp import session_root as _drift_session_root
 from pathlib import Path
 
 from tools.deploy.steps.bundle import DEV_TOOLS, bundle_dev_tools
@@ -21,7 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_bundle_dev_tools_ships_runner_and_budget_into_lib_tools() -> None:
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory(dir=str(_drift_session_root())) as td:
 		dist = Path(td) / "dist"
 		dist.mkdir()
 		bundle_dev_tools(_REPO_ROOT, dist)
@@ -45,7 +47,7 @@ def test_bundle_dev_tools_ships_runner_and_budget_into_lib_tools() -> None:
 
 def test_bundle_dev_tools_NOT_in_bin() -> None:
 	"""CI tools are not PATH artifacts — they must not leak into bin/."""
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory(dir=str(_drift_session_root())) as td:
 		dist = Path(td) / "dist"
 		dist.mkdir()
 		bundle_dev_tools(_REPO_ROOT, dist)
@@ -60,7 +62,7 @@ def test_runner_resolves_bin_siblings_from_lib_tools_layout() -> None:
 	sys.path.insert(0, str(_REPO_ROOT / "tools"))
 	import drift_test_run as dtr
 
-	with tempfile.TemporaryDirectory() as td:
+	with tempfile.TemporaryDirectory(dir=str(_drift_session_root())) as td:
 		dist = Path(td) / "dist"
 		(dist / "bin").mkdir(parents=True)
 		(dist / "lib" / "tools").mkdir(parents=True)

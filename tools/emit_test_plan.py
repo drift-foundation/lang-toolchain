@@ -53,6 +53,12 @@ UNIFORM_LANES: tuple[tuple[str, str], ...] = (
 	("method_registry", "lang/tests/method_registry"),
 	("packages", "lang/tests/packages"),
 	("traits", "lang/tests/traits"),
+	# Repo-hygiene static audits (top-level lang/tests/*.py). These were
+	# in NO gate leg before 2026-07-08 — the tmp-root audit silently
+	# drifted red while /tmp hard-codings accumulated, and the tmpfs
+	# ENOSPC incident followed. A lane target can be a file, not just a
+	# directory; pytest collects it the same way.
+	("repo_audits", "lang/tests/test_tmp_root_compliance.py lang/tests/test_drift_tmp_session_root.py"),
 )
 
 _PY = "./.venv/bin/python3"
@@ -92,7 +98,10 @@ def build_plan() -> dict:
 			"cmd": [
 				_PY, "-m", "pytest",
 				"-n", "{jobs}", "--dist=worksteal", "-v",
-				test_dir,
+				# A lane target may be several whitespace-separated
+				# paths (dirs or files) — each becomes its own argv
+				# element for pytest collection.
+				*test_dir.split(),
 			],
 		})
 	return {

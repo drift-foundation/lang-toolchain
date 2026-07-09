@@ -247,7 +247,7 @@ def test_v2_samepkg_field_borrow_compiles(tmp_path: Path) -> None:
 
 # ─── V3: cross-package borrow (app-team's exact shape) ─────────────
 #
-# Reproduces /tmp/sgw-repro2/consumer/src/app.drift verbatim
+# Reproduces /tmp/sgw-repro2/consumer/src/app.drift verbatim  ## drift-tmp-root-audit: allow docs repro-path reference
 # (modulo module names) -- their reply to compiler-findings #2 with
 # fresh mariadb-rpc rebuild on 0.31.99.  Same diagnostic shape as
 # V2 above; same root cause; included for cross-pkg coverage in
@@ -357,7 +357,7 @@ pub fn main() nothrow -> Int {
 
 def test_v3_crosspkg_field_borrow_compiles(tmp_path: Path) -> None:
 	"""Cross-package mirror of V2 -- bit-identical to the
-	app-team's `/tmp/sgw-repro2/consumer/src/app.drift` from the
+	app-team's `/tmp/sgw-repro2/consumer/src/app.drift` from the  ## drift-tmp-root-audit: allow docs repro-path reference
 	2026-05-17 reply.  Catches `errpkg.inner:ManagedError(e)` and
 	borrows `&e.tag` via a function expecting `&String`.
 

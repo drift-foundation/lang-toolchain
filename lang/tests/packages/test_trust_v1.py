@@ -635,7 +635,8 @@ def test_load_rejects_empty_string_namespace_key() -> None:
 		"namespaces": {"": {"authors": [kid], "certifiers": [kid]}},
 		"revoked": [],
 	}
-	with tempfile.TemporaryDirectory() as tmpdir:
+	from lang.test_support.drift_tmp import session_root as _drift_session_root
+	with tempfile.TemporaryDirectory(dir=str(_drift_session_root())) as tmpdir:
 		p = Path(tmpdir) / "trust.json"
 		p.write_text(json.dumps(bad), encoding="utf-8")
 		with pytest.raises(ValueError, match="namespace pattern must be a non-empty string"):

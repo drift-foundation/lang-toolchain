@@ -14,7 +14,7 @@ declaration and is exactly the kind of thing future contributors
 silently reintroduce -- so the fix lives in the synthesizer, not
 the source.
 
-**Minimal repro** (matches `/tmp/sgw-stub/variant_repro.drift`
+**Minimal repro** (matches `/tmp/sgw-stub/variant_repro.drift`  ## drift-tmp-root-audit: allow docs repro-path reference
 from the app-team report verbatim):
 
     module variant_repro;

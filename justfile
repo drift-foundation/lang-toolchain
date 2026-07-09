@@ -167,8 +167,10 @@ lang-driver-test:
 	fi
 
 # Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
+# Scratch object goes under repo-local build/tmp, not tmpfs /tmp.
 lang-llvm-test:
-	./.venv/bin/python3 tools/test-llvm/test_codegen.py /tmp/lang_test_codegen.o
+	mkdir -p build/tmp
+	./.venv/bin/python3 tools/test-llvm/test_codegen.py build/tmp/lang_test_codegen.o
 
 # LLVM textual codegen tests (SSA→LLVM IR).
 lang-codegen-test:

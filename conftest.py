@@ -43,7 +43,14 @@ from lang.test_support.drift_tmp import session_root as _drift_session_root
 #
 # Rationale: /tmp is tmpfs; SIGKILL/OOM skips cleanup hooks. A predictable
 # Drift-owned namespace lets the janitor reclaim space safely later.
-_DRIFT_TMP_ROOT = _drift_session_root()
+#
+# REPO GATES ROOT ON DISK, NOT tmpfs: full-suite compiles write enough
+# scratch (.ll files, objects, package builds, pytest tmp_path trees) to
+# exhaust a memory-backed /tmp — the 2026-07-08 full gate died on ENOSPC
+# mid-`ir_path.write_text`. When $DRIFT_TMP_ROOT is unset, default the
+# session dir under repo-local `build/tmp/` (gitignored, same janitor
+# `session-*` layout). An explicit $DRIFT_TMP_ROOT still wins.
+_DRIFT_TMP_ROOT = _drift_session_root(base=Path(__file__).resolve().parent / "build" / "tmp")
 _PYTEST_TMP = _DRIFT_TMP_ROOT / "pytest"
 _PYTEST_TMP.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", str(_PYTEST_TMP))

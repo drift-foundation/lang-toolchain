@@ -46,13 +46,19 @@ from lang.test_support.drift_tmp import session_root as _drift_session_root
 # `DRIFT_TMP_ROOT` (see conftest.py line ~46).  But invoking the runner
 # directly (`python -m lang.tests.codegen.e2e.runner ...`) bypasses
 # conftest, so the env var is unset — and the compiled Drift binary's
-# `env.drift_tmp_path()` falls back to bare `/tmp/<name>`, polluting
+# `env.drift_tmp_path()` falls back to bare `/tmp/<name>`, polluting  ## drift-tmp-root-audit: allow docs repro-path reference
 # the tmpfs root outside the janitor-sweepable namespace.  Calling
-# session_root() here writes `/tmp/drift-$USER/session-$PID-$ts` into
-# os.environ, so every subprocess.run(..., env=os.environ.copy())
-# below inherits it and the test binary takes the proper-namespace
-# branch in env.drift_tmp_path.
-_drift_session_root()
+# session_root() here writes the session dir into os.environ, so every
+# subprocess.run(..., env=os.environ.copy()) below inherits it and the
+# test binary takes the proper-namespace branch in env.drift_tmp_path.
+# As a repo gate entrypoint, this runner roots the session under
+# disk-backed `<repo>/build/tmp/` (tmpfs-exhaustion guard), same
+# janitor-safe `session-*` layout; an explicit $DRIFT_TMP_ROOT wins.
+_drift_root = _drift_session_root(base=Path(__file__).resolve().parents[4] / "build" / "tmp")
+# TMPDIR too: DRIFT_TMP_ROOT covers std.env.drift_tmp_path() in compiled
+# Drift binaries, but clang and child-Python tempfile users honor TMPDIR
+# (conftest sets both; direct justfile invocations bypass conftest).
+os.environ.setdefault("TMPDIR", str(_drift_root))
 from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.driftc import compile_to_llvm_ir_for_tests, ReservedNamespacePolicy
 from lang.driftc.env_flags import env_true as _env_true

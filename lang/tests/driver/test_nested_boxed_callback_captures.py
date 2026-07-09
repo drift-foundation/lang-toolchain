@@ -3,7 +3,7 @@
 
 A boxed callback whose body builds a NESTED boxed callback exposed three
 defects (all pre-existing in certified 0.33.69; triage
-`/tmp/drift-announce/2026-07-06T161920Z-ref-typed-callback-args-03373-triage.md`):
+`/tmp/drift-announce/2026-07-06T161920Z-ref-typed-callback-args-03373-triage.md`):  ## drift-tmp-root-audit: allow docs repro-path reference
 
 1. **SSA ICE** for any nested capture of the ENCLOSING lambda's parameter
    (`RuntimeError: SSA: load before store for local '__b{id}'`): the

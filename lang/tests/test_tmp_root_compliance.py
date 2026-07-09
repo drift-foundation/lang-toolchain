@@ -65,7 +65,11 @@ _AUDIT_SELF = "lang/tests/test_tmp_root_compliance.py"
 
 # Directories to walk.  Tests/tools/docs are in scope.  Vendored or
 # generated dirs are not.
-_WALK_ROOTS = ("lang", "tools", "stdlib", "doc", "conftest.py", "examples", "tests", "work")
+# The top-level `justfile` is a file root, like `conftest.py` — it was
+# missing from earlier drafts, which is exactly how the
+# `lang-llvm-test` recipe's hard-coded `/tmp/lang_test_codegen.o`
+# escaped the audit until the 2026-07-08 tmpfs-exhaustion incident.
+_WALK_ROOTS = ("lang", "tools", "stdlib", "doc", "conftest.py", "justfile", "examples", "tests", "work")
 
 # Paths under these prefixes are excluded entirely (vendored, build
 # artifacts, caches).
@@ -88,7 +92,10 @@ _ALLOW_RE = re.compile(r"drift-tmp-root-audit:\s*allow\b")
 # was the original failure mode (a deploy bundle README example
 # with `-o /tmp/hello` inside a Python docstring slipped through).
 # Use per-line allow markers for harmless prose/examples.
-_HARDCODED_TMP_RE = re.compile(r"/tmp/")
+# Negative lookbehind: `/tmp/` must not be preceded by a word char,
+# dot, or dash — otherwise repo-local `build/tmp/...` (the disk-backed
+# gate scratch root) and names like `foo.tmp/` would false-positive.
+_HARDCODED_TMP_RE = re.compile(r"(?<![\w.-])/tmp/")
 
 
 def _walk_source_files():

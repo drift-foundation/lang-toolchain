@@ -5,7 +5,7 @@ DriftQuery report 2026-07-08: passing an existing `&Concrete` (or a fresh
 `&value`) where `&Interface` is expected rejected with a raw-TypeId overload
 error (`no matching overload ... with args [2133]`), forcing per-type
 borrowing-wrapper structs. Assessment
-(`/tmp/drift-announce/2026-07-08T143012Z-ref-to-interface-coercion-assessment.md`)
+(`/tmp/drift-announce/2026-07-08T143012Z-ref-to-interface-coercion-assessment.md`)  ## drift-tmp-root-audit: allow docs repro-path reference
 found an unimplemented coercion gap, not a deliberate boundary.
 
 The fix: at call arguments, `&Concrete` widens to `&Interface` (and

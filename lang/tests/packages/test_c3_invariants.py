@@ -1216,7 +1216,7 @@ def test_resolver_argparse_enforces_mutual_exclusivity() -> None:
 	parser = build_arg_parser()
 	with pytest.raises(SystemExit):
 		parser.parse_args([
-			"--dest", "/tmp/x",
+			"--dest", "/tmp/x",  # drift-tmp-root-audit: allow negative-test arg, never written
 			"--cert-suite-evidence-sha256", "sha256:" + ("a" * 64),
 			"--cert-suite-no-evidence",
 		])
@@ -1232,7 +1232,7 @@ def test_resolver_argparse_rejects_invalid_result_choice() -> None:
 	parser = build_arg_parser()
 	with pytest.raises(SystemExit):
 		parser.parse_args([
-			"--dest", "/tmp/x",
+			"--dest", "/tmp/x",  # drift-tmp-root-audit: allow negative-test arg, never written
 			"--cert-suite-result", "passsss",
 			"--cert-suite-evidence-sha256", "sha256:" + ("a" * 64),
 		])

@@ -818,7 +818,7 @@ def _build_package(
 		# mkstemp returns (fd, path); close the fd to avoid leaking
 		# descriptors across artifacts.  driftc overwrites the file
 		# via Path.write_text() once the child compile finishes.
-		_fd, _path = tempfile.mkstemp(
+		_fd, _path = tempfile.mkstemp(  # drift-tmp-root-audit: allow tmpdir-env gates export TMPDIR=session root; standalone deploys keep the system default
 			prefix=f"drift-deploy-{art.name}-{timing_prefix.replace('.', '-')}-",
 			suffix=".timing.json",
 		)
@@ -886,7 +886,7 @@ def _build_app(
 		# mkstemp returns (fd, path); close the fd to avoid leaking
 		# descriptors across artifacts.  driftc overwrites the file
 		# via Path.write_text() once the child compile finishes.
-		_fd, _path = tempfile.mkstemp(
+		_fd, _path = tempfile.mkstemp(  # drift-tmp-root-audit: allow tmpdir-env gates export TMPDIR=session root; standalone deploys keep the system default
 			prefix=f"drift-deploy-{art.name}-{timing_prefix.replace('.', '-')}-",
 			suffix=".timing.json",
 		)
@@ -1690,7 +1690,7 @@ def _run_baseline_smoke_package(
 	# Path.write_text() when the child compile finishes.
 	timing_out_path: Path | None = None
 	if timing:
-		_fd, _path = tempfile.mkstemp(
+		_fd, _path = tempfile.mkstemp(  # drift-tmp-root-audit: allow tmpdir-env gates export TMPDIR=session root; standalone deploys keep the system default
 			prefix=f"drift-deploy-{art.name}-smoke-compile-",
 			suffix=".timing.json",
 		)

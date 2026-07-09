@@ -78,7 +78,10 @@ def main() -> int:
 	# eliminates a flake observed under `just lang-driver-test` where two
 	# workers concurrently rebuilt `build/runtime_libs/debug/...` and one
 	# of them observed the other's in-progress ar(1) write.
-	with tempfile.TemporaryDirectory(prefix="drift_deps_", dir=str(_drift_session_root())) as tmp:
+	# Repo gate entrypoint: root the session under disk-backed
+	# `<repo>/build/tmp/` (tmpfs-exhaustion guard); an explicit
+	# $DRIFT_TMP_ROOT wins.
+	with tempfile.TemporaryDirectory(prefix="drift_deps_", dir=str(_drift_session_root(base=Path(__file__).resolve().parents[1] / "build" / "tmp"))) as tmp:
 		tmp_dir = Path(tmp)
 		src = tmp_dir / "assert_deps.drift"
 		out = tmp_dir / "assert_deps_bin"
@@ -108,6 +111,15 @@ def main() -> int:
 		env["PYTHONPATH"] = str(ROOT)
 		env["DRIFT_DEBUG"] = "1"
 		env["DRIFT_RUNTIME_LIB_CACHE_DIR"] = str(runtime_cache)
+		# The DRIFT_* scrub above also removed DRIFT_TMP_ROOT — re-pin
+		# the scratch-root contract explicitly so the child driftc (and
+		# anything it spawns) scratches inside THIS check's temp dir,
+		# never bare /tmp: TMPDIR covers tempfile/mktemp users, and
+		# DRIFT_TMP_ROOT is safe to re-add despite the scrub because it
+		# has no effect on runtime-variant selection (the flake class
+		# the scrub exists for). Review finding 2026-07-08.
+		env["TMPDIR"] = str(tmp_dir)
+		env["DRIFT_TMP_ROOT"] = str(tmp_dir)
 		res = _run(cmd, cwd=ROOT, env=env, timeout=120)
 		if res.returncode != 0:
 			return _fail(f"lang.driftc debug build failed: {res.stderr.strip()}")

@@ -14,13 +14,29 @@ OOM-kill. A predictable namespace is the only reliable safety net.
 
 ## Namespace
 
+`$DRIFT_TMP_ROOT` is the canonical env var. If set, all Drift tooling
+honors it verbatim — a user override always wins. If unset, the helper
+picks a `session-$PID-$timestamp` dir and writes the chosen value back
+into `os.environ` so child processes inherit it. WHERE that session dir
+lands depends on the entrypoint:
+
 ```
-/tmp/drift-$USER/session-$PID-$timestamp/
+<repo>/build/tmp/session-$PID-$timestamp/     # repo gates (default)
+/tmp/drift-$USER/session-$PID-$timestamp/     # direct/non-repo tooling
 ```
 
-`$DRIFT_TMP_ROOT` is the canonical env var. If set, all Drift tooling
-honors it. If unset, the helper picks the path above and writes the
-chosen value back into `os.environ` so child processes inherit it.
+**Repo gate entrypoints** (root `conftest.py`, the e2e runners,
+`tools/deps_check.py`) pass `base=<repo>/build/tmp` to `session_root()`,
+so full gates scratch on **repo-local disk**, not tmpfs. Rationale: a
+full-suite run writes enough `.ll` scratch, objects, package builds, and
+pytest `tmp_path` trees to exhaust a memory-backed `/tmp` — the
+2026-07-08 full gate died on ENOSPC mid-compile exactly this way. The
+`session-*` layout (and thus janitor semantics) is identical under
+either root; `build/` is gitignored.
+
+Tooling invoked outside the repo gates (or anything calling
+`session_root()` with no `base`) keeps the legacy `/tmp/drift-$USER/`
+namespace.
 
 ## Rules
 
@@ -159,6 +175,12 @@ tools/drift_janitor.sh --minutes 1440 --apply   # 24h
 The underlying find pattern is hard-coded to `session-*` under
 `/tmp/drift-$USER/`, with `-xdev -prune`, so the janitor cannot
 accidentally touch anything outside the Drift namespace.
+
+Repo-local gate sessions (`build/tmp/session-*`) are NOT swept by the
+janitor — they are disk-backed, so stale ones are a disk-space concern,
+not a wedge-the-box concern. Reclaim them with `rm -rf build/tmp` (or
+any build-dir clean); nothing outside the current run holds state
+there.
 
 ## Related env vars (unchanged)
 

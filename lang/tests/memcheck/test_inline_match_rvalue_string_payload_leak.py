@@ -7,7 +7,7 @@ Filed 2026-05-22 from the bookkeeper bare-Config residual leak.  After the
 class, bookkeeper still showed one definitely-lost block: 32 bytes from
 `drift_string_from_cstr → drift_env_get → main`.  Reduced (by both the
 PushCoin team in `work/bookkeeper-shutdown-hang/repro-bare-leak/` and
-in-house via /tmp/mm.drift) to:
+in-house via /tmp/mm.drift) to:  ## drift-tmp-root-audit: allow docs repro-path reference
 
     val secret: String = match env.get("REPRO_VAR") {
         Optional::Some(v) => { move v },
@@ -32,7 +32,7 @@ Bisect findings pinned in the test bodies below — TL;DR:
 
 So the bug is the value-producing match arm 0 (Some → move v) when the
 match scrutinee is an rvalue Optional<String> sourced from `env.get`.
-IR inspection (/tmp/mm.ll): arm 0 issues multiple `drift_string_retain`
+IR inspection (/tmp/mm.ll): arm 0 issues multiple `drift_string_retain`  ## drift-tmp-root-audit: allow docs repro-path reference
 calls on the moved-out payload with insufficient compensating releases,
 and the rvalue variant temporary is never explicitly dropped — net
 refcount stays > 0 at process exit.

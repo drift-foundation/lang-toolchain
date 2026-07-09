@@ -7,7 +7,7 @@ triggers
 
 Reported by app team in `compiler-findings.md` #4
 (2026-05-17), deterministic repro pinned in their reply at
-`/tmp/sgw-repro4/REPRO.drift` after a 12-row bisect table.
+`/tmp/sgw-repro4/REPRO.drift` after a 12-row bisect table.  ## drift-tmp-root-audit: allow docs repro-path reference
 
 **Trigger recipe** (both clauses required, in source order,
 same function body):
@@ -106,7 +106,7 @@ callback_throw1) or exempt (V2 let-bind, V3 callback0, V4
 swap order, V5 named-local borrow).  Post-fix: V1/V6/V7
 must compile + run; V2-V5 must keep compiling + running.
 
-Repro source: `/tmp/sgw-repro4/REPRO.drift` + variants v10a-v10k.
+Repro source: `/tmp/sgw-repro4/REPRO.drift` + variants v10a-v10k.  ## drift-tmp-root-audit: allow docs repro-path reference
 """
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ def test_v1_literal_borrow_then_callback1_compiles(tmp_path: Path) -> None:
 		f"E-AUTO-e57d22a5 (`cannot borrow from moved or "
 		f"uninitialized '__tmp_borrowN'`).  See app-team "
 		f"compiler-findings.md #4 + bisect table at "
-		f"/tmp/sgw-repro4/.  Hypothesis: callbackN(N>=1) "
+		f"/tmp/sgw-repro4/.  Hypothesis: callbackN(N>=1) "  ## drift-tmp-root-audit: allow docs repro-path reference
 		f"typed-erasure thunk synthesis allocates an SSA "
 		f"temp that collides with `__tmp_borrowN` from the "
 		f"earlier literal borrow.\n\n{cc_err[-1500:]}"

@@ -70,7 +70,7 @@ def test_publish_json_emits_path(tmp_path: Path, capsys: pytest.CaptureFixture[s
 def test_publish_requires_exactly_one_key(tmp_path: Path) -> None:
 	"""Both --key-file and --key-text together must fail; neither
 	must also fail."""
-	argv_both = _publish_argv(tmp_path, _seed_b64()) + ["--key-file", "/tmp/x.seed"]
+	argv_both = _publish_argv(tmp_path, _seed_b64()) + ["--key-file", "/tmp/x.seed"]  # drift-tmp-root-audit: allow negative-test conflicting-arg path, never written
 	with pytest.raises(SystemExit):
 		author_cli_main(argv_both)
 

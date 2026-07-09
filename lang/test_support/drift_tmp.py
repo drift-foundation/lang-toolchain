@@ -41,21 +41,34 @@ def _resolve_user() -> str:
 	return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
 
 
-def session_root() -> Path:
+def session_root(base: "str | os.PathLike[str] | None" = None) -> Path:
 	"""Return $DRIFT_TMP_ROOT, initializing it if unset.
 
 	If $DRIFT_TMP_ROOT is already set (parent shell, agent harness, or an
-	earlier call in this process), reuse it verbatim.  Otherwise pick
-	``/tmp/drift-$USER/session-$PID-$timestamp`` and export it so child  ## drift-tmp-root-audit: allow namespace docstring
-	processes inherit the same root.
+	earlier call in this process), reuse it verbatim — a user override
+	always wins.  Otherwise pick a fresh
+	``<base>/session-$PID-$timestamp`` when ``base`` is given, falling
+	back to ``/tmp/drift-$USER/session-$PID-$timestamp`` when it is  ## drift-tmp-root-audit: allow namespace docstring
+	not, and export the choice so child processes inherit the same root.
+
+	``base`` exists for REPO GATE entrypoints (root ``conftest.py``, the
+	e2e runners, repo tooling): they pass a repo-local, disk-backed
+	``<repo>/build/tmp`` so full-suite compiles (.ll scratch, objects,
+	package builds, pytest tmp_path trees) cannot exhaust a
+	memory-backed /tmp.  Direct/non-repo tooling that calls
+	``session_root()`` with no ``base`` keeps the legacy /tmp namespace;
+	the janitor-safe ``session-*`` layout is identical under either root.
 
 	The returned directory is created (parents=True, exist_ok=True).
 	"""
 	root = os.environ.get(_ENV)
 	if not root:
-		# The one legitimate hard-coded /tmp/ literal in the repo: this  # drift-tmp-root-audit: allow namespace origin comment
-		# helper IS the source of truth for the DRIFT_TMP_ROOT namespace.
-		root = f"/tmp/drift-{_resolve_user()}/session-{os.getpid()}-{int(time.time())}"  # drift-tmp-root-audit: allow namespace origin
+		if base is not None:
+			root = str(Path(base) / f"session-{os.getpid()}-{int(time.time())}")
+		else:
+			# The one legitimate hard-coded /tmp/ literal in the repo: this  # drift-tmp-root-audit: allow namespace origin comment
+			# helper IS the source of truth for the DRIFT_TMP_ROOT namespace.
+			root = f"/tmp/drift-{_resolve_user()}/session-{os.getpid()}-{int(time.time())}"  # drift-tmp-root-audit: allow namespace origin
 		os.environ[_ENV] = root
 	p = Path(root)
 	p.mkdir(parents=True, exist_ok=True)

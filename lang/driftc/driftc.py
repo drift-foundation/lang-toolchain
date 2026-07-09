@@ -8736,8 +8736,8 @@ def main(argv: list[str] | None = None) -> int:
 	# --timing-out <path> implies --timing.  Parent wrappers
 	# (drift build / drift deploy) use this to ingest child timings
 	# without parsing stdout.  Support both argparse forms:
-	#   --timing-out /tmp/x.json
-	#   --timing-out=/tmp/x.json
+	#   --timing-out /tmp/x.json  # drift-tmp-root-audit: allow docs help-text example
+	#   --timing-out=/tmp/x.json  # drift-tmp-root-audit: allow docs help-text example
 	timing_out_path: Path | None = None
 	for _i, _arg in enumerate(raw_argv):
 		if _arg == "--timing-out" and _i + 1 < len(raw_argv):

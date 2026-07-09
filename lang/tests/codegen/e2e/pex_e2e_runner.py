@@ -31,6 +31,19 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[4]
 CASE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 STDLIB_DIR = ROOT / "stdlib"
+
+# Bootstrap DRIFT_TMP_ROOT for direct-invocation runs (this runner is a
+# repo gate entrypoint launched outside pytest/conftest): root the
+# session under disk-backed `<repo>/build/tmp/` so compiled Drift
+# binaries inheriting os.environ (std.env.drift_tmp_path) never fall
+# back to bare /tmp. An explicit $DRIFT_TMP_ROOT wins. Same fix shape
+# as runner.py; review finding 2026-07-08.
+from lang.test_support.drift_tmp import session_root as _drift_session_root
+_drift_root = _drift_session_root(base=ROOT / "build" / "tmp")
+# TMPDIR too: DRIFT_TMP_ROOT covers std.env.drift_tmp_path() in compiled
+# Drift binaries, but clang and child-Python tempfile users honor TMPDIR
+# (conftest sets both; direct justfile invocations bypass conftest).
+os.environ.setdefault("TMPDIR", str(_drift_root))
 _VALGRIND_DIR = ROOT / "lang" / "tests" / "codegen" / "valgrind"
 _VALGRIND_FIBER_SUPPRESSIONS = _VALGRIND_DIR / "fiber.supp"
 
