@@ -38,7 +38,7 @@ from lang.driftc.parser import (
 	parse_drift_workspace_to_hir,
 	stdlib_root,
 )
-from lang.codegen.llvm.test_utils import valgrind_cmd
+from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
 from lang.test_support.drift_tmp import session_root as _drift_session_root
 
 # Bootstrap DRIFT_TMP_ROOT for direct-invocation runs.  When this runner
@@ -1003,8 +1003,13 @@ def main(argv: Iterable[str] | None = None) -> int:
 	ap.add_argument(
 		"--timeout",
 		type=int,
-		default=40,
-		help="Per-case timeout in seconds (default: 40)",
+		# Scaled default: base 40s widened by the canonical
+		# sanitizer_timeout() multipliers (sanitizer lane, xdist
+		# contention, DRIFT_TEST_TIMEOUT_SCALE for slow hosts) — a bare
+		# 40 was a deterministic false red on slower hardware. An
+		# explicit --timeout is used verbatim.
+		default=sanitizer_timeout(40),
+		help="Per-case timeout in seconds (default: 40, scaled by lane/load/host multipliers when unset)",
 	)
 	ap.add_argument(
 		"--debug",

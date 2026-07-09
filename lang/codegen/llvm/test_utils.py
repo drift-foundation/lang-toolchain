@@ -74,7 +74,18 @@ def sanitizer_timeout(base: int) -> int:
 	driftc-built binaries and have been observed to exceed their default
 	budget. Do NOT apply blanket inflation to unrelated timeouts.
 	"""
-	multiplier = 1
+	multiplier = 1.0
+	# Host-speed knob: slower boxes (e.g. an older i7 where the
+	# nested-callback e2e case exceeded 40s ISOLATED in the normal lane,
+	# 2026-07-09) set DRIFT_TEST_TIMEOUT_SCALE once in their shell
+	# profile instead of chasing individual budgets. Values < 1 are
+	# ignored — this knob only ever widens budgets.
+	try:
+		_host_scale = float(os.environ.get("DRIFT_TEST_TIMEOUT_SCALE", "1"))
+	except ValueError:
+		_host_scale = 1.0
+	if _host_scale > 1.0:
+		multiplier *= _host_scale
 	if os.environ.get("DRIFT_ASAN") in ("1", "true", "True"):
 		multiplier *= 3
 	if os.environ.get("DRIFT_UBSAN") in ("1", "true", "True"):
@@ -85,7 +96,7 @@ def sanitizer_timeout(base: int) -> int:
 		# Roughly accommodate 4-8x wall-clock slowdown under high
 		# parallel load. Compose multiplicatively with sanitizer mode.
 		multiplier *= 4
-	return base * multiplier
+	return int(base * multiplier)
 
 
 def asan_active() -> bool:
