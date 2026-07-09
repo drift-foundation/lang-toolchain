@@ -8060,8 +8060,22 @@ def compile_stubbed_funcs(
 			# stdlib-regex workload; bookkeeper's residual
 			# unattributed budget likely includes the same loop.
 			with _events.timed("cleanup_authoring"):
+				from lang.driftc.stage2.string_stakes import (
+					materialize_call_arg_stakes as _materialize_call_arg_stakes,
+				)
 				for fn_id, func in mir_funcs_by_id.items():
 					_author_cleanup(func, type_table=shared_type_table)
+					# B-arch-1a: materialize by-value String call-arg
+					# copy stakes (CopyValue) BEFORE the ledger rebuild
+					# below, so the ledger that string_arc consults
+					# models the copy — string_arc then MOVES the
+					# already-owned stake instead of inventing a late
+					# StringRetain the ledger never sees.
+					_materialize_call_arg_stakes(
+						func,
+						type_table=shared_type_table,
+						fn_infos=checked.fn_infos_by_id,
+					)
 					# Rebuild the ledger so string_arc sees the
 					# post-authoring per-instruction state instead of the
 					# stale pre-authoring snapshot.  Required for both

@@ -17,10 +17,11 @@ Two APIs, both pure:
 
 Both APIs invoke `emit(record)` for every observation — agreement *and*
 disagreement — so an aggregator can see coverage, not just failures.  The
-module itself does no I/O and reads no environment variables; gating is
-the caller's responsibility at the site.  A convenience `stderr_emit`
-factory is provided for the production path and produces one JSON line
-per record.
+drop-verdict APIs above do no I/O and read no environment variables;
+gating is the caller's responsibility at the site.  A convenience
+`stderr_emit` factory is provided for the production path and produces
+one JSON line per record.  (The B-arch-0 string-stake section appended
+below IS env-gated and does its own JSONL I/O — see its banner comment.)
 
 Disagreement classification (stable strings, mirrored in triage
 tooling):
@@ -279,3 +280,405 @@ def collecting_emit() -> Tuple[Emit, list[DisagreementRecord]]:
 	def _emit(r: DisagreementRecord) -> None:
 		bucket.append(r)
 	return _emit, bucket
+
+
+# ═══════════════════════════════════════════════════════════════════
+# B-arch-0: string_arc differential stake reporter (Scope B §11.2).
+#
+# OBSERVATIONAL ONLY.  Off by default; enabled by DRIFT_STRING_ARC_AUDIT=1.
+# When disabled, string_arc constructs no audit object and emits nothing —
+# behavior-identical compilation.  When enabled, the audit records one
+# StringStakeEvent per string_arc-emitted refcount instruction (tagged at
+# the emission point from the CLOSED site_class enumeration below), then
+# diffs the pass's input ledger (L_pre) against a ledger rebuilt on its
+# output MIR (L_post) and classifies every divergence into the closed
+# C1-C4/UNCLASSIFIED set.  It makes NO fixes and changes NO verdicts.
+# ═══════════════════════════════════════════════════════════════════
+
+import atexit as _atexit
+import os as _os
+
+# Event kinds.
+STAKE_RETAIN = "RETAIN"
+STAKE_RELEASE = "RELEASE"
+STAKE_MOVEOUT_EXPANSION = "MOVEOUT_EXPANSION"
+
+# CLOSED site_class enumeration — every string_arc emission point tags
+# itself with one of these AT the emission site (never inferred).  The
+# enumeration itself is a B-arch-0 deliverable: relative to the plan's
+# draft list, `temp_lastuse_release` (SSA-temp last-use releases inside
+# `_ensure_owned`/`_note_use`), `store_value_retain` (stake for the copy
+# written by StoreLocal/StoreRef/ArrayIndexStore), and
+# `value_position_retain` (ctor/exc-ABI/array-elem value positions) were
+# added because real emission sites did not fit the draft tags;
+# `destructor_self` is retained for completeness but is structurally
+# unused since Phase 4 site-3 sub-step 2 retired the site-local
+# destructor-self path.  A note() with a tag outside this set is counted
+# UNTAGGED — itself a finding.
+SITE_CLASS_CALL_ARG_RETAIN = "call_arg_retain"
+SITE_CLASS_STORE_VALUE_RETAIN = "store_value_retain"
+SITE_CLASS_VALUE_POSITION_RETAIN = "value_position_retain"
+SITE_CLASS_RETURN_RETAIN_SITE3 = "return_retain_site3"
+SITE_CLASS_OVERWRITE_RELEASE = "overwrite_release"
+SITE_CLASS_SCOPE_EXIT_RELEASE = "scope_exit_release"
+SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
+SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 = "drop_before_overwrite_site4"
+SITE_CLASS_MOVEOUT_EXPANSION = "moveout_expansion"
+SITE_CLASS_DESTRUCTOR_SELF = "destructor_self"
+
+STRING_ARC_SITE_CLASSES = frozenset({
+	SITE_CLASS_CALL_ARG_RETAIN,
+	SITE_CLASS_STORE_VALUE_RETAIN,
+	SITE_CLASS_VALUE_POSITION_RETAIN,
+	SITE_CLASS_RETURN_RETAIN_SITE3,
+	SITE_CLASS_OVERWRITE_RELEASE,
+	SITE_CLASS_SCOPE_EXIT_RELEASE,
+	SITE_CLASS_TEMP_LASTUSE_RELEASE,
+	SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
+	SITE_CLASS_MOVEOUT_EXPANSION,
+	SITE_CLASS_DESTRUCTOR_SELF,
+})
+
+# Divergence classes (closed set, plan §11.2).
+DIV_C1_RELEASE_WITHOUT_MUST_DROP = "c1_release_without_must_drop"
+DIV_C1_MUST_DROP_WITHOUT_RELEASE = "c1_must_drop_without_release"
+DIV_C1_PATH_DEPENDENT = "c1_path_dependent"
+DIV_C2_INVISIBLE_STAKE = "c2_invisible_stake"
+DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
+DIV_C4_ALLOWLISTED = "c4_allowlisted"
+DIV_PRE_POST_VERDICT_DRIFT = "pre_post_verdict_drift"
+# Hard failure: the L_post snapshot could not be built for this fn.  The
+# "exactly two snapshots" contract (plan §11.2) is broken for that fn —
+# the corpus gate MUST treat any nonzero count as a failed run (the
+# UNCLASSIFIED=0 result is not trustworthy without the L_post half).
+DIV_POST_LEDGER_BUILD_FAILED = "post_ledger_build_failed"
+DIV_UNTAGGED = "untagged"
+DIV_UNCLASSIFIED = "unclassified"
+
+# Anti-telemetry-creep bound: counts are always exact; detailed records
+# are truncated at this many PER CLASS PER FN-AUDIT (a per-corpus-run
+# cap would need cross-process state; the per-fn cap is stricter than
+# the plan's per-run wording and serves the same anti-creep purpose).
+_DETAIL_CAP_PER_CLASS = 50
+
+_AUDIT_ENV = "DRIFT_STRING_ARC_AUDIT"
+_AUDIT_FILE_ENV = "DRIFT_STRING_ARC_AUDIT_FILE"
+
+
+def string_arc_audit_enabled() -> bool:
+	return _os.environ.get(_AUDIT_ENV) in ("1", "true", "True")
+
+
+@dataclass(frozen=True, slots=True)
+class StringStakeEvent:
+	"""One string_arc-emitted refcount instruction (or MoveOut expansion).
+
+	`pre_point` is the (block, index) of the SOURCE instruction being
+	rewritten when the emission happened — the L_pre-queryable anchor.
+	`post_point` is the (block, index) the emitted instruction landed at
+	in the OUTPUT MIR.  Return-boundary emissions use the established
+	site-3 convention `(block, len(original_instructions))` as pre_point.
+	"""
+	fn_name: str
+	kind: str
+	subject: str
+	site_class: str
+	pre_point: Tuple[str, int]
+	post_point: Tuple[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReturnBoundary:
+	"""Marker for one Return-terminator cleanup boundary: the universe
+	C1 quantifies over (string locals × released-vs-skipped)."""
+	point: Tuple[str, int]
+	string_locals: Tuple[str, ...]
+	skipped: Tuple[str, ...]
+
+
+# Process-wide aggregate across all audited functions; flushed once at
+# exit as a single JSON line so corpus tooling can sum per-compile
+# aggregates without parsing per-event records.
+_GLOBAL_AGGREGATE: dict = {}
+_GLOBAL_FLUSH_REGISTERED = False
+
+
+def _audit_stream():
+	path = _os.environ.get(_AUDIT_FILE_ENV)
+	if path:
+		return open(path, "a", encoding="utf-8")
+	return None  # caller falls back to sys.stderr and must not close it
+
+
+def _emit_line(payload: dict) -> None:
+	line = "[drift:string_arc_audit] " + json.dumps(payload, sort_keys=True) + "\n"
+	f = _audit_stream()
+	if f is not None:
+		with f:
+			f.write(line)
+	else:
+		sys.stderr.write(line)
+
+
+def _flush_global_aggregate() -> None:
+	if _GLOBAL_AGGREGATE:
+		_emit_line({"record": "aggregate", **_GLOBAL_AGGREGATE})
+
+
+def _bump(agg: dict, key: str, n: int = 1) -> None:
+	agg[key] = agg.get(key, 0) + n
+
+
+class StringArcAudit:
+	"""Per-function collector + differential classifier.
+
+	Created by `insert_string_arc` ONLY when the audit env is set; every
+	recording call in the pass is guarded on the audit object being
+	non-None, so the disabled path allocates nothing and emits nothing.
+	"""
+
+	def __init__(self, fn_name: str) -> None:
+		self.fn_name = fn_name
+		self.events: list[StringStakeEvent] = []
+		self.return_boundaries: list[_ReturnBoundary] = []
+		self.untagged = 0
+
+	def note(
+		self,
+		kind: str,
+		subject: str,
+		site_class: str,
+		*,
+		pre_point: Tuple[str, int],
+		post_point: Tuple[str, int],
+	) -> None:
+		if site_class not in STRING_ARC_SITE_CLASSES:
+			self.untagged += 1
+			site_class = "UNTAGGED:" + site_class
+		self.events.append(StringStakeEvent(
+			fn_name=self.fn_name,
+			kind=kind,
+			subject=subject,
+			site_class=site_class,
+			pre_point=pre_point,
+			post_point=post_point,
+		))
+
+	def note_return_boundary(
+		self,
+		point: Tuple[str, int],
+		*,
+		string_locals: Iterable[str],
+		skipped: Iterable[str],
+	) -> None:
+		self.return_boundaries.append(_ReturnBoundary(
+			point=point,
+			string_locals=tuple(sorted(string_locals)),
+			skipped=tuple(sorted(skipped)),
+		))
+
+	# ── classification ────────────────────────────────────────────
+
+	def finalize(
+		self,
+		*,
+		l_pre,
+		l_post,
+		needs_drop: NeedsDrop,
+	) -> dict:
+		"""Run the C1-C4 comparisons and emit per-fn JSONL + fold into
+		the process aggregate.  Returns the per-fn aggregate (tests use
+		the return value; production consumers read the JSONL)."""
+		agg: dict = {"fn": self.fn_name, "events": len(self.events)}
+		details: list[dict] = []
+
+		def _detail(cls: str, **kw) -> None:
+			_bump(agg, cls)
+			if sum(1 for d in details if d["class"] == cls) < _DETAIL_CAP_PER_CLASS:
+				details.append({"class": cls, **kw})
+
+		for ev in self.events:
+			_bump(agg, "site_class:" + ev.site_class)
+		if self.untagged:
+			agg[DIV_UNTAGGED] = self.untagged
+
+		if l_pre is not None and l_post is None:
+			# Review finding (B-arch-0 acceptance): a swallowed
+			# build_ledger failure previously skipped the post-snapshot
+			# comparisons SILENTLY.  Hard-count it; the per-fn record is
+			# force-emitted below regardless of the volume guard.
+			_bump(agg, DIV_POST_LEDGER_BUILD_FAILED)
+
+		if l_pre is None:
+			# Pass-local invocation without an attached ledger (legal
+			# per maybe_fresh_ledger's soft contract): events are
+			# counted, differential classification is skipped, and the
+			# aggregate says so rather than silently reporting zero
+			# divergences.
+			agg["skipped_no_ledger"] = 1
+			self._emit(agg, details)
+			return agg
+
+		# C1: scope-exit releases vs ledger verdict, per Return boundary.
+		released_at: dict = {}
+		for ev in self.events:
+			if ev.site_class == SITE_CLASS_SCOPE_EXIT_RELEASE:
+				released_at.setdefault(ev.pre_point, set()).add(ev.subject)
+		for rb in self.return_boundaries:
+			released = released_at.get(rb.point, set())
+			for local in rb.string_locals:
+				verdict = l_pre.verdict_at(rb.point, local, needs_drop=needs_drop(local))
+				raw = l_pre.state_pre(rb.point, local)
+				was_released = local in released
+				if verdict is DropVerdict.PATH_DEPENDENT:
+					_bump(agg, DIV_C1_PATH_DEPENDENT)
+					continue
+				if was_released and verdict is DropVerdict.MUST_NOT_DROP:
+					# C4 allowlist — REVISED interpretation (B-arch-1
+					# stop finding, 2026-07-09): the late site-3
+					# retain-wrap this allowlist was originally written
+					# for is structurally extinct (zero
+					# return_retain_site3 events corpus-wide; plain
+					# returns MOVE via the Phase-4 alias walk).  What
+					# this bucket actually catches is the RELEASE face:
+					# a String local consumed into a RETURN-REACHING
+					# COMPOSITE (ctor/call arg) that the lattice models
+					# as Return-as-move (MOVED_OUT) while string_arc
+					# copies at the value position and correctly
+					# releases the still-owned local — i.e. the
+					# downstream shadow of a C2 invisible stake.
+					# B-arch-1a materializes the call-arg stakes
+					# (CopyValue pre-ledger), shrinking this bucket
+					# where call args were the cause; the
+					# value_position residue goes with that later
+					# slice.  Counted, never failed.
+					if raw is LiveState.MOVED_OUT:
+						_detail(DIV_C4_ALLOWLISTED, kind="return_move_blind_release",
+							local=local, point=list(rb.point))
+					else:
+						_detail(DIV_C1_RELEASE_WITHOUT_MUST_DROP,
+							local=local, point=list(rb.point), raw_state=raw.value)
+				elif (not was_released) and verdict is DropVerdict.MUST_DROP:
+					if local in rb.skipped:
+						# Skip decided by another authority (drop
+						# flags, moved-into-return, destructible
+						# handling) — record separately from a true
+						# missing release.
+						_detail(DIV_C1_MUST_DROP_WITHOUT_RELEASE,
+							local=local, point=list(rb.point), skipped=True)
+					else:
+						_detail(DIV_C1_MUST_DROP_WITHOUT_RELEASE,
+							local=local, point=list(rb.point), skipped=False)
+				else:
+					_bump(agg, "c1_agree")
+				# Both-snapshots check: does the rebuilt L_post still
+				# reach the same verdict at the same boundary?  The
+				# rewrite expands MoveOut into Load+ZeroValue+Store,
+				# which the lattice models as re-initialization — this
+				# is where the two snapshots genuinely diverge.
+				if l_post is not None:
+					post_point = (rb.point[0], _post_block_len(l_post, rb.point[0]))
+					v_post = l_post.verdict_at(post_point, local, needs_drop=needs_drop(local))
+					if v_post is not verdict:
+						_detail(DIV_PRE_POST_VERDICT_DRIFT, local=local,
+							point=list(rb.point), pre=verdict.value, post=v_post.value)
+
+		# C2: every retain is a stake the ledger has no event model for
+		# (StringRetain/StringRelease are string_arc's private
+		# vocabulary).  Operationalization: a RETAIN is a visible stake
+		# only if its subject is a ledger-tracked storage local whose
+		# pre-state at the emission anchor the lattice already models as
+		# consumed/handoff (MOVED_OUT/TOMBSTONED); every other retain is
+		# the invisible-stake inventory B-arch-1 migrates shape by
+		# shape.  return_retain_site3 retains are C4 (documented
+		# divergence), never C2.
+		for ev in self.events:
+			if ev.kind != STAKE_RETAIN:
+				continue
+			if ev.site_class == SITE_CLASS_RETURN_RETAIN_SITE3:
+				_detail(DIV_C4_ALLOWLISTED, kind="return_retain_site3",
+					subject=ev.subject, point=list(ev.pre_point))
+				continue
+			tracked = getattr(l_pre, "tracked_locals", None) or set()
+			if ev.subject in tracked:
+				raw = l_pre.state_pre(ev.pre_point, ev.subject)
+				if raw in (LiveState.MOVED_OUT, LiveState.TOMBSTONED):
+					_bump(agg, "c2_visible_stake")
+					continue
+			_detail(DIV_C2_INVISIBLE_STAKE, subject=ev.subject,
+				site_class=ev.site_class, point=list(ev.pre_point))
+
+		# C3: MoveOut expansions where the local is not Owned (LIVE) in
+		# L_pre at that point.
+		for ev in self.events:
+			if ev.kind != STAKE_MOVEOUT_EXPANSION:
+				continue
+			raw = l_pre.state_pre(ev.pre_point, ev.subject)
+			if raw is LiveState.LIVE:
+				_bump(agg, "c3_moveout_owned")
+			else:
+				_detail(DIV_C3_MOVEOUT_NOT_OWNED, subject=ev.subject,
+					point=list(ev.pre_point), raw_state=raw.value)
+
+		# UNCLASSIFIED: any event whose (kind, site_class) pair no
+		# comparison above consumed and that is not a counted-only
+		# class.  Counted-only (observational, no divergence defined in
+		# the plan): temp_lastuse_release, overwrite_release,
+		# drop_before_overwrite_site4 (site 4 has its own Tier-1
+		# reporter), scope_exit_release (consumed by C1 via
+		# boundaries).
+		_counted_only = {
+			SITE_CLASS_TEMP_LASTUSE_RELEASE,
+			SITE_CLASS_OVERWRITE_RELEASE,
+			SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
+			SITE_CLASS_SCOPE_EXIT_RELEASE,
+		}
+		for ev in self.events:
+			if ev.kind == STAKE_RETAIN or ev.kind == STAKE_MOVEOUT_EXPANSION:
+				continue  # consumed by C2/C3/C4 above
+			if ev.site_class in _counted_only:
+				continue
+			_detail(DIV_UNCLASSIFIED, kind=ev.kind, subject=ev.subject,
+				site_class=ev.site_class, point=list(ev.pre_point))
+
+		self._emit(agg, details)
+		return agg
+
+	def _emit(self, agg: dict, details: list[dict]) -> None:
+		global _GLOBAL_FLUSH_REGISTERED
+		payload = {"record": "fn", **agg}
+		if details:
+			payload["details"] = details
+		# Volume guard (anti-telemetry-creep, plan §11.2): per-fn lines
+		# are emitted only for fns with at least one divergence detail —
+		# clean fns are fully represented in the aggregate counts.  Set
+		# DRIFT_STRING_ARC_AUDIT_VERBOSE=1 to emit every fn (single-file
+		# triage).  A corpus run over ~1k cases × ~1.2k fns/compile would
+		# otherwise produce hundreds of MB of agreeing records.
+		if (
+			details
+			or agg.get(DIV_POST_LEDGER_BUILD_FAILED)
+			or _os.environ.get("DRIFT_STRING_ARC_AUDIT_VERBOSE") in ("1", "true", "True")
+		):
+			_emit_line(payload)
+		for k, v in agg.items():
+			if isinstance(v, int):
+				_bump(_GLOBAL_AGGREGATE, k, v)
+		_bump(_GLOBAL_AGGREGATE, "fns")
+		if not _GLOBAL_FLUSH_REGISTERED:
+			_GLOBAL_FLUSH_REGISTERED = True
+			_atexit.register(_flush_global_aggregate)
+
+
+def _post_block_len(l_post, block_name: str) -> int:
+	"""Length-of-block anchor in the POST ledger's view: the largest
+	instruction index the post ledger has state for, +1 — mirroring the
+	`(block, len(instructions))` return-boundary convention without
+	needing the MIR object here."""
+	# LiveStateMap does not retain the MIR; `post_instr` is keyed by
+	# (block, idx), so probe upward from 0.  Bounded by the real block
+	# length; the loop is cheap (audit-only path).
+	n = 0
+	while (block_name, n) in l_post.post_instr:
+		n += 1
+	return n

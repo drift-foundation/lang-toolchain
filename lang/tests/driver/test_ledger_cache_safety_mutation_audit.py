@@ -45,6 +45,9 @@ SCOPED_FILES = (
 	"lang/driftc/stage2/cleanup_authoring.py",
 	"lang/driftc/stage2/match_cleanup_authoring.py",
 	"lang/driftc/stage2/string_arc.py",
+	# B-arch-1a: the call-arg stake materialization pass mutates
+	# block.instructions and must follow the same dirty-bit discipline.
+	"lang/driftc/stage2/string_stakes.py",
 )
 
 # Each pattern matches a direct MIR mutation shape.  Kept narrow

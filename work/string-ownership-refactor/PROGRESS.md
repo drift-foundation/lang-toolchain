@@ -150,3 +150,48 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   4. stage2 suite: **311 passed**.
   5. Drop-policy battery: **15 passed** (direct String mode-independence intact).
   Handed to maintainer for the full serial gate.
+
+## Scope B log
+
+- 2026-07-09: **B-arch-0 (differential stake reporter) IMPLEMENTED** per plan §11.2.
+  `DRIFT_STRING_ARC_AUDIT=1` gates `StringArcAudit` in `ownership_ledger_reporter.py`
+  (extends the existing reporter, no new framework); `string_arc.py` emission sites tagged
+  with the closed site_class enumeration (deliverable deltas: +temp_lastuse_release,
+  +store_value_retain, +value_position_retain; destructor_self structurally unused).
+  L_pre vs L_post diff classifies into C1-C4 (+pre_post_verdict_drift both-snapshot check);
+  per-fn JSONL (divergent fns only unless VERBOSE) + atexit aggregate; details capped 50/class.
+  NEUTRALITY: seeded off-vs-on IR byte-identical modulo build timestamp (unseeded off-vs-off
+  differs 9.2k lines = pre-existing hash nondeterminism); stage2 suite 318 passed (incl. 5 new
+  pins in test_string_arc_audit_reporter.py). CORPUS (e2e, both rounds: 543 compiles, 1.97M events):
+  **UNTAGGED=0, UNCLASSIFIED=0** — gate criterion met, no classification-model revision needed.
+  Zero leak candidates (c1_must_drop_without_release=0); c2_visible_stake=0 (every emitted
+  retain is ledger-invisible — plan premise empirically confirmed). Inventory + ranked B-arch-1
+  worklist: B-ARCH-0-INVENTORY.md (rank 1 = site-3 return stake). Review report:
+  /tmp/drift-announce/2026-07-09T150000Z-barch0-string-stake-reporter.md. NO fixes made,
+  NO full gate run (per direction). Awaiting B-arch-1 shape decision.
+- 2026-07-09: B-arch-0 review fixes landed: L_post fail-closed (`post_ledger_build_failed`
+  hard-count, force-emitted past the volume guard; pinned — audit pins 6/6), stale docstring +
+  detail-cap comment corrected. **B-arch-1 STOPPED before coding per the explicit stop
+  condition**: corpus has ZERO return_retain_site3 events (shape structurally extinct post
+  Phase 4); C4 = 100% release-face = downstream shadow of C2 ctor/call-arg stakes; eliminating
+  it requires the broad value-position CopyValue migration the scope excluded. Probe: `return
+  p.name` generates zero string_arc events (copy materialized upstream). Inventory §4 ranking
+  REVISED (rank 1 = C2 stake materialization as one mechanism, zeroes C4 as byproduct). Stop
+  report: /tmp/drift-announce/2026-07-09T170000Z-barch1-stop-rescope-return-stake.md.
+  Awaiting re-scope decision.
+- 2026-07-09: **B-arch-1a (call-arg String stakes) IMPLEMENTED + audited.**
+  `stage2/string_stakes.py` materializes by-value String call-arg copy stakes as pre-ledger
+  CopyValue (Call/CallIndirect/CallIface; producer-chain-ends-at-LoadLocal criterion mirrors
+  string_arc's move-vs-retain decision; semantic SCALAR/"String" param predicate per review
+  finding, pkg-boundary pin added). Driver wiring in the cleanup_authoring loop before the
+  per-fn ledger rebuild; mark_ledger_dirty + mutation-audit SCOPED_FILES. Verification:
+  new pins 9/9 (direct+ASAN, move-still-moves, return-reaching+ASAN, indirect, iface,
+  pkg-boundary, audit acceptance); stage2+memcheck 415 passed/1 skipped; om matrices 51/51
+  normal + 51/51 ASAN; pkgb ok; mutation/dirty-bit audits 16/16. CORPUS before/after
+  (FULL definitive run, 543 vs 543 compiles, 647,943 fns both sides): **call_arg_retain
+  58,680 → 0, zero residuals**; c2 114,107 → 55,427 (= value_position 47,803 + store_value
+  7,624 exactly); c4 unchanged (106,620 — call args caused none, consistent with the
+  stop-report analysis); leak candidates / UNTAGGED / UNCLASSIFIED / post_ledger_build_failed
+  all 0; every other counter byte-identical. Events −58,680 exactly. Report:
+  /tmp/drift-announce/2026-07-09T200000Z-barch1a-call-arg-stakes.md. Awaiting review;
+  B-arch-1b (value_position) not started per direction.

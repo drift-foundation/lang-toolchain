@@ -72,6 +72,20 @@ def insert_string_arc(
 	# attached ledger in pass-local testing.  A *stale* ledger still
 	# asserts; that is the bug class we are catching.
 	_ledger = maybe_fresh_ledger(func, "string_arc")
+	# B-arch-0 differential stake audit (Scope B §11.2).  OFF by default:
+	# `_audit is None` unless DRIFT_STRING_ARC_AUDIT=1, and every
+	# recording site below is guarded on that — the disabled path is
+	# behavior-identical (zero instructions, zero diagnostics, zero
+	# allocations beyond this None).  `_audit_point` is the pre-MIR
+	# program point of the instruction currently being rewritten (the
+	# L_pre anchor); Return-boundary emissions use the established
+	# site-3 convention (block, len(original_instructions)).
+	_audit = (
+		_ledger_reporter.StringArcAudit(func.name)
+		if _ledger_reporter.string_arc_audit_enabled()
+		else None
+	)
+	_audit_point: list = [("", 0)]
 	def _ledger_needs_drop(local: str) -> bool:
 		ty = local_types.get(local)
 		if ty is None:
@@ -282,16 +296,34 @@ def insert_string_arc(
 		# from the call return unbalanced.
 		return False
 
-	def _ensure_owned(val: str, owned: Set[str], out: list[M.MInstr]) -> str:
+	def _ensure_owned(
+		val: str,
+		owned: Set[str],
+		out: list[M.MInstr],
+		site_class: str = _ledger_reporter.SITE_CLASS_VALUE_POSITION_RETAIN,
+	) -> str:
 		if not _is_string_value(val):
 			return val
 		if val in use_counts:
 			use_counts[val] -= 1
 			if use_counts[val] == 0 and val in owned and val not in live_out.get(block.name, set()):
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_RELEASE, val,
+						_ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE,
+						pre_point=_audit_point[0],
+						post_point=(block.name, len(out)),
+					)
 				out.append(M.StringRelease(value=val))
 				owned.discard(val)
 				move_only_values.discard(val)
 		tmp = _new_temp()
+		if _audit is not None:
+			_audit.note(
+				_ledger_reporter.STAKE_RETAIN, val, site_class,
+				pre_point=_audit_point[0],
+				post_point=(block.name, len(out)),
+			)
 		out.append(M.StringRetain(dest=tmp, value=val))
 		local_types[tmp] = string_ty
 		owned.add(tmp)
@@ -305,7 +337,7 @@ def insert_string_arc(
 		td = type_table.get(tid)
 		return td.kind is TypeKind.REF
 
-	def _release_local(local: str, out: list[M.MInstr]) -> None:
+	def _release_local(local: str, out: list[M.MInstr], *, site_class: str) -> None:
 		if local not in string_locals:
 			return
 		old = _new_temp()
@@ -314,6 +346,14 @@ def insert_string_arc(
 		out.append(M.ZeroValue(dest=zero, ty=string_ty))
 		local_types[zero] = string_ty
 		out.append(M.StoreLocal(local=local, value=zero))
+		if _audit is not None:
+			# Subject is the STORAGE LOCAL (what C1 quantifies over),
+			# not the loaded temp.
+			_audit.note(
+				_ledger_reporter.STAKE_RELEASE, local, site_class,
+				pre_point=_audit_point[0],
+				post_point=(block.name, len(out)),
+			)
 		out.append(M.StringRelease(value=old))
 		local_types[old] = string_ty
 
@@ -322,7 +362,7 @@ def insert_string_arc(
 		for local in sorted(string_locals):
 			if local in skip:
 				continue
-			_release_local(local, out)
+			_release_local(local, out, site_class=_ledger_reporter.SITE_CLASS_SCOPE_EXIT_RELEASE)
 
 	def _drop_array_local(local: str, out: list[M.MInstr]) -> None:
 		if local not in array_locals:
@@ -857,6 +897,13 @@ def insert_string_arc(
 				move_only_values.discard(val)
 				return
 			if use_counts[val] == 0 and val in owned_values and val not in live_out.get(block.name, set()):
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_RELEASE, val,
+						_ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE,
+						pre_point=_audit_point[0],
+						post_point=(block.name, len(new_instrs)),
+					)
 				new_instrs.append(M.StringRelease(value=val))
 				owned_values.discard(val)
 				move_only_values.discard(val)
@@ -918,6 +965,8 @@ def insert_string_arc(
 			return locals_used
 
 		for _instr_idx, instr in enumerate(block.instructions):
+			if _audit is not None:
+				_audit_point[0] = (block.name, _instr_idx)
 			if isinstance(instr, M.StoreLocal):
 				moved_out_locals.discard(instr.local)
 				explicitly_dropped_locals.discard(instr.local)
@@ -1019,11 +1068,25 @@ def insert_string_arc(
 						emit=_ledger_reporter.stderr_emit,
 					)
 				if _should_drop:
+					if _audit is not None:
+						_audit.note(
+							_ledger_reporter.STAKE_RELEASE, instr.local,
+							_ledger_reporter.SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
+							pre_point=(block.name, _instr_idx),
+							post_point=(block.name, len(new_instrs)),
+						)
 					_drop_destructible_local(instr.local, new_instrs)
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.MoveOut):
 				# Emit load + zero-store, but keep ownership of the moved value.
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_MOVEOUT_EXPANSION, instr.local,
+						_ledger_reporter.SITE_CLASS_MOVEOUT_EXPANSION,
+						pre_point=(block.name, _instr_idx),
+						post_point=(block.name, len(new_instrs)),
+					)
 				new_instrs.append(M.LoadLocal(dest=instr.dest, local=instr.local))
 				local_types[instr.dest] = instr.ty
 				if _is_string_tid(instr.ty):
@@ -1130,13 +1193,13 @@ def insert_string_arc(
 						owned_values.discard(instr.dest)
 
 			if isinstance(instr, M.StoreLocal) and _is_string_tid(local_types.get(instr.local)):
-				_release_local(instr.local, new_instrs)
+				_release_local(instr.local, new_instrs, site_class=_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE)
 				val = instr.value
 				if val in move_only_values or _can_move_owned_once(val):
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs)
+					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
 				continue
@@ -1155,7 +1218,7 @@ def insert_string_arc(
 				# loaded from the slot — `drift_string_release(null)`
 				# is a runtime no-op, so this is safe regardless of
 				# whether the local was previously written.
-				_release_local(instr.local, new_instrs)
+				_release_local(instr.local, new_instrs, site_class=_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE)
 				new_instrs.append(instr)
 				_note_use(instr.ptr, consume=True)
 				continue
@@ -1163,6 +1226,13 @@ def insert_string_arc(
 			if isinstance(instr, M.StoreRef) and _is_string_tid(instr.inner_ty):
 				old = _new_temp()
 				new_instrs.append(M.LoadRef(dest=old, ptr=instr.ptr, inner_ty=instr.inner_ty))
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_RELEASE, old,
+						_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
+						pre_point=(block.name, _instr_idx),
+						post_point=(block.name, len(new_instrs)),
+					)
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
@@ -1170,7 +1240,7 @@ def insert_string_arc(
 					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs)
+					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
 					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
 					_note_use(val, consume=True)
 				continue
@@ -1180,6 +1250,13 @@ def insert_string_arc(
 				new_instrs.append(
 					M.ArrayIndexLoad(dest=old, elem_ty=instr.elem_ty, array=instr.array, index=instr.index)
 				)
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_RELEASE, old,
+						_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
+						pre_point=(block.name, _instr_idx),
+						post_point=(block.name, len(new_instrs)),
+					)
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
@@ -1189,7 +1266,7 @@ def insert_string_arc(
 					)
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs)
+					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
 					new_instrs.append(
 						M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
 					)
@@ -1245,7 +1322,7 @@ def insert_string_arc(
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
-								args.append(_ensure_owned(arg, owned_values, new_instrs))
+								args.append(_ensure_owned(arg, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_VALUE_POSITION_RETAIN))
 								_note_use(arg, consume=True)
 						else:
 							args.append(arg)
@@ -1263,7 +1340,7 @@ def insert_string_arc(
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
-								args.append(_ensure_owned(arg, owned_values, new_instrs))
+								args.append(_ensure_owned(arg, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_VALUE_POSITION_RETAIN))
 								_note_use(arg, consume=True)
 						else:
 							args.append(arg)
@@ -1370,7 +1447,7 @@ def insert_string_arc(
 								args.append(arg)
 								_note_use(arg, consume=True)
 							else:
-								args.append(_ensure_owned(arg, owned_values, new_instrs))
+								args.append(_ensure_owned(arg, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_CALL_ARG_RETAIN))
 								_note_use(arg, consume=True)
 						else:
 							args.append(arg)
@@ -1398,7 +1475,7 @@ def insert_string_arc(
 							args.append(arg)
 							_note_use(arg, consume=True)
 						else:
-							args.append(_ensure_owned(arg, owned_values, new_instrs))
+							args.append(_ensure_owned(arg, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_CALL_ARG_RETAIN))
 							_note_use(arg, consume=True)
 					else:
 						args.append(arg)
@@ -1424,7 +1501,7 @@ def insert_string_arc(
 							args.append(arg)
 							_note_use(arg, consume=True)
 						else:
-							args.append(_ensure_owned(arg, owned_values, new_instrs))
+							args.append(_ensure_owned(arg, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_CALL_ARG_RETAIN))
 							_note_use(arg, consume=True)
 					else:
 						args.append(arg)
@@ -1605,14 +1682,24 @@ def insert_string_arc(
 					)
 					if _verdict is _DropVerdict.MUST_NOT_DROP:
 						skip_cleanup_locals.add(_local)
+			if _audit is not None:
+				# Return-boundary emissions anchor at the established
+				# site-3 convention point.
+				_audit_point[0] = (block.name, len(block.instructions))
 			if val is not None and (_is_string_value(val) or _can_move_creator_return(val)):
 				if val in move_only_values or _can_move_owned_once(val) or _can_move_creator_return(val) or can_move_from_skipped_local:
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs)
+					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_RETURN_RETAIN_SITE3)
 					_note_use(val, consume=True)
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
+			if _audit is not None:
+				_audit.note_return_boundary(
+					(block.name, len(block.instructions)),
+					string_locals=string_locals,
+					skipped=(skip_cleanup_locals & string_locals),
+				)
 			initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
 			# Phase 4 site-3 sub-step 3 — variant zero-tag widening,
 			# now ledger-driven.  The legacy widening used site-3
@@ -1729,6 +1816,22 @@ def insert_string_arc(
 
 		block.instructions = new_instrs
 		mark_ledger_dirty(func, "string_arc.rewrite_block")
+
+	if _audit is not None:
+		# L_post: a fresh ledger over the pass OUTPUT.  Built directly
+		# (never attached) so the driver's ledger-cache sequencing and
+		# dirty-bit state are exactly as in the non-audit path.
+		from .ownership_ledger import build_ledger as _build_ledger
+		try:
+			_l_post = _build_ledger(func, drop_policy=lambda tid: _compute_drop_policy(type_table, tid))
+		except Exception:
+			# Audit must never break a compile (observational contract),
+			# but a missing L_post must never pass silently either:
+			# finalize hard-counts it as post_ledger_build_failed and
+			# force-emits the per-fn record; the corpus gate fails on
+			# any nonzero count (review finding, B-arch-0 acceptance).
+			_l_post = None
+		_audit.finalize(l_pre=_ledger, l_post=_l_post, needs_drop=_ledger_needs_drop)
 
 	return func
 
