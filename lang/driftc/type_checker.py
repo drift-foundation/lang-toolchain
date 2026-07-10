@@ -8630,60 +8630,59 @@ class TypeChecker:
 					inner_ty = type_expr(expr.subject, used_as_value=False)
 					ref_ty = self.type_table.ensure_ref_mut(inner_ty) if expr.is_mut else self.type_table.ensure_ref(inner_ty)
 					return record_expr(expr, ref_ty)
-				# Guardrail: do not materialize `&mut (move x)` into a temp. This would
-				# turn an explicit ownership transfer into an implicit "store then
-				# borrow" pattern, which is a semantic expansion we want to avoid.
-				#
-				# Instead, reject at type-check time with a targeted diagnostic.
-				def _contains_move(node: H.HExpr) -> bool:
+				# Guardrail (narrowed, DriftQuery 2026-07-09): reject borrows
+				# that would alias the moved value ITSELF — turning an explicit
+				# "consume + invalidate" into an implicit "store then borrow"
+				# is a semantic expansion we keep explicit. The predicate walks
+				# only result-forwarding shapes (projections, ternary branches,
+				# copies, unary chains); moves inside call/ctor ARGUMENTS feed
+				# the construction of a fresh result and do NOT trip it —
+				# `&mk(move s)` materializes downstream exactly like
+				# `&mk("x")` (and like auto-borrow already does).
+				def _move_is_borrow_subject(node: H.HExpr) -> bool:
 					if hasattr(H, "HMove") and isinstance(node, getattr(H, "HMove")):
 						return True
-					if isinstance(node, H.HUnary):
-						return _contains_move(node.expr)
-					if isinstance(node, H.HBinary):
-						return _contains_move(node.left) or _contains_move(node.right)
-					if isinstance(node, H.HTernary):
-						return _contains_move(node.cond) or _contains_move(node.then_expr) or _contains_move(node.else_expr)
-					if isinstance(node, H.HCall):
-						return (
-							_contains_move(node.fn)
-							or any(_contains_move(a) for a in node.args)
-							or any(_contains_move(k.value) for k in getattr(node, "kwargs", []) or [])
-						)
-					if isinstance(node, H.HMethodCall):
-						return (
-							_contains_move(node.receiver)
-							or any(_contains_move(a) for a in node.args)
-							or any(_contains_move(k.value) for k in getattr(node, "kwargs", []) or [])
-						)
+					if hasattr(H, "HCopy") and isinstance(node, getattr(H, "HCopy")):
+						return _move_is_borrow_subject(node.subject)
 					if isinstance(node, H.HField):
-						return _contains_move(node.subject)
+						return _move_is_borrow_subject(node.subject)
 					if isinstance(node, H.HIndex):
-						return _contains_move(node.subject) or _contains_move(node.index)
-					if isinstance(node, getattr(H, "HPlaceExpr", ())):
-						# Canonical places cannot contain moves in their base/projections.
-						return False
-					if isinstance(node, H.HArrayLiteral):
-						return any(_contains_move(e) for e in node.elements)
-					if isinstance(node, H.HExceptionInit):
-						return any(_contains_move(a) for a in node.pos_args) or any(_contains_move(k.value) for k in node.kw_args)
-					# NOTE: body scan only checks HExprStmt, so moves inside HLet/HAssign
-					# within block-expression bodies are not detected. Shared limitation
-					# across HTryExpr, HUnsafeExpr, and any future block-expression form.
-					if isinstance(node, getattr(H, "HTryExpr", ())):
-						if _contains_move(node.attempt):
+						return _move_is_borrow_subject(node.subject)
+					if isinstance(node, H.HUnary):
+						return _move_is_borrow_subject(node.expr)
+					if isinstance(node, H.HTernary):
+						return _move_is_borrow_subject(node.then_expr) or _move_is_borrow_subject(node.else_expr)
+					# Block-expression RESULT SLOTS forward (see the
+					# stage1 predicate's twin comment): match/try/unsafe
+					# results and casts walk; HResultOk/calls/ctors stay
+					# terminal fresh producers.
+					if hasattr(H, "HMatchExpr") and isinstance(node, getattr(H, "HMatchExpr")):
+						return any(
+							arm.result is not None and _move_is_borrow_subject(arm.result)
+							for arm in node.arms
+						)
+					if hasattr(H, "HTryExpr") and isinstance(node, getattr(H, "HTryExpr")):
+						if _move_is_borrow_subject(node.attempt):
 							return True
-						for arm in node.arms:
-							if any(_contains_move(s.expr) for s in arm.block.statements if isinstance(s, H.HExprStmt)):
-								return True
-							if arm.result is not None and _contains_move(arm.result):
-								return True
-						return False
-					if isinstance(node, getattr(H, "HUnsafeExpr", ())):
-						return any(_contains_move(s.expr) for s in node.body.statements if isinstance(s, H.HExprStmt)) or _contains_move(node.result)
+						return any(
+							arm.result is not None and _move_is_borrow_subject(arm.result)
+							for arm in node.arms
+						)
+					if hasattr(H, "HUnsafeExpr") and isinstance(node, getattr(H, "HUnsafeExpr")):
+						return _move_is_borrow_subject(node.result)
+					if hasattr(H, "HCast") and isinstance(node, getattr(H, "HCast")):
+						return _move_is_borrow_subject(node.value)
 					return False
 
-				if expr.is_mut and _contains_move(expr.subject):
+				# DECISION (2026-07-09 review): `&mut mk(move s)` is NOT
+				# special-cased — like every `&mut <rvalue>`, it is
+				# temp-materialized by stage1 `borrow_materialize` (its
+				# documented v1 design; `&mut mk("x")` already compiled this
+				# way) BEFORE this checker sees it as a place. Only the
+				# direct `&mut (move x)` shape gets this targeted rejection;
+				# the addressable-place rejection below remains the backstop
+				# for unmaterialized non-place forms.
+				if expr.is_mut and _move_is_borrow_subject(expr.subject):
 					diagnostics.append(
 						_tc_diag(
 							message="cannot take &mut of an expression containing move; assign to a var first",
@@ -8717,6 +8716,23 @@ class TypeChecker:
 						diagnostics.append(
 							_tc_diag(
 								message="borrow operand must be an addressable place in v1 (local/param or deref place)",
+								severity="error",
+								span=borrow_span,
+							)
+						)
+						return record_expr(expr, self._unknown)
+					if _move_is_borrow_subject(expr.subject):
+						# Direct `&(move x)` (shared): the borrow would alias
+						# the moved-out value. This realizes the contract the
+						# stage1 materializer guardrail always assumed ("the
+						# typed checker rejects these with a targeted
+						# diagnostic") — previously only the `&mut` form was
+						# covered and shared borrows fell through to a
+						# location-less generic rejection in the borrow
+						# checker (DriftQuery 2026-07-09).
+						diagnostics.append(
+							_tc_diag(
+								message="cannot borrow an expression that moves the borrowed value; bind it to a `val` first",
 								severity="error",
 								span=borrow_span,
 							)

@@ -8615,8 +8615,14 @@ def _diag_to_json(diag: Diagnostic, phase: str, source: Path) -> dict:
 	if file is None or (isinstance(file, str) and file.startswith("<") and file.endswith(">")):
 		# No span file (or a normalized placeholder from a harness relabel):
 		# fall back to the primary source path so the JSON `file` field
-		# stays useful for real compiles.
-		file = str(source) if source is not None else "<source>"
+		# stays useful for real compiles — but ONLY for located
+		# diagnostics. A fully spanless diagnostic keeps `file: null`
+		# rather than pointing confidently at the wrong file
+		# (DriftQuery 2026-07-09).
+		if line is not None:
+			file = str(source) if source is not None else "<source>"
+		else:
+			file = None
 	phase = getattr(diag, "phase", None) or phase
 	notes = list(getattr(diag, "notes", []) or [])
 	return {
@@ -8646,12 +8652,20 @@ def _diag_label(diag: "Diagnostic | None", source: "Path | str | None") -> str:
 	are treated as absent so a real CLI compile never renders them.
 	"""
 	span_file = None
+	span_line = None
 	if diag is not None and getattr(diag, "span", None) is not None:
 		span_file = getattr(diag.span, "file", None)
+		span_line = getattr(diag.span, "line", None)
 	if span_file and not (span_file.startswith("<") and span_file.endswith(">")):
 		return str(span_file)
-	if source is not None:
+	# Primary-source fallback ONLY for located diagnostics missing a file
+	# label (single-file flows). A fully spanless diagnostic must never
+	# masquerade as the first source file — that misattribution cost
+	# DriftQuery a real debugging session (2026-07-09).
+	if span_line is not None and source is not None:
 		return str(source)
+	if span_line is None:
+		return "<unknown location>"
 	return _source_label()
 
 
@@ -10378,7 +10392,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			_emit_compile_json(payload)
 		else:
 			for d in parse_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -11452,7 +11466,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json(payload)
 			else:
 				for d in _pkg_capture_diags:
-					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 					print(
@@ -12280,7 +12294,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			return 1
 		else:
 			for d in type_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
@@ -12324,7 +12338,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			_emit_compile_json(payload)
 		else:
 			for d in lambda_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -12402,7 +12416,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json(payload)
 			else:
 				for d in _pkg_proj_diags:
-					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}", file=sys.stderr)
 			return 1
 
@@ -12441,7 +12455,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			_emit_compile_json(payload)
 		else:
 			for d in checked.diagnostics:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -12556,7 +12570,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			_emit_compile_json(payload)
 		else:
 			for d in trait_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -12576,7 +12590,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			return 1
 		else:
 			for d in intrinsic_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -12612,7 +12626,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			return 1
 		else:
 			for d in borrow_diags:
-				loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+				loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 				_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 				print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 		return 1
@@ -12703,7 +12717,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json(payload)
 			else:
 				for d in checked_pkg.diagnostics:
-					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
@@ -13473,7 +13487,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json(payload)
 			else:
 				for d in checked_src.diagnostics:
-					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1
@@ -13706,7 +13720,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				_emit_compile_json(payload)
 			else:
 				for d in _checked.diagnostics:
-					loc = f"{getattr(d.span, 'line', '?')}:{getattr(d.span, 'column', '?')}" if d.span else "?:?"
+					loc = f"{d.span.line if d.span and d.span.line is not None else '?'}:{d.span.column if d.span and d.span.column is not None else '?'}"
 					_code_suffix = f" [{d.code}]" if getattr(d, "code", None) else ""
 					print(f"{_diag_label(d, source_path)}:{loc}: {d.severity}: {d.message}{_code_suffix}", file=sys.stderr)
 			return 1

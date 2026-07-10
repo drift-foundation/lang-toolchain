@@ -204,9 +204,13 @@ class BorrowMaterializeRewriter:
 				projections=[*base_place.projections, H.HPlaceDeref()],
 				loc=getattr(expr, "loc", base_place.loc),
 			)
-		# Rvalue base: caller already guarded against explicit `move`;
-		# defend here too for direct entries from sub-recursion.
-		if self._contains_move(expr):
+		# Rvalue base defence — same NARROW question as the HBorrow-arm
+		# guardrail: lift only refuses when the base IS the moved value
+		# (storing `move x` into a temp would silently turn an explicit
+		# consume into store-then-borrow). A call/ctor base whose
+		# ARGUMENTS move (`mk(move s)`) lifts normally: the move consumes
+		# into the construction; the temp holds the fresh result.
+		if self._move_would_be_borrowed(expr):
 			return None
 		tmp = self._fresh("__tmp_borrow_mut" if is_mut else "__tmp_borrow")
 		return (
@@ -222,76 +226,60 @@ class BorrowMaterializeRewriter:
 			H.HPlaceExpr(base=H.HVar(tmp), projections=[], loc=getattr(expr, "loc", Span())),
 		)
 
-	def _contains_move(self, expr: H.HExpr) -> bool:
+	def _move_would_be_borrowed(self, expr: H.HExpr) -> bool:
 		"""
-		Conservatively detect explicit `move` inside an expression.
+		True iff materializing `&expr` would create a borrow that ALIASES a
+		value the expression explicitly moves — i.e. the moved value IS the
+		borrow subject: direct `&(move x)`, or the move reached through
+		result-forwarding shapes only (field/index projections over it,
+		ternary branches, copies, unary chains).
 
-		We use this to avoid materializing `&(move x)` / `&mut (move x)` into a
-		temp. Doing so would implicitly change "consume + invalidate" into "store
-		then borrow", which is a semantic expansion we want to keep explicit.
+		This is the SPLIT move predicate (DriftQuery 2026-07-09): the old
+		whole-subtree contains-move gate (now REMOVED) also fired on moves
+		inside call/ctor ARGUMENTS (`&mk(move s)`), but those moves feed
+		the CONSTRUCTION of a fresh result — materializing that result
+		into a temp changes nothing about the move's semantics, and is
+		exactly what auto-borrow already does for the same expression.
+		Calls, method calls, ctors, array literals and binary operators
+		therefore TERMINATE the walk (fresh-value producers). Both the
+		HBorrow guardrail and the `_split_lift_place_chain` rvalue-base
+		defence ask this same narrow question.
 		"""
 		if hasattr(H, "HMove") and isinstance(expr, getattr(H, "HMove")):
 			return True
 		if hasattr(H, "HCopy") and isinstance(expr, getattr(H, "HCopy")):
-			return self._contains_move(expr.subject)
-		if isinstance(expr, H.HUnary):
-			return self._contains_move(expr.expr)
-		if isinstance(expr, H.HBinary):
-			return self._contains_move(expr.left) or self._contains_move(expr.right)
-		if isinstance(expr, H.HTernary):
-			return (
-				self._contains_move(expr.cond)
-				or self._contains_move(expr.then_expr)
-				or self._contains_move(expr.else_expr)
-			)
-		if isinstance(expr, H.HCall):
-			return (
-				self._contains_move(expr.fn)
-				or any(self._contains_move(a) for a in expr.args)
-				or any(self._contains_move(k.value) for k in getattr(expr, "kwargs", []) or [])
-			)
-		if isinstance(expr, getattr(H, "HInvoke", ())):
-			return (
-				self._contains_move(expr.callee)
-				or any(self._contains_move(a) for a in expr.args)
-				or any(self._contains_move(k.value) for k in getattr(expr, "kwargs", []) or [])
-			)
-		if isinstance(expr, H.HMethodCall):
-			return (
-				self._contains_move(expr.receiver)
-				or any(self._contains_move(a) for a in expr.args)
-				or any(self._contains_move(k.value) for k in getattr(expr, "kwargs", []) or [])
-			)
+			return self._move_would_be_borrowed(expr.subject)
 		if isinstance(expr, H.HField):
-			return self._contains_move(expr.subject)
+			return self._move_would_be_borrowed(expr.subject)
 		if isinstance(expr, H.HIndex):
-			return self._contains_move(expr.subject) or self._contains_move(expr.index)
-		if isinstance(expr, getattr(H, "HPlaceExpr", ())):
-			return False
-		if isinstance(expr, H.HArrayLiteral):
-			return any(self._contains_move(e) for e in expr.elements)
-		if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
-			return any(self._contains_move(e.key) or self._contains_move(e.value) for e in expr.entries)
-		if isinstance(expr, H.HExceptionInit):
-			return any(self._contains_move(a) for a in expr.pos_args) or any(
-				self._contains_move(k.value) for k in expr.kw_args
+			return self._move_would_be_borrowed(expr.subject)
+		if isinstance(expr, H.HUnary):
+			return self._move_would_be_borrowed(expr.expr)
+		if isinstance(expr, H.HTernary):
+			return self._move_would_be_borrowed(expr.then_expr) or self._move_would_be_borrowed(expr.else_expr)
+		# Block-expression RESULT SLOTS forward their value: a `move x`
+		# in a match/try/unsafe result position makes the moved value the
+		# borrow subject just as surely as direct `&(move x)` (review
+		# finding 2, 2026-07-10). Casts are treated as forwarding
+		# CONSERVATIVELY: rejecting `&(cast<T>(move x))` errs on the
+		# explicit-consume side. `HResultOk` (and calls/ctors/binaries)
+		# stay terminal — they CONSTRUCT a fresh value from the move.
+		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+			return any(
+				arm.result is not None and self._move_would_be_borrowed(arm.result)
+				for arm in expr.arms
 			)
-		# NOTE: body scan only checks HExprStmt, so moves inside HLet/HAssign
-		# within block-expression bodies are not detected. Shared limitation
-		# across HTryExpr, HUnsafeExpr, and any future block-expression form.
-		if isinstance(expr, getattr(H, "HTryExpr", ())):
-			if self._contains_move(expr.attempt):
+		if hasattr(H, "HTryExpr") and isinstance(expr, getattr(H, "HTryExpr")):
+			if self._move_would_be_borrowed(expr.attempt):
 				return True
-			for arm in expr.arms:
-				if any(
-					self._contains_move(s.expr) for s in arm.block.statements if isinstance(s, H.HExprStmt)
-				):
-					return True
-				if arm.result is not None and self._contains_move(arm.result):
-					return True
-			return False
-		if isinstance(expr, getattr(H, "HUnsafeExpr", ())):
-			return any(self._contains_move(s.expr) for s in expr.body.statements if isinstance(s, H.HExprStmt)) or self._contains_move(expr.result)
+			return any(
+				arm.result is not None and self._move_would_be_borrowed(arm.result)
+				for arm in expr.arms
+			)
+		if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
+			return self._move_would_be_borrowed(expr.result)
+		if hasattr(H, "HCast") and isinstance(expr, getattr(H, "HCast")):
+			return self._move_would_be_borrowed(expr.value)
 		return False
 
 	def _rewrite_expr(self, expr: H.HExpr) -> Tuple[List[H.HStmt], H.HExpr]:
@@ -393,10 +381,13 @@ class BorrowMaterializeRewriter:
 			return pfx_c + pfx_t + pfx_e, H.HTernary(cond=cond, then_expr=then, else_expr=els, loc=getattr(expr, "loc", Span()))
 		if isinstance(expr, H.HBorrow):
 			pfx, subj = self._rewrite_expr(expr.subject)
-			# Guardrail: do not materialize borrows of expressions that contain an
-			# explicit `move`. The typed checker is responsible for rejecting these
-			# with a targeted diagnostic.
-			if self._contains_move(subj):
+			# Guardrail (narrowed, DriftQuery 2026-07-09): only skip
+			# materialization when the borrow would alias the moved value
+			# ITSELF (`&(move x)` and projections over it) — the type
+			# checker rejects that shape with a targeted diagnostic (both
+			# `&` and `&mut` forms). Moves inside call/ctor arguments
+			# construct the borrowed RESULT and materialize normally.
+			if self._move_would_be_borrowed(subj):
 				return pfx, replace(expr, subject=subj)
 			# Lift the deepest rvalue base of any HField/HIndex/HUnary(DEREF) chain
 			# into a hidden temp, keeping the projections as part of the borrow's
