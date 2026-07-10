@@ -287,3 +287,18 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   hardening proposed: retire the C4 allowlist into a failure class. Report:
   /tmp/drift-announce/2026-07-11T030000Z-release-elision-checkpoint.md. Decisions requested:
   Strings-now/Arrays-follow-up scope; PATH_DEPENDENT disposition; allowlist retirement.
+- 2026-07-11: **Release-elision IMPLEMENTED + audited.** Prove-first items resolved BEFORE
+  code: DropPolicy(String).needs_drop=True (no Copy-shortcut hazard — cheap-copy but
+  drop-needing) and String tombstone ≡ _emit_zero_value (TOMBSTONED in elide set, proven).
+  One guarded loop in string_arc's Return branch (strings analog of the destructible
+  consultation; no-ledger → legacy; PATH_DEPENDENT/arrays/site-4/C3 untouched). CORPUS:
+  scope_exit_release 259,351 → 40,216 (−219,135 = 136,407+82,728 EXACTLY, 84.5%);
+  **c1_release_without_must_drop 0; C4 0 (retirement condition met — held for acceptance
+  per decision 3)**; c1_agree +219,135 exactly; path_dependent 11,951 + C3 11,441 +
+  drift 28,265 byte-identical (drift characterized: modeling artifact independent of
+  emission — the clean B-repr(B5) input); gates 0. HISTORICAL BREAKERS 4/4 under valgrind
+  (test_pkg_map_literal_string_leak — the 0.27.145 killer — now green with the consultation
+  live: the thesis is empirical). Pins 10/10 (incl. live-at-exit leak-direction valgrind
+  pin + mem.replace tombstone valgrind pin); batteries 461/1 skipped; matrices 51/51+51/51.
+  Report: /tmp/drift-announce/2026-07-11T060000Z-release-elision-implemented.md. Awaiting
+  acceptance; C4-allowlist retirement staged as immediate follow-up.

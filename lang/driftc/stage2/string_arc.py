@@ -1692,6 +1692,46 @@ def insert_string_arc(
 				else:
 					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_RETURN_RETAIN_SITE3)
 					_note_use(val, consume=True)
+			# RELEASE ELISION (2026-07-11 slice; B-arch-1 prerequisite):
+			# String locals whose return-boundary ledger verdict is
+			# MUST_NOT_DROP are elided from the scope-exit release sweep.
+			# This is the strings analog of the Phase 4 destructible
+			# consultation above, unblocked by B-arch-1: with every
+			# copy-stake ledger-visible (C2 = 0), the 0.27.145 failure
+			# class — a WRONG MOVED_OUT verdict on a retain-wrapped
+			# return source — is structurally gone, and every
+			# MUST_NOT_DROP string slot at this boundary holds ZEROED
+			# bytes at runtime (UNINIT: never written on the path;
+			# MOVED_OUT: the MoveOut expansion zero-stores; TOMBSTONED:
+			# `_emit_tombstone_value` for String IS `_emit_zero_value`,
+			# proven 2026-07-11) — the elided release was a null-safe
+			# no-op quad (Load+Zero+Store+Release).
+			#
+			# Guardrails (review-pinned):
+			# - DropPolicy-backed needs_drop axis (String is
+			#   needs_drop=True despite structural Copy — cheap-copy,
+			#   NOT drop-free; verified against the Copy-shortcut
+			#   hazard before landing).
+			# - PATH_DEPENDENT keeps today's unconditional null-safe
+			#   release (no string drop-flag machinery in this slice).
+			# - No attached ledger → legacy behavior (loop guarded).
+			# - Arrays, site 4/drop_before_overwrite, and C3
+			#   flag-guarded cleanup MoveOuts untouched.
+			if _ledger is not None:
+				_string_needs_drop = bool(
+					_compute_drop_policy(type_table, string_ty).needs_drop
+				)
+				_ledger_point_str = (block.name, len(block.instructions))
+				for _sl in sorted(string_locals):
+					if _sl in skip_cleanup_locals:
+						continue
+					_sv = _ledger.verdict_at(
+						_ledger_point_str,
+						_sl,
+						needs_drop=_string_needs_drop,
+					)
+					if _sv is _DropVerdict.MUST_NOT_DROP:
+						skip_cleanup_locals.add(_sl)
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
 			if _audit is not None:
