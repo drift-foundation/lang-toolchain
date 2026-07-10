@@ -211,3 +211,39 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   characterized: field-extraction producers (throw_self envelope builders, JSON cursor field
   paths) — the documented conservative boundary; next-slice candidate. Report:
   /tmp/drift-announce/2026-07-09T230000Z-barch1b-value-position-stakes.md. Awaiting review.
+- 2026-07-10: **B-arch-1c CHECKPOINT delivered (STOP before migration, per direction).**
+  Baseline on merged 0.33.78+certified branch: byte-identical to after-1b on EVERY counter
+  (value_position 20,103; C4 82,728; gates 0) — merge provably inert for B-arch. PREMISE
+  CORRECTION: plain user field reads (self.field/obj.name/nested/ref-param/pkg) produce ZERO
+  value_position residuals — probes p1-p5 all clean; copies materialize upstream of
+  string_arc. Real residual producers (instrumented histogram, reverted after):
+  StructGetField ~8.8k (synthesized Throw::throw_self envelope builders + StrictJsonCursor
+  internals), cross-block/param-like ~5.8k, LoadRef/AddrOf* ~1.3k, trace Exc/ArrayDup.
+  Safety argument: CopyValue at the exact point of today's late retain (view stays view;
+  no new invalidation window vs 0.33.58 class; move decisions cannot flip — field-read dests
+  are never movable today). Acceptance targets + regression plan (incl. Valgrind row for
+  arr[i].name) in the checkpoint report:
+  /tmp/drift-announce/2026-07-10T170000Z-barch1c-checkpoint-field-producers.md.
+  Open impl question flagged: bare-storage "param-like" operands (one probe resolves it).
+  Awaiting approval to implement.
+
+- 2026-07-10: **B-arch-1c (MIR field/view producer stakes) IMPLEMENTED + audited.**
+  Fn-wide producer resolution (SSA-sound) + `_is_string_value_view` rule per review
+  guardrails (StructGetField String field_ty, LoadRef String inner_ty, LoadField String
+  dest, bare storage operands; AddrOf* never staked; VariantGetField EXCLUDED per review —
+  dest already owned, removal corpus-neutral; HResultOk/fresh terminal; store_value
+  untouched). CORPUS (543/647,943 identical universe):
+  **value_position_retain 20,103 → 0** (events −20,103 exactly; residual itemization
+  vacuous); c2 = store_value 7,624 exactly; ALL hard gates 0; every other counter
+  byte-identical. C4 UNCHANGED — conjecture corrected: remaining 82,728 are real-move
+  shadows (no-op releases of zeroed slots at multi-path joins), release-elision territory.
+  Pins 11/11 (throw_self+ASAN, cursor-loop+ASAN, ref-path+ASAN, arr[i].name +ASAN+VALGRIND
+  definitely-lost-0, audit acceptance); batteries 445 passed/1 skipped; matrices 51/51+51/51.
+  Report: /tmp/drift-announce/2026-07-10T210000Z-barch1c-field-view-stakes.md. Awaiting
+  review; store_value (1d) and release-elision slices not started.
+
+- 2026-07-10: 1c review round — BLOCKING finding fixed: VariantGetField removed from the
+  view set (dest already owned per codegen/string_arc/ledger contracts, now cited at the
+  site). Post-removal: 36/36 stake pins; corpus BYTE-IDENTICAL to pre-removal AFTER
+  (vp_retain 0, c2=store 7,624, C4 82,728, gates 0) — no VariantGetField operand was ever
+  staked; removal is contract hygiene, zero residuals to itemize.

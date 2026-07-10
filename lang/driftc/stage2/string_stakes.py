@@ -42,15 +42,38 @@ already implies the operand is a String in a by-value position.
 `store_value_retain` (StoreLocal/StoreRef/ArrayIndexStore values)
 remains a later slice.
 
+B-arch-1c extends the PRODUCER side: the residual after 1a/1b was not
+surface field syntax (user `self.field`/`obj.name` copies materialize
+upstream of string_arc — checkpoint-probed) but MIR FIELD/VIEW
+producers, dominated by `StructGetField` inside compiler-synthesized
+`Throw::throw_self` envelope builders and stdlib cursor internals.
+The candidate rule generalizes from "producer is LoadLocal of a String
+local" to "producer is a PROVEN semantically-String VALUE VIEW that
+string_arc would retain today": LoadLocal, StructGetField with a
+String field_ty, LoadRef with a String inner_ty, LoadField whose dest
+is typed String, and bare storage operands (params/locals referenced
+directly as SSA ids). `VariantGetField` is NOT in the set — its dest
+is already owned (codegen retains at extraction; the ledger marks the
+field moved-out), so string_arc moves it. Producer
+identity is resolved FN-WIDE (sound under SSA single-assignment);
+AddrOfField/AddrOfArrayElem and other address producers are NOT
+staked — an address is not a String value — and remain itemized
+residuals, per the 1c review guardrails.
+
 DECISION CRITERION — mirror `string_arc`, copy only where it would
-RETAIN: string_arc moves an arg iff it is an owned single-use value
-(creator results: ConstString/StringConcat/StringFrom*/StringRetain/
-CopyValue dests; MoveOut dests are move-only). It retains iff the arg's
-producer chain (through AssignSSA) ends at a plain `LoadLocal` — a
-borrowed view of a still-owned local. We materialize exactly that case.
-Args with cross-block producers or non-load producers are LEFT ALONE
-(string_arc keeps handling them; they surface as explainable C2
-residuals in the audit rather than risk a behavior change here).
+RETAIN: string_arc moves an operand iff it is an owned single-use
+value (creator results: ConstString/StringConcat/StringFrom*/
+StringRetain/CopyValue dests; MoveOut dests are move-only;
+VariantGetField dests are owned at extraction). It retains iff the
+operand's producer chain (through AssignSSA, resolved FN-WIDE — the
+pre-1c per-block map made cross-block operands silent residuals) ends
+at a PROVEN semantically-String VALUE VIEW: a plain `LoadLocal`, a
+`StructGetField`/`LoadField` field read, a `LoadRef` through a String
+reference, or a bare storage operand — a borrowed view of still-owned
+storage. We materialize exactly those cases (`_is_string_value_view`).
+Operands whose producer is anything else — address producers, unknown
+shapes — are left to string_arc and surface as itemized C2 residuals
+in the audit rather than risk a behavior change here.
 """
 
 from __future__ import annotations
@@ -72,9 +95,13 @@ def materialize_call_arg_stakes(
 	type_table: TypeTable,
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> bool:
-	"""Insert `CopyValue` stakes for by-value String call args whose
-	producer chain ends at a plain LoadLocal. Returns True if the MIR
-	was mutated (and marks the ledger dirty per the cache contract)."""
+	"""Insert `CopyValue` stakes for String operands at call-argument
+	and value positions whose producer chain resolves (fn-wide, through
+	AssignSSA) to a PROVEN semantically-String VALUE VIEW — see
+	`_is_string_value_view`: LoadLocal, StructGetField, LoadRef,
+	LoadField, bare storage operands; NOT VariantGetField (already
+	owned) and never address producers. Returns True if the MIR was
+	mutated (and marks the ledger dirty per the cache contract)."""
 	string_ty = type_table.ensure_string()
 
 	def _param_is_string(ty_id: TypeId) -> bool:
@@ -111,6 +138,51 @@ def materialize_call_arg_stakes(
 		ty = local_types.get(name)
 		return ty is not None and _param_is_string(ty)
 
+	# B-arch-1c: FN-WIDE producer map. Sound under SSA — every value id
+	# has at most one defining instruction, so resolution does not
+	# depend on block order. (The pre-1c per-block map made cross-block
+	# operands silent residuals; see the revised comment at the walk.)
+	fn_producers: Dict[str, M.MInstr] = {}
+	for _blk in func.blocks.values():
+		for _ins in _blk.instructions:
+			_d = getattr(_ins, "dest", None)
+			if isinstance(_d, str):
+				fn_producers[_d] = _ins
+	storage_names = set(func.params) | set(func.locals)
+
+	def _is_string_value_view(prod: "M.MInstr | None", alias: str) -> bool:
+		"""True iff `alias` (with defining instr `prod`, possibly None)
+		is a PROVEN semantically-String VALUE VIEW — a borrowed alias
+		string_arc would retain at a staked position today. Address
+		producers (AddrOfField/AddrOfArrayElem/...) never qualify: an
+		address is not a String value (1c guardrail); unknown shapes
+		stay residual and are itemized by the audit."""
+		if prod is None:
+			# Bare storage operand: a param/local referenced directly
+			# as an SSA id (no defining instruction fn-wide). This is
+			# the LoadLocal-equivalent direct storage read.
+			return alias in storage_names and _local_is_string(alias)
+		if isinstance(prod, M.LoadLocal):
+			return _local_is_string(prod.local)
+		if isinstance(prod, M.StructGetField):
+			fty = getattr(prod, "field_ty", None)
+			return fty is not None and _param_is_string(fty)
+		# `VariantGetField` is deliberately NOT a view (review finding,
+		# 2026-07-10): its String dest is ALREADY OWNED — codegen lowers
+		# it as load + drift_string_retain (string_arc documents the
+		# match-binder extra-retain leak that treating it as borrowed
+		# caused), and the ledger marks the variant field moved-out
+		# (by-value extraction). string_arc MOVES it; staking it would
+		# add a duplicate retain. It stays terminal with the other
+		# owned/fresh producers.
+		if isinstance(prod, M.LoadRef):
+			ity = getattr(prod, "inner_ty", None)
+			return ity is not None and _param_is_string(ity)
+		if isinstance(prod, M.LoadField):
+			dty = local_types.get(prod.dest)
+			return dty is not None and _param_is_string(dty)
+		return False
+
 	# B-arch-1b value positions: (node type, operand attr, is_list).
 	_VALUE_POSITIONS: tuple = (
 		(M.ConstructStruct, "args", True),
@@ -129,31 +201,28 @@ def materialize_call_arg_stakes(
 	changed = False
 	stake_counter = 0
 	for block in func.blocks.values():
-		# Within-block producer map for the AssignSSA→LoadLocal chain
-		# resolution. Cross-block SSA values simply have no entry and
-		# are left alone (conservative residual).
-		producers: Dict[str, M.MInstr] = {}
+		# Producer resolution is FN-WIDE (B-arch-1c) via `fn_producers`;
+		# newly inserted CopyValues register there too so later operands
+		# resolve them as owned (terminal) producers.
 		new_instrs: list[M.MInstr] = []
 
-		def _resolve_load(arg: str) -> Optional[M.LoadLocal]:
+		def _resolve_load(arg: str) -> bool:
 			"""The producer-chain criterion shared by call args and
-			value positions: follow AssignSSA to the producer; a stake
-			is materialized only for a plain LoadLocal of a
-			semantically-String local (mirrors string_arc's
-			move-vs-retain decision — creators/MoveOut dests move)."""
+			value positions: follow AssignSSA fn-wide to the producer;
+			a stake is materialized only for a PROVEN String value view
+			(see `_is_string_value_view`) — mirroring string_arc's
+			move-vs-retain decision: creators/MoveOut/call-result dests
+			move and stay terminal; views retain and are staked."""
 			alias = arg
 			seen = 0
 			while seen < 64:
-				prod = producers.get(alias)
+				prod = fn_producers.get(alias)
 				if isinstance(prod, M.AssignSSA):
 					alias = prod.src
 					seen += 1
 					continue
 				break
-			prod = producers.get(alias)
-			if isinstance(prod, M.LoadLocal) and _local_is_string(prod.local):
-				return prod
-			return None
+			return _is_string_value_view(fn_producers.get(alias), alias)
 
 		def _stake(arg: str, anchor: M.MInstr) -> str:
 			nonlocal stake_counter, changed
@@ -166,7 +235,7 @@ def materialize_call_arg_stakes(
 			if hasattr(anchor, "span"):
 				setattr(copy, "span", getattr(anchor, "span"))
 			new_instrs.append(copy)
-			producers[tmp] = copy
+			fn_producers[tmp] = copy
 			local_types[tmp] = string_ty
 			changed = True
 			return tmp
@@ -182,7 +251,7 @@ def materialize_call_arg_stakes(
 						not _param_is_string(ty_id)
 						or _param_is_ref(ty_id)
 						or not isinstance(arg, str)
-						or _resolve_load(arg) is None
+						or not _resolve_load(arg)
 					):
 						new_args.append(arg)
 						continue
@@ -202,14 +271,14 @@ def materialize_call_arg_stakes(
 						ops = list(getattr(instr, attr) or [])
 						pos_changed = False
 						for i, op in enumerate(ops):
-							if isinstance(op, str) and _resolve_load(op) is not None:
+							if isinstance(op, str) and _resolve_load(op):
 								ops[i] = _stake(op, instr)
 								pos_changed = True
 						if pos_changed:
 							replaced = _dc_replace(instr, **{attr: ops})
 					else:
 						op = getattr(instr, attr, None)
-						if isinstance(op, str) and _resolve_load(op) is not None:
+						if isinstance(op, str) and _resolve_load(op):
 							replaced = _dc_replace(instr, **{attr: _stake(op, instr)})
 					break
 			if replaced is not None:
@@ -218,11 +287,11 @@ def materialize_call_arg_stakes(
 				new_instrs.append(replaced)
 				dest = getattr(replaced, "dest", None)
 				if isinstance(dest, str):
-					producers[dest] = replaced
+					fn_producers[dest] = replaced
 				continue
 			dest = getattr(instr, "dest", None)
 			if isinstance(dest, str):
-				producers[dest] = instr
+				fn_producers[dest] = instr
 			new_instrs.append(instr)
 		block.instructions = new_instrs
 	if changed:

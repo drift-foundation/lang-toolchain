@@ -120,13 +120,18 @@ PROGRESS (2026-07-09): **B-arch-1a DONE** — call_arg_retain 58,680 → 0 (zero
 **B-arch-1b DONE** — value_position_retain 47,803 → 20,103; C4 106,620 → 82,728 with the
 −23,892 converting exactly into c1_agree (boundary releases now ledger-agreed). Remaining:
 
-1. **Field-extraction producers** (20,103 value_position residuals — `throw_self` envelope
-   builders + `StrictJsonCursor::field`-style shapes whose String operands come from
-   `self`-field reads, not LoadLocal) — extend the producer criterion; closes most of the
-   remaining C4 (82,728, same mechanism).
-2. **store_value_retain** (7,624) — the deferred store slice.
-3. **C1 uninit-release elision** (136,407 + 11,951 path-dependent) — after stakes are done.
-4. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — may stay allowlisted.
+**B-arch-1c DONE (2026-07-10):** value_position_retain 20,103 → **0** (fn-wide resolution +
+proven String-value-view rule: StructGetField/LoadRef/LoadField/bare-storage; AddrOf* never
+staked; VariantGetField EXCLUDED per review — its dest is already owned per the codegen/
+string_arc/ledger contracts, and removal was corpus-neutral). C2 now = store_value_retain 7,624 EXACTLY. C4 unchanged — corrected
+interpretation: the remaining 82,728 are REAL-move shadows (multi-path moves; no-op releases
+of zeroed slots), release-elision territory, not stake territory. Remaining:
+
+1. **store_value_retain** (7,624) — the deferred store slice (1d if wanted).
+2. **Release elision** (c1_release_without_must_drop 136,407 + c1_path_dependent 11,951 +
+   C4 moved-out releases 82,728 — one ledger-authored scope-exit mechanism).
+3. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — may stay allowlisted.
+4. B-repr(B5) input: pre_post_verdict_drift 28,265.
 
 ## 5. Corpus caveats
 
