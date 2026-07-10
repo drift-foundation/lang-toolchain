@@ -687,6 +687,11 @@ class HBorrow(HExpr):
 	# Compiler-synthesized escape hatch for Phase 1 fluent receiver chaining:
 	# permit shared borrow of rvalues only when this flag is set.
 	allow_rvalue: bool = False
+	# Source location of the `&`/`&mut` token. User-written borrows MUST
+	# carry it (ast_to_hir attaches it) — every downstream borrow
+	# diagnostic anchors here; a defaulted empty Span produced the
+	# location-less misattributed diagnostics DriftQuery hit (2026-07-09).
+	loc: Span = field(default_factory=Span)
 	# Set by the for-in desugar ONLY on the borrow of a freshly-bound,
 	# compiler-owned iterable temporary (the rvalue case, e.g. `for x in make()`).
 	# Authorizes the `for_iter` resolver to rewrite this borrow into a MOVE when

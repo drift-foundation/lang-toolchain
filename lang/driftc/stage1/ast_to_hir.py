@@ -474,7 +474,14 @@ class AstToHIR:
 			return self.lower_expr(expr.operand)
 		# Borrowing (& / &mut) lowers to HBorrow (lvalue-only check happens later).
 		if expr.op in ("&", "&mut"):
-			return H.HBorrow(subject=self.lower_expr(expr.operand), is_mut=expr.op == "&mut")
+			# loc matters: every downstream borrow diagnostic anchors here.
+			# Omitting it produced the location-less `file:None:None`
+			# misattribution DriftQuery hit (2026-07-09).
+			return H.HBorrow(
+				subject=self.lower_expr(expr.operand),
+				is_mut=expr.op == "&mut",
+				loc=self._as_span(getattr(expr, "loc", None)),
+			)
 		op_map = {
 			"-": H.UnaryOp.NEG,
 			"not": H.UnaryOp.NOT,

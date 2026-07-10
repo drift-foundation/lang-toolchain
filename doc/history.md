@@ -1,5 +1,29 @@
 # Drift development history
 
+## 2026-07-10 (0.33.78: `&call(move x)` borrow materialization fix + spanless-diagnostic hardening; ABI stays 20)
+- **`&outer(&inner(move x))` now compiles** (DriftQuery 2026-07-09 report): the borrow-
+  materialization guardrail and the checker used a whole-subtree "contains move" walk where
+  the real question is "would materialization borrow the moved value ITSELF". The predicate
+  is SPLIT: direct `&(move x)` — and moves forwarded through result slots (field/index
+  projections, ternary branches, copies, unary chains, match/try/unsafe expression results,
+  casts) — still reject; moves inside call/ctor ARGUMENTS feed construction of a fresh
+  result and materialize like any other rvalue borrow (exactly what auto-borrow already did
+  for the same expression). The old deep walker is REMOVED from both layers.
+- Decision: `&mut mk(move s)` is SUPPORTED via the same temp-materialization (v1 already
+  materialized every `&mut <rvalue>`; the move variant was an inconsistent exception).
+  Direct `&mut (move x)` keeps its targeted "assign to a var first" rejection; direct shared
+  `&(move x)` gains a NEW targeted rejection ("bind it to a `val` first") — realizing the
+  contract the materializer comment had always assumed of the checker.
+- Diagnostics: `HBorrow` now carries `loc` (user borrows were spanless — the source of the
+  misattributed `file:None:None` errors); text/JSON renderers fall back to the primary
+  source ONLY for located diagnostics (fully spanless → `<unknown location>` / JSON
+  `file: null`, never the compile unit's first file); 12 sites rendering literal `None:None`
+  now render `?:?`.
+- Pins: `lang/tests/driver/test_borrow_rvalue_move_args.py` (incl. DriftQuery's production
+  `&src.catalog(move e)` method shape, ASAN row, `&mut` consistency pair, forwarding-slot
+  rejections, renderer unit pins). Verified: core suites 905; full driver 2008.
+
+
 ## 2026-07-08 (0.33.77 follow-up: generic interface-instance widening + multi-instance dispatch miscompile fix; ABI stays 20)
 - **Generic interface INSTANCES now participate in reference widening**:
   `implement Sink<Int> for Box` lets `&Box` widen to `&Sink<Int>` — and never
