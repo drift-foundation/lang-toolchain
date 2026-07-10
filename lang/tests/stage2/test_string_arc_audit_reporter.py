@@ -12,9 +12,14 @@ Three contracts:
      site_class enumeration holds (no UNTAGGED), and the C1-C4
      classification runs against L_pre/L_post with per-fn JSONL going
      to DRIFT_STRING_ARC_AUDIT_FILE.
-  3. The classifier itself: C4 allowlists the documented Return-as-move
-     release; C2 counts retains as invisible stakes; C3 flags MoveOut
-     of a non-Owned local.
+  3. The classifier itself: C2 counts retains as invisible stakes; C3
+     flags MoveOut of a non-Owned local. The old C4 allowlist is
+     RETIRED (2026-07-11, post release-elision acceptance): the
+     `c4_allowlisted` constant is retained only for historical
+     aggregate compatibility, and any NEW occurrence of either retired
+     face (a release at a MOVED_OUT return boundary, or a site-3 return
+     retain) classifies as UNCLASSIFIED — the hard corpus gate — with a
+     `*_retired_c4` triage kind (pinned below).
 """
 
 from __future__ import annotations
@@ -175,3 +180,45 @@ def test_missing_l_post_is_hard_counted(monkeypatch, tmp_path: Path) -> None:
 	fn_recs = [r for r in recs if r.get("record") == "fn" and r.get("fn") == "test::h"]
 	assert fn_recs, "hard failure must force per-fn emission despite empty details"
 	assert fn_recs[0].get("post_ledger_build_failed") == 1, fn_recs[0]
+
+
+def test_retired_c4_moved_out_release_fails_loudly(monkeypatch, tmp_path: Path) -> None:
+	"""C4 retirement pin (2026-07-11): a scope-exit release at a
+	MOVED_OUT return boundary — impossible with release-elision live —
+	must classify as UNCLASSIFIED (the hard corpus gate), not the
+	retired counted-never-failed c4_allowlisted bucket."""
+	out = tmp_path / "audit.jsonl"
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_VERBOSE", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(out))
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	# x is stored then MOVED OUT — its boundary state is MOVED_OUT.
+	func = _make_func("r", params=[], locals_=["x", "m"], types={"x": string_ty, "m": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%c", value="a"),
+		M.StoreLocal(local="x", value="%c"),
+		M.MoveOut(dest="%m0", local="x", ty=string_ty),
+		M.StoreLocal(local="m", value="%m0"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+	boundary = ("entry", len(entry.instructions))
+	audit = R.StringArcAudit("test::r")
+	# Simulate the forbidden emission: a scope-exit release of the
+	# moved-out local at the boundary.
+	audit.note(R.STAKE_RELEASE, "x", R.SITE_CLASS_SCOPE_EXIT_RELEASE,
+		pre_point=boundary, post_point=boundary)
+	audit.note_return_boundary(boundary, string_locals=["m", "x"], skipped=[])
+	agg = audit.finalize(l_pre=l_pre, l_post=None, needs_drop=lambda _l: True)
+	assert agg.get(R.DIV_UNCLASSIFIED, 0) >= 1, agg
+	assert agg.get(R.DIV_C4_ALLOWLISTED, 0) in (0, None) or R.DIV_C4_ALLOWLISTED not in agg, agg
+	recs = [json.loads(line.split("] ", 1)[1]) for line in out.read_text().splitlines()]
+	fn_recs = [r for r in recs if r.get("record") == "fn" and r.get("fn") == "test::r"]
+	assert fn_recs, "per-fn record expected (unclassified forces emission via details)"
+	kinds = [d.get("kind") for d in fn_recs[0].get("details", [])]
+	assert "moved_out_release_regression_retired_c4" in kinds, fn_recs[0]

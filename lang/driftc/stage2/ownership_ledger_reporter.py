@@ -345,6 +345,14 @@ DIV_C1_MUST_DROP_WITHOUT_RELEASE = "c1_must_drop_without_release"
 DIV_C1_PATH_DEPENDENT = "c1_path_dependent"
 DIV_C2_INVISIBLE_STAKE = "c2_invisible_stake"
 DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
+# RETIRED (2026-07-11, post release-elision acceptance): the C4
+# allowlist is closed. Release-elision drove both faces to zero
+# corpus-wide (the site-3 return retain was structurally extinct since
+# Phase 4; the return-move-blind release is now ELIDED at
+# MUST_NOT_DROP boundaries). Any reappearance is a REGRESSION and
+# classifies as UNCLASSIFIED (a hard corpus gate) with a distinct
+# detail kind. The constant remains defined only so historical
+# aggregates/tooling parsing old corpus files keep working.
 DIV_C4_ALLOWLISTED = "c4_allowlisted"
 DIV_PRE_POST_VERDICT_DRIFT = "pre_post_verdict_drift"
 # Hard failure: the L_post snapshot could not be built for this fn.  The
@@ -534,26 +542,18 @@ class StringArcAudit:
 					_bump(agg, DIV_C1_PATH_DEPENDENT)
 					continue
 				if was_released and verdict is DropVerdict.MUST_NOT_DROP:
-					# C4 allowlist — REVISED interpretation (B-arch-1
-					# stop finding, 2026-07-09): the late site-3
-					# retain-wrap this allowlist was originally written
-					# for is structurally extinct (zero
-					# return_retain_site3 events corpus-wide; plain
-					# returns MOVE via the Phase-4 alias walk).  What
-					# this bucket actually catches is the RELEASE face:
-					# a String local consumed into a RETURN-REACHING
-					# COMPOSITE (ctor/call arg) that the lattice models
-					# as Return-as-move (MOVED_OUT) while string_arc
-					# copies at the value position and correctly
-					# releases the still-owned local — i.e. the
-					# downstream shadow of a C2 invisible stake.
-					# B-arch-1a materializes the call-arg stakes
-					# (CopyValue pre-ledger), shrinking this bucket
-					# where call args were the cause; the
-					# value_position residue goes with that later
-					# slice.  Counted, never failed.
+					# C4 ALLOWLIST RETIRED (2026-07-11): release-elision
+					# skips String releases at MUST_NOT_DROP boundaries,
+					# so NO release should ever appear here again — at a
+					# MOVED_OUT point (the old allowlisted face) or any
+					# other MUST_NOT_DROP state.  A release at a
+					# MOVED_OUT boundary now FAILS LOUDLY as
+					# UNCLASSIFIED (hard corpus gate) with a triage
+					# kind naming the retired bucket; non-MOVED_OUT
+					# releases keep the C1 divergence class.
 					if raw is LiveState.MOVED_OUT:
-						_detail(DIV_C4_ALLOWLISTED, kind="return_move_blind_release",
+						_detail(DIV_UNCLASSIFIED,
+							kind="moved_out_release_regression_retired_c4",
 							local=local, point=list(rb.point))
 					else:
 						_detail(DIV_C1_RELEASE_WITHOUT_MUST_DROP,
@@ -590,13 +590,19 @@ class StringArcAudit:
 		# pre-state at the emission anchor the lattice already models as
 		# consumed/handoff (MOVED_OUT/TOMBSTONED); every other retain is
 		# the invisible-stake inventory B-arch-1 migrates shape by
-		# shape.  return_retain_site3 retains are C4 (documented
-		# divergence), never C2.
+		# shape.  return_retain_site3 retains are NOT C2 — and since the
+		# C4 retirement (2026-07-11) they are not allowlisted either:
+		# the shape is structurally extinct, so any occurrence
+		# classifies as UNCLASSIFIED (regression; see the branch below).
 		for ev in self.events:
 			if ev.kind != STAKE_RETAIN:
 				continue
 			if ev.site_class == SITE_CLASS_RETURN_RETAIN_SITE3:
-				_detail(DIV_C4_ALLOWLISTED, kind="return_retain_site3",
+				# Structurally extinct since Phase 4 (zero events across
+				# every corpus generation); with the C4 allowlist
+				# retired, a reappearance is a string_arc regression.
+				_detail(DIV_UNCLASSIFIED,
+					kind="return_retain_site3_regression_retired_c4",
 					subject=ev.subject, point=list(ev.pre_point))
 				continue
 			tracked = getattr(l_pre, "tracked_locals", None) or set()

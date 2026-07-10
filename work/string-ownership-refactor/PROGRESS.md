@@ -302,3 +302,14 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   pin + mem.replace tombstone valgrind pin); batteries 461/1 skipped; matrices 51/51+51/51.
   Report: /tmp/drift-announce/2026-07-11T060000Z-release-elision-implemented.md. Awaiting
   acceptance; C4-allowlist retirement staged as immediate follow-up.
+- 2026-07-11: **C4 allowlist RETIRED** (post-acceptance, per decision 3). Narrow reporter
+  patch: both faces converted to UNCLASSIFIED (hard gate) with triage kinds —
+  moved_out_release_regression_retired_c4 (release face) and
+  return_retain_site3_regression_retired_c4 (extinct retain face); constant kept for
+  historical-aggregate parsing; comments rewritten (no more counted-never-failed).
+  Retirement pin added (synthetic MOVED_OUT-boundary release → UNCLASSIFIED, per-fn record
+  force-emitted): reporter pins 7/7; elision+audit pins 12/12; 15-compile spot corpus:
+  unclassified 0, no c4 key, gates 0 — output format unchanged beyond the retired bucket,
+  full corpus not required. REMAINING B-arch: C3 flag-guarded modeling (11,441, allowlisted,
+  byte-identical through six slices) or leave; Arrays release-elision follow-up;
+  pre_post_verdict_drift 28,265 → B-repr(B5) planning input.
