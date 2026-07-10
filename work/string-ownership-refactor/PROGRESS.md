@@ -247,3 +247,43 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   site). Post-removal: 36/36 stake pins; corpus BYTE-IDENTICAL to pre-removal AFTER
   (vp_retain 0, c2=store 7,624, C4 82,728, gates 0) — no VariantGetField operand was ever
   staked; removal is contract hygiene, zero residuals to itemize.
+- 2026-07-10: **B-arch-1d CHECKPOINT delivered (STOP before implementation, per direction).**
+  Baseline: store_value_retain 7,624 = entire remaining C2; ~14 stdlib fns (json encode/log
+  emit family). Probe ranking (throwaway, reverted): StoreLocal×LoadLocal ~3.3k,
+  StoreLocal×ArrayIndexLoadUnchecked ~2.8k (NEW view kind), StoreLocal×ResultOk ~1.8k
+  (Ok-payload PROJECTION, not ctor — 0.33.46-adjacent, extra pins planned),
+  StoreRef×LoadLocal ~250, ArrayIndexStore 0. ORDERING PROOF: today's store expansion
+  releases old-dest BEFORE retaining the new value — copy-before-release is strictly safer
+  (closes the latent self-aliased-store window); site-4 drop_before_overwrite disjoint
+  (destination side, untouched). Expected: store_value → ~0, C2 → 0 TOTAL, gates 0,
+  C4/drift byte-identical predicted. Report:
+  /tmp/drift-announce/2026-07-10T230000Z-barch1d-checkpoint-store-stakes.md. One scope
+  decision flagged (include ArrayIndexStore despite 0 hits — recommended). Awaiting approval.
+
+- 2026-07-10: **B-arch-1d (store-value stakes) IMPLEMENTED + audited — C2 INVENTORY CLOSED.**
+  Store positions (StoreLocal/StoreRef/ArrayIndexStore sources) + view kinds
+  ArrayIndexLoad[Unchecked] (element views) and ResultOk (Ok-payload PROJECTION — ctor
+  stays terminal). Ordering: copy-before-release (strictly safer; self-aliased pin). OOB
+  ArrayIndexStore: noreturn abort contract quoted + live pin (silent abort in nothrow main).
+  CORPUS: store_value 7,624 → 0 (events −7,624 exactly); **c2_invisible_stake = 0 TOTAL
+  (114,107 → 0 across 1a/1b/1c/1d)**; C4 82,728 + drift 28,265 byte-identical as predicted;
+  gates 0. Pins 14/14 (overwrite +ASAN+VALGRIND, array stores +ASAN+VALGRIND, mut-ref,
+  ResultOk both paths, self-aliased, OOB, audit); 0.33.46 matrix explicit 10/10; batteries
+  459 passed/1 skipped; matrices 51/51+51/51. Report:
+  /tmp/drift-announce/2026-07-11T010000Z-barch1d-store-stakes.md. Awaiting review.
+  Remaining B-arch: release elision (~231k), C3 modeling, drift → B-repr(B5).
+- 2026-07-10: 1d review round — audit acceptance made PER-SHAPE (shared `_audit_pin`):
+  main (StoreLocal/ArrayIndexStore), set (StoreRef), probe (ResultOk projection). Rationale
+  pinned in the helper: runtime rows cannot catch a rewrite regression (string_arc's
+  late-retain fallback preserves behavior; only the audit sees it). 16/16. 1d ACCEPTED.
+- 2026-07-11: **B-arch-1 CLOSED by maintainer** (C2 fully migrated). **Release-elision
+  CHECKPOINT delivered as its own slice (report only).** Core thesis: the 0.27.145 blocker
+  ("consulting the ledger for strings leaks") is structurally gone — B-arch-1 removed the
+  wrong-MOVED_OUT class; every disagreeing scope-exit release now sits over a zeroed slot
+  (UNINIT 136,407 elide; C4 moved-out 82,728 elide; PATH_DEPENDENT 11,951 KEEP unconditional
+  — no string drop-flags). ~219k/259k emissions (84%) elidable. C3 (11,441) kept SEPARATE:
+  different instruction/authority/fix-shape, byte-identical through all four stake slices
+  (no visibility coupling), site 3 already skips flag-managed locals. Post-acceptance
+  hardening proposed: retire the C4 allowlist into a failure class. Report:
+  /tmp/drift-announce/2026-07-11T030000Z-release-elision-checkpoint.md. Decisions requested:
+  Strings-now/Arrays-follow-up scope; PATH_DEPENDENT disposition; allowlist retirement.

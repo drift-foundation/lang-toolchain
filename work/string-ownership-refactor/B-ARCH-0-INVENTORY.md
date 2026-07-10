@@ -127,11 +127,16 @@ string_arc/ledger contracts, and removal was corpus-neutral). C2 now = store_val
 interpretation: the remaining 82,728 are REAL-move shadows (multi-path moves; no-op releases
 of zeroed slots), release-elision territory, not stake territory. Remaining:
 
-1. **store_value_retain** (7,624) — the deferred store slice (1d if wanted).
-2. **Release elision** (c1_release_without_must_drop 136,407 + c1_path_dependent 11,951 +
-   C4 moved-out releases 82,728 — one ledger-authored scope-exit mechanism).
-3. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — may stay allowlisted.
-4. B-repr(B5) input: pre_post_verdict_drift 28,265.
+**B-arch-1d DONE (2026-07-10):** store_value_retain 7,624 → **0** (store positions +
+ArrayIndexLoad[Unchecked]/ResultOk-projection view kinds; OOB abort-contract pinned;
+0.33.46 matrix rerun 10/10). **C2 = 0 TOTAL — the invisible-stake inventory is CLOSED:
+114,107 → 0 across 1a/1b/1c/1d.** C4 + drift byte-identical as predicted. Remaining:
+
+1. **Release elision** (c1_release_without_must_drop 136,407 + c1_path_dependent 11,951 +
+   C4 moved-out releases 82,728 — one ledger-authored scope-exit mechanism, ~231k no-op
+   releases).
+2. **C3 flag-guarded cleanup MoveOut modeling** (11,441) — may stay allowlisted.
+3. B-repr(B5) input: pre_post_verdict_drift 28,265.
 
 ## 5. Corpus caveats
 

@@ -39,8 +39,11 @@ exception-ABI strings (`ConstructError.event_fqn`,
 For value positions no signature is needed: the candidate test —
 producer chain ends at a `LoadLocal` of a semantically-String local —
 already implies the operand is a String in a by-value position.
-`store_value_retain` (StoreLocal/StoreRef/ArrayIndexStore values)
-remains a later slice.
+B-arch-1d completes the inventory: StoreLocal/StoreRef/
+ArrayIndexStore VALUE operands are staked positions too, and the view
+set gains `ArrayIndexLoad`/`ArrayIndexLoadUnchecked` (String element
+views) and the `ResultOk` Ok-payload projection (NOT the
+`ConstructResultOk` constructor).
 
 B-arch-1c extends the PRODUCER side: the residual after 1a/1b was not
 surface field syntax (user `self.field`/`obj.name` copies materialize
@@ -181,6 +184,22 @@ def materialize_call_arg_stakes(
 		if isinstance(prod, M.LoadField):
 			dty = local_types.get(prod.dest)
 			return dty is not None and _param_is_string(dty)
+		# B-arch-1d view kinds:
+		if isinstance(prod, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
+			# Element VIEW (`x = arr[i]` reads): dest borrows the slot;
+			# string_arc never owns it. (`ArrayElemTake` — the OWNED
+			# transfer — is a different node and stays terminal.)
+			ety = getattr(prod, "elem_ty", None)
+			return ety is not None and _param_is_string(ety)
+		if isinstance(prod, M.ResultOk):
+			# Ok-payload PROJECTION (`dest = result.ok`) — a read of the
+			# FnResult temp's payload, NOT the `ConstructResultOk`
+			# constructor (which stays terminal as a fresh producer).
+			# The copy leaves the Result temp's ownership untouched, so
+			# the 0.33.46 Ok-payload-holder machinery still releases the
+			# payload exactly once (pinned Ok+Err paths in the 1d tests).
+			dty = local_types.get(prod.dest)
+			return dty is not None and _param_is_string(dty)
 		return False
 
 	# B-arch-1b value positions: (node type, operand attr, is_list).
@@ -196,6 +215,22 @@ def materialize_call_arg_stakes(
 		(M.ConstructError, "event_fqn", False),
 		(M.ExcSetParamsJson, "json_text", False),
 		(M.ExcAppendContextFrame, "frame_json", False),
+		# B-arch-1d store positions. The stake (CopyValue) lands BEFORE
+		# the store instruction — and therefore before string_arc's
+		# old-destination release expansion — which is the strictly
+		# safer order (the +1 is taken while the source is provably
+		# alive; today's retain-after-release order has a latent
+		# self-aliased-store window). The destination-side release /
+		# site-4 drop_before_overwrite logic is untouched: this pass
+		# only rewrites the SOURCE operand. For an out-of-bounds
+		# ArrayIndexStore the pre-store copy cannot leak under any
+		# cleanup contract: `drift_bounds_check_fail` is
+		# `__attribute__((noreturn))` and by its own documented
+		# contract "ends in abort(); cleanup never fires on a noreturn
+		# frame" (array_runtime.c) — pinned by the 1d OOB test row.
+		(M.StoreLocal, "value", False),
+		(M.StoreRef, "value", False),
+		(M.ArrayIndexStore, "value", False),
 	)
 
 	changed = False
