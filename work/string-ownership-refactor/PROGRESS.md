@@ -313,3 +313,38 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   full corpus not required. REMAINING B-arch: C3 flag-guarded modeling (11,441, allowlisted,
   byte-identical through six slices) or leave; Arrays release-elision follow-up;
   pre_post_verdict_drift 28,265 → B-repr(B5) planning input.
+- 2026-07-10: **Full-suite BLOCKER fixed: 1d ArrayIndexLoad view-staking leak.** Two
+  codegen-e2e memcheck failures (main_argv_content, array_extend_borrowed_source_string_
+  no_uaf; exit 97, definitely-lost = one block per element load). ROOT CAUSE — 1d
+  misclassified ArrayIndexLoad[Unchecked] as a borrowed element view; the codegen lowering
+  RETAINS the extracted element (_lower_array_index_load[_unchecked] → _emit_copy_value →
+  drift_string_retain), so the MIR dest is OWNED at extraction — VariantGetField's exact
+  sibling (the shape the 1c review removed). The stake copied from the dest and orphaned
+  the codegen +1. NOT the release-elision (bisected empirically: fails with elision off +
+  AIL stake on; passes with elision on + AIL stake off) and NOT an array-authority gap —
+  both hypothesized shapes ruled out. Exhaustive _emit_copy_value sweep: AIL and
+  VariantGetField are the ONLY extraction nodes that retain at codegen; ResultOk is a bare
+  extractvalue (true borrow — its staking stays). WHY 1d PINS MISSED IT: array pins used
+  static literals; DRIFT_STRING_FLAG_STATIC no-ops retain/release and masks the imbalance
+  (the e2e fixtures use heap strings by design). FIX: AIL[U] back to TERMINAL in
+  _is_string_value_view with the owned-at-extraction contract comment; module docstring
+  reverted; array store pins upgraded to heap strings. VERIFIED: both e2e fixtures green
+  under memcheck; all stake+elision+reporter pins 63/63 (-n16); 15-compile spot corpus —
+  no stake-retain site classes (C2 stays 0: AIL dest moves into its single consumer with
+  no string_arc retain, matching pre-1d MIR), no c4 key, unclassified/untagged 0, gates 0,
+  elision live. Report: /tmp/drift-announce/2026-07-10T000000Z-ail-stake-leak-fix.md.
+- 2026-07-10: **Interlude — two DriftQuery LANGUAGE_BUGs (kept separate from the elision
+  fix per direction).** (1) Arc<T>.get RecursionError on self-referential T: FIXED —
+  visited-set guards on three call_resolver walks (_has_owner_typevar crasher +
+  _has_unknown same-shape + _contains_foreign_typevar defensive); has_typevar left
+  (structural early return). Pins test_arc_get_recursive_struct.py 2/2 (compile+run);
+  checker/type_checker/traits/method_registry unfiltered 236/236. Report:
+  /tmp/drift-announce/2026-07-10T120000Z-arc-get-recursive-typevar-walk-fix.md.
+  (2) Receiver destroy atexit abort: CHECKPOINT ONLY per direction — root cause is NOT
+  registry ordering; __drift_cb_drop_* runs user Destructible::destroy on zero-backed
+  MOVED-OUT capture slots (Token probe: destroy-live then destroy-zeroed on the normal
+  path, no channel). Receiver aborts because destroy dereferences the moved-from Arc
+  sentinel (_arc_get_impl arc.drift:244 cap-0 bounds check). Options A (env drop flags,
+  recommended) / B (zero gate, unsound) / C (stdlib moved-from guard, tactical) in
+  /tmp/drift-announce/2026-07-10T130000Z-receiver-destroy-atexit-checkpoint.md. Awaiting
+  decision.

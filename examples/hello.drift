@@ -1,6 +1,9 @@
-import sys.console.out;
+module main;
 
-fn main() -> Void {
-	val greeting: String = "hello"
-	out.writeln(greeting + ", drift")
+import std.console as console;
+
+pub fn main() nothrow -> Int {
+	val greeting: String = "hello";
+	console.println(greeting + ", drift");
+	return 0;
 }

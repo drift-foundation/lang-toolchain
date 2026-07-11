@@ -51,73 +51,94 @@ Drift is a systems programming language focused on deterministic resource manage
 - Development history: [doc/history.md](doc/history.md)
 - Project TODO/roadmap: [TODO.md](TODO.md)
 - Toolchain:
-  - `lang/driftc.py` — Drift → MIR/SSA → LLVM driver (emits LLVM IR/object via llvmlite/LLVM).
-  - `just test-e2e` — runs e2e programs through the SSA backend and compares outputs.
-  - `just mir-codegen` — lowers simple MIR samples to an object, links with clang, and runs the binary.
-  - `lang/codegen/codegen_runner.py` — next compiler e2e runner using `lang.driftc` (`--json` for compile errors, `-o` for run-mode) against cases in `tests/lang-e2e` by default (configurable with `--root`).
+  - `lang/driftc/` — the compiler driver package (Drift → HIR → MIR → LLVM); invoked as `bin/driftc` or `python -m lang.driftc`.
+  - `bin/drift` — manifest-driven build/deploy front end (packages, signing, deploy).
+  - `just test` — the full repo gate (uniform pytest, LLVM/driver/codegen suites, ownership matrices, deploy tests).
+  - `just lang-codegen-test` — the Drift-source e2e suite (`lang/tests/codegen/e2e/`, one directory per case with `main.drift` + `expected.json`).
 
 ## Quick Tour
 
 ### Hello Drift
 
 ```drift
+module main;
+
+import std.console as console;
+
 pub fn main() nothrow -> Int {
-    println("hello, drift")
-    return 0
+    console.println("hello, drift");
+    return 0;
 }
 ```
 
 ### Structs, ownership, and methods
 
 ```drift
-struct Point { x: Int64, y: Int64 }
+struct Point { x: Int, y: Int }
 
 implement Point {
-    fn move_by(self: &mut Point, dx: Int, dy: Int) -> Void {
-        self.x += dx
-        self.y += dy
+    pub fn move_by(self: &mut Point, dx: Int, dy: Int) nothrow -> Void {
+        self.x += dx;
+        self.y += dy;
     }
 }
 
-fn translate(p: &mut Point, dx: Int, dy: Int) -> Void {
-    p.x += dx
-    p.y += dy
+fn translate(p: &mut Point, dx: Int, dy: Int) nothrow -> Void {
+    p.x += dx;
+    p.y += dy;
 }
 ```
 
 ### Collection literals with type inference
 
 ```drift
-fn numbers() -> Array<Int> {
-    val xs = [1, 2, 3]          // inferred Array<Int>
-    var ys: Array<Int> = [4, 5, 6]
-    ys[1] = 42                 // requires `var`
-    return xs + ys
+fn numbers() nothrow -> Array<Int> {
+    val xs = [1, 2, 3];         // inferred Array<Int>
+    var ys: Array<Int> = [4, 5, 6];
+    ys[1] = 42;                 // requires `var`
+    ys.extend(&xs);             // element-wise copy from a borrow
+    return move ys;             // ownership transfer is explicit
 }
 ```
 
 ### Concurrency at eye level
 
 ```drift
-import std.concurrent as conc
+import std.core as core;
+import std.concurrent as conc;
+import std.console as console;
 
 pub fn main() nothrow -> Int {
-    conc.scope(Fn(scope: conc.Scope) -> Void {
-        val user = scope.spawn(Fn() -> User { load_user(42) })
-        val data = scope.spawn(Fn() -> Data { fetch_data() })
-        render(user.join(), data.join())
-    })
-    return 0
+    var user_vt = conc.spawn_cb(|| => { return load_user(42); });
+    var data_vt = conc.spawn_cb(|| => { return fetch_data(); });
+    match user_vt.join() {
+        core.Result::Ok(user) => { console.println(user); },
+        core.Result::Err(_) => { return 1; },
+    }
+    match data_vt.join() {
+        core.Result::Ok(data) => { render(data); },
+        core.Result::Err(_) => { return 1; },
+    }
+    return 0;
 }
 ```
 
 ## Getting Started
 
-Use the MIR+LLVM prototype to lower and run a sample:
+Set up the environment, build the runtime archives, then compile and run a program:
 
 ```bash
-just mir-codegen
+just venv && just deps-check   # create the venv, verify the machine is wired
+just build                     # build the runtime archives driftc links against
+
+bin/driftc --dev --stdlib-root stdlib hello.drift --entry main::main -o hello
+./hello
 ```
+
+`driftc` is the compiler for ad-hoc/single-program compiles; `drift` (also under
+`bin/`) is the manifest-driven build/deploy front end. `just test` runs the full
+repo gate. See [doc/toolchain-build-workflow.md](doc/toolchain-build-workflow.md)
+for the packaging/signing workflow.
 
 ## Prerequisites
 

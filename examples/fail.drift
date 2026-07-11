@@ -1,8 +1,24 @@
+// Demonstrates error declaration, `throw`, and handling the failure
+// at the entrypoint boundary (`main` must be nothrow; an uncaught
+// throw cannot leave the program).
+module main;
+
+import std.console as console;
+
 error DiskError { code: String }
+
 fn fail() -> Void {
-	throw DiskError(code = "ENOENT")
+	throw DiskError(code = "ENOENT");
 }
 
-fn main() -> Void {
-	fail()
+pub fn main() nothrow -> Int {
+	try {
+		fail();
+	} catch DiskError(e) {
+		console.eprintln("disk error: " + e.code);
+		return 1;
+	} catch {
+		return 2;
+	}
+	return 0;
 }

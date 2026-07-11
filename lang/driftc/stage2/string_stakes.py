@@ -41,9 +41,12 @@ producer chain ends at a `LoadLocal` of a semantically-String local —
 already implies the operand is a String in a by-value position.
 B-arch-1d completes the inventory: StoreLocal/StoreRef/
 ArrayIndexStore VALUE operands are staked positions too, and the view
-set gains `ArrayIndexLoad`/`ArrayIndexLoadUnchecked` (String element
-views) and the `ResultOk` Ok-payload projection (NOT the
-`ConstructResultOk` constructor).
+set gains the `ResultOk` Ok-payload projection (NOT the
+`ConstructResultOk` constructor).  `ArrayIndexLoad`/
+`ArrayIndexLoadUnchecked` were briefly classified as views in 1d and
+REVERTED: their codegen lowering retains the extracted element, so
+the dest is owned at extraction (VariantGetField's sibling) — see the
+terminal-producer note in `_is_string_value_view`.
 
 B-arch-1c extends the PRODUCER side: the residual after 1a/1b was not
 surface field syntax (user `self.field`/`obj.name` copies materialize
@@ -184,13 +187,20 @@ def materialize_call_arg_stakes(
 		if isinstance(prod, M.LoadField):
 			dty = local_types.get(prod.dest)
 			return dty is not None and _param_is_string(dty)
-		# B-arch-1d view kinds:
-		if isinstance(prod, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
-			# Element VIEW (`x = arr[i]` reads): dest borrows the slot;
-			# string_arc never owns it. (`ArrayElemTake` — the OWNED
-			# transfer — is a different node and stays terminal.)
-			ety = getattr(prod, "elem_ty", None)
-			return ety is not None and _param_is_string(ety)
+		# B-arch-1d view kind (ResultOk below).  ArrayIndexLoad /
+		# ArrayIndexLoadUnchecked are NOT views — they stay TERMINAL,
+		# the exact sibling of VariantGetField above: the codegen
+		# lowering already retains the extracted element
+		# (`_lower_array_index_load[_unchecked]` calls
+		# `_emit_copy_value` -> `drift_string_retain`), so the MIR dest
+		# is OWNED at extraction and its single consumer moves that +1.
+		# Staking it copies from the dest and orphans the codegen +1 —
+		# one leaked ref per element load (caught by the heap-string
+		# e2e fixtures `main_argv_content` /
+		# `array_extend_borrowed_source_string_no_uaf`; static-literal
+		# elements mask the imbalance because retain/release are no-ops
+		# on DRIFT_STRING_FLAG_STATIC).  `ArrayElemTake` — the
+		# move-out-of-storage transfer — is likewise terminal.
 		if isinstance(prod, M.ResultOk):
 			# Ok-payload PROJECTION (`dest = result.ok`) — a read of the
 			# FnResult temp's payload, NOT the `ConstructResultOk`

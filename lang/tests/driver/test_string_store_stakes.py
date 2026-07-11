@@ -1,8 +1,15 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """B-arch-1d pins: String STORE-value stakes (StoreLocal/StoreRef/
 ArrayIndexStore source operands) materialize as pre-store `CopyValue`,
-and the view set gains `ArrayIndexLoad[Unchecked]` element views and the
-`ResultOk` Ok-payload projection.
+and the view set gains the `ResultOk` Ok-payload projection.
+`ArrayIndexLoad[Unchecked]` is NOT a view — its codegen lowering
+retains the extracted element (owned at extraction, VariantGetField's
+sibling), so it stays a terminal producer; staking it leaks one ref
+per element load.  The array pins here use HEAP strings (concat), not
+literals: static strings (DRIFT_STRING_FLAG_STATIC) no-op on
+retain/release and MASK exactly that imbalance (which the heap-string
+e2e fixtures `main_argv_content` /
+`array_extend_borrowed_source_string_no_uaf` caught).
 
 Ordering contract pinned here: the stake lands BEFORE string_arc's
 old-destination release expansion — the strictly safer order (the +1 is
@@ -53,12 +60,15 @@ pub fn main() nothrow -> Int {
 """
 
 # (2) Element-view store: x = arr[i]; and String element store arr[i] = y.
+# HEAP strings on purpose — static literals mask refcount imbalance.
 _ARRAY_STORE_SOURCE = """\
 module main;
 
 pub fn main() nothrow -> Int {
-	var arr = ["a", "b"];
-	val y = "z";
+	var arr: Array<String> = [];
+	arr.push("a" + "");
+	arr.push("b" + "");
+	val y = "z" + "";
 	var x = "old" + "";
 	x = arr[1];
 	arr[0] = y;
@@ -315,7 +325,9 @@ def _audit_pin(tmp_path: Path, source: str, fn_tail: str) -> None:
 
 
 def test_audit_store_stakes_materialized(tmp_path: Path) -> None:
-	"""ArrayIndexLoadUnchecked view + ArrayIndexStore/StoreLocal stakes."""
+	"""ArrayIndexStore/StoreLocal stakes (AIL itself is terminal: its
+	dest is codegen-owned and moves into the holder without a
+	string_arc retain, so store_value_retain still reads 0)."""
 	_audit_pin(tmp_path, _ARRAY_STORE_SOURCE, "main")
 
 

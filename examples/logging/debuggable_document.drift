@@ -23,7 +23,7 @@ pub fn main() nothrow -> Int {
 	cfgb.enqueue_timeout(conc.Duration(millis = 2));
 	cfgb.write_timeout(conc.Duration(millis = 25));
 	val cfg = cfgb.build();
-	val logger = log.create_logger("main", cfg);
+	val logger = log.create_logger("main", move cfg);
 	val doc = Document(name = "contract.pdf", size = 1048576, pages = 42, owner = "legal");
 	logger.debug("document-indexed", {"doc": move doc});
 	val _ = logger.flush(conc.Duration(millis = 1000));

@@ -1,5 +1,51 @@
 # Drift development history
 
+## 2026-07-10 (0.33.79: String B-arch — ledger-visible stakes, release elision, C4 retirement; `Arc<T>.get()` recursion fix; ABI stays 20)
+
+### String B-arch (branch `refactor/string-b-arch-ledger-reporter`)
+- **Every String refcount stake is now ledger-visible MIR** (B-arch-1a→1d, new pass
+  `stage2/string_stakes.py`): by-value String call args, value positions (ctor/array-lit/
+  iface/Result/Exc operands), MIR field/view producers (`StructGetField`/`LoadRef`/
+  `LoadField` views in synthesized builders), and store values (`StoreLocal`/`StoreRef`/
+  `ArrayIndexStore`, plus the `ResultOk` Ok-payload projection) materialize as pre-ledger
+  `CopyValue` instead of string_arc's late invisible retains. Corpus (543 compiles /
+  647,943 fns): C2 invisible stakes 114,107 → **0**, every delta arithmetically exact.
+- **Ledger-authored String release elision** at the site-3 return boundary: String locals
+  whose ledger verdict is MUST_NOT_DROP (UNINIT / MOVED_OUT / TOMBSTONED — all proven
+  zeroed-at-runtime slots) skip the scope-exit release sweep, the strings analog of the
+  Phase 4 destructible consultation. Structurally unblocked by B-arch-1: the 0.27.145
+  wrong-MOVED_OUT class is gone (historical breaker `test_pkg_map_literal_string_leak`
+  green under valgrind with the consultation live). scope_exit_release 259,351 → 40,216
+  (−219,135 exactly; 84.5% of emissions — each a no-op Load+Zero+Store+Release quad).
+  PATH_DEPENDENT keeps the unconditional null-safe release; Arrays untouched (follow-up).
+- **C4 allowlist retired** in the audit reporter: with c4_allowlisted proven 0 corpus-wide,
+  both faces (release at a MOVED_OUT boundary; site-3 return retain) now classify as
+  UNCLASSIFIED — the hard gate — with `*_retired_c4` triage kinds. The constant remains
+  only for historical aggregate parsing.
+- **Leak fix (caught by the full suite)**: 1d briefly classified
+  `ArrayIndexLoad[Unchecked]` as a borrowed element view; its codegen lowering already
+  RETAINS the extracted element (`_emit_copy_value` → `drift_string_retain`), so the dest
+  is owned at extraction — `VariantGetField`'s sibling — and staking it orphaned the
+  codegen +1 (one leaked ref per element load; `main_argv_content` /
+  `array_extend_borrowed_source_string_no_uaf` under memcheck). Reverted to terminal.
+  Static-literal elements mask the imbalance (`DRIFT_STRING_FLAG_STATIC` no-ops
+  retain/release) — the 1d array pins now use heap strings.
+- Pins: `test_string_call_arg_stakes` (9), `test_string_value_position_stakes` (10),
+  `test_string_field_stakes` (11), `test_string_store_stakes` (16),
+  `test_string_release_elision` (10, incl. leak-direction valgrind rows),
+  `test_string_arc_audit_reporter` (7, incl. the retired-C4 loud-failure pin).
+
+### `Arc<T>.get()` on self-referential T — RecursionError (DriftQuery 2026-07-10)
+- Resolving a generic method on `Arc<T>` where T recursively contains itself through
+  `Array<T>` (any tree/AST-shaped struct) crashed with a raw Python RecursionError:
+  `call_resolver._has_owner_typevar` walked the legitimately-cyclic `param_types` graph
+  with no visited set. Visited-tid guards (revisit → False, semantically neutral) added
+  to the crasher plus the same-shaped `_has_unknown` and (defensively)
+  `_contains_foreign_typevar`; `TypeTable.has_typevar` is safe as-is (early-returns
+  through instantiated nominals). Pins: `test_arc_get_recursive_struct.py` (wrapper +
+  direct shapes, compile AND run). Issue:
+  `issues/arc-get-recursive-struct-owner-typevar-recursion/`.
+
 ## 2026-07-10 (0.33.78: `&call(move x)` borrow materialization fix + spanless-diagnostic hardening; ABI stays 20)
 - **`&outer(&inner(move x))` now compiles** (DriftQuery 2026-07-09 report): the borrow-
   materialization guardrail and the checker used a whole-subtree "contains move" walk where

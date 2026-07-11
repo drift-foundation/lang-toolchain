@@ -9,7 +9,7 @@ pub fn main() nothrow -> Int {
 	cfgb.enqueue_timeout(conc.Duration(millis = 2));
 	cfgb.write_timeout(conc.Duration(millis = 25));
 	val cfg = cfgb.build();
-	val logger = log.create_logger("main", cfg);
+	val logger = log.create_logger("main", move cfg);
 	logger.info("auth-failed", {"user": "alice", "reason": "bad-password"});
 	logger.info("session-opened", {"user": "alice", "session_id": "sess-01"});
 	logger.error("db-timeout", {"host": "db-main", "retryable": "true"});

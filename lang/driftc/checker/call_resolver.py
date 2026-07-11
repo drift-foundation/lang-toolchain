@@ -2267,24 +2267,32 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if not copy_status:
 					diagnostics.append(_tc_diag(message="Array<T>.extend() requires element type to be Copy", severity="error", span=getattr(expr, "loc", Span())))
 					return MethodCallResult(ctx.unknown_ty, None)
-			def _has_unknown(tid: TypeId) -> bool:
+			# Cycle guard: same unguarded-deep-walk shape as the
+			# `_has_owner_typevar` RecursionError (self-referential
+			# structs make `param_types` cyclic); revisits return False.
+			def _has_unknown(tid: TypeId, _seen: set | None = None) -> bool:
+				if _seen is None:
+					_seen = set()
+				if tid in _seen:
+					return False
+				_seen.add(tid)
 				td_local = ctx.type_table.get(tid)
 				if td_local.kind is TypeKind.UNKNOWN:
 					return True
 				if td_local.kind is TypeKind.STRUCT:
 					inst_local = ctx.type_table.get_struct_instance(tid)
-					if inst_local is not None and any(_has_unknown(arg) for arg in inst_local.type_args):
+					if inst_local is not None and any(_has_unknown(arg, _seen) for arg in inst_local.type_args):
 						return True
 				if td_local.kind is TypeKind.VARIANT:
 					inst_local = ctx.type_table.get_variant_instance(tid)
-					if inst_local is not None and any(_has_unknown(arg) for arg in inst_local.type_args):
+					if inst_local is not None and any(_has_unknown(arg, _seen) for arg in inst_local.type_args):
 						return True
 				if td_local.kind is TypeKind.INTERFACE:
 					inst_local = ctx.type_table.get_interface_instance(tid)
-					if inst_local is not None and any(_has_unknown(arg) for arg in inst_local.type_args):
+					if inst_local is not None and any(_has_unknown(arg, _seen) for arg in inst_local.type_args):
 						return True
 				for child in td_local.param_types:
-					if _has_unknown(child):
+					if _has_unknown(child, _seen):
 						return True
 				return False
 
@@ -3725,12 +3733,26 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					impl_params = list(getattr(fn_sig, "impl_type_params", []) or [])
 					impl_owner = impl_params[0].id.owner if impl_params else None
 					if impl_owner is not None and receiver_args and not any(ctx.type_table.has_typevar(t) for t in receiver_args):
-						def _has_owner_typevar(tid: TypeId) -> bool:
+						# The `param_types` graph is legitimately CYCLIC for
+						# self-referential structs (`Node { children: Array<Node> }`
+						# — the only shape recursive value types take, via a
+						# container).  The walk needs a visited set or it recurses
+						# to the interpreter limit (RecursionError on `Arc<T>.get()`
+						# for any tree-shaped T; issues/arc-get-recursive-struct-
+						# owner-typevar-recursion, 2026-07-10).  A revisit returns
+						# False: it can never hide a typevar — the first visit
+						# explores all children.
+						def _has_owner_typevar(tid: TypeId, _seen: set | None = None) -> bool:
+							if _seen is None:
+								_seen = set()
+							if tid in _seen:
+								return False
+							_seen.add(tid)
 							td = ctx.type_table.get(tid)
 							if td.kind is TypeKind.TYPEVAR and td.type_param_id is not None and td.type_param_id.owner == impl_owner:
 								return True
 							for sub in td.param_types or []:
-								if _has_owner_typevar(sub):
+								if _has_owner_typevar(sub, _seen):
 									return True
 							return False
 						if any(_has_owner_typevar(t) for t in param_type_ids) or _has_owner_typevar(ret_id):
@@ -4414,24 +4436,31 @@ def resolve_call_expr(
 	current_module = ctx.current_module
 	_debug_stderr = sys.stderr
 	type_param_map = ctx.type_param_map
-	def _contains_foreign_typevar(ty: TypeId, allowed: set[TypeParamId]) -> bool:
+	# Cycle guard (see `_has_owner_typevar`): `param_types` is cyclic
+	# for self-referential structs; revisits return False.
+	def _contains_foreign_typevar(ty: TypeId, allowed: set[TypeParamId], _seen: set | None = None) -> bool:
+		if _seen is None:
+			_seen = set()
+		if ty in _seen:
+			return False
+		_seen.add(ty)
 		td = ctx.type_table.get(ty)
 		if td.kind is TypeKind.TYPEVAR:
 			return td.type_param_id not in allowed
 		if td.kind is TypeKind.STRUCT:
 			inst = ctx.type_table.get_struct_instance(ty)
 			if inst is not None:
-				return any(_contains_foreign_typevar(arg, allowed) for arg in inst.type_args)
+				return any(_contains_foreign_typevar(arg, allowed, _seen) for arg in inst.type_args)
 		if td.kind is TypeKind.VARIANT:
 			inst = ctx.type_table.get_variant_instance(ty)
 			if inst is not None:
-				return any(_contains_foreign_typevar(arg, allowed) for arg in inst.type_args)
+				return any(_contains_foreign_typevar(arg, allowed, _seen) for arg in inst.type_args)
 		if td.kind is TypeKind.INTERFACE:
 			inst = ctx.type_table.get_interface_instance(ty)
 			if inst is not None:
-				return any(_contains_foreign_typevar(arg, allowed) for arg in inst.type_args)
+				return any(_contains_foreign_typevar(arg, allowed, _seen) for arg in inst.type_args)
 		for child in td.param_types:
-			if _contains_foreign_typevar(child, allowed):
+			if _contains_foreign_typevar(child, allowed, _seen):
 				return True
 		return False
 	allowed_type_params = set(type_param_map.values()) if isinstance(type_param_map, dict) else set()
