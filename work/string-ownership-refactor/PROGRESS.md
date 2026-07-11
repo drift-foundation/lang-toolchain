@@ -369,3 +369,12 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   out inside a boxed callback (core.callback0+spawn), destroy-exactly-once. Matrix
   12/12. Callback0 side-finding: both authorities False = correct (no user destructor,
   structural zero-safe drop). Targeted runs only per new rule.
+- 2026-07-10: **Full-suite blocker: invalid LLVM IR (`multiple definition of 'raw116'`)
+  — latent _fresh prefix-ambiguity, NOT channel semantics.** _fresh(hint) has no
+  hint/counter separator; _fresh("raw1")@16 == _fresh("raw")@116. Env flag fields
+  shifted temp counts into the collision. Exhaustive scan: 11 ambiguous pairs / 7
+  families; all digit-suffixed hints renamed letter-terminated (22 sites); channel
+  test/source untouched. NEW static pin test_fresh_hint_ambiguity.py (source scan,
+  zero ambiguous pairs allowed). Verified in review-ordered sequence: failing test
+  green → channel file + 12-pin callback matrix 14/14. Targeted only; full suite is
+  the user's gate.

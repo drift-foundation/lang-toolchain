@@ -2499,7 +2499,7 @@ class _FuncBuilder:
 			self.value_types[src_val] = val_llty
 		val = src_val
 		if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
-			tmp = self._fresh("bool8")
+			tmp = self._fresh("bool_byte")
 			self.lines.append(f"  {tmp} = zext i1 {val} to i8")
 			val = tmp
 		emit_store_llty = self._llty(store_llty)
@@ -2529,7 +2529,7 @@ class _FuncBuilder:
 			assert self._entry_alloca_insert_index is not None
 			param_val = self._map_value(pname)
 			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
-				tmp = self._fresh("bool8")
+				tmp = self._fresh("bool_byte")
 				self.lines.insert(self._entry_alloca_insert_index, f"  {tmp} = zext i1 {param_val} to i8")
 				self._entry_alloca_insert_index += 1
 				param_val = tmp
@@ -3163,7 +3163,7 @@ class _FuncBuilder:
 				alloca_id = self._ensure_local_storage(instr.local, store_llty)
 				dest = self._map_value(instr.dest)
 				if store_llty == "i8":
-					raw = self._fresh("bool8")
+					raw = self._fresh("bool_byte")
 					self.lines.append(f"  {raw} = load i8, ptr %{alloca_id}")
 					self._bool_from_storage(raw, dest=dest)
 					self.value_types[dest] = "i1"
@@ -3515,7 +3515,7 @@ class _FuncBuilder:
 			emit_want_llty = self._llty(want_llty)
 			dest = self._map_value(instr.dest)
 			if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
-				raw = self._fresh("field8")
+				raw = self._fresh("field_byte")
 				self.lines.append(f"  {raw} = load i8, ptr {field_ptr}")
 				self.lines.append(f"  {dest} = icmp ne i8 {raw}, 0")
 				self.value_types[dest] = "i1"
@@ -3621,7 +3621,7 @@ class _FuncBuilder:
 			is_fat_fn = field_td.kind is TypeKind.FUNCTION and field_td.can_throw()
 			dest = self._map_value(instr.dest)
 			if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
-				raw = self._fresh("field8")
+				raw = self._fresh("field_byte")
 				self.lines.append(f"  {raw} = extractvalue {struct_llty} {subject}, {instr.field_index}")
 				self._bool_from_storage(raw, dest=dest)
 				self.value_types[dest] = "i1"
@@ -3640,7 +3640,7 @@ class _FuncBuilder:
 			ptr_ty = "ptr"
 			dest = self._map_value(instr.dest)
 			if self._is_bool_storage_pair(value_llty=val_llty, storage_llty=store_llty):
-				raw = self._fresh("bool8")
+				raw = self._fresh("bool_byte")
 				self.lines.append(f"  {raw} = load i8, ptr {ptr}")
 				self._bool_from_storage(raw, dest=dest)
 				self.value_types[dest] = "i1"
@@ -3795,7 +3795,7 @@ class _FuncBuilder:
 			if ok_tid is not None and self.type_table is not None:
 				ok_td = self.type_table.get(ok_tid)
 				if ok_td.kind is TypeKind.SCALAR and ok_td.name == "Bool":
-					raw = self._fresh("ok8")
+					raw = self._fresh("ok_byte")
 					self.lines.append(f"  {raw} = extractvalue {fnres_llty} {res}, 1")
 					self._bool_from_storage(raw, dest=dest)
 					self.value_types[dest] = "i1"
@@ -3849,8 +3849,8 @@ class _FuncBuilder:
 							f"LLVM codegen v1: ok payload type mismatch for ConstructResultOk in {self.fn_info.name}: "
 							f"have {val_ty}, expected {ok_llty}"
 						)
-			tmp0 = self._fresh("ok0")
-			tmp1 = self._fresh("ok1")
+			tmp0 = self._fresh("ok_a")
+			tmp1 = self._fresh("ok_b")
 			err_zero = f"{DRIFT_ERROR_PTR} null"
 			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 0, 0")
 			emit_ok_llty = self._llty(ok_llty)
@@ -3865,8 +3865,8 @@ class _FuncBuilder:
 			err_val = self._map_value(instr.error)
 			ok_llty, fnres_llty = self._fnresult_types_for_current_fn()
 			self.value_types[dest] = fnres_llty
-			tmp0 = self._fresh("err0")
-			tmp1 = self._fresh("err1")
+			tmp0 = self._fresh("err_a")
+			tmp1 = self._fresh("err_b")
 			ok_zero = self._zero_value_for_ok(ok_llty)
 			self.lines.append(f"  {tmp0} = insertvalue {fnres_llty} zeroinitializer, i8 1, 0")
 			self.lines.append(f"  {tmp1} = insertvalue {fnres_llty} {tmp0}, {ok_zero}, 1")
@@ -4018,7 +4018,7 @@ class _FuncBuilder:
 		self.lines.append(
 			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 2, i32 0"
 		)
-		tmp0 = self._fresh("str0")
+		tmp0 = self._fresh("str_a")
 		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {size}, 0")
 		self.lines.append(f"  {dest} = insertvalue {DRIFT_STRING_TYPE} {tmp0}, ptr {ptr}, 1")
 		self.value_types[dest] = DRIFT_STRING_TYPE
@@ -4043,7 +4043,7 @@ class _FuncBuilder:
 		self.lines.append(
 			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 2, i32 0"
 		)
-		tmp0 = self._fresh("str0")
+		tmp0 = self._fresh("str_a")
 		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {size}, 0")
 		dest = dest_name or self._fresh("str")
 		self.lines.append(f"  {dest} = insertvalue {DRIFT_STRING_TYPE} {tmp0}, ptr {ptr}, 1")
@@ -9205,7 +9205,7 @@ class _FuncBuilder:
 		self.module.needs_array_helpers = True
 		# MVP invariant: ArrayAlloc always returns len=0; callers must set len via ArraySetLen.
 		tmp_alloc = self._fresh("arr")
-		zero_len = self._fresh("len0")
+		zero_len = self._fresh("len_zero")
 		self.lines.append(f"  {zero_len} = add {self._llty(DRIFT_INT_TYPE)} 0, 0")
 		self.lines.append(
 			f"  {tmp_alloc} = call ptr @drift_alloc_array({self._llty(DRIFT_USIZE_TYPE)} {elem_size}, {self._llty(DRIFT_USIZE_TYPE)} {elem_align}, {self._llty(DRIFT_INT_TYPE)} {zero_len}, {self._llty(DRIFT_INT_TYPE)} {cap_val})"
@@ -9316,7 +9316,7 @@ class _FuncBuilder:
 		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
 		raw = dest
 		if self._is_bool_type(instr.elem_ty):
-			raw = self._fresh("bool8")
+			raw = self._fresh("bool_byte")
 		self.lines.append(f"  {raw} = load {elem_llty}, ptr {ptr_tmp}")
 		if self._is_bool_type(instr.elem_ty):
 			self._bool_from_storage(raw, dest=dest)
@@ -9536,7 +9536,7 @@ class _FuncBuilder:
 							f"  {field_ptr} = getelementptr inbounds {arm_layout.payload_struct_llty}, ptr {payload_struct_ptr}, i32 0, i32 {fidx}"
 						)
 						if self._is_bool_storage_pair(value_llty=want_llty, storage_llty=store_llty):
-							raw = self._fresh("field8")
+							raw = self._fresh("field_byte")
 							self.lines.append(f"  {raw} = load i8, ptr {field_ptr}")
 							field_val = self._fresh("field")
 							self.lines.append(f"  {field_val} = icmp ne i8 {raw}, 0")
@@ -10255,7 +10255,7 @@ class _FuncBuilder:
 		ptr_tmp = self._lower_array_index_addr(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
 		raw = dest
 		if self._is_bool_type(instr.elem_ty):
-			raw = self._fresh("bool8")
+			raw = self._fresh("bool_byte")
 		self.lines.append(f"  {raw} = load {elem_llty}, ptr {ptr_tmp}")
 		if self._is_bool_type(instr.elem_ty):
 			self._bool_from_storage(raw, dest=dest)
@@ -10279,7 +10279,7 @@ class _FuncBuilder:
 		ptr_tmp = self._lower_array_index_addr_unchecked(array=array, index=index, elem_llty=elem_llty, arr_llty=arr_llty)
 		raw = dest
 		if self._is_bool_type(instr.elem_ty):
-			raw = self._fresh("bool8")
+			raw = self._fresh("bool_byte")
 		self.lines.append(f"  {raw} = load {elem_llty}, ptr {ptr_tmp}")
 		if self._is_bool_type(instr.elem_ty):
 			self._bool_from_storage(raw, dest=dest)
@@ -10483,13 +10483,13 @@ class _FuncBuilder:
 		cap_val = self._map_value(instr.cap)
 		self.module.needs_array_helpers = True
 		tmp_alloc = self._fresh("raw")
-		zero_len = self._fresh("len0")
+		zero_len = self._fresh("len_zero")
 		self.lines.append(f"  {zero_len} = add {self._llty(DRIFT_INT_TYPE)} 0, 0")
 		self.lines.append(
 			f"  {tmp_alloc} = call ptr @drift_alloc_array({self._llty(DRIFT_USIZE_TYPE)} {elem_size}, {self._llty(DRIFT_USIZE_TYPE)} {elem_align}, {self._llty(DRIFT_INT_TYPE)} {zero_len}, {self._llty(DRIFT_INT_TYPE)} {cap_val})"
 		)
-		tmp0 = self._fresh("raw0")
-		tmp1 = self._fresh("raw1")
+		tmp0 = self._fresh("raw_a")
+		tmp1 = self._fresh("raw_b")
 		self.lines.append(f"  {tmp0} = insertvalue {raw_llty} zeroinitializer, ptr {tmp_alloc}, {RAWBUF_PTR_IDX}")
 		self.lines.append(f"  {tmp1} = insertvalue {raw_llty} {tmp0}, {self._llty(DRIFT_INT_TYPE)} {cap_val}, {RAWBUF_CAP_IDX}")
 		self.value_map[instr.dest] = tmp1
@@ -10687,7 +10687,7 @@ class _FuncBuilder:
 		raise AssertionError("internal: unresolved Copy status at LLVM payload extract boundary")
 
 	def _bool_to_storage(self, value: str) -> str:
-		tmp = self._fresh("bool8")
+		tmp = self._fresh("bool_byte")
 		self.lines.append(f"  {tmp} = zext i1 {value} to i8")
 		return tmp
 
