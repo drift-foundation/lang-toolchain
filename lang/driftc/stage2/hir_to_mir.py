@@ -3465,6 +3465,114 @@ class HIRToMIR:
 		self._local_types[moved_val] = inner_ty
 		return moved_val
 
+	def _drop_can_invoke_user_destroy(self, ty: TypeId, _seen: set | None = None) -> bool:
+		"""True iff dropping a value of `ty` can invoke a user
+		`Destructible::destroy` — directly, or transitively through
+		struct fields / variant arms / array elements / a boxed
+		interface payload.
+
+		Used to decide which MOVE-kind callback captures get a
+		CB-DROP LIVENESS FLAG (see `_lower_lambda_callback`).  The
+		spec contract (drift-lang-spec §5.11 + §4) is that destroy
+		runs EXACTLY ONCE on a fully-formed value; the env drop thunk
+		must therefore never run user destroy on a zero-backed
+		(moved-out) slot.  Built-in refcount drops (String/Array/
+		Error/Arc runtime releases) are null/zero-safe and need no
+		flag.  False positives are harmless (an extra flag-guarded
+		drop is still exactly-once); false negatives re-open the
+		phantom-destroy bug, so unknown shapes flag conservatively.
+
+		Visited-set guarded: self-referential structs make the field
+		graph legitimately cyclic (cf. the `_has_owner_typevar`
+		RecursionError, 2026-07-10)."""
+		if _seen is None:
+			_seen = set()
+		if ty in _seen:
+			return False
+		_seen.add(ty)
+		# Destructor AUTHORITY must mirror what drop emission actually
+		# uses, not just the trait prover: codegen consults
+		# `type_table.destructor_fns` FIRST (`_emit_drop_value`,
+		# llvm_codegen ~9873), and `types_core.has_drop` documents why —
+		# `is_destructible` can fail to resolve cross-package generic
+		# instantiations during package builds, while `destructor_fns`
+		# is populated directly from the impl index and is complete.
+		# A false negative here re-opens the phantom-destroy bug for
+		# exactly those shapes (flag missing → thunk still calls the
+		# registered destructor on the zeroed slot), so the check order
+		# is: exact destructor_fns hit → trait prover → the same
+		# (name, module_id) generic-nominal fallback has_drop uses.
+		destructor_fns = getattr(self._type_table, "destructor_fns", None)
+		if isinstance(destructor_fns, dict) and destructor_fns.get(ty) is not None:
+			return True
+		try:
+			if self._type_table.is_destructible(ty):
+				return True
+		except Exception:
+			return True
+		td = self._type_table.get(ty)
+		if (
+			td.kind in (TypeKind.STRUCT, TypeKind.VARIANT)
+			and td.module_id is not None
+			and isinstance(destructor_fns, dict)
+		):
+			for _dtor_tid in destructor_fns:
+				_dtor_td = self._type_table.get(_dtor_tid)
+				if _dtor_td.name == td.name and _dtor_td.module_id == td.module_id:
+					return True
+		if td.kind is TypeKind.INTERFACE:
+			# A boxed payload may itself be Destructible; the drop
+			# helper dispatches into it.  Flag conservatively.
+			return True
+		if td.kind is TypeKind.STRUCT:
+			inst = self._type_table.get_struct_instance(ty)
+			fields = list(inst.field_types) if inst is not None else list(td.param_types or [])
+			return any(self._drop_can_invoke_user_destroy(f, _seen) for f in fields)
+		if td.kind is TypeKind.VARIANT:
+			inst = self._type_table.get_variant_instance(ty)
+			if inst is not None:
+				return any(
+					self._drop_can_invoke_user_destroy(ft, _seen)
+					for arm in inst.arms
+					for ft in arm.field_types
+				)
+			return any(self._drop_can_invoke_user_destroy(f, _seen) for f in (td.param_types or []))
+		if td.kind is TypeKind.ARRAY and td.param_types:
+			return self._drop_can_invoke_user_destroy(td.param_types[0], _seen)
+		return False
+
+	def _clear_capture_live_flag(self, slot: int) -> None:
+		"""Store 0 to the `__live{slot}` CB-DROP LIVENESS FLAG in the
+		callback env, if this slot has one.  Called by
+		`_move_from_callback_capture_slot` alongside the value
+		zero-back so the env drop thunk skips user destroy on the
+		moved-out slot (spec: destroy exactly once, never on a
+		non-fully-formed value).  The field NAME is the contract with
+		`llvm_codegen._emit_callback_drop_thunk`."""
+		if self._lambda_env_ty is None or self._lambda_env_local is None:
+			return
+		td = self._type_table.get(self._lambda_env_ty)
+		field_names = list(getattr(td, "field_names", None) or [])
+		flag_name = f"__live{slot}"
+		if flag_name not in field_names:
+			return
+		flag_idx = field_names.index(flag_name)
+		env_ptr = self.b.new_temp()
+		self.b.emit(M.LoadLocal(dest=env_ptr, local=self._lambda_env_local))
+		flag_ptr = self.b.new_temp()
+		self.b.emit(
+			M.AddrOfField(
+				dest=flag_ptr,
+				base_ptr=env_ptr,
+				struct_ty=self._lambda_env_ty,
+				field_index=flag_idx,
+				field_ty=self._int_type,
+				is_mut=True,
+			)
+		)
+		zero_flag = self._const_int(0)
+		self.b.emit(M.StoreRef(ptr=flag_ptr, value=zero_flag, inner_ty=self._int_type))
+
 	def _move_from_callback_capture_slot(self, key: C.HCaptureKey) -> M.ValueId | None:
 		if not self._lambda_is_callback or self._lambda_capture_slots is None or self._lambda_capture_kinds is None:
 			return None
@@ -3493,6 +3601,7 @@ class HIRToMIR:
 		self.b.emit(M.ZeroValue(dest=zero_val, ty=inner_ty))
 		self._local_types[zero_val] = inner_ty
 		self.b.emit(M.StoreRef(ptr=ptr, value=zero_val, inner_ty=inner_ty))
+		self._clear_capture_live_flag(slot)
 		return moved_val
 
 	def _visit_expr_HUnary(self, expr: H.HUnary) -> M.ValueId:
@@ -5325,7 +5434,9 @@ class HIRToMIR:
 			else:
 				env_name = f"__lambda_env_cb_{lambda_id}"
 			field_names = [f"c{i}" for i in range(len(lam.captures))]
-			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
+			# env_ty is DECLARED after the capture loop (below): the
+			# CB-DROP LIVENESS FLAG fields depend on the final capture
+			# field types, which the loop computes.
 			env_vals: list[M.ValueId] = []
 			# Build a binding_id → HExplicitCapture map so the SHARE
 			# branch can read `share_value` (synthesized in
@@ -5418,6 +5529,36 @@ class HIRToMIR:
 					continue
 				if val_ty != env_field_types[idx]:
 					env_field_types[idx] = val_ty
+			# CB-DROP LIVENESS FLAGS (2026-07-10, LANGUAGE_BUG
+			# issues/channel-receiver-destroy-bounds-check-crash-at-exit):
+			# the env drop thunk used to run user Destructible::destroy
+			# unconditionally on every env slot — including slots the body
+			# MOVED OUT and zero-backed, violating the spec's
+			# destroy-exactly-once / fully-formed-value contract
+			# (drift-lang-spec §5.11 + §4).  Refcount releases are
+			# zero-safe; user destroy is arbitrary code (Receiver::destroy
+			# dereferences its inner Arc and aborts on the moved-from
+			# sentinel).  Fix: every MOVE-kind capture whose drop can
+			# reach a user destructor gets a trailing Int field
+			# `__live{slot}` (init 1; `_move_from_callback_capture_slot`
+			# stores 0 alongside the value zero-back); the drop thunk
+			# (`_emit_callback_drop_thunk`) guards that slot's drop on the
+			# flag.  Trailing placement keeps capture slot indices stable;
+			# the field NAME is the lowering↔codegen contract and
+			# round-trips package serialization with the struct type.
+			# Runtime flags, not static elision: a capture may be moved
+			# out on one branch only.
+			for _slot, _cap in enumerate(lam.captures):
+				if _cap.kind is not C.HCaptureKind.MOVE:
+					continue
+				if _slot >= len(env_field_types):
+					continue
+				if not self._drop_can_invoke_user_destroy(env_field_types[_slot]):
+					continue
+				field_names.append(f"__live{_slot}")
+				env_field_types.append(self._int_type)
+				env_vals.append(self._const_int(1))
+			env_ty = self._type_table.declare_struct(module_id=mod, name=env_name, field_names=field_names)
 			self._type_table.define_struct_fields(env_ty, env_field_types)
 			env_val = self.b.new_temp()
 			self.b.emit(M.ConstructStruct(dest=env_val, struct_ty=env_ty, args=env_vals))

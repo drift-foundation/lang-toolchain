@@ -6724,7 +6724,54 @@ class _FuncBuilder:
 		env_val = self._fresh("env_val")
 		lines.append(f"  {env_val} = load {emit_env_llty}, ptr %data")
 		self.value_types[env_val] = env_llty
-		self._emit_drop_value(env_ty, env_val)
+		# CB-DROP LIVENESS FLAGS (2026-07-10): an env struct may carry
+		# trailing Int fields named `__live<slot>` (one per MOVE-kind
+		# capture whose drop can invoke a user Destructible::destroy —
+		# see hir_to_mir._lower_lambda_callback).  The body stores 0 to
+		# the flag when it moves the capture out (alongside the value
+		# zero-back), and this thunk must then SKIP that slot's drop:
+		# the spec (drift-lang-spec §5.11 + §4) promises destroy runs
+		# exactly once and only on a fully-formed value, never on the
+		# moved-out zero sentinel (Receiver::destroy dereferences its
+		# inner Arc and aborts on it).  Envs with no flag fields take
+		# the legacy whole-struct drop, byte-identical to before.
+		flag_by_slot: dict[int, int] = {}
+		env_inst = self.type_table.get_struct_instance(env_ty)
+		if env_inst is not None:
+			for j, fname in enumerate(env_inst.field_names):
+				if fname.startswith("__live"):
+					try:
+						flag_by_slot[int(fname[len("__live"):])] = j
+					except ValueError:
+						continue
+		if not flag_by_slot:
+			self._emit_drop_value(env_ty, env_val)
+		else:
+			flag_llty = self._llty(DRIFT_INT_TYPE)
+			for idx, field_ty in enumerate(env_inst.field_types):
+				if env_inst.field_names[idx].startswith("__live"):
+					continue
+				if not self._type_needs_drop(field_ty):
+					continue
+				field_llty = self._llvm_type_for_typeid(field_ty)
+				field_val = self._fresh("cb_drop_field")
+				lines.append(f"  {field_val} = extractvalue {emit_env_llty} {env_val}, {idx}")
+				self.value_types[field_val] = field_llty
+				flag_idx = flag_by_slot.get(idx)
+				if flag_idx is None:
+					self._emit_drop_value(field_ty, field_val)
+					continue
+				flag_val = self._fresh("cb_live")
+				lines.append(f"  {flag_val} = extractvalue {emit_env_llty} {env_val}, {flag_idx}")
+				cond = self._fresh("cb_live_ne")
+				lines.append(f"  {cond} = icmp ne {flag_llty} {flag_val}, 0")
+				live_bb = self._fresh("cb_slot_live")
+				cont_bb = self._fresh("cb_slot_cont")
+				lines.append(f"  br i1 {cond}, label {live_bb}, label {cont_bb}")
+				lines.append(f"{live_bb[1:]}:")
+				self._emit_drop_value(field_ty, field_val)
+				lines.append(f"  br label {cont_bb}")
+				lines.append(f"{cont_bb[1:]}:")
 		self.module.needs_array_helpers = True
 		lines.append("  call void @drift_cb_env_free(ptr %data)")
 		lines.append("  ret void")

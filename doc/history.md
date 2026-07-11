@@ -35,6 +35,35 @@
   `test_string_release_elision` (10, incl. leak-direction valgrind rows),
   `test_string_arc_audit_reporter` (7, incl. the retired-C4 loud-failure pin).
 
+### Callback-env phantom destroy of moved-out Destructible captures (DriftQuery 2026-07-10)
+- **`Receiver<T>::destroy` SIGABRT at process exit fixed at the root**
+  (`issues/channel-receiver-destroy-bounds-check-crash-at-exit/`): the callback env drop
+  thunk ran user `Destructible::destroy` unconditionally on every env slot — including
+  slots the body MOVED OUT and zero-backed. That violated the spec's destroy contract
+  (§5.11 "exactly once"; §4 "expects every field to be in a fully-formed state …
+  destructors must remain simple and total"): refcount releases are zero-safe, but user
+  destroy is arbitrary code — `Receiver::destroy` dereferences its inner Arc and aborted
+  (`drift_bounds_check_fail` via `_arc_get_impl`) on the moved-from zero sentinel;
+  quieter Destructible types got a silent phantom zero-value destroy on the NORMAL
+  completion path (no channel needed). NOT a registry-ordering bug — single-VT
+  deterministic repro on the zero sentinel.
+- Fix: **CB-DROP LIVENESS FLAGS** — MOVE-kind captures whose drop can reach a user
+  destructor get a trailing `__live{slot}` Int field in the env (init 1; the capture
+  move-out stores 0 alongside the value zero-back); `_emit_callback_drop_thunk` guards
+  those slots' drops on the flag. Runtime flags (conditional moves), field-name contract
+  between lowering and codegen, trailing placement keeps capture indices stable. Envs
+  without Destructible move-captures compile to byte-identical thunks. No stdlib change:
+  destructors still never inspect liveness, per spec. ABI stays 20 (the env blob is only
+  interpreted by its own vtable-carried thunks).
+- The flag predicate mirrors drop emission's FULL destructor authority (review round):
+  exact `destructor_fns[ty]` → trait prover → the `(name, module_id)` generic-nominal
+  fallback `has_drop` uses — the trait prover alone can miss cross-package generic
+  instantiations (types_core documents the divergence).
+- Pins: `test_cb_env_destructible_capture_flags.py` (12): destroy-exactly-once Token
+  probe, the reported repro (+ASAN +Valgrind), blocked-in-recv, join control, non-moved
+  capture, conditional move both outcomes (+Valgrind both paths), package-mode
+  signed-std check, generic `Wrap<T>` moved out inside a boxed callback.
+
 ### `Arc<T>.get()` on self-referential T — RecursionError (DriftQuery 2026-07-10)
 - Resolving a generic method on `Arc<T>` where T recursively contains itself through
   `Array<T>` (any tree/AST-shaped struct) crashed with a raw Python RecursionError:

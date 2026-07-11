@@ -348,3 +348,24 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   recommended) / B (zero gate, unsound) / C (stdlib moved-from guard, tactical) in
   /tmp/drift-announce/2026-07-10T130000Z-receiver-destroy-atexit-checkpoint.md. Awaiting
   decision.
+- 2026-07-10: **Fix A implemented — CB-DROP liveness flags (0.33.79 candidate; cert held
+  for this).** User agreed root cause + spec ruling; scope: compiler drop-glue only, no
+  stdlib guard, no byte-sniffing. Mechanism: MOVE captures whose drop can reach a user
+  destructor get trailing `__live{slot}` Int env fields (init 1; move-out stores 0 with
+  the zero-back); _emit_callback_drop_thunk guards flagged slots; flag-free envs
+  byte-identical. Matrix 11/11 (Token exactly-once, Receiver repro +ASAN+Valgrind,
+  blocked-recv, join control, non-moved, conditional move both outcomes +Valgrind,
+  pkg-mode signed-std). ABI assessed: stays 20 (bump was authorized, not needed — env
+  blob interpreted only by own vtable thunks). history.md folded into 0.33.79 entry.
+  Wide batteries (full e2e memcheck, stage2+memcheck, matrices) running at log time.
+  Report: /tmp/drift-announce/2026-07-10T160000Z-cb-env-destructible-capture-flags.md.
+- 2026-07-10: **Review round on fix A (blocking): predicate authority widened.**
+  _drop_can_invoke_user_destroy now mirrors has_drop/codegen destructor authority:
+  exact destructor_fns[ty] → is_destructible → (name, module_id) generic-nominal
+  fallback (trait prover can miss cross-package generic instantiations). Explicit
+  proof per review: instrumented pkg-mode consumer compile — Receiver resolves
+  exact=True ∧ trait=True (existing pkg pin does NOT isolate destructor_fns-only; no
+  deterministic in-tree shape does) → added pin 12: generic Wrap<T> Destructible moved
+  out inside a boxed callback (core.callback0+spawn), destroy-exactly-once. Matrix
+  12/12. Callback0 side-finding: both authorities False = correct (no user destructor,
+  structural zero-safe drop). Targeted runs only per new rule.
