@@ -1,0 +1,24 @@
+// Standalone check for the third manifestation (usr2 harness): `val _ = <generic call>`
+// inside a spawn lambda — SSA return-type contract failure family.
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+fn g<R>(var cb: core.Callback0<R>) nothrow -> R {
+	return cb.call();
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	var vt = conc.spawn(core.callback0(|| => {
+		val _ = g(core.callback0(|| => { return 41; }));
+		return 0;
+	}));
+	match vt.join() {
+		core.Result::Ok(v) => {
+			if v == 0 { return 0; }
+			return 2;
+		},
+		core.Result::Err(_) => { return 1; },
+	}
+}

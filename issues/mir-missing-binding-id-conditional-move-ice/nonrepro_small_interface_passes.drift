@@ -1,0 +1,41 @@
+// Reduction attempt 2 for E-AUTO-91e8ffe5: interface-impl method reads a flag through a
+// scoped MutexGuard, then conditionally early-returns (dropping the `var` boxed-callback
+// param) or moves the callback into a consumer.
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+pub struct FailState { mode: Int }
+
+pub interface Sink {
+	fn feed(self: &Self, var cb: core.Callback1<Int, Int>) nothrow -> Int;
+}
+
+pub struct RealSink { state: conc.Mutex<FailState> }
+
+fn consume(var cb: core.Callback1<Int, Int>) nothrow -> Int {
+	return cb.call(2);
+}
+
+implement Sink for RealSink {
+	pub fn feed(self: &RealSink, var cb: core.Callback1<Int, Int>) nothrow -> Int {
+		var failMode = false;
+		{
+			var g = conc.lock(&self.state);
+			val fs = g.get_mut();
+			if fs.mode == 1 { failMode = true; }
+		}
+		if failMode {
+			return 0 - 1;
+		}
+		return 40 + consume(move cb);
+	}
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	var sink: Sink = RealSink(state = conc.mutex(FailState(mode = 0)));
+	val a = sink.feed(core.callback1(| x: Int | => { return x; }));
+	if a == 42 { return 0; }
+	return 1;
+}

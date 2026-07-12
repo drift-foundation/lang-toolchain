@@ -1,0 +1,55 @@
+// 2-file repro for the spawn-lambda SSA-contract ICEs (E-AUTO-30f18b1b / -5860e3c5 / -55b73ccb,
+// "typecheck contract failure: SSA return type does not match declared signature for
+// __lambda_cb_main_0_N in entry"): a `val _ = <generic driver call>` inside a spawned Callback0
+// lambda, where the generic call is dqc.storage's with_read_txn/with_write_txn. A standalone
+// reduction (val _ = g(cb) for a local generic g inside conc.spawn) COMPILES FINE — the failure
+// needs the real dqc.storage generics; hence this 2-file bundle. Same family as the standalone
+// repro in issues/generic-lambda-match-result-ssa-ice/ (generic type substitution inside boxed
+// lambda bodies).
+// Compile with the bundled storage_slice12_snapshot.drift:
+//
+//   driftc --allow-unsafe --link-search /usr/lib/x86_64-linux-gnu --link-lib :liblmdb.so.0 \
+//     --target-word-bits 64 -o /tmp/repro storage_slice12_snapshot.drift repro_spawn_lambda_main.drift
+module main;
+
+import std.core as core;
+import std.console as console;
+import std.concurrent as conc;
+import dqc.storage as st;
+
+extern "C" fn usleep(usec: Uint32) nothrow -> Int32;
+
+fn b(s: String) nothrow -> Array<Byte> {
+	var out: Array<Byte> = [];
+	var i = 0;
+	val n = s.byte_length();
+	while i < n { out.push(core.string_byte_at(&s, i)); i = i + 1; }
+	return move out;
+}
+
+pub fn main() nothrow -> Int {
+	var bld = conc.blocking_executor_builder();
+	bld.min_threads(2);
+	bld.max_threads(2);
+	bld.queue_limit(2);
+	bld.timeout(conc.Duration(millis = 600000));
+	match st.new_lmdb_storage_with_policy("/tmp/dqc_repro_spawn_lambda.mdb", bld.build(), "storage-lmdb") {
+		Err(e) => { console.eprintln("open failed: " + e.msg); return 1; },
+		Ok(ls) => {
+			val storeArc = conc.arc(move ls).as_interface<type st.Storage>();
+			val arcA = storeArc.clone();
+			val _vtA = conc.spawn(core.callback0(|| captures(move arcA) => {
+				val s = arcA.get();
+				val _ = st.with_write_txn(s, "lmdb.hold.write", core.callback2(| s2: &st.Storage, wt: &st.WriteTxn |  => {
+					unsafe {
+						val _z = usleep(cast<Uint32>(1000));
+					}
+					return st.txn_put(s2, wt, &b("k"), &b("v"));
+				}));
+				return 0;
+			}));
+			val _s1 = conc.sleep(conc.Duration(millis = 50));
+			return 0;
+		},
+	}
+}

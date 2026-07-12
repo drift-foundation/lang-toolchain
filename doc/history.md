@@ -1,6 +1,47 @@
 # Drift development history
 
-## 2026-07-13 (0.33.81: std.concurrent export-surface hotfix — blocking-FFI API nameable; ABI stays 21)
+## 2026-07-13 (0.33.82: compiler-ICE hotfix — generic-lambda substitution, lambda return inference, method-body consts, extern dedup; ABI stays 21)
+
+Root-cause fixes for the two ICEs drift-query filed against certified 0.33.81
+(`issues/generic-lambda-match-result-ssa-ice/`,
+`issues/mir-missing-binding-id-conditional-move-ice/` — both blocking its
+Slice 12), plus two adjacent defects uncovered while verifying them. Compiler
+fixes only — no runtime, ABI, or stdlib changes; ABI stays 21.
+
+- **Lambdas hoisted out of generic instantiations now see the template's type
+  params** (E-AUTO-90fc29aa): a boxed/captureless lambda inside `fn f<R>` is
+  re-checked as a standalone function; the re-check received no `R → concrete`
+  binding, so `core.Result<R, Int>` written in the lambda body resolved `R` as
+  an unknown NOMINAL — surfacing as the SSA return-type contract ICE (match-arm
+  shape) or as a wrong `E_VARIANT_CTOR_ARG_TYPE` diagnostic ("have Int,
+  expected R" — the sibling repro). Fix: both lambda re-check sites forward the
+  origin TypedFn's recorded `preseed_type_params`; nested lambdas inherit
+  transitively because each lambda's TypedFn records the forwarded map.
+- **Lambda return inference no longer crosses nested-lambda boundaries**
+  (E-AUTO-30f18b1b, the spawn manifestation): `_find_return_expr` walked the
+  lambda body for the first `HReturn` and descended into inner `HLambda`
+  bodies, so `|| => { val _ = g(|x| => { return e; }); return 0; }` typed the
+  OUTER lambda from `e`. `HLambda` is now a boundary in the walk.
+- **Unqualified module consts in method bodies** (E-AUTO-91e8ffe5): the checker
+  resolved `CONST` inside a method but never stamped the resolved module on the
+  HVar; MIR lowering then re-derived the module from the MirFunc name — which
+  for interface-impl methods (`Type::Iface::method`) and inherent methods
+  (`Type::method`) has no module prefix — missed the lookup, and strict typed
+  mode ICE'd with "missing binding_id for local read" at the method header.
+  (The reported 12-method-interface shape was a red herring: the trigger was
+  the const read behind the wrapper's mode check.) Fix: stamp `expr.module_id`
+  at const resolution.
+- **Duplicate identical extern "C" declares deduped**: two modules in one
+  compilation unit declaring the same C symbol emitted two LLVM `declare`
+  lines; clang rejects repeated declares even when identical. Exact repeats are
+  now deduped; a repeat with a DIFFERENT signature still fails at the LLVM
+  level as before.
+- Pins: `test_drift_query_slice12_ices.py` (5 — the two filed regression-first
+  pins now green, the variant-ctor sibling, an LMDB-free spawn-manifestation
+  reduction verified to reproduce on the pre-fix checker, and a tight
+  const-in-iface-impl/inherent-method pin) +
+  `test_extern_c_declare_dedup.py` (1). All issue-bundle repros (including
+  both original 2-file LMDB contexts) compile and run.
 
 - **`conc.BlockingExecutor` is now nameable in user code**
   (`issues/blocking-executor-missing-from-concurrent-exports/`, reported by

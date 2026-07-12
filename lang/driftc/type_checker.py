@@ -6736,6 +6736,15 @@ class TypeChecker:
 						cv = self.type_table.lookup_const(f"{const_mod}::{expr.name}")
 						if cv is not None:
 							ty_id, _val = cv
+							# Stamp the resolved module on the node.  MIR
+							# lowering re-resolves consts by name; without
+							# the stamp it guesses the module from the
+							# MirFunc name, which for interface-impl
+							# methods ("Type::Iface::method") has no module
+							# prefix — the lookup misses and strict typed
+							# mode ICEs with "missing binding_id for local
+							# read" (E-AUTO-91e8ffe5).
+							expr.module_id = const_mod
 							_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
 							return record_expr(expr, ty_id)
 				if expr.module_id is None and expr.binding_id is None:
@@ -7110,6 +7119,14 @@ class TypeChecker:
 						inferred_ret = type_expr(expr.body_expr)
 					elif expr.body_block is not None:
 						def _find_return_expr(node: H.HNode) -> H.HExpr | None:
+							# A nested lambda is a function boundary: its
+							# `return`s exit the INNER lambda, never this
+							# one.  Descending into it made an outer
+							# `|| => { val _ = g(|x| => { return e; }); return 0; }`
+							# infer the OUTER return type from `e` (the
+							# spawn-lambda SSA-contract ICE family).
+							if isinstance(node, H.HLambda):
+								return None
 							if isinstance(node, H.HReturn) and node.value is not None:
 								return node.value
 							if isinstance(node, H.HBlock):

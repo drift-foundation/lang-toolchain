@@ -1,0 +1,125 @@
+// 2-file repro for E-AUTO-91e8ffe5 ("MIR lowering contract failure (typed_mode strict: missing
+// binding_id for local read (checker bug))" at the scan_prefix impl-method header): a mode-switched
+// Storage wrapper whose impl methods conditionally early-return around moves of non-Copy values.
+// Standalone reductions of the same shapes (small interface, same guard/conditional-move structure)
+// COMPILE FINE — the failure needs dqc.storage's real interface; hence this 2-file bundle.
+// Compile with the bundled storage_slice12_snapshot.drift:
+//
+//   driftc --allow-unsafe --link-search /usr/lib/x86_64-linux-gnu --link-lib :liblmdb.so.0 \
+//     --target-word-bits 64 -o /tmp/repro storage_slice12_snapshot.drift repro_wrapper_main.drift
+module main;
+
+import std.core as core;
+import std.format as fmt;
+import std.concurrent as conc;
+import dqc.storage as st;
+
+const MODE_FAIL_SCAN_PREFIX: Int = 1;
+const MODE_FAIL_F_PUTS_AFTER_FIRST: Int = 2;
+
+pub struct FailState { mode: Int, fPuts: Int, }
+pub struct FailingStorage { inner: st.Storage, state: conc.Arc<conc.Mutex<FailState> >, }
+
+fn invocation_f_prefix() nothrow -> Array<Byte> {
+    var out: Array<Byte> = [];
+    out.push(cast<Byte>(7));
+    return move out;
+}
+fn bytes_starts_with(key: &Array<Byte>, prefix: &Array<Byte>) nothrow -> Bool {
+    if key.len() < prefix.len() { return false; }
+    var i = 0;
+    while i < prefix.len() {
+        if key[i] != prefix[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+fn injected_unavailable(what: String) nothrow -> st.StorageError {
+    return st.StorageError(kind = st.STORAGE_UNAVAILABLE, rc = 0, msg = "injected (FailingStorage): " + (what + ""));
+}
+
+implement st.Storage for FailingStorage {
+    pub fn begin_read(self: &FailingStorage) nothrow -> core.Result<st.ReadTxn, st.StorageError> {
+        return self.inner.begin_read();
+    }
+    pub fn end_read(self: &FailingStorage, txn: &st.ReadTxn) nothrow -> Void {
+        self.inner.end_read(txn);
+    }
+    pub fn begin_write(self: &FailingStorage) nothrow -> core.Result<st.WriteTxn, st.StorageError> {
+        return self.inner.begin_write();
+    }
+    pub fn commit_write(self: &FailingStorage, txn: st.WriteTxn) nothrow -> core.Result<Void, st.StorageError> {
+        return self.inner.commit_write(move txn);
+    }
+    pub fn abort_write(self: &FailingStorage, txn: st.WriteTxn) nothrow -> Void {
+        self.inner.abort_write(move txn);
+    }
+    pub fn get(self: &FailingStorage, txn: &st.ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, st.StorageError> {
+        return self.inner.get(txn, key);
+    }
+    pub fn get_in_write(self: &FailingStorage, txn: &st.WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, st.StorageError> {
+        return self.inner.get_in_write(txn, key);
+    }
+    pub fn scan(self: &FailingStorage, txn: &st.ReadTxn, var visitor: core.Callback1<st.KeyValue, Bool>) nothrow -> core.Result<Void, st.StorageError> {
+        return self.inner.scan(txn, move visitor);
+    }
+    pub fn scan_prefix(self: &FailingStorage, txn: &st.ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<st.KeyValue, Bool>) nothrow -> core.Result<Void, st.StorageError> {
+        // the param is moved UNCONDITIONALLY into vopt (a conditionally-moved var param trips a MIR
+        // lowering contract failure on driftc 0.33.81 — "missing binding_id for local read"); the
+        // fail branch then just drops vopt.
+        var vopt: Optional<core.Callback1<st.KeyValue, Bool> > = Optional::Some(move visitor);
+        var failMode = false;
+        {
+            var sh = self.state.clone();
+            var g = conc.lock(sh);
+            val fs = g.get_mut();
+            if fs.mode == MODE_FAIL_SCAN_PREFIX { failMode = true; }
+        }
+        if failMode {
+            return core.Result::Err(injected_unavailable("scan_prefix"));
+        }
+        match vopt {
+            None => { return core.Result::Err(injected_unavailable("scan_prefix (visitor unexpectedly absent)")); },
+            Some(v) => {
+                var vis = move v;
+                return self.inner.scan_prefix(txn, prefix, move vis);
+            },
+        }
+    }
+    pub fn put(self: &FailingStorage, txn: &st.WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, st.StorageError> {
+        var sh = self.state.clone();
+        var g = conc.lock(sh);
+        val fs = g.get_mut();
+        if fs.mode == MODE_FAIL_F_PUTS_AFTER_FIRST {
+            val fpfx = invocation_f_prefix();
+            if bytes_starts_with(key, &fpfx) {
+                fs.fPuts = fs.fPuts + 1;
+                if fs.fPuts >= 2 {
+                    return core.Result::Err(injected_unavailable("namespace-F put #" + fmt.format_int(fs.fPuts)));
+                }
+            }
+        }
+        return self.inner.put(txn, key, value);
+    }
+    pub fn del(self: &FailingStorage, txn: &st.WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, st.StorageError> {
+        return self.inner.del(txn, key);
+    }
+    pub fn exec_handle(self: &FailingStorage) nothrow -> Optional<st.ExecHandle> {
+        // None => the drivers run this wrapper's transactions INLINE, so every op (including the
+        // injected failures) passes through the wrapper — the executor path would reconstruct a raw
+        // LmdbView worker-side and bypass the wrapper entirely. Test-only deviation, see header.
+        val _ = self;
+        return Optional<st.ExecHandle>::None();
+    }
+}
+
+
+pub fn main() nothrow -> Int {
+    var inner: st.Storage = st.new_mem_storage();
+    var w: st.Storage = FailingStorage(inner = move inner, state = conc.arc(conc.mutex(FailState(mode = 0, fPuts = 0))));
+    match w.begin_read() {
+        Err(_) => { return 1; },
+        Ok(t) => { w.end_read(&t); },
+    }
+    return 0;
+}
