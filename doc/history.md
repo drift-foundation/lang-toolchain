@@ -1,5 +1,24 @@
 # Drift development history
 
+## 2026-07-13 (0.33.81: std.concurrent export-surface hotfix — blocking-FFI API nameable; ABI stays 21)
+
+- **`conc.BlockingExecutor` is now nameable in user code**
+  (`issues/blocking-executor-missing-from-concurrent-exports/`, reported by
+  drift-query against certified 0.33.80): all six blocking-facility declarations
+  were `pub` but absent from std.concurrent's `export {}` list. Functions RESOLVED
+  cross-module by inference — masking the omission — but the TYPE failed with
+  E-AUTO-0fd5b919 in struct fields, parameters, and return types, blocking the
+  store-your-subsystem-executor integration shape the facility's own boundary
+  guidance prescribes (and the generic-parameter dodge failed on inference
+  conflicts). Fix: `BlockingExecutor`, `blocking_executor_builder`,
+  `build_blocking_executor`, `spawn_blocking_on`, `run_blocking_on`,
+  `spawn_on_labeled` added to the export list. Export list only — no executor
+  behavior changes; ABI stays 21.
+- Pins: `test_blocking_executor_exports.py` (3): the full store-your-executor shape
+  (type in FIELD + &PARAM + RETURN, compiled AND run through the stored handle);
+  the pre-fix inference-only shape still works; a genuinely private name
+  (`ResultState`) stays rejected — the export gate itself is intact.
+
 ## 2026-07-12 (0.33.80: blocking-FFI facility — Block(timeout) bounded admission, BlockingExecutor, and observability; ABI 20 → 21)
 
 ### Executor `Block(timeout)` bounded admission (runtime; DriftQuery-approved design)

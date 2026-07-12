@@ -68,7 +68,18 @@ export {
 	Sender,
 	Receiver,
 	ChannelHalves,
-	channel
+	channel,
+	// 0.33.80 blocking-FFI facility surface (export omission fixed in
+	// 0.33.81 — the declarations were pub from day one, but without
+	// export{} entries the TYPE was unnameable cross-module, blocking
+	// the store-your-executor integration shape the facility's own
+	// docs prescribe).
+	BlockingExecutor,
+	blocking_executor_builder,
+	build_blocking_executor,
+	spawn_blocking_on,
+	run_blocking_on,
+	spawn_on_labeled
 };
 
 // Source compatibility for `Arc<T>` / `arc()`.  These moved to
