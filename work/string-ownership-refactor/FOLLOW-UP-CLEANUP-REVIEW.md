@@ -39,3 +39,84 @@ After the immediate bug is patched, please review whether this list is complete 
 - The highest architectural value is still deleting or collapsing `string_arc.py`.
 - Array release-elision is worth evaluating, but only if it removes real runtime work or prevents the same class of defects we just saw.
 - B-repr/B5 should remain a design slice until the remaining authority cleanup is stable.
+
+---
+
+## Review (K, 2026-07-12) — accepted with additions
+
+**Verdict: the list is sound, no item blocks the next certification, and
+`string_arc.py` is the highest-value target.** Two items were missing (8 and 9 below);
+two existing items get sharper framing.
+
+### Item-by-item
+
+1. **`string_arc.py` deletion — top prize, and B-arch changed HOW to do it.** With
+   C2 = 0, string_arc's residual authority is enumerable by the audit itself:
+   temp last-use releases (~363k corpus emissions), overwrite releases (~137k), the
+   ledger-consulted scope-exit sweep (~40k), site-4, and retain fallbacks the stakes
+   made mostly dead. The deletion should NOT be a rewrite — it should be
+   *prove-a-class-dead-then-delete* slices: use the reporter to show an emission class
+   is zero (or migrate it to the generic cleanup_authoring/drop_flags authorities),
+   delete that branch, corpus as the acceptance signature each time. This framing
+   belongs in SCOPE-B-PLAN.md.
+
+2. **C3 allowlist — a POST-CERT DECISION SLICE, not an open-ended exception.**
+   "Explicit exception, byte-identical for six corpus generations" is precisely what
+   C4 was — counted-never-failed — and C4's retirement proved forcing these to a
+   decision is cheap. After cert, one small slice must either model flag-guarded
+   cleanup MoveOuts in the ledger event model or bless the allowlist PERMANENTLY with
+   a loud pin. The indefinite "temporary" exception is the item's real risk, not the
+   11,441 count.
+
+3. **Array release-elision — MEASUREMENT-FIRST.** Extend the reporter to
+   ArrayDrop/`_drop_all_arrays` sites for one corpus generation (mirror of B-arch-0)
+   and size the win before committing to implementation. Safety direction matches
+   strings (wrongly-kept drops of zeroed arrays are no-ops; only wrongly-elided live
+   arrays leak — the MUST_NOT_DROP-only guardrail carries over). If UNINIT/MOVED_OUT
+   dominance repeats, it is the same slice shape at low risk; if not, drop the item.
+
+4. **`pre_post_verdict_drift` → B-repr input — agreed**; already characterized as
+   emission-independent.
+
+5. **B-repr/B5 stays a design slice — agreed.**
+
+6. **Two ownership meanings, one C signature — agreed on fragility, with a
+   reframe: this item IS a B-repr input, not a separate track.** B5's accessor-style
+   interop is the structural fix; fold the long-term options here (typedef aliases
+   are documentation-strength; extern ownership annotations consumed by the AUDIT are
+   the cheap version with teeth) into the B-repr design doc rather than doing them
+   piecemeal. Interim mitigations now in place: the call-site-decides convention
+   wording in string_runtime.h, the owned-string audit, and heap-string valgrind pins
+   in both directions for the two new receivers. Residual risk to carry as a RULE,
+   not precedent: a stdlib call-site change (`move` → live pass) flips a receiver's
+   convention without touching C — therefore **new or changed Convention-A
+   DriftString receivers need a heap-string ownership pin, or coverage by an existing
+   representative pin** (static literals mask both failure directions; heap strings
+   are the only decisive test).
+
+### Missing items (7 and 8 join the "Not Clean Yet" inventory)
+
+7. **Owned-at-extraction contract pin.** Exactly two codegen extraction lowerings
+   retain the extracted element (`ArrayIndexLoad[Unchecked]`, `VariantGetField` via
+   `_emit_copy_value`), and the stake pass encodes that only as terminal-with-
+   comments. Nothing structural stops a future extraction node shipping with a hidden
+   retain and being misclassified as a stakeable view — the exact 1d leak shape,
+   which cost a full-suite catch. Cleanup: a STATIC AUDIT (same genre as the
+   fresh-hint ambiguity scan) tying the set of codegen extraction nodes that call
+   `_emit_copy_value` to the stake pass's terminal-producer list, so the class cannot
+   regress silently.
+
+8. **Corpus tooling promotion.** The B-arch corpus runner/aggregator live as session
+   scratchpad scripts, but the "identical universe / arithmetically exact deltas"
+   methodology is what signs off every Scope-B deletion slice. If deletions proceed
+   corpus-signed, the runner/aggregator belongs in repo tooling (`tools/`, alongside
+   the shared test-runner conventions) so the methodology is reproducible and not
+   session-local.
+
+### Answers to the review request
+
+- **Completeness:** complete after adding items 7-8 above.
+- **Cert-blocking:** nothing here blocks cert. Item 6 was the only live-bug
+  candidate and is pinned in both directions.
+- **Priorities:** string_arc deletion (incremental, corpus-signed) > C3 decision
+  slice > Array-elision measurement > B-repr design (absorbing items 4, 5, 6).
