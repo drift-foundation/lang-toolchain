@@ -2551,7 +2551,11 @@ int64_t drift_thread_tid(void) {
 /* Executor display name (liveness).  Publish-length-last: bytes first,
  * release-store of the (clamped) length after.  Single logical writer
  * (build_blocking_executor, right after exec_create). */
-void drift_exec_set_name(uint64_t exec, DriftString name) {
+void drift_exec_set_name(uint64_t exec, DriftString name_in) {
+	/* By-value DriftString: the caller transferred an owned stake —
+	 * the shadow's cleanup releases it on every exit path
+	 * (drift-owned-string audit discipline). */
+	DRIFT_OWNED_STRING DriftString name = name_in;
 	DriftExec *ex = (DriftExec *)exec;
 	if (!ex) {
 		return;
@@ -2570,7 +2574,10 @@ void drift_exec_set_name(uint64_t exec, DriftString name) {
  * encoded into the label (review: string formatting is not cheap and
  * the label budget is small).  Publish-length-last as above; single
  * writer (the submitter, before exec_submit). */
-void drift_vt_set_op(uint64_t vt, DriftString label) {
+void drift_vt_set_op(uint64_t vt, DriftString label_in) {
+	/* By-value DriftString: owned stake transferred; shadow-release
+	 * on every exit path (drift-owned-string audit discipline). */
+	DRIFT_OWNED_STRING DriftString label = label_in;
 	DriftVt *h = (DriftVt *)vt;
 	if (!h) {
 		return;

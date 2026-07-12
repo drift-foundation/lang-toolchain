@@ -321,3 +321,51 @@ def test_hostile_labels_json_valid_and_unlabeled_vts_clean(tmp_path: Path) -> No
 		if v.get("op") is None:
 			assert "submitter" not in v, v
 			assert "ffi" not in v, v
+
+
+_HEAP_LABEL_BALANCE_SOURCE = """\
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as console;
+
+pub fn main() nothrow -> Int {
+	var b = conc.blocking_executor_builder();
+	b.min_threads(1);
+	b.max_threads(1);
+	val ex = conc.build_blocking_executor(b.build(), "heap-" + "name");
+	var i = 0;
+	while i < 5 {
+		match conc.run_blocking_on(&ex, "heap." + "label", core.callback0(|| => { return 1; })) {
+			core.Result::Ok(_) => {},
+			core.Result::Err(_) => { return 1; },
+		}
+		i = i + 1;
+	}
+	console.println("balance-done");
+	return 0;
+}
+"""
+
+
+@pytest.mark.skipif(__import__("shutil").which("valgrind") is None, reason="valgrind required")
+def test_heap_labels_balanced_valgrind(tmp_path: Path) -> None:
+	"""Ownership pin for the name/label externs, decisive in BOTH
+	directions because the strings are HEAP (concat — static literals
+	no-op retain/release and mask everything): the stdlib call sites
+	pass `move`, so the runtime receivers own the stake and must
+	release exactly once (DRIFT_OWNED_STRING shadow).  A missing
+	release leaks per call; a wrong extra release (Convention-B
+	misclassification) double-frees.  Valgrind must be silent."""
+	out = _compile(tmp_path, _HEAP_LABEL_BALANCE_SOURCE)
+	vg_log = tmp_path / "valgrind.log"
+	vg = subprocess.run(
+		["valgrind", "--leak-check=full",
+		 "--errors-for-leak-kinds=definite,indirect",
+		 "--error-exitcode=97", f"--log-file={vg_log}", str(out)],
+		capture_output=True, text=True, timeout=sanitizer_timeout(240),
+	)
+	log = vg_log.read_text() if vg_log.exists() else ""
+	assert vg.returncode == 0, f"valgrind errors:\n{log[-1500:]}"
+	assert "balance-done" in vg.stdout

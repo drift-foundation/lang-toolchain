@@ -45,16 +45,29 @@ char *drift_string_to_cstr(DriftString s);
  * (using a local copy) to make the release automatic at every scope
  * exit -- no per-return-path drift_string_release() calls needed.
  *
- * Convention B (language built-in / intrinsic receivers) -- do NOT
- * use DRIFT_OWNED_STRING.  The Drift caller passes the existing
- * stake direct (no pre-retain) and releases its own local AFTER the
- * call.  Adding the macro on these sites would double-free (UAF on
- * heap inputs).  Convention-B receivers must instead carry an
- * explicit drift-owned-string-audit allow marker
- * (read-only-borrow / consumed-by-noreturn-callee as appropriate).
- * Current convention-B sites: drift_assert_loc (posix/assert_runtime.c),
- * drift_bounds_check + drift_bounds_check_fail +
- * drift_bounds_check_params_json_build (array_runtime.c).
+ * Convention B (borrowed-pass-through receivers) -- do NOT use
+ * DRIFT_OWNED_STRING.  The Drift caller passes the existing stake
+ * direct (no pre-retain) and releases its own local AFTER the call.
+ * Adding the macro on these sites would double-free (UAF on heap
+ * inputs).  Convention-B receivers must instead carry an explicit
+ * drift-owned-string-audit allow marker (read-only-borrow /
+ * consumed-by-noreturn-callee as appropriate).
+ *
+ * IMPORTANT: @intrinsic-ness does NOT decide the convention -- the
+ * DRIFT-LEVEL CALL SITE does.  An intrinsic whose stdlib callers pass
+ * `move s` (or a stake copy) transfers ownership and is Convention A
+ * even with no pre-retain: the move IS the transfer, the caller can
+ * no longer release, and the callee must (console_write/_writeln,
+ * exec_set_name, vt_set_op -- the latter two proven by a heap-string
+ * valgrind probe both directions, 2026-07-12).  Convention B applies
+ * where callers keep ownership and pass a live borrowed value
+ * (diagnostic paths: assert/bounds-check sites).
+ *
+ * There is deliberately NO exhaustive site list here -- it went stale
+ * once already.  The authority is the audit
+ * (lang/tests/driver/test_drift_owned_string_audit.py); enumerate
+ * current Convention-B sites with:
+ *   grep -rn "drift-owned-string-audit: allow" lang/language_runtime/
  *
  * Adoption (both conventions) is enforced by
  * lang/tests/driver/test_drift_owned_string_audit.py, which fails CI

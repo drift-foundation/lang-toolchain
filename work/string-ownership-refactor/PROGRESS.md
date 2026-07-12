@@ -504,3 +504,14 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   carries op= and wait=blocking-admission exec_id= (was wait_id-only — the queued
   blocking op was JSON-visible but not stderr-actionable); also added
   PARKED_BLOCKING_ADMISSION state name. Obs pins 4/4; targeted gate re-run green.
+- 2026-07-12: **Owned-string audit round — challenged and RESOLVED in favor of the
+  shadows (user accepted).** Full-suite audit flagged the two new String-taking
+  externs. Initial review suggestion (Convention-B allow markers) was challenged:
+  both stdlib call sites pass `move` (caller cannot release after — B's defining
+  shape doesn't apply); decisive heap-string valgrind probe (heap exec name + heap
+  label ×5, shadows in place) = 0 errors 0 leaks — B-misclassification would have
+  double-freed, A-without-shadow would have leaked. Kept DRIFT_OWNED_STRING shadows;
+  string_runtime.h convention section reworded (intrinsic-ness does NOT decide the
+  convention, the Drift-level call site does; stale site list replaced by
+  audit-authority + grep); NEW both-directions pin test_heap_labels_balanced_valgrind.
+  Audit + obs file 11/11; earlier gate (audit+obs+admission) green.
