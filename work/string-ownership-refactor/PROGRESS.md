@@ -466,3 +466,41 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   to the caller beats silent loss, kills a third behavior class, and the silent-drop
   shape is the 0.32.x shutdown-bug breeding ground. Flagged as the one behavior
   change beyond the finding's letter.
+- 2026-07-12: **Observability slice IMPLEMENTED (ABI 20→21, version 0.33.80).**
+  Runtime: DriftVt gains op_label(48, publish-length-last)/submitter_vtid/
+  exec_id_word(stamped at every enqueue)/atomic ffi_site ptr; DriftExec gains
+  exec_id(registration ordinal)/name(32, length-last)/wait_count. New externs
+  drift_exec_set_name, drift_vt_set_op (records caller vtid as separate numeric
+  submitter), drift_ffi_enter(site)/exit (single atomic ptr to compiler-emitted
+  rodata DriftFfiSite {sym,file,line}). New wait kind blocking-admission (wait_id =
+  exec id; deadline via extended timer correlation). Liveness walker: bounded
+  execs[64] snapshot + per-VT op/submitter/exec/ffi; JSON + stderr top-running
+  extended. Codegen: user-module extern "C" calls bracketed with enter/exit via
+  cached per-callsite site constants; std.*/lang.*-declared externs + @intrinsic
+  excluded (std.codec's drift_codec_* showed up in EVERY binary on the first cut —
+  the intrinsic-only IR pin caught it). Stdlib: REQUIRED names/labels —
+  build_blocking_executor(policy, name), spawn_blocking_on/run_blocking_on(exec,
+  label, cb), new spawn_on_labeled. vt_set_op/exec_set_name intrinsics wired at BOTH
+  codegen dispatch sites. Example examples/blocking_ffi (named exec + labeled op +
+  named wrapper + --stuck; README carries expected USR2 output, verified live
+  byte-for-shape incl. main.drift:33); justfile passes --allow-unsafe for it. Docs:
+  drift-concurrency "Blocking FFI from virtual threads" + "Making blocking FFI
+  diagnosable"; effective-drift entry. Findings during impl: deadline correlation
+  had to include the new wait kind; completed VTs leave the registry (label-persists
+  assert removed). Pins: test_blocking_ffi_observability.py (3: stuck-FFI USR2 names
+  subsystem/op/submitter/extern-symbol/file:line in JSON+stderr with waiters>=1;
+  marker clears after return; instrumentation scope IR pin). Targeted gate 60/60
+  (admission 18 relabeled + obs 3 + cb-flags 12 + channel + ABI stamp + liveness
+  interrogator suite). Full suite = user-run combined-facility gate.
+- 2026-07-12: **Observability review round (3 findings, fixed+pinned).** (1) BLOCKING:
+  DriftVt is malloc'd and the spawn init block never zeroed op_len/submitter_vtid/
+  exec_id_word/ffi_site → walker could read garbage labels or a WILD ffi_site
+  pointer. Zero-init added at spawn; pin: unlabeled VTs report no op/submitter/ffi.
+  (2) MEDIUM: JSON printed user strings raw (%.*s) — quote/backslash/newline in a
+  label/name corrupted the document. lv_json_escape helper (", \, \n, \r, \t,
+  control → \u00xx) applied to exec names, op labels, AND ffi symbol/file; pin:
+  hostile name 'sto"rage\demo\n' + label 'op"quote\back\nnl\tt' → json.loads
+  succeeds and both round-trip exactly. (3) LOW/MED: stderr top-parked line now
+  carries op= and wait=blocking-admission exec_id= (was wait_id-only — the queued
+  blocking op was JSON-visible but not stderr-actionable); also added
+  PARKED_BLOCKING_ADMISSION state name. Obs pins 4/4; targeted gate re-run green.

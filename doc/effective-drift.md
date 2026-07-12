@@ -2305,3 +2305,26 @@ For expression-level conditionals, prefer ternary for simple two-way choices
 and expression `match` for state or variant dispatch. Drift v1 does not have
 block-valued `if`; statement-form `if` is for control flow, not for producing
 a value.
+
+## Blocking FFI: isolate it, and make it diagnosable
+
+Foreign calls that can block (database engines, legacy C libraries) follow one
+pattern — both halves are load-bearing:
+
+- Store acquired FFI handles as `RawPtr`, never as word integers, and wrap every
+  acquisition in a `Destructible` owner that releases in `destroy` (see the
+  FFI-resource-lifecycle rules).
+- Run foreign work on a **named** `BlockingExecutor`
+  (`build_blocking_executor(policy, "storage-lmdb")`) via a **labeled**
+  `run_blocking_on(&ex, "lmdb.write_txn", …)` — never on cooperative carriers, and
+  never behind hand-rolled queues: the executor owns bounded admission.
+- Keep each submitted closure a structural batch (one transaction), with no
+  cooperative operations inside while holding thread-affine C state.
+- Call extern C through named Drift wrapper functions, not anonymous inline unsafe
+  blocks — the compiler brackets user extern calls so `kill -USR2` names the extern
+  symbol and source line when a worker wedges.
+
+A blocked worker is acceptable only if operators can identify which subsystem, which
+operation, which extern call, and where in Drift source. See
+`examples/blocking_ffi/` and "Blocking FFI from virtual threads" in
+`doc/design/drift-concurrency.md`.

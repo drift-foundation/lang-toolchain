@@ -1,5 +1,67 @@
 # Drift development history
 
+## 2026-07-12 (0.33.80: blocking-FFI facility — Block(timeout) bounded admission, BlockingExecutor, and observability; ABI 20 → 21)
+
+### Executor `Block(timeout)` bounded admission (runtime; DriftQuery-approved design)
+- The `exec_create(... timeout_ms, saturation ...)` parameters — always carried by the
+  extern and encoded by the stdlib, previously `(void)`-discarded — are now real:
+  submission to a full `Block` executor parks the submitter (never pinning its
+  carrier) until FREED CAPACITY IS TRANSFERRED to it or the deadline passes.
+  Conditional FIFO transfer (`try_admit_waiter_locked`: admits only while
+  `queue+running < limit` after each decrement — `drift_thread_yield`'s re-enqueue
+  transient cannot over-admit); wake-capacity checked before pop (no lost wakes on
+  batch overflow); unparks deferred past `ex->mu` (unpark takes the target's own
+  executor mutex); submissions queue BEHIND existing waiters even when a slot is
+  momentarily free (no starvation by direct traffic); submit codes 0/1/2/3 with a new
+  explicit `spawn_on` mapping `3 → Err(CANCELLED)`.
+- Ownership: the submission VT is not enqueued/started until admitted; `exec` is
+  assigned AT admission so abandoned waiters return in the exact never-submitted state
+  `drift_thread_drop`'s exactly-once cleanup requires.
+- Shutdown: a global prepass closes admission on EVERY executor (`admission_closed` —
+  ALL submissions fail fast, free-capacity path included, while workers keep running)
+  then drains and unparks every waiter while all home executors are alive
+  (cross-executor waiter topology made per-destroy draining a UAF); workers now DRAIN
+  their queues at shutdown — never-started work dropped (existing semantics), started
+  fibers RESUMED so waiters deterministically unwind. Behavior change (argued in
+  review): submit to a `shutting_down` executor fails fast `Err(BUSY)` instead of the
+  legacy silent enqueue-into-dying-queue.
+- Liveness accuracy: `drift_vt_set_ready` moved to the actual enqueue points — a
+  submission awaiting admission no longer shows phantom READY.
+
+### `BlockingExecutor` (stdlib) — the standard blocking-FFI facility
+- `std.concurrent`: nominal `BlockingExecutor` over `Executor`;
+  `blocking_executor_builder()` (fixed workers, queue 64, `Block` 5s);
+  `build_blocking_executor(policy, name)`; `spawn_blocking_on(&ex, label, cb)` /
+  `run_blocking_on(&ex, label, cb)`; `spawn_on_labeled`. Executor NAMES and operation
+  LABELS are required parameters — anonymous stuck FFI is the failure case the
+  facility exists to eliminate. Boundary rules documented (structural txn closures;
+  no per-FFI-call wrapping of thread-affine handles; no cooperative ops while holding
+  thread-affine C state; in-flight C calls are not cancellable — bounded workers are
+  the containment).
+
+### Blocking-FFI observability (ABI 20 → 21)
+- **New externs** `drift_exec_set_name`, `drift_vt_set_op` (also records the
+  submitter's vtid as a separate numeric field), `drift_ffi_enter/exit` (a single
+  atomic pointer to a compiler-emitted rodata `DriftFfiSite {symbol, file, line}` —
+  one acquire load reads a consistent triple; publish-length-last for the name/label
+  buffers; all schemes documented at the field declarations).
+- **Compiler instrumentation of user-module `extern "C"` calls**: each call is
+  bracketed with `ffi_enter(site)/ffi_exit()`; `@intrinsic` and stdlib-declared
+  (`std.*`/`lang.*`) externs pay nothing.
+- **Liveness**: new wait kind `blocking-admission` (with target executor id and the
+  admission deadline via the existing timer correlation); bounded `execs[]` snapshot
+  (stable registration-ordinal ids, name, queue/running/waiters/capacity); per-VT
+  `op`/`submitter`/`exec_id`/`ffi` fields in JSON and the stderr top-running summary.
+  A wedged blocking worker now names its subsystem, operation, extern symbol, and
+  Drift source line under `kill -USR2`.
+- NEW `examples/blocking_ffi/` (named executor + labeled op + named extern wrapper +
+  `--stuck` mode with expected USR2 output in its README); docs: "Blocking FFI from
+  virtual threads" + "Making blocking FFI diagnosable" in drift-concurrency.md and an
+  effective-drift entry.
+- Pins: `test_exec_block_admission.py` (18, all real saturation) and
+  `test_blocking_ffi_observability.py` (3: stuck-FFI USR2 JSON/stderr naming
+  everything; FFI marker clears after return; instrumentation scope).
+
 ## 2026-07-10 (0.33.79: String B-arch — ledger-visible stakes, release elision, C4 retirement; `Arc<T>.get()` recursion fix; ABI stays 20)
 
 ### String B-arch (branch `refactor/string-b-arch-ledger-reporter`)

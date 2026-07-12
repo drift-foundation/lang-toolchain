@@ -1591,8 +1591,10 @@ pub fn blocking_executor_builder() nothrow -> ExecutorPolicyBuilder {
 /// joined by the runtime at exit).
 ///
 /// **See also:** `blocking_executor_builder`, `spawn_blocking_on`.
-pub fn build_blocking_executor(policy: ExecutorPolicy) nothrow -> BlockingExecutor {
-	return BlockingExecutor(exec = build_executor(policy));
+pub fn build_blocking_executor(policy: ExecutorPolicy, name: String) nothrow -> BlockingExecutor {
+	val ex = build_executor(policy);
+	thread.exec_set_name(ex.handle, move name);
+	return BlockingExecutor(exec = ex);
 }
 
 /// Submits `cb` to a blocking executor and returns a joinable handle.
@@ -1608,8 +1610,8 @@ pub fn build_blocking_executor(policy: ExecutorPolicy) nothrow -> BlockingExecut
 /// admission error.
 ///
 /// **See also:** `run_blocking_on`, `spawn_on`.
-pub fn spawn_blocking_on<T>(exec: &BlockingExecutor, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
-	return spawn_on(exec.exec, move cb);
+pub fn spawn_blocking_on<T>(exec: &BlockingExecutor, label: String, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
+	return spawn_on_labeled(exec.exec, move label, move cb);
 }
 
 /// Runs `cb` on a blocking worker and waits for its result — the
@@ -1628,8 +1630,8 @@ pub fn spawn_blocking_on<T>(exec: &BlockingExecutor, var cb: core.Callback0<T>) 
 /// **Returns:** the closure's value, or the admission/join error.
 ///
 /// **See also:** `spawn_blocking_on`.
-pub fn run_blocking_on<T>(exec: &BlockingExecutor, var cb: core.Callback0<T>) nothrow -> core.Result<T, ConcurrencyError> {
-	match spawn_blocking_on(exec, move cb) {
+pub fn run_blocking_on<T>(exec: &BlockingExecutor, label: String, var cb: core.Callback0<T>) nothrow -> core.Result<T, ConcurrencyError> {
+	match spawn_blocking_on(exec, move label, move cb) {
 		core.Result::Ok(vt) => {
 			var owned = move vt;
 			return owned.join();
@@ -1838,6 +1840,56 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 		// Block(timeout) admission wait abandoned because the submitting
 		// VT was cancelled.  Explicit mapping — falling through to the
 		// FAILED catch-all would hide a well-defined outcome.
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -6));
+	}
+	try {
+		throw ExecSubmitFailed(code = submit_code);
+	} catch e {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_FAILED, code = -5));
+	}
+}
+
+/// `spawn_on` with a liveness OPERATION LABEL: the label (and the
+/// calling VT's id, recorded separately as the submitter) is attached
+/// to the submission before it enters the executor, so `kill -USR2`
+/// snapshots name the operation in every state — admission wait,
+/// queued, running, or pinned inside a C call.
+///
+/// **Parameters:**
+/// - `exec` — target executor.
+/// - `label` — short operation label (≤ 48 bytes; e.g. `lmdb.write_txn`).
+/// - `cb` — the work.
+///
+/// **See also:** `spawn_on`, `spawn_blocking_on`.
+pub fn spawn_on_labeled<T>(exec: Executor, label: String, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
+	var state = _make_result_state<type T>();
+	val state_for_cb = state.clone();
+	var thunk: core.Callback0<Void> = core.callback0(
+		| | captures(move cb, move state_for_cb) => {
+			_publish_or_drop(&state_for_cb, cb.call());
+			return;
+		}
+	);
+	var h = thread.vt_spawn(move thunk, exec.handle);
+	thread.vt_set_op(h, move label);
+	var submit_code = thread.exec_submit(exec.handle, h);
+	if submit_code == 0 {
+		return core.Result::Ok(VirtualThread<type T>(
+			joined = false,
+			handle = h,
+			state = move state,
+			cancelled = false,
+			submit_error = 0
+		));
+	}
+	thread.vt_drop(h);
+	if submit_code == 1 {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_BUSY, code = -4));
+	}
+	if submit_code == 2 {
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
+	}
+	if submit_code == 3 {
 		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -6));
 	}
 	try {

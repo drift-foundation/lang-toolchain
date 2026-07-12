@@ -437,6 +437,80 @@ category fairness is a known limitation (a directory stall can delay DNS and vic
 versa) tracked for a future slice. User code calls the synchronous-looking API
 with an explicit deadline; the boundary keeps it VT-safe.
 
+## Blocking FFI from virtual threads
+
+Non-pollable blocking C FFI (database engines, legacy libraries — anything with no
+readiness handle) must never run on a cooperative carrier. The standard facility is
+`std.concurrent.BlockingExecutor`: a dedicated, bounded, **named** executor whose
+workers are expected to be pinned by C calls.
+
+```drift
+var b = conc.blocking_executor_builder();   // fixed workers, queue 64, Block 5s
+val ex = conc.build_blocking_executor(b.build(), "storage-lmdb");
+val r = conc.run_blocking_on(&ex, "lmdb.write_txn", core.callback0(|| => {
+    return commit_txn_ffi(...);            // named extern wrapper
+}));
+```
+
+Semantics:
+
+- **Bounded admission is the executor's job.** `Block(timeout)` (the default) parks
+  the submitter — without pinning its carrier — until capacity is transferred (FIFO)
+  or the deadline passes (`Err(TIMEOUT)`); `ReturnBusy` fails immediately
+  (`Err(BUSY)`). Do not build app-level queues/retries around the executor.
+- **Errors are ordinary Results.** Domain errors travel inside `T` (return
+  `core.Result<Payload, DomainError>` from the closure); `ConcurrencyError` is
+  infrastructure only (`busy`/`timeout`/`cancelled`).
+- **In-flight C calls are not cancellable.** Deadlines time out the waiter, never the
+  C call; the bounded worker count is the containment for a wedged call.
+- **Boundary rules:** submit structural batch closures (one transaction per closure);
+  never wrap individual FFI calls on thread-affine handles (an `MDB_txn` must not
+  span workers); never hold a transaction across arbitrary application logic; and
+  perform NO cooperative operation (channel op, sleep, yield, join) inside a closure
+  holding a thread-affine C resource — carrier migration only happens at park
+  points, and blocking C calls do not park, so a closure free of cooperative calls
+  provably runs on one thread start-to-finish.
+
+### Making blocking FFI diagnosable
+
+**Scheduler isolation without diagnostic labeling is incomplete. A blocked worker is
+acceptable only if operators can identify which subsystem, which operation, which
+extern call, and where in Drift source — from `kill -USR2 <pid>` alone.**
+
+The required pattern (see `examples/blocking_ffi/`):
+
+1. **Name the executor** for the subsystem: `build_blocking_executor(policy,
+   "storage-lmdb")`.
+2. **Label every submission**: `run_blocking_on(&ex, "lmdb.write_txn", …)` — labels
+   are required parameters, ≤ 48 bytes, dot-namespaced by convention.
+3. **Call extern C through named Drift wrapper functions**, not anonymous unsafe
+   blocks scattered through app logic. The compiler brackets user-module
+   `extern "C"` calls automatically, so liveness reports the extern symbol and the
+   wrapper's file:line while the call is in flight (stdlib/`@intrinsic` externs are
+   not instrumented — user FFI is where operators get stuck).
+4. **Correlate with your logs**: include request/scope identifiers in application
+   logs around submission/join, so liveness `vtid`/labels join to service logs.
+
+What `kill -USR2` then shows (`drift.liveness.v1`):
+
+```json
+"execs": [{"id": 2, "name": "storage-lmdb", "queue_len": 0, "running": 1,
+           "queue_limit": 1, "waiters": 1, "workers": 1}]
+{"vtid": 2, "state": "RUNNING", "carrier_tid": 12345,
+ "op": "lmdb.write_txn", "submitter": 1, "exec_id": 2,
+ "ffi": {"symbol": "mdb_txn_commit", "file": "src/storage.drift", "line": 212}}
+{"vtid": 3, "state": "PARKED",
+ "wait": {"kind": "blocking-admission", "exec_id": 2, "deadline_ms": 4180},
+ "op": "lmdb.read_txn"}
+```
+
+The bad pattern — an unnamed executor, unlabeled submits, raw unsafe blocks inline —
+degrades that to `RUNNING carrier_tid=…` and nothing else: an anonymous stuck worker.
+
+**Limitations:** Drift identifies the Drift-visible operation and extern
+symbol/callsite. It cannot see C-library internals — if `mdb_txn_commit` is stuck in
+`fdatasync`, attach gdb/perf/strace to the reported `carrier_tid` to refine.
+
 ## Runtime target boundary
 
 The concurrency model described in this document has a concrete implementation

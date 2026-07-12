@@ -148,6 +148,20 @@ typedef struct DriftVt {
 	 * (fd,dir) registration list (NULL when not in a wait-set wait). */
 	atomic_uint_fast64_t wait_epoch;
 	DriftIoReg *io_regs;
+	/* Blocking-FFI observability (ABI 21).  op_label publication is
+	 * length-last: bytes first, then a release store of op_len; the
+	 * liveness walker acquire-loads op_len and reads only that many
+	 * bytes (single writer: the submitter, before exec_submit).
+	 * ffi_site is one atomic pointer to a compiler-emitted rodata
+	 * DriftFfiSite — a single acquire load yields a consistent triple
+	 * and the pointee is immortal.  exec_id_word is stamped at every
+	 * enqueue (drift_exec_enqueue) so snapshots can join the VT to an
+	 * executor without dereferencing vt->exec. */
+	char op_label[DRIFT_LIVENESS_OP_LABEL_CAP];
+	atomic_int op_len;
+	atomic_uint_fast64_t submitter_vtid;
+	atomic_uint_fast64_t exec_id_word;
+	_Atomic(const DriftFfiSite *) ffi_site;
 } DriftVt;
 
 typedef enum DriftVtState {
@@ -629,6 +643,16 @@ typedef struct DriftExec {
 	 * Fiber RESUMPTION (unpark -> drift_exec_enqueue) is not admission
 	 * and stays live. */
 	int admission_closed;
+	/* Blocking-FFI observability (ABI 21).  exec_id: registration
+	 * ordinal, stable process-wide, joined from VT snapshots.  name is
+	 * publish-length-last like op_label (written once via
+	 * drift_exec_set_name).  wait_count tracks the admission-waiter
+	 * list length (mutated under mu; snapshot reads are racy-read
+	 * diagnostics like queue_len). */
+	uint64_t exec_id;
+	char name[DRIFT_LIVENESS_EXEC_NAME_CAP];
+	atomic_int name_len;
+	int64_t wait_count;
 } DriftExec;
 
 /* One Block(timeout) admission wait.  done: 0 pending; 1 admitted (the
@@ -1822,6 +1846,10 @@ static DriftExec *drift_exec_create_internal(int64_t min_threads, int64_t max_th
 	exec->saturation = 1;
 	exec->submit_timeout_ms = 0;
 	exec->admission_closed = 0;
+	static atomic_uint_fast64_t drift_exec_id_counter = 1;
+	exec->exec_id = atomic_fetch_add(&drift_exec_id_counter, 1);
+	atomic_store(&exec->name_len, 0);
+	exec->wait_count = 0;
 	exec->queue_limit = queue_limit;
 	atomic_store(&exec->running, 0);
 	if (stack_bytes <= 0) {
@@ -1895,6 +1923,7 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 			}
 			sw->next = NULL;
 			sw->done = -1;
+			exec->wait_count--;
 			if (sw->waiter_vt != 0) {
 				shutdown_wakes[n_shutdown_wakes++] = sw->waiter_vt;
 			}
@@ -1998,6 +2027,7 @@ static void drift_exec_drain_all_admission_waiters(void) {
 				}
 				sw->next = NULL;
 				sw->done = -1;
+				e->wait_count--;
 				if (sw->waiter_vt != 0) {
 					wakes[n_wakes++] = sw->waiter_vt;
 				}
@@ -2110,6 +2140,7 @@ static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt) {
 	if (!node) {
 		return;
 	}
+	lv_set_u(&vt->exec_id_word, exec->exec_id);
 	node->vt = vt;
 	node->next = NULL;
 	if (exec->tail) {
@@ -2137,6 +2168,7 @@ static int drift_exec_waiter_unlink_locked(DriftExec *exec, ExecWaiter *w) {
 			if (exec->wait_tail == cur) {
 				exec->wait_tail = prev;
 			}
+			exec->wait_count--;
 			cur->next = NULL;
 			return 1;
 		}
@@ -2193,6 +2225,7 @@ static void drift_exec_admit_waiters(DriftExec *exec) {
 			if (!exec->wait_head) {
 				exec->wait_tail = NULL;
 			}
+			exec->wait_count--;
 			w->next = NULL;
 			w->submission->exec = exec;
 			drift_vt_set_ready(w->submission);
@@ -2302,6 +2335,13 @@ uint64_t drift_thread_spawn(DriftIface *cb_ptr, uint64_t exec) {
 	vt->join_waiter = 0;
 	vt->vtid = atomic_fetch_add(&drift_vtid_counter, 1);
 	lv_set_i(&vt->wait_kind, DRIFT_WAIT_NONE);
+	/* Blocking-FFI observability fields: malloc'd record — MUST be
+	 * zeroed here or the liveness walker reads garbage labels /
+	 * exec ids / a wild ffi_site pointer (review finding). */
+	atomic_store(&vt->op_len, 0);
+	lv_set_u(&vt->submitter_vtid, 0);
+	lv_set_u(&vt->exec_id_word, 0);
+	atomic_store(&vt->ffi_site, (const DriftFfiSite *)NULL);
 	lv_set_u(&vt->wait_id, 0);
 	lv_set_t(&vt->state_since_ms, drift_now_ms());
 	lv_set_u(&vt->carrier_tid, 0);
@@ -2506,6 +2546,67 @@ int64_t drift_thread_tid(void) {
  * wait kind + an opaque wait-object id so the liveness dump can report what a
  * parked VT is waiting on.  No-op off a VT.  Cleared automatically on resume
  * (drift_vt_tls_set / non-VT wake path).  Additive runtime/stdlib ABI symbol. */
+/* ---- Blocking-FFI observability externs (ABI 21) ---------------------- */
+
+/* Executor display name (liveness).  Publish-length-last: bytes first,
+ * release-store of the (clamped) length after.  Single logical writer
+ * (build_blocking_executor, right after exec_create). */
+void drift_exec_set_name(uint64_t exec, DriftString name) {
+	DriftExec *ex = (DriftExec *)exec;
+	if (!ex) {
+		return;
+	}
+	int64_t n = name.len;
+	if (n < 0) n = 0;
+	if (n > DRIFT_LIVENESS_EXEC_NAME_CAP) n = DRIFT_LIVENESS_EXEC_NAME_CAP;
+	if (n > 0 && name.data) {
+		memcpy(ex->name, name.data, (size_t)n);
+	}
+	atomic_store_explicit(&ex->name_len, (int)n, memory_order_release);
+}
+
+/* Operation label for a submission VT (liveness).  Also records the
+ * CALLING VT's id as the submitter — a separate numeric field, never
+ * encoded into the label (review: string formatting is not cheap and
+ * the label budget is small).  Publish-length-last as above; single
+ * writer (the submitter, before exec_submit). */
+void drift_vt_set_op(uint64_t vt, DriftString label) {
+	DriftVt *h = (DriftVt *)vt;
+	if (!h) {
+		return;
+	}
+	int64_t n = label.len;
+	if (n < 0) n = 0;
+	if (n > DRIFT_LIVENESS_OP_LABEL_CAP) n = DRIFT_LIVENESS_OP_LABEL_CAP;
+	if (n > 0 && label.data) {
+		memcpy(h->op_label, label.data, (size_t)n);
+	}
+	DriftVt *self = drift_vt_tls_get();
+	lv_set_u(&h->submitter_vtid, self ? self->vtid : 0);
+	atomic_store_explicit(&h->op_len, (int)n, memory_order_release);
+}
+
+/* Active-FFI-call marker (liveness).  `site` is a compiler-emitted
+ * rodata DriftFfiSite (one static per instrumented extern "C"
+ * callsite): a single atomic pointer means one acquire load in the
+ * snapshot walker always sees a consistent {symbol, file, line}
+ * triple, and the pointee is immortal.  Off-VT calls are no-ops. */
+void drift_ffi_enter(const void *site) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) {
+		return;
+	}
+	atomic_store_explicit(&vt->ffi_site, (const DriftFfiSite *)site, memory_order_release);
+}
+
+void drift_ffi_exit(void) {
+	DriftVt *vt = drift_vt_tls_get();
+	if (!vt) {
+		return;
+	}
+	atomic_store_explicit(&vt->ffi_site, NULL, memory_order_release);
+}
+
 void drift_thread_set_wait(uint64_t kind, uint64_t id) {
 	DriftVt *vt = drift_vt_tls_get();
 	if (!vt) {
@@ -3115,6 +3216,7 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 				ex->wait_head = &w;
 			}
 			ex->wait_tail = &w;
+			ex->wait_count++;
 			int64_t deadline_ms = 0;
 			if (ex->submit_timeout_ms > 0) {
 				deadline_ms = drift_now_ms() + ex->submit_timeout_ms;
@@ -3135,6 +3237,10 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 				 * latched and the first park returns immediately. */
 				drift_exec_admit_waiters(ex);
 				for (;;) {
+					/* Liveness: refine PARKED as blocking-admission on
+					 * the target executor (re-set each iteration; the
+					 * resume path clears wait state). */
+					drift_thread_set_wait(DRIFT_WAIT_BLOCKING_ADMISSION, ex->exec_id);
 					if (deadline_ms > 0) {
 						drift_thread_park_until(deadline_ms);
 					} else {
@@ -3499,6 +3605,29 @@ void drift_liveness_collect(DriftLivenessSnapshot *out, int reason) {
 			out->exec_ready_queue_len = ex->queue_len;
 			out->exec_shutting_down = ex->shutting_down;
 		}
+		/* Per-executor snapshots (blocking-FFI observability): bounded
+		 * walk; racy-int reads under the registry lock, same discipline
+		 * as the summary above.  Names read via acquire on name_len
+		 * (publish-length-last contract). */
+		for (DriftExec *e = drift_exec_registry_head; e; e = e->reg_next) {
+			if (out->exec_count >= DRIFT_LIVENESS_MAX_EXECS) {
+				out->execs_truncated = 1;
+				break;
+			}
+			DriftExecSnapshot *es = &out->execs[out->exec_count++];
+			es->id = e->exec_id;
+			int nl = atomic_load_explicit(&e->name_len, memory_order_acquire);
+			if (nl < 0) nl = 0;
+			if (nl > DRIFT_LIVENESS_EXEC_NAME_CAP) nl = DRIFT_LIVENESS_EXEC_NAME_CAP;
+			if (nl > 0) memcpy(es->name, e->name, (size_t)nl);
+			es->name_len = nl;
+			es->queue_len = e->queue_len;
+			es->running = atomic_load(&e->running);
+			es->queue_limit = e->queue_limit;
+			es->waiters = e->wait_count;
+			es->workers = e->threads_count;
+			es->shutting_down = e->shutting_down;
+		}
 		pthread_mutex_unlock(&drift_exec_registry_mu);
 	} else {
 		out->degraded_exec_registry = 1;
@@ -3522,6 +3651,24 @@ void drift_liveness_collect(DriftLivenessSnapshot *out, int reason) {
 			s->timer_deadline_ms = -1;
 			s->io_fd = -1;
 			s->io_events = 0;
+			/* Blocking-FFI observability fields. */
+			int opn = atomic_load_explicit(&vt->op_len, memory_order_acquire);
+			if (opn < 0) opn = 0;
+			if (opn > DRIFT_LIVENESS_OP_LABEL_CAP) opn = DRIFT_LIVENESS_OP_LABEL_CAP;
+			if (opn > 0) memcpy(s->op_label, vt->op_label, (size_t)opn);
+			s->op_len = opn;
+			s->submitter_vtid = lv_get_u(&vt->submitter_vtid);
+			s->exec_id = lv_get_u(&vt->exec_id_word);
+			const DriftFfiSite *site = atomic_load_explicit(&vt->ffi_site, memory_order_acquire);
+			if (site) {
+				s->ffi_symbol = site->symbol;
+				s->ffi_file = site->file;
+				s->ffi_line = site->line;
+			} else {
+				s->ffi_symbol = NULL;
+				s->ffi_file = NULL;
+				s->ffi_line = 0;
+			}
 			switch (s->state) {
 				case DRIFT_VT_RUNNING:   out->tally_running++; break;
 				case DRIFT_VT_READY:     out->tally_ready++; break;
@@ -3530,10 +3677,13 @@ void drift_liveness_collect(DriftLivenessSnapshot *out, int reason) {
 				case DRIFT_VT_CANCELLED: out->tally_cancelled++; break;
 				default: break;
 			}
-			if (s->wait_kind >= 0 && s->wait_kind < 6) {
+			if (s->wait_kind >= 0 && s->wait_kind < 7) {
 				out->tally_wait[s->wait_kind]++;
 			}
-			if (s->wait_kind == DRIFT_WAIT_TIMER) {
+			if (s->wait_kind == DRIFT_WAIT_TIMER ||
+			    s->wait_kind == DRIFT_WAIT_BLOCKING_ADMISSION) {
+				/* blocking-admission waits with a submit timeout arm a
+				 * reactor deadline timer — same correlation as TIMER. */
 				for (int i = 0; i < n_timers; i++) {
 					if (timers[i].vt == (uint64_t)vt) {
 						s->timer_deadline_ms = timers[i].deadline;

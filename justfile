@@ -330,6 +330,10 @@ make-example EXAMPLE:
 		if [[ "${example}" == debug_* ]]; then
 			extra_args+=(--debug-info)
 		fi
+		if [[ "${example}" == blocking_ffi ]]; then
+			# Raw extern "C" call inside the named wrapper.
+			extra_args+=(--allow-unsafe)
+		fi
 		PYTHONPATH=. ./.venv/bin/python3 -m lang.driftc "${extra_args[@]}" --stdlib-root stdlib "${example_dir}/main.drift" -o "${out_bin}"
 	else
 		shopt -s nullglob

@@ -18,6 +18,8 @@ export {
 	vt_park,
 	vt_park_until,
 	vt_set_wait,
+	vt_set_op,
+	exec_set_name,
 	vt_unpark,
 	vt_yield,
 	now_ms,
@@ -168,6 +170,13 @@ pub type ReactorHandle = Int;
 /// wait-object id (0 if none).  No-op off a VT; cleared automatically on
 /// resume.  Best-effort: never affects scheduling or correctness.
 @intrinsic pub fn vt_set_wait(kind: Int, id: Int) nothrow -> Void;
+
+/// Records a liveness operation label on a submission VT and stamps the
+/// calling VT's id as the submitter (blocking-FFI observability).
+@intrinsic pub fn vt_set_op(vt: VtHandle, label: String) nothrow -> Void;
+
+/// Sets an executor's liveness display name (blocking-FFI observability).
+@intrinsic pub fn exec_set_name(exec: ExecutorHandle, name: String) nothrow -> Void;
 @intrinsic pub fn vt_unpark(vt: VtHandle) nothrow -> Void;
 @intrinsic pub fn vt_yield() nothrow -> Void;
 /// Monotonic scheduler clock in milliseconds.  Internal deadline APIs use

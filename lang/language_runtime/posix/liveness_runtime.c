@@ -61,6 +61,7 @@ static const char *drift_liveness_state_str(int state, int wait_kind) {
 				case DRIFT_WAIT_JOIN:    return "PARKED_JOIN";
 				case DRIFT_WAIT_CONDVAR: return "PARKED_CONDVAR";
 				case DRIFT_WAIT_CHANNEL: return "PARKED_CHANNEL";
+				case DRIFT_WAIT_BLOCKING_ADMISSION: return "PARKED_BLOCKING_ADMISSION";
 				default:                 return "PARKED";
 			}
 		default: return "UNKNOWN";
@@ -74,6 +75,7 @@ static const char *drift_liveness_wait_str(int wait_kind) {
 		case DRIFT_WAIT_JOIN:    return "join";
 		case DRIFT_WAIT_CONDVAR: return "condvar";
 		case DRIFT_WAIT_CHANNEL: return "channel";
+		case DRIFT_WAIT_BLOCKING_ADMISSION: return "blocking-admission";
 		default:                 return "none";
 	}
 }
@@ -122,6 +124,35 @@ static int drift_liveness_text_enabled(void) {
 
 /* ---- JSON emission ---------------------------------------------------- */
 
+/* Emit a JSON-escaped string body (no surrounding quotes).  Executor
+ * names, op labels, and FFI file paths are arbitrary user bytes — raw
+ * %.*s with an embedded quote/backslash/control byte would corrupt the
+ * document (review finding).  Bounded input (labels <= 48, names <= 32,
+ * paths bounded by the site constant), so per-byte dprintf is fine at
+ * snapshot rate. */
+static void lv_json_escape(int fd, int *werr, const char *p, int len) {
+	for (int i = 0; i < len; i++) {
+		unsigned char c = (unsigned char)p[i];
+		switch (c) {
+			case '"':  lv_dp(fd, werr, "\\\""); break;
+			case '\\': lv_dp(fd, werr, "\\\\"); break;
+			case '\n': lv_dp(fd, werr, "\\n"); break;
+			case '\r': lv_dp(fd, werr, "\\r"); break;
+			case '\t': lv_dp(fd, werr, "\\t"); break;
+			default:
+				if (c < 0x20) {
+					lv_dp(fd, werr, "\\u%04x", c);
+				} else {
+					lv_dp(fd, werr, "%c", c);
+				}
+		}
+	}
+}
+
+static void lv_json_escape_cstr(int fd, int *werr, const char *p) {
+	lv_json_escape(fd, werr, p, (int)strlen(p));
+}
+
 static int drift_liveness_write_json(int fd, const DriftLivenessSnapshot *s) {
 	int werr = 0;
 	lv_dp(fd, &werr,
@@ -149,6 +180,28 @@ static int drift_liveness_write_json(int fd, const DriftLivenessSnapshot *s) {
 		(unsigned long long)s->exec_completed,
 		s->exec_shutting_down ? "true" : "false");
 
+	/* Per-executor snapshots (blocking-FFI observability). */
+	lv_dp(fd, &werr, "  \"execs\": [");
+	for (int i = 0; i < s->exec_count; i++) {
+		const DriftExecSnapshot *e = &s->execs[i];
+		lv_dp(fd, &werr, "%s\n    {\"id\": %llu, \"name\": ",
+			(i == 0) ? "" : ",", (unsigned long long)e->id);
+		if (e->name_len > 0) {
+			lv_dp(fd, &werr, "\"");
+			lv_json_escape(fd, &werr, e->name, e->name_len);
+			lv_dp(fd, &werr, "\"");
+		} else {
+			lv_dp(fd, &werr, "null");
+		}
+		lv_dp(fd, &werr, ", \"queue_len\": %lld, \"running\": %d, "
+			"\"queue_limit\": %lld, \"waiters\": %lld, \"workers\": %d, "
+			"\"shutting_down\": %s}",
+			(long long)e->queue_len, e->running,
+			(long long)e->queue_limit, (long long)e->waiters,
+			e->workers, e->shutting_down ? "true" : "false");
+	}
+	lv_dp(fd, &werr, "\n  ],\n");
+
 	if (s->reactor_present) {
 		lv_dp(fd, &werr,
 			"  \"reactor\": {\"present\": true, \"fd_waiters\": %d, \"timers\": %d, \"next_deadline_ms\": ",
@@ -165,12 +218,13 @@ static int drift_liveness_write_json(int fd, const DriftLivenessSnapshot *s) {
 	lv_dp(fd, &werr,
 		"  \"tallies\": {\"running\": %d, \"ready\": %d, \"parked\": %d, "
 		"\"finished\": %d, \"cancelled\": %d, "
-		"\"wait\": {\"timer\": %d, \"io\": %d, \"join\": %d, \"condvar\": %d, \"channel\": %d}},\n",
+		"\"wait\": {\"timer\": %d, \"io\": %d, \"join\": %d, \"condvar\": %d, \"channel\": %d, \"blocking_admission\": %d}},\n",
 		s->tally_running, s->tally_ready, s->tally_parked,
 		s->tally_finished, s->tally_cancelled,
 		s->tally_wait[DRIFT_WAIT_TIMER], s->tally_wait[DRIFT_WAIT_IO],
 		s->tally_wait[DRIFT_WAIT_JOIN], s->tally_wait[DRIFT_WAIT_CONDVAR],
-		s->tally_wait[DRIFT_WAIT_CHANNEL]);
+		s->tally_wait[DRIFT_WAIT_CHANNEL],
+		s->tally_wait[DRIFT_WAIT_BLOCKING_ADMISSION]);
 
 	lv_dp(fd, &werr, "  \"vts\": [");
 	for (int i = 0; i < s->vt_count; i++) {
@@ -205,8 +259,36 @@ static int drift_liveness_write_json(int fd, const DriftLivenessSnapshot *s) {
 		           v->wait_kind == DRIFT_WAIT_CONDVAR ||
 		           v->wait_kind == DRIFT_WAIT_CHANNEL) {
 			lv_dp(fd, &werr, ", \"id\": %llu", (unsigned long long)v->wait_id);
+		} else if (v->wait_kind == DRIFT_WAIT_BLOCKING_ADMISSION) {
+			/* wait_id carries the target executor's stable id; the
+			 * TIMER correlation above already resolved the admission
+			 * deadline when one is armed. */
+			lv_dp(fd, &werr, ", \"exec_id\": %llu", (unsigned long long)v->wait_id);
+			if (v->timer_deadline_ms >= 0) {
+				lv_dp(fd, &werr, ", \"deadline_ms\": %lld", (long long)v->timer_deadline_ms);
+			}
 		}
-		lv_dp(fd, &werr, "}, \"logical_frame\": null}");
+		lv_dp(fd, &werr, "}");
+		/* Blocking-FFI observability fields (absent when unset). */
+		if (v->op_len > 0) {
+			lv_dp(fd, &werr, ", \"op\": \"");
+			lv_json_escape(fd, &werr, v->op_label, v->op_len);
+			lv_dp(fd, &werr, "\"");
+		}
+		if (v->submitter_vtid != 0) {
+			lv_dp(fd, &werr, ", \"submitter\": %llu", (unsigned long long)v->submitter_vtid);
+		}
+		if (v->exec_id != 0) {
+			lv_dp(fd, &werr, ", \"exec_id\": %llu", (unsigned long long)v->exec_id);
+		}
+		if (v->ffi_symbol != NULL) {
+			lv_dp(fd, &werr, ", \"ffi\": {\"symbol\": \"");
+			lv_json_escape_cstr(fd, &werr, v->ffi_symbol);
+			lv_dp(fd, &werr, "\", \"file\": \"");
+			lv_json_escape_cstr(fd, &werr, v->ffi_file ? v->ffi_file : "<unknown>");
+			lv_dp(fd, &werr, "\", \"line\": %lld}", (long long)v->ffi_line);
+		}
+		lv_dp(fd, &werr, ", \"logical_frame\": null}");
 	}
 	lv_dp(fd, &werr, "\n  ],\n");
 
@@ -293,9 +375,20 @@ static void drift_liveness_write_text(int fd, const DriftLivenessSnapshot *s,
 		for (int i = 0; i < n; i++) {
 			const DriftVtSnapshot *v = &s->vts[top[i]];
 			int64_t age = s->now_ms - v->state_since_ms;
-			dprintf(fd, "[drift:liveness]   vtid=%llu carrier_tid=%llu running_for=%lldms\n",
+			dprintf(fd, "[drift:liveness]   vtid=%llu carrier_tid=%llu running_for=%lldms",
 				(unsigned long long)v->vtid, (unsigned long long)v->carrier_tid,
 				(long long)age);
+			if (v->op_len > 0) {
+				dprintf(fd, " op=%.*s", v->op_len, v->op_label);
+			}
+			if (v->exec_id != 0) {
+				dprintf(fd, " exec_id=%llu", (unsigned long long)v->exec_id);
+			}
+			if (v->ffi_symbol != NULL) {
+				dprintf(fd, " ffi=%s@%s:%lld", v->ffi_symbol,
+					v->ffi_file ? v->ffi_file : "<unknown>", (long long)v->ffi_line);
+			}
+			dprintf(fd, "\n");
 		}
 	}
 
@@ -305,10 +398,20 @@ static void drift_liveness_write_text(int fd, const DriftLivenessSnapshot *s,
 		for (int i = 0; i < n; i++) {
 			const DriftVtSnapshot *v = &s->vts[top[i]];
 			int64_t age = s->now_ms - v->state_since_ms;
-			dprintf(fd, "[drift:liveness]   vtid=%llu %s wait_id=%llu parked_for=%lldms\n",
+			dprintf(fd, "[drift:liveness]   vtid=%llu %s wait_id=%llu parked_for=%lldms",
 				(unsigned long long)v->vtid,
 				drift_liveness_state_str(v->state, v->wait_kind),
 				(unsigned long long)v->wait_id, (long long)age);
+			if (v->op_len > 0) {
+				dprintf(fd, " op=%.*s", v->op_len, v->op_label);
+			}
+			if (v->wait_kind == DRIFT_WAIT_BLOCKING_ADMISSION) {
+				dprintf(fd, " wait=blocking-admission exec_id=%llu",
+					(unsigned long long)v->wait_id);
+			} else if (v->exec_id != 0) {
+				dprintf(fd, " exec_id=%llu", (unsigned long long)v->exec_id);
+			}
+			dprintf(fd, "\n");
 		}
 	}
 

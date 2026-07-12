@@ -1,0 +1,87 @@
+// Blocking FFI from virtual threads — the REQUIRED pattern, both halves:
+//
+//   Scheduler contract: blocking C calls run on a dedicated, bounded
+//   BlockingExecutor and never pin a cooperative carrier.
+//
+//   Diagnostic contract: every piece of blocking work is NAMED so a
+//   wedged process explains itself under `kill -USR2 <pid>`:
+//     1. a NAMED executor for the subsystem      ("storage-demo")
+//     2. a LABELED operation per submission      ("demo.slow_add")
+//     3. a NAMED Drift wrapper per extern call   (slow_add_ffi), never
+//        anonymous unsafe blocks scattered through app logic — the
+//        compiler brackets user extern "C" calls so liveness reports
+//        the symbol and this file:line while the call is in flight.
+//
+// Run normally:            ./example_blocking_ffi
+// Run wedged for USR2:     ./example_blocking_ffi --stuck &
+//                          kill -USR2 <pid>   # then inspect the JSON/stderr
+//
+// Compile requires --allow-unsafe (raw extern call inside the wrapper).
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.console as console;
+
+extern "C" fn usleep(usec: Uint32) nothrow -> Int32;
+
+/// Named extern wrapper: ONE place where Drift meets C.  Liveness
+/// reports `ffi: {symbol: "usleep", file: ..., line: ...}` pointing
+/// here whenever a worker is inside the call.
+fn slow_add_ffi(a: Int, b: Int, hold_ms: Int) nothrow -> Int {
+	unsafe {
+		val _ = usleep(cast<Uint32>(hold_ms * 1000));
+	}
+	return a + b;
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	var stuck = false;
+	if argv.len > 1 {
+		if argv[1] == "--stuck" { stuck = true; }
+	}
+
+	// 1. Named blocking executor: the subsystem's capacity domain.
+	var b = conc.blocking_executor_builder();
+	b.min_threads(1);
+	b.max_threads(1);
+	b.queue_limit(1);
+	val ex = conc.build_blocking_executor(b.build(), "storage-demo");
+
+	if stuck {
+		// Wedge the single worker inside the C call for 10 minutes and
+		// park a second labeled submission in admission, then idle so
+		// an operator can `kill -USR2` this pid.
+		match conc.spawn_blocking_on(&ex, "demo.stuck_op", core.callback0(|| => {
+			return slow_add_ffi(1, 2, 600000);
+		})) {
+			core.Result::Ok(_) => {},
+			core.Result::Err(_) => { return 1; },
+		}
+		val exw = ex;
+		val _w = conc.spawn_cb(|| captures(copy exw) => {
+			match conc.spawn_blocking_on(&exw, "demo.waiting_op", core.callback0(|| => { return 0; })) {
+				core.Result::Ok(_) => {},
+				core.Result::Err(_) => {},
+			}
+			return 0;
+		});
+		console.println("stuck mode: send `kill -USR2 <pid>` and read the liveness output");
+		val _ = conc.sleep(conc.Duration(millis = 600000));
+		return 0;
+	}
+
+	// 2+3. Labeled operation running the named wrapper on the blocking
+	// executor.  The calling VT parks; its carrier stays free.
+	match conc.run_blocking_on(&ex, "demo.slow_add", core.callback0(|| => {
+		return slow_add_ffi(20, 22, 50);
+	})) {
+		core.Result::Ok(v) => {
+			match v == 42 {
+				true => { console.println("blocking ffi result: 42"); return 0; },
+				false => { return 2; },
+			}
+		},
+		core.Result::Err(_) => { return 1; },
+	}
+}

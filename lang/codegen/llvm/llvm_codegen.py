@@ -1496,6 +1496,10 @@ class LlvmModuleBuilder:
 					f"declare void @drift_exec_default_set({self._llty(DRIFT_INT_TYPE)})",
 				f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_create({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_exec_submit({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
+					f"declare void @drift_exec_set_name({self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
+					f"declare void @drift_vt_set_op({self._llty(DRIFT_INT_TYPE)}, {DRIFT_STRING_TYPE})",
+					"declare void @drift_ffi_enter(ptr)",
+					"declare void @drift_ffi_exit()",
 					f"declare {self._llty(DRIFT_INT_TYPE)} @drift_reactor_default_get()",
 					f"declare void @drift_reactor_default_set({self._llty(DRIFT_INT_TYPE)})",
 					f"declare void @drift_reactor_register_io({self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)})",
@@ -4050,6 +4054,45 @@ class _FuncBuilder:
 		self.value_types[dest] = DRIFT_STRING_TYPE
 		return dest
 
+	def _ensure_ffi_site(self, symbol: str, file_s: str, line_n: int) -> str:
+		"""Return the global name of a rodata DriftFfiSite {ptr,ptr,i64}
+		for this extern "C" callsite, emitting it (and its two C strings)
+		once per unique (symbol, file, line).
+
+		Blocking-FFI observability (ABI 21): `drift_ffi_enter` stores ONE
+		pointer to this immortal record on the current VT, so the
+		liveness walker's single acquire load always observes a
+		consistent triple — the layout is the ABI contract with
+		`DriftFfiSite` in liveness_runtime.h."""
+		cache = getattr(self.module, "_ffi_site_cache", None)
+		if cache is None:
+			cache = {}
+			setattr(self.module, "_ffi_site_cache", cache)
+		key = (symbol, file_s, line_n)
+		existing = cache.get(key)
+		if existing is not None:
+			return existing
+		idx = len(cache)
+		def _cstr(name: str, text: str) -> str:
+			data = text.encode("utf-8", errors="replace")
+			esc = "".join(
+				chr(b) if 32 <= b < 127 and chr(b) not in ('"', "\\") else f"\\{b:02X}"
+				for b in data
+			)
+			self.module.consts.append(
+				f'@{name} = private unnamed_addr constant [{len(data) + 1} x i8] c"{esc}\\00"'
+			)
+			return name
+		sym_g = _cstr(f"__drift_ffi_sym_{idx}", symbol)
+		file_g = _cstr(f"__drift_ffi_file_{idx}", file_s)
+		site = f"__drift_ffi_site_{idx}"
+		self.module.consts.append(
+			f"@{site} = private unnamed_addr constant {{ptr, ptr, i64}} "
+			f"{{ptr @{sym_g}, ptr @{file_g}, i64 {line_n}}}"
+		)
+		cache[key] = site
+		return site
+
 	def _lower_call(self, instr: Call) -> None:
 		if drift_debug.enabled("llvm") and getattr(instr.fn_id, "module", None) == "main":
 			print(f"[drift:debug][llvm] call fn={instr.fn_id} span={getattr(instr, 'span', None)}", file=sys.stderr)
@@ -4069,8 +4112,36 @@ class _FuncBuilder:
 			args_str = ", ".join(arg_parts)
 			ret_tid = callee_sig.return_type_id
 			is_void = ret_tid is None or (self.type_table is not None and self.type_table.is_void(ret_tid))
+			# Blocking-FFI observability (ABI 21): bracket USER-module
+			# extern "C" calls with drift_ffi_enter/exit so a liveness
+			# snapshot taken while the C call is in flight names the
+			# extern symbol and the Drift callsite.  Scope: externs
+			# DECLARED in stdlib/toolchain modules (std.*, lang.*) are
+			# runtime-owned plumbing on hot paths (e.g. std.codec's
+			# drift_codec_*) and are NOT instrumented — user FFI is
+			# where operators get stuck; @intrinsic externs never reach
+			# this fast path at all.  C cannot unwind, so the
+			# straight-line exit covers every edge.
+			_decl_mod = getattr(callee_sig, "module", None) or getattr(instr.fn_id, "module", "") or ""
+			_instrument_ffi = not (
+				_decl_mod == "std" or _decl_mod.startswith("std.")
+				or _decl_mod == "lang" or _decl_mod.startswith("lang.")
+			)
+			if _instrument_ffi:
+				span = getattr(instr, "span", None)
+				ffi_file = getattr(span, "file", None) if span is not None else None
+				ffi_line = getattr(span, "line", None) if span is not None else None
+				site = self._ensure_ffi_site(
+					c_symbol,
+					str(ffi_file) if ffi_file else "<unknown>",
+					int(ffi_line) if isinstance(ffi_line, int) else 0,
+				)
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_ffi_enter(ptr @{site})")
 			if is_void:
 				self.lines.append(f"  call void @{c_symbol}({args_str})")
+				if _instrument_ffi:
+					self.lines.append("  call void @drift_ffi_exit()")
 				if dest is not None:
 					# Void-returning extern C called in a value context (e.g. FnResult
 					# wrap for a can_throw nothrow extern).  Produce a dummy i8 0.
@@ -4083,6 +4154,8 @@ class _FuncBuilder:
 				else:
 					self.lines.append(f"  {dest} = call {ret_llty} @{c_symbol}({args_str})")
 					self.value_types[dest] = _extern_c_llvm_type(ret_tid, self.type_table, self.module)
+				if _instrument_ffi:
+					self.lines.append("  call void @drift_ffi_exit()")
 			return
 		if instr.fn_id.module == "std.core" and instr.fn_id.name == "string_from_utf8_bytes":
 			if len(instr.args) != 2:
@@ -4300,6 +4373,30 @@ class _FuncBuilder:
 					self._wrap_ok_fnresult(None, "i8", dest, hint="vpu_ok")
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "exec_set_name":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: exec_set_name expects 2 args, got {len(instr.args)}")
+				exec_val = self._map_value(instr.args[0])
+				name_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_exec_set_name({self._llty(DRIFT_INT_TYPE)} {exec_val}, {DRIFT_STRING_TYPE} {name_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="esn_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: exec_set_name returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_set_op":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: vt_set_op expects 2 args, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				label_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_vt_set_op({self._llty(DRIFT_INT_TYPE)} {vt_val}, {DRIFT_STRING_TYPE} {label_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vso_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_set_op returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_set_wait":
 				if len(instr.args) != 2:
@@ -6013,6 +6110,30 @@ class _FuncBuilder:
 					self._wrap_ok_fnresult(None, "i8", dest, hint="vpu_ok")
 				elif dest:
 					raise NotImplementedError("LLVM codegen v1: vt_park_until returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "exec_set_name":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: exec_set_name expects 2 args, got {len(instr.args)}")
+				exec_val = self._map_value(instr.args[0])
+				name_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_exec_set_name({self._llty(DRIFT_INT_TYPE)} {exec_val}, {DRIFT_STRING_TYPE} {name_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="esn_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: exec_set_name returns Void; result cannot be captured")
+				return
+			if instr.fn_id.name == "vt_set_op":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: vt_set_op expects 2 args, got {len(instr.args)}")
+				vt_val = self._map_value(instr.args[0])
+				label_val = self._map_value(instr.args[1])
+				self.module.needs_thread_runtime = True
+				self.lines.append(f"  call void @drift_vt_set_op({self._llty(DRIFT_INT_TYPE)} {vt_val}, {DRIFT_STRING_TYPE} {label_val})")
+				if instr.can_throw and dest:
+					self._wrap_ok_fnresult(None, "i8", dest, hint="vso_ok")
+				elif dest:
+					raise NotImplementedError("LLVM codegen v1: vt_set_op returns Void; result cannot be captured")
 				return
 			if instr.fn_id.name == "vt_set_wait":
 				if len(instr.args) != 2:
