@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout
+from lang.codegen.llvm.test_utils import asan_active, sanitizer_timeout
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -350,6 +350,7 @@ pub fn main() nothrow -> Int {
 
 
 @pytest.mark.skipif(__import__("shutil").which("valgrind") is None, reason="valgrind required")
+@pytest.mark.skipif(asan_active(), reason="valgrind cannot run ASan-instrumented binaries")
 def test_heap_labels_balanced_valgrind(tmp_path: Path) -> None:
 	"""Ownership pin for the name/label externs, decisive in BOTH
 	directions because the strings are HEAP (concat — static literals

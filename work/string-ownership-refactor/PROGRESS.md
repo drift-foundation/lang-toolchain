@@ -515,3 +515,12 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   convention, the Drift-level call site does; stale site list replaced by
   audit-authority + grep); NEW both-directions pin test_heap_labels_balanced_valgrind.
   Audit + obs file 11/11; earlier gate (audit+obs+admission) green.
+- 2026-07-12: **Two full-suite harness fixes (neither a design concern, per review
+  agreement).** (1) reactor stale-fd whitebox TU (#includes thread_runtime.c
+  standalone) gained an undefined drift_string_release from the DRIFT_OWNED_STRING
+  cleanup sites — added the sibling test-only stub (resolver-only whitebox never
+  exercises the externs). (2) test_heap_labels_balanced_valgrind lacked the standard
+  asan_active skipif the file's other valgrind rows carry — failed under DRIFT_ASAN=1
+  via the known ASAN/valgrind collision, not an ownership defect (0 leaks/errors in
+  its own log). Verified: both green in normal lane; heap pin SKIPS in ASAN lane.
+  Full suite restart is the user's.

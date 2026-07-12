@@ -30,6 +30,10 @@ void drift_makecontext(DriftContext *ctx, void *stack_top,
 void drift_liveness_thread_start(void) {}
 void drift_liveness_thread_shutdown(void) {}
 char *drift_string_to_cstr(DriftString s) { (void)s; return 0; }
+/* thread_runtime.c's DRIFT_OWNED_STRING cleanup sites (observability
+ * externs) reference the release; this resolver-only whitebox never
+ * exercises them. */
+void drift_string_release(DriftString s) { (void)s; }
 
 static uint64_t pack(uint32_t gen, int fd) {
 	return ((uint64_t)gen << 32) | (uint32_t)fd;
