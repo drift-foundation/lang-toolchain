@@ -597,3 +597,66 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   4 + tool 7). NOTE: the running reference baseline stays on v1.3.0 — v1.4.0
   changes ONLY the --baseline branch; standalone acquisition semantics are
   byte-identical, recorded here to keep the reference citation honest.
+- 2026-07-12: **0.33.81 merge verified + Slice 1 REFERENCE BASELINE recorded.**
+  Merge verification accepted (payload = certified hotfix only: std.concurrent
+  exports + e2e timeout scaling + versions/history/tests; Slice 1 files intact;
+  battery 11/11 on merged tree). Deleted
+  issues/blocking-executor-missing-from-concurrent-exports/ from this branch —
+  resolved in 0.33.81, repros promoted to
+  lang/tests/driver/test_blocking_executor_exports.py on main.
+  **Reference baseline (slices 2-4 compare against this via --baseline):**
+  - command: `PYTHONPATH=. .venv/bin/python tools/drift_corpus_audit.py --out build/tmp/cleanup-baseline -j 16`
+  - tree: refactor/string-authority-cleanup with 0.33.81/ABI 21 merged (post issue-dir deletion; deletion does not affect the corpus universe)
+  - tool version: 1.4.0
+  - manifest sha256: 8dceddd56d770b9bac1a14949670a097961df0087a56fcfeb220c98915ae72ce
+  - universe: 924/1268 fixtures compiled (344 compile-failed, 49 excluded by rule)
+  - hard gates: ZERO (unclassified / untagged / c1_must_drop_without_release /
+    post_ledger_build_failed all absent; standalone gate check passed, exit 0)
+  - aggregate counters (fixtures_compiled: 924):
+    | counter | value |
+    |---|---|
+    | c1_agree | 882371 |
+    | c1_path_dependent | 20384 |
+    | c2_invisible_stake | 1 |
+    | c3_moveout_not_owned | 19504 |
+    | c3_moveout_owned | 1835400 |
+    | events | 2775744 |
+    | fns | 1107693 |
+    | pre_post_verdict_drift | 48178 |
+    | site_class:drop_before_overwrite_site4 | 14 |
+    | site_class:moveout_expansion | 1854904 |
+    | site_class:overwrite_release | 233519 |
+    | site_class:scope_exit_release | 68562 |
+    | site_class:store_value_retain | 1 |
+    | site_class:temp_lastuse_release | 618744 |
+  This supersedes the v1.3.0 in-flight citation from review round 4. Next:
+  Slice 2 Part 1 (C3 decision checkpoint, report-only) awaiting clearance.
+- 2026-07-12: **Slice 2 Part 1 — C3 decision checkpoint COMPLETE (report-only);
+  STOPPED for arm selection.** Report: C3-DECISION-REPORT.md. Headline: the
+  plan's premise was wrong — C3 (19,504, detail records uncapped = complete
+  census, 91 distinct sites, 18 stdlib sites = 99.5% of volume) is FIVE
+  populations, and model-vs-allowlist as framed only decides population A
+  (8,316 flag-guarded `*_cleanup_drop_*` moves). B = 8,384 UNGUARDED inline
+  cleanup drops of zero-tag-drop-safe variants at PATH_DEPENDENT points (all
+  `__cleanup_t*` compiler-authored; child_sp/cr); C = 1,852 cleanup moves in
+  statically-DEAD catch blocks (`try <nothrow fields.get> catch` in
+  std.json::JsonNode::get / JsonObject::get — dispatch has no CFG preds);
+  D = 945 zero-init-as-empty-value immediately moved (tombstoned;
+  std.log::log_context attrs + __maplit temps); E = 7 re-moves of moved-out
+  locals/binders across 5 fixture sites — NOT root-caused, must stay
+  divergent pending individual triage. Conditional-ownership event model IS
+  representable (edge-refined dataflow on drop-flag branches, ~100-150
+  lines) but the shared-authority feedback means refined states change
+  release-elision/site-4 emission — "everything else byte-identical" is NOT
+  achievable under the model arm with a shared ledger. Recommendation:
+  A → structural recognition (retired-C4 discipline), flag-refinement
+  recorded as a future emission slice with its own acceptance; B+D →
+  `c3_moveout_zero_safe` reporter comparison fix; C → unreachable-block
+  filter (+ stdlib dead-try/catch hygiene flag, separate thread); E →
+  triage first. Expected movement: 19,504 → 7 residual, exact balance per
+  population. Side-results (valgrind probes, scratchpad only): throwing
+  calls DO get explicit call_err→dispatch MIR edges — reachable catch
+  blocks have correct ledger state, heap-string-in-catch probes clean (no
+  release-elision leak concern); the plan's 11,441 was a stale smaller-
+  corpus generation of the same populations. No in-tree changes; nothing
+  staged.
