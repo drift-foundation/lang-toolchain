@@ -601,7 +601,50 @@ typedef struct DriftExec {
 	struct DriftExec *reg_next;
 	ExecNode *node_freelist;
 	int node_freelist_len;
+	/* Bounded-admission policy (2026-07-11 Block(timeout) design; the
+	 * exec_create extern has always carried these — they were
+	 * (void)-discarded until real admission landed).  Encoding matches
+	 * the shipped stdlib build_executor: 0 = Block, 1 = ReturnBusy. */
+	int saturation;
+	int64_t submit_timeout_ms;
+	/* FIFO admission waiters (guarded by mu).  Waiter records live on
+	 * the SUBMITTER's stack (fiber stacks persist across park); a waker
+	 * copies waiter_vt out before releasing mu and never touches the
+	 * record afterwards.  admit_cv is DEDICATED to non-VT admission
+	 * waiters: workers wait on cv, and drift_exec_enqueue's single
+	 * cond_signal(cv) must never be consumed by an admission waiter or
+	 * the task wakeup is lost. */
+	struct ExecWaiter *wait_head;
+	struct ExecWaiter *wait_tail;
+	pthread_cond_t admit_cv;
+	/* Shutdown-prepass admission freeze: ALL submissions fail fast
+	 * (busy) — the free-capacity direct enqueue path included, so a
+	 * shutdown-resumed waiter re-submitting anywhere cannot enqueue new
+	 * work at exit — while WORKERS KEEP RUNNING, unlike shutting_down,
+	 * which also stops workers.  The distinction is load-bearing:
+	 * drained admission waiters are unparked onto their HOME executors
+	 * and must actually RESUME to release stack-held submission state;
+	 * freezing workers at prepass time would strand them parked (leak).
+	 * drift_exec_admit_waiters also stops admitting once this is set.
+	 * Fiber RESUMPTION (unpark -> drift_exec_enqueue) is not admission
+	 * and stays live. */
+	int admission_closed;
 } DriftExec;
+
+/* One Block(timeout) admission wait.  done: 0 pending; 1 admitted (the
+ * waker already enqueued `submission` — the freed capacity slot was
+ * TRANSFERRED, not merely signalled); -1 abandoned (executor shutting
+ * down).  The submission VT already owns the moved-in callback (vt_spawn
+ * runs before exec_submit); the invariant is it is neither enqueued nor
+ * started until admission, and on timeout/cancel it returns to the
+ * caller untouched for the existing vt_drop cleanup path (exactly-once,
+ * 0.33.79 contract). */
+typedef struct ExecWaiter {
+	DriftVt *submission;
+	uint64_t waiter_vt; /* 0 => non-VT submitter (admit_cv leg) */
+	int done;
+	struct ExecWaiter *next;
+} ExecWaiter;
 
 /* ExecNode freelist helpers.  Caller must hold exec->mu. */
 static ExecNode *exec_node_alloc(DriftExec *exec) {
@@ -878,6 +921,7 @@ static void drift_worker_vt_finish(DriftVt *vt) {
  * Returns 1 if the worker handled at least one event (caller should re-check
  * the run queue), 0 if it should fall through to condvar_wait. */
 static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt);
+static void drift_exec_admit_waiters(DriftExec *exec);
 
 #ifdef __linux__
 static int drift_worker_poll(DriftExec *exec, DriftContext *sched_ctx) {
@@ -1134,10 +1178,18 @@ static void *drift_exec_worker(void *arg) {
 		while (!exec->head && !exec->shutting_down) {
 			pthread_cond_wait(&exec->cv, &exec->mu);
 		}
-		if (exec->shutting_down) {
+		if (exec->shutting_down && !exec->head) {
 			pthread_mutex_unlock(&exec->mu);
 			break;
 		}
+		/* Shutdown drain mode: the queue is non-empty while
+		 * shutting_down.  Keep dequeuing — never-started work is
+		 * dropped below (existing destroy semantics), but STARTED
+		 * fibers (e.g. an admission waiter unparked by the shutdown
+		 * drain) are resumed so they unwind stack-held resources
+		 * instead of leaking them.  Workers exit when the queue is
+		 * empty. */
+		int draining = exec->shutting_down;
 		ExecNode *node = exec->head;
 		DriftVt *vt = NULL;
 		if (node) {
@@ -1154,6 +1206,7 @@ static void *drift_exec_worker(void *arg) {
 		if (!vt) {
 			if (node) {
 				atomic_fetch_sub(&exec->running, 1);
+				drift_exec_admit_waiters(exec);
 			}
 			continue;
 		}
@@ -1170,6 +1223,25 @@ static void *drift_exec_worker(void *arg) {
 			pthread_mutex_unlock(&vt->mu);
 			if (w1 != 0) drift_thread_unpark(w1);
 			atomic_fetch_sub(&exec->running, 1);
+			drift_exec_admit_waiters(exec);
+			continue;
+		}
+		if (draining && !atomic_load(&vt->started)) {
+			/* Shutdown drain: never-started submissions are dropped
+			 * exactly as destroy's queue walk would drop them. */
+			atomic_store(&vt->state, DRIFT_VT_CANCELLED);
+			pthread_mutex_lock(&vt->mu);
+			if (!atomic_exchange(&vt->completed, 1)) {
+				drift_drop_callback(&vt->cb);
+			}
+			atomic_store(&vt->park_token, 1);
+			uint64_t w3 = vt->join_waiter;
+			vt->join_waiter = 0;
+			pthread_cond_broadcast(&vt->cv);
+			pthread_mutex_unlock(&vt->mu);
+			if (w3 != 0) drift_thread_unpark(w3);
+			atomic_fetch_sub(&exec->running, 1);
+			drift_exec_admit_waiters(exec);
 			continue;
 		}
 		/* Use atomic_exchange to distinguish "first pickup" (was_started=0)
@@ -1200,6 +1272,7 @@ static void *drift_exec_worker(void *arg) {
 			pthread_mutex_unlock(&vt->mu);
 			if (w2 != 0) drift_thread_unpark(w2);
 			atomic_fetch_sub(&exec->running, 1);
+			drift_exec_admit_waiters(exec);
 			continue;
 		}
 		/* Re-entrancy guard (multi-carrier safety, Finding 1): a parked VT can be
@@ -1277,6 +1350,12 @@ static void *drift_exec_worker(void *arg) {
 			drift_vt_tls_set(NULL);
 #endif
 		atomic_fetch_sub(&exec->running, 1);
+		/* Capacity may have freed (task finished or parked).  Conditional
+		 * transfer: admits only if queue_len + running is genuinely below
+		 * the limit AFTER this decrement — a drift_thread_yield re-enqueue
+		 * (queue_len++ before this decrement) leaves no free slot and
+		 * admits nothing. */
+		drift_exec_admit_waiters(exec);
 	}
 #ifdef __linux__
 	drift_sched_ctx = NULL;
@@ -1733,6 +1812,16 @@ static DriftExec *drift_exec_create_internal(int64_t min_threads, int64_t max_th
 	}
 	pthread_mutex_init(&exec->mu, NULL);
 	pthread_cond_init(&exec->cv, NULL);
+	pthread_cond_init(&exec->admit_cv, NULL);
+	exec->wait_head = NULL;
+	exec->wait_tail = NULL;
+	/* Direct internal callers (default executor) get ReturnBusy-shaped
+	 * defaults; drift_exec_create overwrites from the caller's policy.
+	 * (Default executor is unbounded-queue, so saturation never applies
+	 * there either way.) */
+	exec->saturation = 1;
+	exec->submit_timeout_ms = 0;
+	exec->admission_closed = 0;
 	exec->queue_limit = queue_limit;
 	atomic_store(&exec->running, 0);
 	if (stack_bytes <= 0) {
@@ -1780,6 +1869,46 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 	exec->shutting_down = 1;
 	pthread_cond_broadcast(&exec->cv);
 	pthread_mutex_unlock(&exec->mu);
+	/* Drain Block-admission waiters BEFORE joining workers, in BATCHES —
+	 * a fixed one-shot array would abandon waiters beyond its capacity
+	 * still parked (forever, with timeout=0).  Per round: under mu, pop
+	 * up to 64 waiters (done = -1 -> submit returns busy; the submission
+	 * VT is returned to its caller's vt_drop cleanup path), collect VT
+	 * wakes; unlock; unpark (drift_thread_unpark takes the target's own
+	 * exec mutex — never call it under ours).  Waiter records live on
+	 * submitter stacks — never touched after their round's unlock.
+	 * TOPOLOGY: at process exit this is a defensive BACKSTOP only —
+	 * drift_exec_drain_all_admission_waiters() has already frozen every
+	 * executor and drained every waiter while ALL executors were alive,
+	 * because a waiter here may HOME on a different executor and
+	 * unparking it goes through that executor's mutex (destroying the
+	 * home first would make this drain a use-after-free). */
+	for (;;) {
+		uint64_t shutdown_wakes[64];
+		int n_shutdown_wakes = 0;
+		pthread_mutex_lock(&exec->mu);
+		while (exec->wait_head && n_shutdown_wakes < 64) {
+			ExecWaiter *sw = exec->wait_head;
+			exec->wait_head = sw->next;
+			if (!exec->wait_head) {
+				exec->wait_tail = NULL;
+			}
+			sw->next = NULL;
+			sw->done = -1;
+			if (sw->waiter_vt != 0) {
+				shutdown_wakes[n_shutdown_wakes++] = sw->waiter_vt;
+			}
+		}
+		int drained = (exec->wait_head == NULL);
+		pthread_cond_broadcast(&exec->admit_cv);
+		pthread_mutex_unlock(&exec->mu);
+		for (int wi = 0; wi < n_shutdown_wakes; wi++) {
+			drift_thread_unpark(shutdown_wakes[wi]);
+		}
+		if (drained) {
+			break;
+		}
+	}
 	/* Wake worker if it is in poll mode (epoll_wait). */
 	Reactor *r = drift_default_reactor_ptr;
 	if (r) drift_reactor_wake(r);
@@ -1825,15 +1954,73 @@ static void drift_exec_destroy_internal(DriftExec *exec) {
 		fl = fn;
 	}
 	pthread_cond_destroy(&exec->cv);
+	pthread_cond_destroy(&exec->admit_cv);
 	pthread_mutex_destroy(&exec->mu);
 	free(exec->threads);
 	free(exec);
+}
+
+/* Shutdown topology prepass: drain EVERY executor's admission waiters
+ * BEFORE any executor is destroyed.  A waiter parked on executor B may
+ * HOME on executor A (its fiber runs on A); unparking it goes through
+ * h->exec == A's mutex, so B's own destroy-time drain is only safe
+ * while A is still alive.  Registry destruction order is newest-first,
+ * and nothing stops A (created after B) from hosting a VT that waits
+ * on B — so per-destroy draining cannot be made safe by ordering
+ * alone.  The prepass (a) sets admission_closed on EVERY executor
+ * first (any submission after this returns busy immediately — direct
+ * enqueue included — so no NEW admission can happen anywhere, while
+ * workers KEEP RUNNING to resume drained fibers), then (b) drains and
+ * unparks all existing waiters while ALL executors are alive.  Lock order registry_mu ->
+ * exec->mu is the established nesting (destroy/liveness never nest the
+ * inverse).  destroy_internal keeps its own drain as a defensive
+ * backstop; after this prepass it finds nothing. */
+static void drift_exec_drain_all_admission_waiters(void) {
+	pthread_mutex_lock(&drift_exec_registry_mu);
+	for (DriftExec *e = drift_exec_registry_head; e; e = e->reg_next) {
+		pthread_mutex_lock(&e->mu);
+		/* admission_closed, NOT shutting_down: no new Block waiter can
+		 * form anywhere, but every executor's workers keep running so
+		 * the drained waiters below can resume and unwind. */
+		e->admission_closed = 1;
+		pthread_mutex_unlock(&e->mu);
+	}
+	for (DriftExec *e = drift_exec_registry_head; e; e = e->reg_next) {
+		for (;;) {
+			uint64_t wakes[64];
+			int n_wakes = 0;
+			pthread_mutex_lock(&e->mu);
+			while (e->wait_head && n_wakes < 64) {
+				ExecWaiter *sw = e->wait_head;
+				e->wait_head = sw->next;
+				if (!e->wait_head) {
+					e->wait_tail = NULL;
+				}
+				sw->next = NULL;
+				sw->done = -1;
+				if (sw->waiter_vt != 0) {
+					wakes[n_wakes++] = sw->waiter_vt;
+				}
+			}
+			int drained = (e->wait_head == NULL);
+			pthread_cond_broadcast(&e->admit_cv);
+			pthread_mutex_unlock(&e->mu);
+			for (int wi = 0; wi < n_wakes; wi++) {
+				drift_thread_unpark(wakes[wi]);
+			}
+			if (drained) {
+				break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&drift_exec_registry_mu);
 }
 
 static void drift_exec_shutdown_all_atexit(void) {
 	/* Prevent the default-executor atexit hook from dereferencing stale
 	 * pointers after global executor teardown runs first. */
 	atomic_store(&drift_default_executor, 0);
+	drift_exec_drain_all_admission_waiters();
 	while (1) {
 		pthread_mutex_lock(&drift_exec_registry_mu);
 		DriftExec *exec = drift_exec_registry_head;
@@ -1933,6 +2120,112 @@ static void drift_exec_enqueue(DriftExec *exec, DriftVt *vt) {
 	exec->tail = node;
 	exec->queue_len++;
 	pthread_cond_signal(&exec->cv);
+}
+
+/* Unlink one admission waiter (abandonment path: timeout / cancel).
+ * Caller holds exec->mu.  Returns 1 if found. */
+static int drift_exec_waiter_unlink_locked(DriftExec *exec, ExecWaiter *w) {
+	ExecWaiter *prev = NULL;
+	ExecWaiter *cur = exec->wait_head;
+	while (cur) {
+		if (cur == w) {
+			if (prev) {
+				prev->next = cur->next;
+			} else {
+				exec->wait_head = cur->next;
+			}
+			if (exec->wait_tail == cur) {
+				exec->wait_tail = prev;
+			}
+			cur->next = NULL;
+			return 1;
+		}
+		prev = cur;
+		cur = cur->next;
+	}
+	return 0;
+}
+
+/* Conditional capacity transfer (Block(timeout) admission).  Called
+ * WITHOUT exec->mu held, after any total-decrease point (the running--
+ * sites).  Admits FIFO waiters ONLY while capacity truly exists —
+ * queue_limit == 0 (unbounded; no waiter can exist, defensive) or
+ * queue_len + running < queue_limit.  The check runs AFTER the caller's
+ * decrement, which is what makes drift_thread_yield's transient
+ * (re-enqueue BEFORE the worker's running--) harmless: at that decrement
+ * the total merely returns to the limit, no slot is free, nothing is
+ * admitted.  Admission enqueues the waiter's submission right here (the
+ * freed slot is consumed under the same mu hold — atomic FIFO admission,
+ * no lost wakeups, no over-admission), sets done=1, and COLLECTS the
+ * wake; the unparks run after mu is released because
+ * drift_thread_unpark takes the target VT's own executor mutex in its
+ * PARKED->READY path (same-executor waiter => self-deadlock otherwise). */
+static void drift_exec_admit_waiters(DriftExec *exec) {
+	if (!exec) {
+		return;
+	}
+	for (;;) {
+		uint64_t wakes[8];
+		int n_wakes = 0;
+		int cond_wake = 0;
+		int admitted_any = 0;
+		int more = 0;
+		pthread_mutex_lock(&exec->mu);
+		while (exec->wait_head && !exec->shutting_down && !exec->admission_closed) {
+			if (exec->queue_limit > 0) {
+				int running = atomic_load(&exec->running);
+				if (exec->queue_len + (int64_t)running >= exec->queue_limit) {
+					break;
+				}
+			}
+			ExecWaiter *w = exec->wait_head;
+			/* Wake-capacity check BEFORE admitting: once a waiter is
+			 * popped/enqueued/done=1 its wake MUST be recorded — a
+			 * batch-full break after admission would leave the VT
+			 * parked until its deadline (or forever with timeout=0).
+			 * Peek first; if this round's batch is full, wake what we
+			 * have and come back for the rest. */
+			if (w->waiter_vt != 0 && n_wakes >= 8) {
+				more = 1;
+				break;
+			}
+			exec->wait_head = w->next;
+			if (!exec->wait_head) {
+				exec->wait_tail = NULL;
+			}
+			w->next = NULL;
+			w->submission->exec = exec;
+			drift_vt_set_ready(w->submission);
+			drift_exec_enqueue(exec, w->submission);
+			w->done = 1;
+			admitted_any = 1;
+			if (w->waiter_vt != 0) {
+				wakes[n_wakes++] = w->waiter_vt;
+			} else {
+				cond_wake = 1;
+			}
+			/* w may live on the (about to resume) submitter's stack —
+			 * never touched again after mu is released. */
+		}
+		pthread_mutex_unlock(&exec->mu);
+		for (int i = 0; i < n_wakes; i++) {
+			drift_thread_unpark(wakes[i]);
+		}
+		if (cond_wake) {
+			pthread_cond_broadcast(&exec->admit_cv);
+		}
+		if (admitted_any) {
+			/* Mirror the direct-submit path: a single poll-mode worker may
+			 * be inside epoll_wait and miss the enqueue cond_signal.
+			 * Keyed on ANY admission — a cond-admitted non-VT waiter
+			 * (n_wakes == 0) still enqueued a task the worker must see. */
+			Reactor *r = drift_default_reactor_ptr;
+			if (r) drift_reactor_wake(r);
+		}
+		if (!more) {
+			break;
+		}
+	}
 }
 
 static int drift_exec_remove_vt_locked(DriftExec *exec, DriftVt *vt) {
@@ -2727,13 +3020,16 @@ void drift_exec_default_set(uint64_t exec) {
 }
 
 uint64_t drift_exec_create(int64_t min_threads, int64_t max_threads, int64_t queue_limit, int64_t timeout_ms, int64_t saturation, int64_t stack_bytes) {
-	(void)timeout_ms;
-	(void)saturation;
 	pthread_once(&drift_exec_cleanup_once, drift_exec_register_shutdown_once);
 	DriftExec *exec = drift_exec_create_internal(min_threads, max_threads, queue_limit, stack_bytes);
 	if (!exec) {
 		return 0;
 	}
+	/* Bounded admission policy (previously (void)-discarded; the stdlib
+	 * has always encoded and passed these — build_executor: ReturnBusy=1,
+	 * Block=0, plus policy.timeout.millis). */
+	exec->saturation = (int)saturation;
+	exec->submit_timeout_ms = timeout_ms;
 	return (uint64_t)exec;
 }
 
@@ -2755,17 +3051,165 @@ uint64_t drift_exec_submit(uint64_t exec, uint64_t vt) {
 	if (atomic_load(&h->cancelled)) {
 		return 0;
 	}
-	drift_vt_set_ready(h);
+	/* READY is published at the actual enqueue points (direct enqueue
+	 * below; admission transfer in drift_exec_admit_waiters) — NOT here:
+	 * a Block-admission wait can hold the submission VT un-enqueued for
+	 * seconds, and liveness must not show it as READY while it is
+	 * really "created, awaiting admission". */
 	pthread_mutex_lock(&ex->mu);
+	/* Full admission freeze: once the executor is shutting down or the
+	 * shutdown prepass has closed admission, NO submission may enqueue —
+	 * including the free-capacity direct path.  (A shutdown-resumed
+	 * admission waiter re-submitting to a different, not-full executor
+	 * must fail fast here, not enqueue new work at exit.)  Fiber
+	 * RESUMPTION is unaffected: unpark re-enqueues through
+	 * drift_exec_enqueue directly, which is not admission. */
+	if (ex->shutting_down || ex->admission_closed) {
+		pthread_mutex_unlock(&ex->mu);
+		return 1;
+	}
 	if (ex->queue_limit > 0) {
 		int running = atomic_load(&ex->running);
 		int64_t total = ex->queue_len + (int64_t)running;
-		if (total >= ex->queue_limit) {
+		/* FIFO fairness: freed capacity belongs to the OLDEST admission
+		 * waiter, not to whichever direct submitter wins the race for
+		 * ex->mu between a capacity release and its (already pending)
+		 * drift_exec_admit_waiters call.  A submission that sees waiters
+		 * must queue BEHIND them even if a slot is momentarily free —
+		 * otherwise repeated direct traffic can starve a waiter into
+		 * timeout despite capacity freeing over and over.  (Waiters only
+		 * exist on Block executors: the ReturnBusy leg below is
+		 * unreachable with wait_head set, but the check is kept on the
+		 * shared path for defense.) */
+		if (total >= ex->queue_limit || ex->wait_head != NULL) {
+			/* ReturnBusy (saturation == 1): byte-identical legacy path.
+			 * (shutting_down/admission_closed were rejected at entry.) */
+			if (ex->saturation != 0) {
+				pthread_mutex_unlock(&ex->mu);
+				return 1;
+			}
+			/* Block(timeout) bounded admission (2026-07-11 design).  The
+			 * waiter record lives on THIS stack (fiber stacks persist
+			 * across park; OS-thread stacks across cond_timedwait).  The
+			 * submission VT is neither enqueued nor started until a
+			 * capacity transfer admits it (drift_exec_admit_waiters); on
+			 * timeout/cancel/shutdown it is returned untouched and the
+			 * caller's existing vt_drop path destroys the callback and
+			 * captures exactly once.  done (under ex->mu) is the single
+			 * arbiter: no path can both enqueue and return-failure. */
+			/* h->exec is deliberately NOT set here: drift_thread_drop's
+			 * pre-start cleanup branch (the exactly-once callback destroy
+			 * on submit failure) requires !started && !exec — "reserved
+			 * for cleanup of a VT that was created but never submitted".
+			 * An abandoned waiter must return the VT in exactly that
+			 * state; admission (drift_exec_admit_waiters) sets exec right
+			 * before enqueueing, mirroring the direct-submit path. */
+			ExecWaiter w;
+			w.submission = h;
+			w.waiter_vt = drift_thread_current_vt_handle();
+			w.done = 0;
+			w.next = NULL;
+			if (ex->wait_tail) {
+				ex->wait_tail->next = &w;
+			} else {
+				ex->wait_head = &w;
+			}
+			ex->wait_tail = &w;
+			int64_t deadline_ms = 0;
+			if (ex->submit_timeout_ms > 0) {
+				deadline_ms = drift_now_ms() + ex->submit_timeout_ms;
+			}
+			if (w.waiter_vt != 0) {
+				/* VT leg: park (yielding the carrier — the submitter
+				 * pins nothing while waiting).  park_until registers a
+				 * reactor deadline timer; unpark permit semantics
+				 * (park_token latch + handshake) close the unlock->park
+				 * window, so a transfer that lands before we park just
+				 * makes the park return immediately. */
+				pthread_mutex_unlock(&ex->mu);
+				/* We may have appended while capacity was momentarily
+				 * free (the FIFO-fairness branch above).  Run one
+				 * admission pass ourselves so this waiter never depends
+				 * on the ordering of the freeing thread's pending
+				 * admit call; if it admits us, the unpark token is
+				 * latched and the first park returns immediately. */
+				drift_exec_admit_waiters(ex);
+				for (;;) {
+					if (deadline_ms > 0) {
+						drift_thread_park_until(deadline_ms);
+					} else {
+						drift_thread_park(0);
+					}
+					/* Timer hygiene: park_until registers a fresh timer
+					 * per iteration; cancel before arbitrating so an
+					 * already-admitted waiter leaves no stale wakeup
+					 * behind.  Reactor lock is taken WITHOUT ex->mu held
+					 * (lock-ordering hygiene). */
+					if (deadline_ms > 0) {
+						drift_reactor_cancel_vt_timers(w.waiter_vt);
+					}
+					pthread_mutex_lock(&ex->mu);
+					if (w.done == 1) {
+						pthread_mutex_unlock(&ex->mu);
+						return 0;
+					}
+					if (w.done == -1) {
+						pthread_mutex_unlock(&ex->mu);
+						return 1;
+					}
+					if (drift_thread_is_cancelled()) {
+						drift_exec_waiter_unlink_locked(ex, &w);
+						pthread_mutex_unlock(&ex->mu);
+						return 3;
+					}
+					if (deadline_ms > 0 && drift_now_ms() >= deadline_ms) {
+						drift_exec_waiter_unlink_locked(ex, &w);
+						pthread_mutex_unlock(&ex->mu);
+						return 2;
+					}
+					pthread_mutex_unlock(&ex->mu);
+				}
+			}
+			/* Non-VT leg (main thread pre-runtime / foreign threads):
+			 * wait on the DEDICATED admit_cv — never ex->cv, whose single
+			 * cond_signal per enqueue must reach a worker, not us.
+			 * Same self-admission pass as the VT leg (drop/retake mu:
+			 * the admit helper locks it itself). */
 			pthread_mutex_unlock(&ex->mu);
-			return 1;
+			drift_exec_admit_waiters(ex);
+			pthread_mutex_lock(&ex->mu);
+			while (w.done == 0 && !ex->shutting_down) {
+				if (deadline_ms > 0) {
+					int64_t now = drift_now_ms();
+					if (now >= deadline_ms) {
+						break;
+					}
+					struct timespec ts;
+					clock_gettime(CLOCK_REALTIME, &ts);
+					int64_t rem = deadline_ms - now;
+					ts.tv_sec += rem / 1000;
+					ts.tv_nsec += (long)(rem % 1000) * 1000000L;
+					if (ts.tv_nsec >= 1000000000L) {
+						ts.tv_sec += 1;
+						ts.tv_nsec -= 1000000000L;
+					}
+					pthread_cond_timedwait(&ex->admit_cv, &ex->mu, &ts);
+				} else {
+					pthread_cond_wait(&ex->admit_cv, &ex->mu);
+				}
+			}
+			if (w.done == 1) {
+				pthread_mutex_unlock(&ex->mu);
+				return 0;
+			}
+			drift_exec_waiter_unlink_locked(ex, &w);
+			uint64_t rc = (w.done == -1 || ex->shutting_down) ? 1 : 2;
+			pthread_mutex_unlock(&ex->mu);
+			return rc;
 		}
 	}
 	h->exec = ex;
+	drift_vt_set_ready(h);
 	drift_exec_enqueue(ex, h);
 	pthread_mutex_unlock(&ex->mu);
 	/* Wake worker if it is in poll mode (epoll_wait instead of condvar).

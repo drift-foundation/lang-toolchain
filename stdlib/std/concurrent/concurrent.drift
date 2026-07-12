@@ -1537,6 +1537,109 @@ pub fn build_executor(policy: ExecutorPolicy) nothrow -> Executor {
 	return Executor(policy = policy, handle = handle);
 }
 
+/// A dedicated executor whose worker threads are EXPECTED to be pinned
+/// by blocking C calls (non-pollable FFI: database engines, DNS-style
+/// syscalls, legacy C libraries).  Nominal wrapper over `Executor`:
+/// same runtime machinery, blocking-appropriate defaults, and a stable
+/// name for the blocking contract — blocking work runs on these
+/// workers and NEVER pins a cooperative virtual-thread carrier.
+///
+/// Submission is bounded: the queue limit plus the saturation policy
+/// (`Block` with a timeout by default) make admission the executor's
+/// job — callers get ordinary `Result` errors, never an unbounded
+/// pile-up.  In-flight C calls are not cancellable; the worker count
+/// is the containment bound for wedged foreign calls.
+///
+/// **See also:** `blocking_executor_builder`, `build_blocking_executor`,
+/// `spawn_blocking_on`, `run_blocking_on`.
+pub struct BlockingExecutor {
+	exec: Executor
+}
+
+implement core.Copy for BlockingExecutor {
+}
+
+/// Returns an `ExecutorPolicyBuilder` preset for blocking foreign
+/// work: 4 fixed workers (created eagerly at build, parked when
+/// idle), queue limit 64, `Block` saturation with a 5 s admission
+/// timeout, 256 KiB stacks.
+///
+/// **Returns:** builder; adjust and pass to `build_blocking_executor`.
+///
+/// **See also:** `BlockingExecutor`, `build_blocking_executor`.
+pub fn blocking_executor_builder() nothrow -> ExecutorPolicyBuilder {
+	return ExecutorPolicyBuilder(
+		min_threads = 4,
+		max_threads = 4,
+		queue_limit = 64,
+		timeout = Duration(millis = 5000),
+		on_saturation = SaturationPolicy::Block(),
+		stack_bytes = 262144
+	);
+}
+
+/// Materializes a `BlockingExecutor` from a policy (typically from
+/// `blocking_executor_builder`).  Both saturation policies are
+/// supported: `Block` parks the submitter (without pinning its
+/// carrier) until capacity is transferred or the policy timeout
+/// elapses; `ReturnBusy` fails submission immediately when full.
+///
+/// **Parameters:**
+/// - `policy` — executor policy (worker count, queue bound, saturation).
+///
+/// **Returns:** the blocking executor (process-lifetime; workers are
+/// joined by the runtime at exit).
+///
+/// **See also:** `blocking_executor_builder`, `spawn_blocking_on`.
+pub fn build_blocking_executor(policy: ExecutorPolicy) nothrow -> BlockingExecutor {
+	return BlockingExecutor(exec = build_executor(policy));
+}
+
+/// Submits `cb` to a blocking executor and returns a joinable handle.
+/// Asynchronous form; mirrors `spawn_on` exactly, including its error
+/// mapping (`busy` / `timeout` / `cancelled` as `ConcurrencyError`).
+///
+/// **Parameters:**
+/// - `exec` — the blocking executor.
+/// - `cb` — the blocking closure; runs on a blocking worker thread.
+///
+/// **Returns:** `Ok(VirtualThread<T>)` once ADMITTED (with `Block`
+/// saturation the call may park until capacity frees), or the
+/// admission error.
+///
+/// **See also:** `run_blocking_on`, `spawn_on`.
+pub fn spawn_blocking_on<T>(exec: &BlockingExecutor, var cb: core.Callback0<T>) nothrow -> core.Result<VirtualThread<T>, ConcurrencyError> {
+	return spawn_on(exec.exec, move cb);
+}
+
+/// Runs `cb` on a blocking worker and waits for its result — the
+/// common shape for structural foreign batches (e.g. one database
+/// transaction per call).  The calling virtual thread parks while the
+/// work runs; its carrier is free the whole time.
+///
+/// Domain errors should travel inside `T` (return
+/// `core.Result<Payload, DomainError>` from the closure);
+/// `ConcurrencyError` is reserved for infrastructure outcomes.
+///
+/// **Parameters:**
+/// - `exec` — the blocking executor.
+/// - `cb` — the blocking closure.
+///
+/// **Returns:** the closure's value, or the admission/join error.
+///
+/// **See also:** `spawn_blocking_on`.
+pub fn run_blocking_on<T>(exec: &BlockingExecutor, var cb: core.Callback0<T>) nothrow -> core.Result<T, ConcurrencyError> {
+	match spawn_blocking_on(exec, move cb) {
+		core.Result::Ok(vt) => {
+			var owned = move vt;
+			return owned.join();
+		},
+		core.Result::Err(e) => {
+			return core.Result::Err(move e);
+		},
+	}
+}
+
 /// Replaces the process-wide default `Executor`.
 ///
 /// Subsequent calls to `default_executor()` return the supplied
@@ -1730,6 +1833,12 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 	}
 	if submit_code == 2 {
 		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_TIMEOUT, code = -1));
+	}
+	if submit_code == 3 {
+		// Block(timeout) admission wait abandoned because the submitting
+		// VT was cancelled.  Explicit mapping — falling through to the
+		// FAILED catch-all would hide a well-defined outcome.
+		return core.Result::Err(ConcurrencyError(kind = CONCURRENCY_KIND_CANCELLED, code = -6));
 	}
 	try {
 		throw ExecSubmitFailed(code = submit_code);

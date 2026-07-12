@@ -814,3 +814,43 @@ opportunistic uplifts)" for the full rule.
   project, separate from ABI — keep the three tracks (0.33.69 UAF fix,
   projected-capture follow-up, Scope A) separate from Scope B even
   though they share root cause.
+
+## FFI-handle lifecycle lint (`RawPtr` field without `Destructible`)
+
+- **Improvement:** diagnostics for the "acquired via unsafe FFI, no
+  matching `Destructible`" leak shape (drift-query `LmdbStorage`
+  report, 2026-07-11: an `MDB_env*` stored as a plain `Uint` field on
+  a Copy struct — every handle leaked on the success path).  Ladder:
+  - **v1 lint:** struct declares a `RawPtr<T>` field and the struct
+    has no `Destructible` impl → warn.  Cheap, no dataflow.  Only
+    effective paired with the authoring convention "store acquired
+    FFI handles as `RawPtr`, never as word ints" (effective-drift
+    candidate) — the reported bug's `env: Uint` erased the last
+    statically visible pointer trace, so no lint catches it without
+    the convention.
+  - **v2 annotation:** an acquires-resource marker on `extern "C"`
+    declarations with checked flow-to-owner (value must reach a
+    `Destructible`-implementing container or an explicit release).
+    Catches the REAL reported dataflow — out-param write, buffer
+    read-back, cast to `Uint` — which v1 and the reporter's own
+    "field assigned from an FFI call result" phrasing both miss.
+    Language-surface design slice, not a lint.
+
+- **Why deferred (2026-07-11):** one report, already fixed correctly
+  downstream by opting into `Destructible`; v1 without the convention
+  has near-zero catch rate on real code (handles get stored as ints);
+  v2 is new annotation surface + taint analysis through unsafe
+  out-param writes and casts, with a real false-positive budget to
+  design (many FFI-adjacent fields legitimately need no cleanup).
+  Post-0.33.79 roadmap (C3 modeling, Arrays elision, B-repr(B5))
+  outranks it.
+
+- **Triggers:**
+  - A second FFI-handle leak report from a downstream team → build v1
+    + land the effective-drift convention note.
+  - Any slice that adds extern-decl annotations for other reasons
+    (ownership conventions A/B already documented in the FFI notes)
+    → fold the v2 acquires-resource marker into its design.
+
+- **Scope when triggered:** v1 ~1 day (checker walk over struct
+  schemas + one diagnostic + pins); v2 is its own design doc first.

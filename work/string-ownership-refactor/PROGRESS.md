@@ -378,3 +378,91 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   zero ambiguous pairs allowed). Verified in review-ordered sequence: failing test
   green → channel file + 12-pin callback matrix 14/14. Targeted only; full suite is
   the user's gate.
+- 2026-07-11: **Block(timeout) admission IMPLEMENTED (runtime + stdlib), 10/10 pins.**
+  Runtime: DriftExec gains saturation/submit_timeout_ms/FIFO ExecWaiter list +
+  dedicated admit_cv (enqueue's single cv signal must reach a WORKER, never an
+  admission waiter — lost-task-wakeup hazard found during implementation);
+  try_admit_waiter_locked conditional transfer (admits only while queue+running <
+  limit, wakes collected under mu and unparked after release); Block path in
+  drift_exec_submit (park_until loop, done-flag arbitration, codes 0/1/2/3);
+  shutdown drain (done=-1) before worker join. Stdlib: spawn_on code-3 →
+  Err(CANCELLED) arm; BlockingExecutor + blocking_executor_builder (Block 5s/queue
+  64/4 workers) + build_blocking_executor + spawn_blocking_on/run_blocking_on.
+  ONE ownership finding vs design (fixed, not a stop-condition breach):
+  drift_thread_drop's exactly-once cleanup branch requires !started && !exec, so
+  h->exec must be assigned AT ADMISSION (in the transfer), not before the wait —
+  premature assignment leaked the timed-out submission's callback (caught by the
+  Destructible exactly-once pin). Pins (test_exec_block_admission.py, ALL real
+  saturation): FIFO success-after-wait, timeout+Destructible exactly-once
+  (+ASAN+Valgrind), ReturnBusy immediate, no-carrier-pinning, cancel→CANCELLED,
+  yield/requeue no-over-admission, exit-with-waiter (+Valgrind). ABI 20 held.
+  NEW SCOPE from review before facility completion: observability (liveness must
+  identify stuck blocking work) — design proposal at
+  /tmp/drift-announce/2026-07-12T010000Z-design-blocking-ffi-observability.md:
+  wait-kind blocking-admission (extern-free), exec names + op labels + ffi
+  enter/exit markers (3 new externs → ABI 21 + recert), compiler instrumentation
+  of user-module extern "C" calls (recommended over manual markers), required
+  label params, diagnosable-FFI docs/example contract. AWAITING approval; version
+  bump + history deferred until the facility is complete per review stance.
+- 2026-07-11: **Review round on admission (3 findings, all fixed/folded).** (1)
+  BLOCKING — FIFO bypass: direct submit ignored wait_head when capacity was free
+  (release→admit window), letting new submitters starve older waiters. Fix:
+  submissions enter the wait path when waiters exist even with free capacity
+  (`total >= limit || wait_head != NULL`), + belt-and-braces self-admission pass in
+  both waiter legs (safe: done=1 observed via latched park token / while-condition
+  before any wait). New starvation pin (waiter with 4s budget vs 12 sequential
+  competing submissions) — matrix now 11/11. (2) MEDIUM — reactor wake keyed on
+  admitted_any, not n_wakes (cond-admitted non-VT waiter still enqueues a task a
+  poll-mode worker must see). (3) MEDIUM — observability design corrected: NO
+  per-exec JSON exists today (walker reports first entry only, ~3328); design now
+  specifies bounded execs[] (cap 64 + truncated flag) with stable registration-
+  ordinal ids joined from VT wait/op records. ABI 20 still held for admission;
+  observability slice remains the ABI-21 boundary.
+- 2026-07-12: **Review round 2 on admission (4 findings).** (1) BLOCKING lost-wake in
+  admit batch: wake-capacity now checked BEFORE pop/admit (peek-first; batch-full →
+  wake this round, loop for the rest) — pre-fix an admitted waiter beyond wakes[8]
+  slept to deadline/forever. Pin: 12-simultaneous-release many-waiter shape with
+  timeout=0, all 10 waiters woken. (2) BLOCKING shutdown drain same cap: now batched
+  rounds of ≤64 (pop under mu, unpark after unlock, loop until drained); registry
+  prepend order verified (newest-first destroy → waiters unpark while their home
+  executor is alive, noted at the site). Pins: 70-waiter exit (+valgrind). Matrix
+  14/14. (3) MEDIUM observability data-race scheme added to design (§1.4): exec name
+  immutable-before-registry-publish; op label publish-length-last atomic;
+  FFI marker redesigned to ONE atomic pointer to a compiler-emitted rodata
+  DriftFfiSite record (no torn triples, no lifetime coordination). (4) LOW/MED:
+  submitter recorded as numeric DriftVt.submitter_vtid inside drift_vt_set_op — not
+  string-encoded into the 47-byte label.
+- 2026-07-12: **Review round 3: shutdown topology blocker + two lows — fixed, matrix
+  16/16 + adjacent batteries 126/1skip.** (1) BLOCKING topology: cross-executor
+  waiters (home exec A created AFTER blocking exec B → A destroyed first → B's drain
+  unparks through freed A->mu). Fix has TWO parts, and the first attempt taught the
+  second: a naive global prepass that set shutting_down everywhere DRAINED waiters but
+  froze their home executors' workers, stranding resumed-waiter fibers parked → the
+  fiber-stack-held submission state leaked (caught by the pre-existing exit valgrind
+  rows). Final design: (a) new admission_closed flag — prepass closes Block admission
+  on ALL executors (no new waiters anywhere) while workers KEEP RUNNING, then drains
+  and unparks every waiter while all homes are alive; (b) worker shutdown-drain —
+  workers exit only when the queue is EMPTY; during shutdown they drop never-started
+  work (existing destroy semantics, cancelled-unstarted pattern) but RESUME started
+  fibers so an unparked waiter deterministically runs its submit-failure unwind
+  (vt_drop) regardless of destroy timing. destroy_internal's own drain stays as
+  backstop. Pins: cross-exec topology exit (+valgrind), all prior exit rows green
+  again. (2) phantom READY: drift_vt_set_ready moved from submit entry to the two
+  actual enqueue points (direct + admission transfer) — a Block-waiting submission
+  now snapshots as created/awaiting-admission, not READY. (3) doc example fixed to
+  "op" + separate "submitter": 3. Worker-loop semantics change flagged for the
+  report: queued never-started work at shutdown is now dropped by the DRAINING worker
+  rather than destroy's post-join walk (same outcome, earlier point); started fibers
+  now resume at shutdown (new, load-bearing for graceful teardown).
+- 2026-07-12: **Review round 4: admission_closed made a FULL freeze — matrix 18/18.**
+  Submit rejects shutting_down||admission_closed at ENTRY (before the free-capacity
+  direct path); admit_waiters stops admitting once closed; stale prepass comment
+  fixed (the shutting_down/admission_closed distinction IS the fix). New pin (12):
+  shutdown-resumed waiter re-submits into a DIFFERENT not-full blocking exec →
+  Err(BUSY), with negative markers proving no enqueue and no task ran (+valgrind).
+  Challenge noted per user instruction: kept ONE deliberate scope-widening — the
+  entry check also fail-fasts `shutting_down` on the direct path (previously
+  enqueue-into-dying-queue, silently dropped by destroy's walk). Argued FOR: Err(BUSY)
+  to the caller beats silent loss, kills a third behavior class, and the silent-drop
+  shape is the 0.32.x shutdown-bug breeding ground. Flagged as the one behavior
+  change beyond the finding's letter.
