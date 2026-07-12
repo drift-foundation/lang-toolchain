@@ -4,7 +4,15 @@ import std.core as core;
 import lang.thread as thread;
 
 pub fn main() nothrow -> Int {
-	val exec = thread.exec_create(1, 1, 1, 0, 0, 262144);
+	// Raw intrinsic ABI pin: exec_create(min_threads, max_threads,
+	// queue_limit, timeout_ms, saturation, stack_bytes) with
+	// saturation = 1 = ReturnBusy (0 = Block).  This fixture asserts
+	// RETURN-BUSY queue-limit enforcement at the intrinsic level: a
+	// submit to a full executor fails IMMEDIATELY with code 1.  The
+	// Block(timeout) admission path (saturation = 0, real since
+	// 0.33.80) is covered by lang/tests/driver/
+	// test_exec_block_admission.py via the stdlib builder.
+	val exec = thread.exec_create(1, 1, 1, 0, 1, 262144);
 	if exec == 0 {
 		return 10;
 	}

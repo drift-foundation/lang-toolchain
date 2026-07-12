@@ -1,5 +1,5 @@
 {
-  "description": "e2e: executor queue limit enforced",
+  "description": "e2e: executor queue limit enforced under ReturnBusy (raw intrinsic ABI: saturation=1); Block admission is pinned separately in test_exec_block_admission.py",
   "skip_memcheck": true,
   "exit_code": 0
 }

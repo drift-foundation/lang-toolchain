@@ -524,3 +524,12 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   via the known ASAN/valgrind collision, not an ownership defect (0 leaks/errors in
   its own log). Verified: both green in normal lane; heap pin SKIPS in ASAN lane.
   Full suite restart is the user's.
+- 2026-07-12: **Stale e2e fixture: concurrent_queue_limit_enforced (full-suite catch,
+  agreed not environmental).** Raw exec_create(..., saturation=0) fixture encoded the
+  pre-admission behavior where saturation was (void)-ignored and full always returned
+  busy; with Block real (0 = Block per shipped encoding), the second submit is now
+  legitimately admitted after the occupant finishes → fixture returned 1. Fixed to
+  saturation=1 with the positional encoding documented at the call — kept RAW
+  (challenged the builder suggestion: this is the only e2e coverage of the intrinsic
+  numeric ABI; builder path already has the 18 admission pins). expected.json
+  description updated. Fixture green. Sweep: no other raw exec_create callers.
