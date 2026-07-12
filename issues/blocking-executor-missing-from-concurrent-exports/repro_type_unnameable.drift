@@ -1,0 +1,31 @@
+// Repro 2: the TYPE name is not exported, so user code cannot declare a
+// struct field, function parameter, or return type of the executor type.
+// This blocks any design that stores the executor (e.g. a storage adapter
+// holding its subsystem executor, per the facility's own boundary guidance).
+//
+// Expected: compiles.
+// Actual (driftc 0.33.80 | abi 21):
+//   error: module 'std.concurrent' does not export type 'BlockingExecutor' [E-AUTO-0fd5b919]
+module main;
+
+import std.core as core;
+import std.concurrent as conc;
+
+struct HoldsExecutor {
+	ex: conc.BlockingExecutor
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	var b = conc.blocking_executor_builder();
+	val h = HoldsExecutor(ex = conc.build_blocking_executor(b.build(), "repro"));
+	val x = 41;
+	match conc.run_blocking_on(&h.ex, "repro.op", core.callback0(|| captures(copy x) => {
+		return x + 1;
+	})) {
+		core.Result::Ok(v) => {
+			if v == 42 { return 0; }
+			return 2;
+		},
+		core.Result::Err(_) => { return 1; },
+	}
+}

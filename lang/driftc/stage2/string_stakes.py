@@ -173,6 +173,7 @@ def materialize_call_arg_stakes(
 		if isinstance(prod, M.StructGetField):
 			fty = getattr(prod, "field_ty", None)
 			return fty is not None and _param_is_string(fty)
+		# owned-at-extraction: VariantGetField
 		# `VariantGetField` is deliberately NOT a view (review finding,
 		# 2026-07-10): its String dest is ALREADY OWNED — codegen lowers
 		# it as load + drift_string_retain (string_arc documents the
@@ -187,6 +188,8 @@ def materialize_call_arg_stakes(
 		if isinstance(prod, M.LoadField):
 			dty = local_types.get(prod.dest)
 			return dty is not None and _param_is_string(dty)
+		# owned-at-extraction: ArrayIndexLoad
+		# owned-at-extraction: ArrayIndexLoadUnchecked
 		# B-arch-1d view kind (ResultOk below).  ArrayIndexLoad /
 		# ArrayIndexLoadUnchecked are NOT views — they stay TERMINAL,
 		# the exact sibling of VariantGetField above: the codegen

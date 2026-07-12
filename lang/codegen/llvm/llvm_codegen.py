@@ -2794,6 +2794,7 @@ class _FuncBuilder:
 		elif isinstance(instr, CopyValue):
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
+			# copy-construction: the CopyValue instruction IS the copy.
 			copied = self._emit_copy_value(instr.ty, val, dest_hint=dest)
 			self.value_map[instr.dest] = copied if copied != dest else dest
 			if copied in self.value_types:
@@ -3529,6 +3530,7 @@ class _FuncBuilder:
 					loaded = self._fresh("field")
 					self.lines.append(f"  {loaded} = load {emit_want_llty}, ptr {field_ptr}")
 					self.value_types[loaded] = want_llty
+					# owned-at-extraction: VariantGetField
 					copied = self._emit_copy_value(instr.field_ty, loaded)
 					# Materialize a real SSA def for `dest` (instead of aliasing via
 					# value_map) so downstream drop/phi logic remains consistent.
@@ -9301,6 +9303,7 @@ class _FuncBuilder:
 			elem_val = self._map_value(elem)
 			elem_val = self._coerce_value_to_typeid(elem, elem_val, instr.elem_ty, context="array literal element")
 			if needs_string_copy:
+				# copy-construction: array-literal element ownership stake.
 				elem_val = self._emit_copy_value(instr.elem_ty, elem_val)
 			if is_bool:
 				elem_val = self._bool_to_storage(elem_val)
@@ -9555,6 +9558,7 @@ class _FuncBuilder:
 			)
 			src_val = self._fresh("src_val")
 			self.lines.append(f"  {src_val} = load {elem_llty}, ptr {src_ptr}")
+			# copy-construction: array dup copies each element into the new buffer.
 			copied_val = self._emit_copy_value(elem_ty_id, src_val)
 			self.lines.append(f"  store {elem_llty} {copied_val}, ptr {dst_ptr}")
 			next_val = self._fresh("idx_next")
@@ -9668,6 +9672,7 @@ class _FuncBuilder:
 							self.lines.append(f"  {field_val} = load {emit_want_llty}, ptr {field_ptr}")
 							self.value_types[field_val] = want_llty
 						field_ty = field_types_by_ctor.get(ctor_name, [])[fidx]
+						# copy-construction: recursive per-field copy inside the copy machinery.
 						copied = self._emit_copy_value(field_ty, field_val)
 						args.append(copied)
 				copied_val = self._emit_variant_value(ty_id, ctor_name, args)
@@ -9701,6 +9706,7 @@ class _FuncBuilder:
 					field_val = self._bool_from_storage(field_raw)
 				else:
 					field_val = field_raw
+				# copy-construction: recursive per-field copy inside the copy machinery.
 				copied = self._emit_copy_value(field_ty, field_val)
 				store_val = copied
 				if self._is_bool_storage_pair(value_llty=field_val_llty, storage_llty=field_store_llty):
@@ -10382,6 +10388,7 @@ class _FuncBuilder:
 			self._bool_from_storage(raw, dest=dest)
 			self.value_types[dest] = "i1"
 		else:
+			# owned-at-extraction: ArrayIndexLoad
 			copied = self._emit_copy_value(instr.elem_ty, raw)
 			if copied != raw:
 				self.value_map[instr.dest] = copied
@@ -10406,6 +10413,7 @@ class _FuncBuilder:
 			self._bool_from_storage(raw, dest=dest)
 			self.value_types[dest] = "i1"
 		else:
+			# owned-at-extraction: ArrayIndexLoadUnchecked
 			copied = self._emit_copy_value(instr.elem_ty, raw)
 			if copied != raw:
 				self.value_map[instr.dest] = copied

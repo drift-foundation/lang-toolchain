@@ -533,3 +533,67 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   (challenged the builder suggestion: this is the only e2e coverage of the intrinsic
   numeric ABI; builder path already has the 18 admission pins). expected.json
   description updated. Fixture green. Sweep: no other raw exec_create callers.
+- 2026-07-13: **Cleanup Slice 1 IMPLEMENTED (branch refactor/string-authority-cleanup;
+  plan tightened 5/5 per review before coding).** 1a: owned-at-extraction contract —
+  marker discipline at all 8 _emit_copy_value sites in llvm_codegen (3× owned-at-
+  extraction: ArrayIndexLoad/ArrayIndexLoadUnchecked/VariantGetField — three nodes,
+  two families; 5× copy-construction) + matching markers at string_stakes terminal
+  sites; NEW test_extraction_retain_contract.py (3 pins, Python ast, fail-closed:
+  unmarked site fails; larger-than-expected extraction set fails with explicit
+  STOP/REPORT message; extraction∩view-isinstance must be empty, tie checked both
+  directions). 1b: NEW tools/drift_corpus_audit.py v1.0.0 (aggregate.json comparable/
+  sorted/volatile-free; manifest.json universe identity incl. success partition;
+  metadata.json volatile-only; --baseline: universe equality→exit 2 on mismatch,
+  exact-delta table, hard gates nonzero on NEW side→exit 1) + 4 pins in
+  lang/tests/tools/ (stability/determinism-byte-identical/universe-mismatch/
+  gate-failure; one test fix: naive volatile substring check false-positived on
+  c1_path_dependent → structural key check). Slice battery 7/7. No compiler-semantics
+  changes (comments + new files only). Full-corpus baseline running; reference record
+  (manifest sha256 + aggregate table + command + tool version) appended on
+  completion. Report: /tmp/drift-announce/2026-07-13T010000Z-cleanup-slice1-
+  guardrails-tooling.md.
+- 2026-07-13: **Slice 1 review round (5 static findings, addressed; tool v1.1.0).**
+  (1) scratch rooted via session_root(base=build/tmp) + explicit dir= (never bare
+  /tmp); (2) shlex.split for --driftc-args; (3) whole-directory fixture hashes
+  (companion modules/C helpers/expected.json covered); (4) explicit compile-only
+  single-unit inclusion rule embedded verbatim in every manifest + rule-excluded
+  fixtures recorded with reasons (module_paths/c_sources shapes) + new exclusion
+  pin; (5) issues/blocking-executor-missing-from-concurrent-exports kept OUT of
+  this slice — flagged to user (pub-but-not-exported: type unnameable cross-module,
+  blocks drift-query Slice 12; functions resolve, type doesn't). Battery 8/8.
+  Baseline restarted on v1.1.0 (v1.0.0 run discarded, superseded manifest schema).
+  Incident note: a pkill pattern self-matched the invoking shell again (exit 144) —
+  the edits were re-applied and verified; reinforces the standing rule.
+- 2026-07-13: **Slice 1 review round 2 (blocking authority inversion + 2 fixed; tool
+  v1.2.0).** (1) BLOCKING: the contract pin trusted markers as classification
+  authority — a future retaining extraction mislabeled `# copy-construction` passed
+  silently. Rewritten: the authority is the AST-INFERRED instruction context per
+  call site (innermost isinstance(instr, X) branch body → else `instr: <Node>`
+  param annotation → else helper identity), classified against an explicit
+  reviewed table (EXTRACTION_CONTEXTS / CONSTRUCTION_CONTEXTS); markers only
+  DOCUMENT and must agree; unclassified contexts fail with the STOP/REPORT text;
+  multi-node isinstance branches deliberately surface as unclassified. NEW teeth
+  test: doctored copy with the ArrayIndexLoad site relabeled copy-construction →
+  context authority still classifies extraction AND reports the marker
+  disagreement. (2) MEDIUM: non-empty --out now refused (exit 2) — stale
+  audit/<fixture>.jsonl from a prior run could be aggregated as current results;
+  new reuse pin. (3) unused fn_count removed. Battery 10/10 (contract 4 + tool 6).
+  Baseline restarted on v1.2.0 (v1.1.0 run superseded).
+- 2026-07-13: **Slice 1 review round 3 (medium; tool v1.3.0).** Standalone baseline
+  acquisition could return 0 with nonzero hard gates (gates were only checked
+  inside _compare) — a reference baseline could silently bless a regression for
+  the phase. Shared _hard_gate_failures(counters) helper now applied BOTH after
+  writing a standalone run (exit 1; with --baseline the delta table still prints
+  first) and on the new side of comparisons. Gate pin extended: clean counters →
+  no failures; tampered counters → comparison exits 1 AND the same helper flags
+  standalone acquisition. Battery 10/10. Baseline restarted on v1.3.0.
+- 2026-07-13: **Slice 1 review round 4 (medium; tool v1.4.0).** In --baseline mode
+  the standalone gate check ran BEFORE _compare, so universe-mismatch + gate-failure
+  returned 1 with _compare's exit 2 ignored — breaking the mismatch-dominates
+  contract. Fixed to the reviewer's shape: baseline mode delegates entirely to
+  _compare (which owns the ordering: universe equality → delta table → new-side
+  gates); the standalone helper path applies only without --baseline. NEW pin:
+  mismatched universes + tampered gate → exit 2. Battery 11 pins green (contract
+  4 + tool 7). NOTE: the running reference baseline stays on v1.3.0 — v1.4.0
+  changes ONLY the --baseline branch; standalone acquisition semantics are
+  byte-identical, recorded here to keep the reference citation honest.
