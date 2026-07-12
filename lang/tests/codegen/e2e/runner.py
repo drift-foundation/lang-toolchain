@@ -883,6 +883,19 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 
 
 def _effective_case_timeout(case_dir: Path, default_timeout_s: int) -> int:
+	"""Per-case runtime budget.
+
+	`expected.json`'s `timeout_s` is a BASE case budget, exactly like the
+	runner default's base of 40: it goes through the same
+	`sanitizer_timeout()` scaling (host DRIFT_TEST_TIMEOUT_SCALE,
+	sanitizer/memcheck lanes, xdist contention).  Pre-fix it was returned
+	VERBATIM, so on a scaled host an overridden case became TIGHTER than
+	an un-overridden one (treemap_iter_order's 40 stayed 40 while the
+	default became 120 under DRIFT_TEST_TIMEOUT_SCALE=3 — slow-box
+	full-suite failure, 2026-07-13).  `default_timeout_s` arrives already
+	scaled (the argparse default is sanitizer_timeout(40)), so fallbacks
+	return it untouched.  If a truly ABSOLUTE per-case timeout is ever
+	needed, add a new explicitly named field — do not reuse timeout_s."""
 	expected_path = case_dir / "expected.json"
 	if not expected_path.exists():
 		return default_timeout_s
@@ -899,7 +912,7 @@ def _effective_case_timeout(case_dir: Path, default_timeout_s: int) -> int:
 		return default_timeout_s
 	if case_timeout <= 0:
 		return default_timeout_s
-	return case_timeout
+	return sanitizer_timeout(case_timeout)
 
 
 def _run_case_with_timeout(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
