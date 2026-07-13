@@ -8185,11 +8185,33 @@ def compile_stubbed_funcs(
 		# the architecture rationale.
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
-				mir_funcs_by_id[fn_id] = insert_string_arc(
-					func,
-					type_table=shared_type_table,
-					fn_infos=checked.fn_infos_by_id,
-				)
+				try:
+					mir_funcs_by_id[fn_id] = insert_string_arc(
+						func,
+						type_table=shared_type_table,
+						fn_infos=checked.fn_infos_by_id,
+					)
+				except AssertionError as err:
+					# Slice 4a boundary: string_arc contract failures
+					# (the dead-stake tripwires foremost) surface as a
+					# clean `internal:` diagnostic with a best-effort
+					# span — never a Python traceback.  Same containment
+					# pattern as the HIR→MIR lowering wraps above.
+					_append_boundary_contract_diag(
+						checked,
+						phase="string_arc",
+						prefix="string ownership stake contract failure",
+						err=err,
+						fn_id=fn_id,
+						signatures_by_id=signatures_by_id,
+						origin_by_fn_id=origin_by_fn_id,
+					)
+					_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+					if return_checked:
+						if return_ssa:
+							return {}, checked, None
+						return {}, checked
+					return {}
 		unknown_ty = shared_type_table.ensure_unknown()
 		for func in mir_funcs_by_id.values():
 			func.local_types = dict(getattr(func, "local_types", {}) or {})

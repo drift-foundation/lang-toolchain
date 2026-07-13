@@ -329,6 +329,39 @@ def insert_string_arc(
 		owned.add(tmp)
 		return tmp
 
+	def _dead_stake_tripwire(
+		val: str,
+		*,
+		site_class: str,
+		target: str,
+		block_name: str,
+		idx: int,
+	) -> None:
+		"""Slice 4a fail-closed tripwire: this stake class is corpus-zero
+		(B-arch-1d drove store_value_retain 7,624 → 0; the C2 ZeroValue
+		fix removed the last wild carrier) and its fallback is now a
+		loud, structured internal error pending deletion after a clean
+		cert cycle.  The AssertionError is converted to a clean
+		`internal:` diagnostic at the driver's string_arc boundary —
+		operators never see a Python traceback."""
+		producer = "unknown"
+		_blk = func.blocks.get(block_name)
+		if _blk is not None:
+			for _p_ins in _blk.instructions:
+				if getattr(_p_ins, "dest", None) == val:
+					producer = type(_p_ins).__name__
+					break
+		raise AssertionError(
+			f"string_arc dead-stake tripwire [{site_class}]: "
+			f"fn '{func.name}', block '{block_name}'[{idx}], "
+			f"value '{val}' -> {target}, producer={producer}. "
+			f"This stake class is corpus-zero and fail-closed pending "
+			f"deletion (string-cleanup slice 4a). A firing on real "
+			f"source is a LANGUAGE_BUG: file "
+			f"issues/string-arc-dead-stake-tripwire/ with the compiling "
+			f"source and this full message."
+		)
+
 	def _param_is_string(tid: TypeId) -> bool:
 		td = type_table.get(tid)
 		return td.kind is TypeKind.SCALAR and td.name == "String"
@@ -462,7 +495,7 @@ def insert_string_arc(
 			yield instr.array
 		elif isinstance(instr, M.ArrayDup):
 			yield instr.array
-		elif isinstance(instr, M.ArrayIndexLoad):
+		elif isinstance(instr, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
 			yield instr.array
 			yield instr.index
 		elif isinstance(instr, M.ArraySetLen):
@@ -880,6 +913,23 @@ def insert_string_arc(
 			dest = getattr(instr, "dest", None)
 			if isinstance(dest, str):
 				producers[dest] = instr
+			# String ZeroValue and element-extraction dests carry their
+			# type on the INSTRUCTION; register it before use counting so
+			# the owned/single-use store path sees them even when
+			# upstream metadata omitted the temp from func.local_types.
+			# Without this, a metadata gap makes the slice-4a
+			# store_value tripwire FIRE on an owned value (false
+			# positive: `use_counts` skips untyped values, so
+			# `_can_move_owned_once` can never approve the move) instead
+			# of taking the no-stake/move route.
+			if isinstance(instr, M.ZeroValue) and _is_string_tid(instr.ty) and instr.dest not in local_types:
+				local_types[instr.dest] = instr.ty
+			elif (
+				isinstance(instr, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked))
+				and _is_string_tid(instr.elem_ty)
+				and instr.dest not in local_types
+			):
+				local_types[instr.dest] = instr.elem_ty
 			for val in _iter_used_values(instr):
 				if _is_string_value(val) and not _is_local_name(val):
 					use_counts[val] = use_counts.get(val, 0) + 1
@@ -1186,10 +1236,27 @@ def insert_string_arc(
 					# guard and let the first consumer move the ref
 					# while later consumers observed a consumed value.
 					owned_values.add(instr.dest)
-			elif isinstance(instr, M.ArrayIndexLoad):
+			elif isinstance(instr, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
+				# OWNED AT EXTRACTION (B-arch-1d contract; see the
+				# `# owned-at-extraction:` markers in llvm_codegen.py and
+				# string_stakes.py, enforced by
+				# test_extraction_retain_contract.py): codegen lowers a
+				# String element load as load + drift_string_retain, so
+				# the dest arrives with its own +1 — string_arc must MOVE
+				# it (single use) or retain-for-additional-consumers via
+				# the fallback, exactly like VariantGetField above.  The
+				# pre-contract `discard` view classification orphaned the
+				# codegen +1 whenever a consumer re-staked (the 1d leak
+				# shape); it was corpus-latent on the CLI path and
+				# surfaced through the in-process pipeline's explicit
+				# bounds-check shape (`idx_ok`/`__idx_tmp` stores of
+				# ArrayIndexLoadUnchecked dests) when the slice-4a
+				# tripwire made the fallback fail-closed.  NOT
+				# move_only_values — same multi-consumer rationale as the
+				# VariantGetField arm.
 				local_types[instr.dest] = instr.elem_ty
 				if _is_string_tid(instr.elem_ty):
-					owned_values.discard(instr.dest)
+					owned_values.add(instr.dest)
 			elif isinstance(instr, M.ArrayElemTake):
 				local_types[instr.dest] = instr.elem_ty
 				if _is_string_tid(instr.elem_ty):
@@ -1224,7 +1291,22 @@ def insert_string_arc(
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
+					# Slice 4a: the fallback's RETAIN arm — reached only
+					# for a PROVEN-String value (`_is_string_value`) —
+					# is corpus-zero (string_stakes owns store staking)
+					# and fail-closed.  Values WITHOUT String type
+					# metadata keep the fallback's other historical
+					# behavior: `_ensure_owned` early-returned and the
+					# value passed through unchanged (live, exercised by
+					# e.g. can-throw call Ok-payload holders).
+					if _is_string_value(val):
+						_dead_stake_tripwire(
+							val,
+							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
+							target=f"StoreLocal '{instr.local}'",
+							block_name=block.name,
+							idx=_instr_idx,
+						)
 					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
 					_note_use(val, consume=True)
 				continue
@@ -1265,7 +1347,17 @@ def insert_string_arc(
 					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
+					# Slice 4a: fail-closed on the PROVEN-String retain
+					# arm only (see the StoreLocal arm); untyped values
+					# keep the historical pass-through.
+					if _is_string_value(val):
+						_dead_stake_tripwire(
+							val,
+							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
+							target=f"StoreRef via '{instr.ptr}'",
+							block_name=block.name,
+							idx=_instr_idx,
+						)
 					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
 					_note_use(val, consume=True)
 				continue
@@ -1291,7 +1383,17 @@ def insert_string_arc(
 					)
 					_note_use(val, consume=True)
 				else:
-					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN)
+					# Slice 4a: fail-closed on the PROVEN-String retain
+					# arm only (see the StoreLocal arm); untyped values
+					# keep the historical pass-through.
+					if _is_string_value(val):
+						_dead_stake_tripwire(
+							val,
+							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
+							target=f"ArrayIndexStore into '{instr.array}'",
+							block_name=block.name,
+							idx=_instr_idx,
+						)
 					new_instrs.append(
 						M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
 					)

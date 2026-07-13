@@ -52,13 +52,14 @@ def _attach_ledger(func: M.MirFunc) -> None:
 
 
 def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
-	"""fn f() { var x: String; var y: String; x = "a"; y = <same temp>;
-	val m = move x; return; }
+	"""fn f() { var x = "a"; var y = "b"; val m = move x; return; }
 
-	Shapes exercised: store_value_retain (the const temp is stored
-	twice, so the second store must retain), overwrite_release +
-	scope_exit_release (string locals), moveout_expansion.
-	"""
+	Shapes exercised: overwrite_release + scope_exit_release (string
+	locals), moveout_expansion.  Each store consumes its OWN owned
+	producer — since slice 4a the store_value_retain fallback is a
+	fail-closed tripwire, so a store of a non-owned/multi-use value
+	aborts the pass (pinned separately in
+	test_dead_store_value_stake_tripwire_fires)."""
 	string_ty = type_table.ensure_string()
 	func = _make_func(
 		"f",
@@ -70,7 +71,8 @@ def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
 	entry.instructions = [
 		M.ConstString(dest="%c", value="a"),
 		M.StoreLocal(local="x", value="%c"),
-		M.StoreLocal(local="y", value="%c"),
+		M.ConstString(dest="%c2", value="b"),
+		M.StoreLocal(local="y", value="%c2"),
 		M.MoveOut(dest="%m0", local="x", ty=string_ty),
 		M.StoreLocal(local="m", value="%m0"),
 	]
@@ -114,11 +116,11 @@ def test_audit_collects_tags_and_classifies(monkeypatch, tmp_path: Path) -> None
 	assert not any(k.startswith("site_class:UNTAGGED") for k in agg), agg
 	# The shapes we constructed appear under their tags.
 	assert agg.get("site_class:moveout_expansion", 0) >= 1, agg
-	assert agg.get("site_class:store_value_retain", 0) >= 1, agg
 	assert agg.get("site_class:scope_exit_release", 0) >= 1, agg
-	# C2: the store retain is an invisible stake (the ledger has no
-	# event model for StringRetain).
-	assert agg.get("c2_invisible_stake", 0) >= 1, agg
+	# Slice 4a: the store_value_retain fallback is a fail-closed
+	# tripwire — the class must NEVER appear in a successful pass run.
+	assert agg.get("site_class:store_value_retain", 0) == 0, agg
+	assert agg.get("c2_invisible_stake", 0) == 0, agg
 	# C3: the MoveOut source was Owned (stored just above) — counted as
 	# owned, not flagged.
 	assert agg.get("c3_moveout_owned", 0) >= 1, agg
@@ -482,6 +484,190 @@ def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
 	# slot's old value) — the fix touches ONLY the stored-value
 	# classification, never the release side.
 	assert agg.get("site_class:overwrite_release", 0) == 2, agg
+
+
+def test_dead_store_value_stake_tripwire_fires(monkeypatch) -> None:
+	"""Slice 4a: the store_value_retain fallback is FAIL-CLOSED.  A store
+	of a non-owned multi-use String value (the pre-B-arch double-store
+	shape, unreachable from real HIR since string_stakes owns store
+	staking) must abort the pass with the STRUCTURED tripwire message —
+	site-class, fn, block/index, value, target, producer, report path —
+	so the failure mode and wording stay stable."""
+	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("tw", params=[], locals_=["x", "y"], types={"x": string_ty, "y": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%c", value="a"),
+		M.StoreLocal(local="x", value="%c"),
+		M.StoreLocal(local="y", value="%c"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	try:
+		insert_string_arc(func, type_table=tt, fn_infos={})
+	except AssertionError as err:
+		msg = str(err)
+		assert "string_arc dead-stake tripwire [store_value_retain]" in msg, msg
+		assert "fn 'test::tw'" in msg, msg
+		# %c is consumed twice, so `_can_move_owned_once` already fails
+		# at the FIRST store — the fallback (and thus the wire) trips at
+		# entry[1], not at the second store.
+		assert "block 'entry'[1]" in msg, msg
+		assert "value '%c'" in msg, msg
+		assert "StoreLocal 'x'" in msg, msg
+		assert "producer=ConstString" in msg, msg
+		assert "issues/string-arc-dead-stake-tripwire/" in msg, msg
+	else:
+		raise AssertionError("dead store_value stake fallback did not trip")
+
+
+def test_tripwire_surfaces_as_clean_internal_diagnostic(tmp_path: Path, monkeypatch) -> None:
+	"""The driver's string_arc boundary converts pass AssertionErrors
+	into a clean `internal:` diagnostic (best-effort span, phased) — an
+	operator never sees a Python traceback.  Injected via monkeypatch
+	because no real source can reach the tripwire (that is the point of
+	fail-closed)."""
+	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
+	from lang.driftc.module_lowered import flatten_modules
+	from lang.driftc import driftc as D
+	from lang.driftc.core.function_id import function_symbol
+
+	src = tmp_path / "main.drift"
+	src.write_text("module main;\n\npub fn main() nothrow -> Int {\n\tval s = \"x\" + \"y\";\n\tif s.byte_length() > 0 { return 0; }\n\treturn 1;\n}\n")
+	modules, type_table, exc, mexp, mdeps, pdiags = parse_drift_workspace_to_hir(
+		[src], stdlib_root=stdlib_root(), test_build_only=True
+	)
+	assert not pdiags, [d.message for d in pdiags]
+	func_hirs, signatures, _ = flatten_modules(modules)
+	main_id = [i for i, s in signatures.items() if i.name == "main" and not s.is_method][0]
+	origin = {}
+	for m in modules.values():
+		origin.update(m.origin_by_fn_id)
+
+	_orig = D.insert_string_arc
+	def _boom(func, **kw):
+		if getattr(func, "name", "") == "main":
+			raise AssertionError(
+				"string_arc dead-stake tripwire [store_value_retain]: injected-for-pin"
+			)
+		return _orig(func, **kw)
+	monkeypatch.setattr(D, "insert_string_arc", _boom)
+
+	ir, checked = D.compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exc,
+		entry=function_symbol(main_id),
+		type_table=type_table,
+		module_exports=mexp,
+		module_deps=mdeps,
+		origin_by_fn_id=origin,
+		enforce_entrypoint=True,
+		reserved_namespace_policy=D.ReservedNamespacePolicy.ALLOW_DEV,
+	)
+	errors = [d for d in getattr(checked, "diagnostics", []) if getattr(d, "severity", None) == "error"]
+	assert errors, "injected tripwire must surface as a diagnostic"
+	msgs = [d.message for d in errors]
+	assert any(
+		"internal: string ownership stake contract failure" in m
+		and "dead-stake tripwire" in m
+		for m in msgs
+	), msgs
+	# Clean surface: a diagnostic, not a propagated exception — and the
+	# compile returned instead of raising (we got here), with no IR.
+	assert ir == "", "compile must not produce IR after the tripwire"
+
+
+def test_c2_invisible_stake_classifier_still_covered() -> None:
+	"""C2 coverage moved off the (now fail-closed) store fallback: a
+	RETAIN of an untracked SSA temp in a non-extinct site class is an
+	invisible stake."""
+	tt = TypeTable()
+	func = _string_shuffle_func(tt)
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+	audit = R.StringArcAudit("test::c2")
+	audit.note(
+		R.STAKE_RETAIN, ".t99", R.SITE_CLASS_VALUE_POSITION_RETAIN,
+		pre_point=("entry", 0), post_point=("entry", 0),
+	)
+	agg = audit.finalize(l_pre=l_pre, l_post=None, needs_drop=lambda _l: True)
+	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 1, agg
+
+
+def _ail_store_func(tt: TypeTable, *, unchecked: bool) -> M.MirFunc:
+	"""A String element extraction feeding a store: `x = arr[i]` at the
+	MIR level.  The AIL/AILU dest `%e` is DELIBERATELY NOT pre-seeded in
+	func.local_types — production metadata can omit SSA temps, and the
+	slice-4a pre-scan must register the type from the INSTRUCTION."""
+	string_ty = tt.ensure_string()
+	arr_ty = tt.new_array(string_ty)
+	func = _make_func(
+		"ail_u" if unchecked else "ail_c",
+		params=[],
+		locals_=["arr", "x"],
+		types={"arr": arr_ty, "x": string_ty},
+	)
+	load_cls = M.ArrayIndexLoadUnchecked if unchecked else M.ArrayIndexLoad
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ZeroValue(dest="%a", ty=arr_ty),
+		M.StoreLocal(local="arr", value="%a"),
+		M.ConstInt(dest="%i", value=0),
+		load_cls(dest="%e", elem_ty=string_ty, array="arr", index="%i"),
+		M.StoreLocal(local="x", value="%e"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	return func
+
+
+def test_array_index_load_dest_is_owned_at_extraction(monkeypatch, tmp_path: Path) -> None:
+	"""Slice 4a review pin (BLOCKING finding): string_arc's producer
+	chain must classify ArrayIndexLoad String dests OWNED AT EXTRACTION
+	(codegen retains the loaded element — the B-arch-1d contract the
+	slice-1 static pin enforces for codegen+string_stakes).  The pre-fix
+	VIEW classification (`owned_values.discard`) sent the single-use
+	store to the fallback's retain arm — i.e. straight into the slice-4a
+	dead-stake tripwire."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	func = _ail_store_func(tt, unchecked=False)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})  # must not trip
+	agg = _fn_agg(out, "test::ail_c")
+	assert agg.get("site_class:store_value_retain", 0) == 0, agg
+	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
+
+
+def test_array_index_load_unchecked_dest_is_owned_at_extraction(monkeypatch, tmp_path: Path) -> None:
+	"""Sibling pin for ArrayIndexLoadUnchecked, which the pre-fix chain
+	did not handle AT ALL: the dest stayed untyped, so the store took
+	the silent pass-through — no tripwire and no retain either way,
+	which is why this pin ALSO asserts the observable the fix adds: the
+	pre-scan registers the dest's String type from the instruction
+	(local_types is the metadata every downstream ownership decision
+	keys on)."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _ail_store_func(tt, unchecked=True)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})  # must not trip
+	agg = _fn_agg(out, "test::ail_u")
+	assert agg.get("site_class:store_value_retain", 0) == 0, agg
+	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
+	# Teeth for the unhandled-classification half: post-fix the dest is
+	# instruction-typed and owned (moved into the store); pre-fix it was
+	# invisible to the ownership machinery entirely.
+	assert func.local_types.get("%e") == string_ty, dict(func.local_types)
 
 
 def test_untagged_note_is_a_finding() -> None:

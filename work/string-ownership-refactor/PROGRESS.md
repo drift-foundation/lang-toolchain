@@ -814,3 +814,70 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   depends on it). Teeth PROVEN: with the ZeroValue-owned classification
   temporarily disabled the pin now FAILS; restored, battery 15/15. No
   non-test changes in this round (string_arc diff unchanged at +13).
+- 2026-07-13: **Slice 4a LANDED — store_value fallback fail-closed tripwires +
+  a MAJOR mid-slice finding.** Deliverables:
+  (1) ENUMERATION (report req.): stake fallback classes corpus-zero in the
+  924-fixture universe post-C2-fix — store_value_retain (tripwired THIS
+  slice), call_arg_retain, value_position_retain (candidates for later 4a
+  rounds), return_retain_site3 (already loud via retired-C4 UNCLASSIFIED),
+  destructor_self (structurally unused).
+  (2) TRIPWIRE: `_dead_stake_tripwire` in string_arc — structured AssertionError
+  (site-class, fn, block[idx], value, store target, best-effort producer,
+  report path issues/string-arc-dead-stake-tripwire/) at the three
+  store_value _ensure_owned sites, converted at a NEW driver boundary wrap
+  (string_arc loop in compile_stubbed_funcs) to a clean
+  `internal: string ownership stake contract failure (…)` diagnostic with
+  best-effort span — never a Python traceback.
+  (3) FINDING (initial fail-closed conversion fired CLI-wide): the fallback
+  was NEVER uniformly dead — `_ensure_owned` has TWO historical arms:
+  PROVEN-String → retain (the corpus-zero dead part) and NO-type-metadata →
+  silent pass-through (LIVE, exercised constantly — e.g. can-throw call
+  Ok-payload holders `__call_ok` stores). "store_value_retain = 0" only ever
+  measured the RETAIN arm. Tripwires now guard exactly the retain arm;
+  untyped values keep the historical pass-through. Deletion note for 4a′:
+  only the RETAIN emission is deletable; the pass-through is load-bearing.
+  (4) ADJACENT CONTRACT GAP FIXED (surfaced by the over-broad first cut):
+  string_arc's producer chain classified ArrayIndexLoad dests as VIEWS
+  (owned_values.discard) and did not handle ArrayIndexLoadUnchecked AT ALL —
+  contradicting the owned-at-extraction contract (codegen retains; the
+  slice-1 pin enforces it for codegen+string_stakes but string_arc's chain
+  predated it). Both now classify owned-at-extraction (mirroring the
+  VariantGetField arm, NOT move_only). Latent 1d-leak shape; corpus-neutral
+  on the CLI path (proven by acceptance below). Plus pre-scan local_types
+  registration for String ZeroValue/AIL[U] dests (instruction-carried types)
+  so metadata gaps cannot false-fire the tripwire (use_counts skips untyped
+  values → _can_move_owned_once could never approve).
+  (5) PINS: test_dead_store_value_stake_tripwire_fires (message stability:
+  all structured fields), test_tripwire_surfaces_as_clean_internal_diagnostic
+  (in-process compile with injected failure → clean phased diagnostic, no
+  IR, no traceback), test_c2_invisible_stake_classifier_still_covered
+  (C2 coverage moved off the now-fail-closed fallback);
+  _string_shuffle_func reworked (per-store owned producers — the old
+  double-store shape is the tripwire trigger now).
+  ACCEPTANCE (build/tmp/cleanup-4a vs cleanup-c2fix, tool v1.4.0, exit 0):
+  EVERY counter +0, identical universe partition, store_value_retain and
+  c2_invisible_stake remain 0, hard gates zero. NO real corpus fixture trips
+  (the early CLI firings were the over-broad first cut, resolved by the
+  retain-arm refinement + AIL contract fix — not by weakening the guard on
+  actual retains). Batteries: stage2 FULL 331/331; memcheck 97+1skip;
+  guardrails+ICE pins 16/16. Next per user: E-population triage (7 events)
+  BEFORE Array elision.
+- 2026-07-13: **Slice 4a review round 1 (blocking + 2 addressed).**
+  (1) BLOCKING — the AIL/AILU owned-at-extraction string_arc fix was
+  unpinned (the slice-1 static pin covers codegen+string_stakes, not
+  string_arc's producer chain). Two new pins, dests DELIBERATELY not
+  pre-seeded in local_types so the instruction-typed pre-scan is exercised:
+  checked ArrayIndexLoad single-use store → no tripwire, no
+  store_value_retain, no C2 (pre-fix VIEW classification sent this into the
+  tripwire); ArrayIndexLoadUnchecked ditto + asserts the pre-scan registered
+  the dest's String type (pre-fix the instruction was wholly unhandled and
+  the dest invisible to ownership — silent pass-through either way, so the
+  metadata assertion is the teeth for that half). Teeth PROVEN empirically:
+  with the classification+pre-scan temporarily reverted both pins fail;
+  restored, string_arc byte-identical to the committed state.
+  (2) MEDIUM — the tripwire's report path now exists:
+  issues/string-arc-dead-stake-tripwire/description.md (meaning, required
+  repro info, triage starting points; intentionally repro-free intake).
+  (3) Boundary wrap phase renamed mir_validate → string_arc (phase strings
+  are free-form; only non-None is enforced).
+  Battery: reporter 20/20; stage2 FULL 333/333.
