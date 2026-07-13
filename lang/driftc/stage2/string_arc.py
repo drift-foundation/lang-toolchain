@@ -1081,11 +1081,23 @@ def insert_string_arc(
 			if isinstance(instr, M.MoveOut):
 				# Emit load + zero-store, but keep ownership of the moved value.
 				if _audit is not None:
+					# Snapshot the cleanup-drop pairing from the SOURCE
+					# stream now — finalize runs after every block was
+					# rewritten, so the pre_point index stops aligning.
+					_nxt = (
+						block.instructions[_instr_idx + 1]
+						if _instr_idx + 1 < len(block.instructions)
+						else None
+					)
 					_audit.note(
 						_ledger_reporter.STAKE_MOVEOUT_EXPANSION, instr.local,
 						_ledger_reporter.SITE_CLASS_MOVEOUT_EXPANSION,
 						pre_point=(block.name, _instr_idx),
 						post_point=(block.name, len(new_instrs)),
+						moveout_feeds_drop=(
+							isinstance(_nxt, M.DropValue)
+							and _nxt.value == instr.dest
+						),
 					)
 				new_instrs.append(M.LoadLocal(dest=instr.dest, local=instr.local))
 				local_types[instr.dest] = instr.ty
@@ -1871,7 +1883,18 @@ def insert_string_arc(
 			# force-emits the per-fn record; the corpus gate fails on
 			# any nonzero count (review finding, B-arch-0 acceptance).
 			_l_post = None
-		_audit.finalize(l_pre=_ledger, l_post=_l_post, needs_drop=_ledger_needs_drop)
+		_audit.finalize(
+			l_pre=_ledger,
+			l_post=_l_post,
+			needs_drop=_ledger_needs_drop,
+			# C3 agree-class ladder inputs (Slice 2 Part 2): the func for
+			# STRUCTURAL flag-guard verification (terminators + pred
+			# LoadLocals survive this pass's rewrites) and the same
+			# zero-safety predicate cleanup_authoring used to author the
+			# unguarded cleanup arm.
+			func=func,
+			zero_safe_ty=lambda _tid: variant_zero_tag_drop_safe(_tid, type_table),
+		)
 
 	return func
 

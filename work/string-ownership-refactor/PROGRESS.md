@@ -660,3 +660,62 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   release-elision leak concern); the plan's 11,441 was a stale smaller-
   corpus generation of the same populations. No in-tree changes; nothing
   staged.
+- 2026-07-13: **Slice 2 Part 2 IMPLEMENTED — hybrid C3 classification; acceptance
+  EXACT.** Per the approved hybrid arm selection on C3-DECISION-REPORT.md:
+  reporter-side only (`ownership_ledger_reporter.py` C3 ladder + `string_arc.py`
+  wiring), NO ledger/lattice change, NO emission change.
+  - A → `c3_moveout_flag_guarded`: STRUCTURAL verification in the reporter
+    (retired-C4 discipline — MIR shape, never a name/count): MoveOut at idx 0
+    feeding an immediately-following DropValue (snapshotted at note() time from
+    the SOURCE stream, since finalize runs post-rewrite), single predecessor
+    entering via IfTerminator whose cond loads the subject's OWN
+    `_drop_flag_for_local` flag.
+  - B+D → `c3_moveout_zero_safe`: raw TOMBSTONED (lattice's own drop-safe-bytes
+    guarantee) OR raw MAYBE_UNINIT + authored MoveOut→DropValue pairing +
+    `variant_zero_tag_drop_safe` (the same predicate cleanup_authoring used to
+    choose the unguarded arm). Both legs required.
+  - C → `c3_moveout_unreachable_block` (observational; renamed from the report's
+    placeholder `unreachable_block_event`): event block absent from
+    l_pre.block_in ⇔ never reached by the CFG walk.
+  - E: raw MOVED_OUT intentionally NOT normalized — stays divergent.
+  Fail-closed: finalize's new `func`/`zero_safe_ty` inputs are optional; without
+  them every non-LIVE MoveOut classifies as before (divergent), never as agree.
+  Pins: +5 in test_string_arc_audit_reporter.py (A agree; A-teeth wrong-flag
+  divergent; D tombstoned agree; C unreachable observational; B ladder — both
+  legs required, either missing → divergent, AND an E-shaped MOVED_OUT with both
+  legs true stays divergent). Batteries: reporter 12/12; stage2+guardrails 336/336.
+  **Pre-change reference (0.33.82 merge corpus-neutral):** run
+  `build/tmp/cleanup-prepart2` vs recorded Slice-1 baseline → universe accepted,
+  ALL 14 counters +0 (merge changed nothing observable). manifest sha256
+  fed2559af4798246a149d2f33cc1f7d1c148b5bdc1518ef6b8121ddaedf5ff64.
+  **Acceptance run** (`--out build/tmp/cleanup-part2 --baseline
+  build/tmp/cleanup-prepart2 -j 16`, tool v1.4.0, exit 0): movement EXACTLY as
+  predicted — c3_moveout_not_owned 19,504 → 7 (−19,497); +8,316 flag_guarded;
+  +9,329 zero_safe (B 8,384 + D 945); +1,852 unreachable; every other counter
+  +0 (events/fns/site classes byte-identical — reporter-only by construction);
+  hard gates zero. Residual 7 verified = EXACTLY the population-E events from
+  the decision report (same fixtures/subjects/points). No new population found;
+  no STOP trigger fired.
+  **Future-slice record (per instruction):** edge-refined flag-aware ledger
+  modeling (population A's 2A arm) is EXPLICITLY out of this bookkeeping slice —
+  it changes release-elision/site-4 emission and needs its own predicted-delta
+  acceptance table + memcheck gate. Logged in CLEANUP-EXECUTION-PLAN.md addendum.
+  Next: STOP for review; then Slice 3 (Array measurement, report-only) and the
+  E-population triage (7 events, 5 sites) as separate work.
+- 2026-07-13: **FOLLOW-UP (open, tracked; not introduced by Slice 2): single
+  invisible stake contradicts the "C2 fully closed" narrative.** The corpus
+  carries `c2_invisible_stake = 1` / `site_class:store_value_retain = 1` — one
+  event, located: fixture `rest_health_spawn_cb_iface`, fn
+  `m::__lambda_cb_start_server_0_0` (hidden callback lambda), point
+  `entry[12]`, subject `.t10` (an SSA TEMP, not a named local — note the C2
+  visibility test can never classify an SSA-temp subject as visible, since
+  `tracked_locals` holds named locals only; so this is either a genuinely
+  un-migrated store_value stake shape in hidden-lambda entry blocks OR a C2
+  operationalization artifact for temp subjects). Already present in the
+  recorded Slice-1 reference baseline (2026-07-12, pre-0.33.82), so it entered
+  between the B-arch C2=0 acceptance (0.33.79) and Slice 1 — possibly via a
+  fixture/lambda-lowering change in between. Does NOT affect the Slice 2 C3
+  acceptance (all C2/site-class counters +0 across the slice) and is NOT a
+  hard gate. ACTION before any future "invisible-stake program remains closed"
+  claim: root-cause this one event (B-arch triage method: per-site MIR dump +
+  heap-string probe if it turns out to be a real orphaned stake).

@@ -152,6 +152,196 @@ def test_classifier_c3_flags_moveout_of_uninit(monkeypatch, tmp_path: Path) -> N
 	assert agg.get("c3_moveout_not_owned", 0) >= 1, agg
 
 
+def _diamond_flag_func(tt: TypeTable, *, cond_loads_flag_of: str) -> M.MirFunc:
+	"""Slice 2 Part 2 population-A carrier: `x` initialized on one arm of
+	a diamond (MAYBE_UNINIT at the join), then the authored guarded
+	cleanup shape — join loads a drop flag and branches to a drop block
+	whose instruction 0 is `MoveOut(x)` feeding a DropValue.
+
+	`cond_loads_flag_of` selects WHICH local's flag the IfTerminator
+	condition loads: "x" builds the genuine shape; anything else builds
+	the out-of-shape teeth variant (a different local's flag guards the
+	branch, so the structural check must refuse)."""
+	string_ty = tt.ensure_string()
+	bool_ty = tt.ensure_bool()
+	func = _make_func(
+		"fg",
+		params=[],
+		locals_=["x", "__drop_flag_x", "__drop_flag_other"],
+		types={"x": string_ty, "__drop_flag_x": bool_ty, "__drop_flag_other": bool_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.ConstBool(dest="%c0", value=True)]
+	entry.terminator = M.IfTerminator(cond="%c0", then_target="init", else_target="skip")
+	init = M.BasicBlock(name="init")
+	init.instructions = [
+		M.ConstString(dest="%s", value="a"),
+		M.StoreLocal(local="x", value="%s"),
+	]
+	init.terminator = M.Goto(target="join")
+	skip = M.BasicBlock(name="skip")
+	skip.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	loaded_flag = "__drop_flag_x" if cond_loads_flag_of == "x" else "__drop_flag_other"
+	join.instructions = [M.LoadLocal(dest="%f", local=loaded_flag)]
+	join.terminator = M.IfTerminator(cond="%f", then_target="drop_x", else_target="post")
+	drop_x = M.BasicBlock(name="drop_x")
+	drop_x.instructions = [
+		M.MoveOut(dest="%t", local="x", ty=string_ty),
+		M.DropValue(value="%t", ty=string_ty),
+		M.ConstBool(dest="%z", value=False),
+		M.StoreLocal(local="__drop_flag_x", value="%z"),
+	]
+	drop_x.terminator = M.Goto(target="post")
+	post = M.BasicBlock(name="post")
+	post.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "init": init, "skip": skip, "join": join, "drop_x": drop_x, "post": post}
+	func.entry = "entry"
+	setattr(func, "_drop_flag_managed_locals", {"x"})
+	setattr(func, "_drop_flag_for_local", {"x": "__drop_flag_x"})
+	return func
+
+
+def _fn_agg(out: Path, fn: str) -> dict:
+	recs = [json.loads(line.split("] ", 1)[1]) for line in out.read_text().splitlines()]
+	matches = [r for r in recs if r.get("record") == "fn" and r.get("fn") == fn]
+	assert matches, recs
+	return matches[0]
+
+
+def _audit_env(monkeypatch, out: Path) -> None:
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_VERBOSE", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(out))
+
+
+def test_c3_flag_guarded_cleanup_is_agree_class(monkeypatch, tmp_path: Path) -> None:
+	"""Population A (Slice 2 Part 2): the guarded cleanup MoveOut —
+	MAYBE_UNINIT to the flag-blind lattice, ownership proven by the
+	runtime flag — classifies c3_moveout_flag_guarded, not divergent."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	func = _diamond_flag_func(tt, cond_loads_flag_of="x")
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::fg")
+	assert agg.get(R.AGREE_C3_FLAG_GUARDED, 0) == 1, agg
+	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
+
+
+def test_c3_flag_guard_wrong_flag_stays_divergent(monkeypatch, tmp_path: Path) -> None:
+	"""Teeth (retired-C4 discipline): the IDENTICAL block shape guarded
+	by a DIFFERENT local's flag must NOT structurally qualify — it stays
+	c3_moveout_not_owned."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	func = _diamond_flag_func(tt, cond_loads_flag_of="other")
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::fg")
+	assert agg.get(R.AGREE_C3_FLAG_GUARDED, 0) == 0, agg
+	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, agg
+
+
+def test_c3_tombstoned_move_is_zero_safe(monkeypatch, tmp_path: Path) -> None:
+	"""Population D: zero-init-as-empty-value immediately moved — raw
+	TOMBSTONED carries the lattice's own drop-safe-bytes guarantee, so
+	the move is a zero-safe byte copy (agree), independent of any type
+	predicate."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("tz", params=[], locals_=["x", "m"], types={"x": string_ty, "m": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ZeroValue(dest="%z", ty=string_ty),
+		M.StoreLocal(local="x", value="%z"),
+		M.MoveOut(dest="%t", local="x", ty=string_ty),
+		M.StoreLocal(local="m", value="%t"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::tz")
+	assert agg.get(R.AGREE_C3_ZERO_SAFE, 0) == 1, agg
+	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
+
+
+def test_c3_unreachable_block_event_is_observational(monkeypatch, tmp_path: Path) -> None:
+	"""Population C: a MoveOut in a block the CFG walk never reaches
+	(dead catch machinery) — state_pre's UNINIT there is a fallback, not
+	a verdict; classifies c3_moveout_unreachable_block."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("ur", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.Return(value=None)
+	dead = M.BasicBlock(name="dead_catch")
+	dead.instructions = [
+		M.MoveOut(dest="%t", local="x", ty=string_ty),
+		M.DropValue(value="%t", ty=string_ty),
+	]
+	dead.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "dead_catch": dead}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::ur")
+	assert agg.get(R.OBS_C3_UNREACHABLE_BLOCK, 0) == 1, agg
+	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
+
+
+def test_c3_zero_safe_ladder_requires_drop_pairing_and_predicate() -> None:
+	"""Population B's rule via direct finalize: MAYBE_UNINIT classifies
+	zero-safe ONLY with BOTH legs — the authored MoveOut→DropValue
+	pairing AND a true zero-safety predicate.  Either leg missing →
+	divergent.  And population E's raw MOVED_OUT re-move stays divergent
+	even with both legs present (triage before normalizing)."""
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	bool_ty = tt.ensure_bool()
+	func = _diamond_flag_func(tt, cond_loads_flag_of="x")
+	# Strip the flag metadata so the A rule cannot fire; the join-block
+	# state for x is MAYBE_UNINIT.
+	setattr(func, "_drop_flag_for_local", {})
+	setattr(func, "_drop_flag_managed_locals", set())
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+	point = ("join", 0)  # x is MAYBE_UNINIT at the join's entry
+
+	def run(feeds_drop: bool, zero_safe: bool, subject: str = "x", raw_point=point):
+		audit = R.StringArcAudit("test::zl")
+		audit.note(
+			R.STAKE_MOVEOUT_EXPANSION, subject, R.SITE_CLASS_MOVEOUT_EXPANSION,
+			pre_point=raw_point, post_point=raw_point,
+			moveout_feeds_drop=feeds_drop,
+		)
+		return audit.finalize(
+			l_pre=l_pre, l_post=None, needs_drop=lambda _l: True,
+			func=func, zero_safe_ty=lambda _t: zero_safe,
+		)
+
+	both = run(True, True)
+	assert both.get(R.AGREE_C3_ZERO_SAFE, 0) == 1, both
+	no_drop = run(False, True)
+	assert no_drop.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, no_drop
+	not_safe = run(True, False)
+	assert not_safe.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, not_safe
+	# Population E: MOVED_OUT at drop_x's post-MoveOut point — x was
+	# moved by drop_x[0], so at index 1 it is MOVED_OUT.  Both legs true
+	# must NOT bless it.
+	e_shape = run(True, True, raw_point=("drop_x", 1))
+	assert e_shape.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, e_shape
+	assert e_shape.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, e_shape
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

@@ -219,3 +219,22 @@ delta corpus acceptance and memcheck gate.
 ## 8. STOP
 
 Awaiting arm selection (per population) before any Part 2 implementation.
+
+---
+
+## OUTCOME (2026-07-13): hybrid arm selected and implemented — acceptance exact
+
+User selection: A → structural recognition now (no edge-refined ledger in this
+slice); B+D → zero-safe agree-class; C → unreachable filter; E → stays divergent
+pending triage; flag-refined modeling recorded as a future emission slice
+(CLEANUP-EXECUTION-PLAN.md addendum).
+
+Implemented reporter-side only (see PROGRESS 2026-07-13). One naming change vs
+§6's placeholder: the population-C class landed as `c3_moveout_unreachable_block`
+(scoped to the C3 comparison) rather than `unreachable_block_event`.
+
+Corpus acceptance vs the pre-change reference (0.33.82 merge first confirmed
+corpus-neutral: all 14 counters +0): movement EXACTLY as §6 predicted —
+19,504 → 7 residual; +8,316 flag_guarded; +9,329 zero_safe; +1,852 unreachable;
+all other counters byte-identical; hard gates zero. The residual 7 verified
+identical to §5's population-E list. No new population surfaced.

@@ -47,6 +47,8 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Callable, Iterable, Optional, Tuple
 
+from . import cfg as _cfg
+from . import mir_nodes as _M
 from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .ownership_ledger_events import (
 	DropDecisionEvent,
@@ -345,6 +347,38 @@ DIV_C1_MUST_DROP_WITHOUT_RELEASE = "c1_must_drop_without_release"
 DIV_C1_PATH_DEPENDENT = "c1_path_dependent"
 DIV_C2_INVISIBLE_STAKE = "c2_invisible_stake"
 DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
+# C3 agree/observational classes (Slice 2 Part 2, hybrid plan accepted
+# 2026-07-12 — see work/string-ownership-refactor/C3-DECISION-REPORT.md).
+# C3's original comparison asked "is the subject LIVE at the move?",
+# which is the wrong invariant for compiler-authored cleanup moves; the
+# corrected ladder recognizes, in order:
+#  - AGREE_C3_FLAG_GUARDED: the MoveOut is the guarded cleanup-drop
+#    shape (population A) — STRUCTURALLY verified against the MIR
+#    (retired-C4 discipline: shape match, never a count or a block
+#    name): index 0, feeds an immediately-following DropValue, block's
+#    single predecessor branches in on an IfTerminator whose cond loads
+#    the subject's OWN drop flag.  The runtime flag proves ownership on
+#    the executing path; the flag-blind lattice reports MAYBE_UNINIT.
+#    (Edge-refined flag-aware ledger modeling is deliberately NOT part
+#    of this bookkeeping slice — recorded as a future emission-
+#    improvement slice with its own acceptance, since it would move
+#    release-elision/site-4 emission.)
+#  - AGREE_C3_ZERO_SAFE: the moved storage is provably drop-safe
+#    zeroed on every non-LIVE path (populations B and D): raw
+#    TOMBSTONED (the lattice's own definition — zero/tombstone bytes
+#    written in place), or raw MAYBE_UNINIT where the MoveOut feeds an
+#    immediately-following DropValue (the unguarded authored cleanup
+#    shape) AND the subject's type is zero-tag-drop-safe — the same
+#    predicate cleanup_authoring used to choose the unguarded arm.
+#  - OBS_C3_UNREACHABLE_BLOCK: the event's block is unreachable in the
+#    ledger's CFG walk (population C: dead catch machinery from
+#    `try <nothrow-expr> catch`).  state_pre's UNINIT there is a
+#    fallback, not a verdict; counted separately, never divergent.
+# Raw MOVED_OUT re-moves (population E) intentionally remain
+# DIV_C3_MOVEOUT_NOT_OWNED pending individual triage.
+AGREE_C3_FLAG_GUARDED = "c3_moveout_flag_guarded"
+AGREE_C3_ZERO_SAFE = "c3_moveout_zero_safe"
+OBS_C3_UNREACHABLE_BLOCK = "c3_moveout_unreachable_block"
 # RETIRED (2026-07-11, post release-elision acceptance): the C4
 # allowlist is closed. Release-elision drove both faces to zero
 # corpus-wide (the site-3 return retain was structurally extinct since
@@ -393,6 +427,12 @@ class StringStakeEvent:
 	site_class: str
 	pre_point: Tuple[str, int]
 	post_point: Tuple[str, int]
+	# MOVEOUT_EXPANSION only: the SOURCE instruction stream had a
+	# DropValue consuming this MoveOut's dest immediately after it (the
+	# authored cleanup-drop pairing).  Snapshotted at note() time because
+	# finalize runs after the pass rewrote every block — the pre_point
+	# index no longer aligns with the output instruction list.
+	moveout_feeds_drop: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,6 +499,7 @@ class StringArcAudit:
 		*,
 		pre_point: Tuple[str, int],
 		post_point: Tuple[str, int],
+		moveout_feeds_drop: bool = False,
 	) -> None:
 		if site_class not in STRING_ARC_SITE_CLASSES:
 			self.untagged += 1
@@ -470,6 +511,7 @@ class StringArcAudit:
 			site_class=site_class,
 			pre_point=pre_point,
 			post_point=post_point,
+			moveout_feeds_drop=moveout_feeds_drop,
 		))
 
 	def note_return_boundary(
@@ -487,16 +529,67 @@ class StringArcAudit:
 
 	# ── classification ────────────────────────────────────────────
 
+	@staticmethod
+	def _is_flag_guarded_cleanup_moveout(ev: "StringStakeEvent", func, preds: dict | None) -> bool:
+		"""STRUCTURAL verification of the population-A shape — the
+		reporter checks the MIR itself rather than trusting a pass tag
+		or a block-name pattern (retired-C4 discipline):
+
+		  pred:  ... LoadLocal(c, __drop_flag_<L>) ;
+		         IfTerminator(cond=c, then_target=<ev block>)
+		  block: [0] MoveOut(L) -> feeds an immediately-following
+		         DropValue (snapshotted at note() time)
+
+		The subject's OWN flag must be the branch condition — a load of
+		any other local's flag does not qualify.  Terminators and the
+		predecessor's LoadLocal survive string_arc's instruction
+		rewrites (the pass inserts, it does not remove loads or touch
+		IfTerminators), so this check is stable at finalize time."""
+		if func is None or preds is None:
+			return False
+		if ev.pre_point[1] != 0:
+			return False
+		if not ev.moveout_feeds_drop:
+			return False
+		flag_map = getattr(func, "_drop_flag_for_local", None) or {}
+		flag = flag_map.get(ev.subject)
+		if flag is None:
+			return False
+		plist = preds.get(ev.pre_point[0], [])
+		if len(plist) != 1:
+			return False
+		pblk = func.blocks.get(plist[0])
+		if pblk is None:
+			return False
+		term = pblk.terminator
+		if not isinstance(term, _M.IfTerminator):
+			return False
+		if term.then_target != ev.pre_point[0]:
+			return False
+		for ins in pblk.instructions:
+			if isinstance(ins, _M.LoadLocal) and ins.dest == term.cond:
+				return ins.local == flag
+		return False
+
 	def finalize(
 		self,
 		*,
 		l_pre,
 		l_post,
 		needs_drop: NeedsDrop,
+		func=None,
+		zero_safe_ty=None,
 	) -> dict:
 		"""Run the C1-C4 comparisons and emit per-fn JSONL + fold into
 		the process aggregate.  Returns the per-fn aggregate (tests use
-		the return value; production consumers read the JSONL)."""
+		the return value; production consumers read the JSONL).
+
+		`func` (the MirFunc, terminators un-rewritten by string_arc) and
+		`zero_safe_ty` (TypeId -> bool: zeroed bytes of this type are
+		drop-safe; production passes `variant_zero_tag_drop_safe`) power
+		the C3 agree-class ladder.  Both optional: without them every
+		non-LIVE MoveOut classifies as it did pre-slice-2 (divergent),
+		never silently as an agree class."""
 		agg: dict = {"fn": self.fn_name, "events": len(self.events)}
 		details: list[dict] = []
 
@@ -614,15 +707,52 @@ class StringArcAudit:
 			_detail(DIV_C2_INVISIBLE_STAKE, subject=ev.subject,
 				site_class=ev.site_class, point=list(ev.pre_point))
 
-		# C3: MoveOut expansions where the local is not Owned (LIVE) in
-		# L_pre at that point.
+		# C3: MoveOut expansions vs L_pre ownership, with the Slice 2
+		# Part 2 agree-class ladder (hybrid plan; see the constants'
+		# comment block).  Order matters: reachability is checked before
+		# any raw-state rule because state_pre in an unreachable block
+		# returns a FALLBACK UNINIT, not a verdict.
+		preds: dict | None = None
+		if func is not None:
+			preds = {}
+			for _blk in func.blocks.values():
+				for _succ in _cfg.terminator_successors(_blk.terminator):
+					preds.setdefault(_succ, []).append(_blk.name)
 		for ev in self.events:
 			if ev.kind != STAKE_MOVEOUT_EXPANSION:
 				continue
 			raw = l_pre.state_pre(ev.pre_point, ev.subject)
 			if raw is LiveState.LIVE:
 				_bump(agg, "c3_moveout_owned")
+			elif ev.pre_point[0] not in l_pre.block_in:
+				# Population C: block never reached by the dataflow walk
+				# (dead catch machinery).  Observational, not divergent.
+				_bump(agg, OBS_C3_UNREACHABLE_BLOCK)
+			elif self._is_flag_guarded_cleanup_moveout(ev, func, preds):
+				# Population A: guarded cleanup drop — the runtime flag
+				# proves ownership on the executing path.
+				_bump(agg, AGREE_C3_FLAG_GUARDED)
+			elif raw is LiveState.TOMBSTONED:
+				# Population D: the lattice's own tombstone guarantee —
+				# zero/tombstone bytes were written in place; moving
+				# them is a byte-copy of drop-safe storage.
+				_bump(agg, AGREE_C3_ZERO_SAFE)
+			elif (
+				raw is LiveState.MAYBE_UNINIT
+				and ev.moveout_feeds_drop
+				and zero_safe_ty is not None
+				and func is not None
+				and ev.subject in (func.local_types or {})
+				and zero_safe_ty(func.local_types[ev.subject])
+			):
+				# Population B: the unguarded authored cleanup shape for
+				# a zero-tag-drop-safe type — every non-LIVE component
+				# of the join holds zeroed storage; the paired drop is a
+				# no-op there.
+				_bump(agg, AGREE_C3_ZERO_SAFE)
 			else:
+				# Residual (incl. population E's raw MOVED_OUT re-moves,
+				# deliberately NOT normalized pending triage).
 				_detail(DIV_C3_MOVEOUT_NOT_OWNED, subject=ev.subject,
 					point=list(ev.pre_point), raw_state=raw.value)
 

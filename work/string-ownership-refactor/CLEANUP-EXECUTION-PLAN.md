@@ -180,3 +180,20 @@ corpus delta not predicted by the class being migrated; any memcheck movement.
   long-running campaign.
 - The selfhost plan (work/selfhost-driftc/) consumes this phase's completion as a
   gate and is untouched by it.
+
+---
+
+## Addendum (2026-07-13, post Slice 2 Part 2): flag-refined ledger = future emission slice
+
+The C3 decision checkpoint selected the HYBRID arm: Part 2 shipped reporter-side
+classification only (`c3_moveout_flag_guarded` structural / `c3_moveout_zero_safe`
+/ `c3_moveout_unreachable_block`; population E left divergent for triage).
+
+The 2A model arm — edge-refined dataflow on drop-flag branches in
+`build_ledger` (sketch in C3-DECISION-REPORT.md §1) — is RECORDED here as a
+future EMISSION-IMPROVEMENT slice, not cleanup bookkeeping: refined states
+propagate to post-cleanup joins and would legitimately move release-elision and
+site-4 decisions (a correctness-preserving emission win, e.g. PATH_DEPENDENT
+release elision). It must ship behind its own acceptance table with PREDICTED
+emission deltas, memcheck lanes in-gate, and a fresh corpus reference — never
+inside a byte-identical-acceptance slice.
