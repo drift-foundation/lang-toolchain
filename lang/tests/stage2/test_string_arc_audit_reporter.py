@@ -342,6 +342,102 @@ def test_c3_zero_safe_ladder_requires_drop_pairing_and_predicate() -> None:
 	assert e_shape.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, e_shape
 
 
+def test_arraydrop_measurement_mix_and_inertness() -> None:
+	"""Slice 3 (report-only): `note_array_drop` records the return-
+	boundary Array sweep into a SEPARATE inventory — the reporter derives
+	the raw-state and verdict mix, and the string-side counters stay
+	byte-identical by construction (`events` counts string stake events
+	only; array drops must not touch it)."""
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func(
+		"ad", params=[],
+		locals_=["x", "y", "m", "u"],
+		types={"x": string_ty, "y": string_ty, "m": string_ty, "u": string_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%c", value="a"),
+		M.StoreLocal(local="x", value="%c"),
+		M.StoreLocal(local="y", value="%c"),
+		M.MoveOut(dest="%m0", local="x", ty=string_ty),
+		M.StoreLocal(local="m", value="%m0"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+	boundary = ("entry", len(entry.instructions))
+	audit = R.StringArcAudit("test::ad")
+	audit.note_array_drop("y", point=boundary, needs_drop=True)   # LIVE -> must_drop
+	audit.note_array_drop("x", point=boundary, needs_drop=True)   # MOVED_OUT -> must_not_drop
+	audit.note_array_drop("u", point=boundary, needs_drop=True)   # UNINIT -> must_not_drop
+	audit.note_array_drop("m", point=boundary, needs_drop=False)  # LIVE but drop-free type -> must_not_drop
+	agg = audit.finalize(l_pre=l_pre, l_post=None, needs_drop=lambda _l: True)
+	# The mix.
+	assert agg.get("site_class:scope_exit_arraydrop") == 4, agg
+	assert agg.get("arraydrop_state:live") == 2, agg
+	assert agg.get("arraydrop_state:moved_out") == 1, agg
+	assert agg.get("arraydrop_state:uninit") == 1, agg
+	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
+	assert agg.get("arraydrop_verdict:must_not_drop") == 3, agg
+	# Inertness: no string stake events were involved — the string-side
+	# event counter and divergence classes are untouched.
+	assert agg.get("events") == 0, agg
+	assert agg.get(R.DIV_UNCLASSIFIED, 0) == 0, agg
+
+
+def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) -> None:
+	"""End-to-end coverage of the string_arc NOTE SITE (the direct-API pin
+	above does not exercise it): insert_string_arc over a func with real
+	Array locals reaching the return-boundary sweep, audit env on.
+
+	- `a_uninit` (never written) and `a_live` (stored) are swept →
+	  recorded with their raw states and verdicts;
+	- `a_moved` is moved out IN the return block, so string_arc's own
+	  `moved_out_locals` fold puts it in skip_cleanup_locals → the sweep
+	  skips it and it must NOT be recorded."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	arr_ty = tt.new_array(tt.ensure_string())
+	func = _make_func(
+		"asw", params=[],
+		locals_=["a_uninit", "a_live", "a_moved", "sink"],
+		types={"a_uninit": arr_ty, "a_live": arr_ty, "a_moved": arr_ty, "sink": arr_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ZeroValue(dest="%z", ty=arr_ty),
+		M.StoreLocal(local="a_live", value="%z"),
+		M.ZeroValue(dest="%z2", ty=arr_ty),
+		M.StoreLocal(local="a_moved", value="%z2"),
+		M.MoveOut(dest="%mv", local="a_moved", ty=arr_ty),
+		M.StoreLocal(local="sink", value="%mv"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::asw")
+	# Swept: a_uninit + a_live + sink (holds the moved-in array, LIVE at
+	# the boundary); skipped: a_moved (moved_out_locals fold).
+	assert agg.get("site_class:scope_exit_arraydrop") == 3, agg
+	assert agg.get("arraydrop_state:uninit") == 1, agg
+	# a_live was zero-init-stored → the walker records the zero-store as
+	# TOMBSTONED; sink holds a real moved-in value → LIVE.  Both states
+	# recorded; a_moved contributes nothing.
+	assert agg.get("arraydrop_state:tombstoned") == 1, agg
+	assert agg.get("arraydrop_state:live") == 1, agg
+	assert agg.get("arraydrop_state:moved_out") is None, agg
+	# Verdicts recorded for every swept drop (uninit/tombstoned →
+	# must_not_drop; live Array<String> → must_drop).
+	assert agg.get("arraydrop_verdict:must_not_drop") == 2, agg
+	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

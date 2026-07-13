@@ -719,3 +719,67 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   hard gate. ACTION before any future "invisible-stake program remains closed"
   claim: root-cause this one event (B-arch triage method: per-site MIR dump +
   heap-string probe if it turns out to be a real orphaned stake).
+- 2026-07-13: **C2 singleton RECONCILED (report-only triage).** Classification:
+  a REAL store-value stake emission — but a runtime NO-OP — surfaced by
+  UNIVERSE GROWTH, not by merge/mainline and not a tooling artifact.
+  - Exact site: `rest_health_spawn_cb_iface` (fixture since 2026-03-24),
+    `m::__lambda_cb_start_server_0_0`, entry[12]. Shape:
+    `captures(move <String>)` in a spawn_cb lambda → prologue materializes the
+    capture (stake-CopyValue → StoreLocal → MoveOut) then ZERO-BACKS the env
+    slot: `StoreRef(env_field, ZeroValue .t10)`. string_arc's StoreRef arm
+    `_ensure_owned`s the stored value; an input-stream ZeroValue dest is never
+    in `owned_values` → it emits `StringRetain(.t10)` — a retain of
+    compile-time-zeroed String bytes, i.e. a no-op. Surrounding semantics
+    verified CORRECT in the MIR (body's copy staked +1; overwrite-release
+    takes the env slot's ref at zero-back; cb_drop sees a zeroed slot).
+  - Why the "C2 = 0 TOTAL / CLOSED" claim didn't see it: B-ARCH-0-INVENTORY's
+    own corpus caveat — B-arch coverage was 543/1,317 e2e cases
+    (session-local scripts); the slice-1b tool's universe is 924/1,268. The
+    closure claim was true FOR ITS CORPUS; the widened universe surfaced one
+    uncovered shape. Narrative correction: "C2 closed" must be read as
+    closed-over-543; the widened-universe residual is exactly this one no-op.
+  - LOAD-BEARING for Slice 4a: the plan tripwires string_arc's store_value
+    fallback as unreachable — with this event live, that tripwire WOULD FIRE
+    on this fixture. Reconciliation is therefore a 4a PREREQUISITE.
+  - Recommended next action (NOT implemented — emission change, out of
+    report-only scope): tiny mechanical string_arc classification fix — treat
+    input-stream ZeroValue dests as owned/no-stake-needed in the store paths
+    (zeroed bytes transfer nothing; the retain is a no-op). Expected corpus
+    delta: store_value_retain 1→0, c2_invisible_stake 1→0, one dead retain
+    instruction removed; acceptance via the tool (exact delta) + memcheck on
+    the capture-fixture family. Fits the ownership-change bar as mechanical +
+    restores the C2=0 invariant 4a depends on. Alternative (doc-only caveat +
+    tripwire carve-out) rejected as worse: keeps dead emission and complicates
+    4a's unreachability claim.
+- 2026-07-13: **Slice 3 COMPLETE (Array measurement, report-only) — STOPPED per
+  plan.** Report: SLICE3-ARRAY-MEASUREMENT.md. Instrumentation: reporter-side
+  `note_array_drop` inventory (separate from string events — `events` counter
+  untouched by construction) + string_arc note site at the Return-boundary
+  `_drop_all_arrays` sweep; counters `site_class:scope_exit_arraydrop` /
+  `arraydrop_state:*` / `arraydrop_verdict:*` (counted-only, never gates).
+  Pin +1 (mix + inertness); reporter 13/13; stage2+guardrails 337/337.
+  Corpus (`build/tmp/cleanup-slice3` vs cleanup-part2, exit 0): EVERY
+  pre-existing counter +0 (inertness proven) + the new mix: 156,308 swept
+  drops = 141,391 uninit (90.5%) + 10,297 moved_out (6.6%) + 4,620
+  maybe_uninit (3.0%) + **0 live / 0 tombstoned**; verdicts 151,688
+  must_not_drop (97%) + 4,620 path_dependent + **0 must_drop**. Probe-verified
+  structural explanation for live=0: live arrays never reach the sweep —
+  cleanup_authoring owns their drops (inline MoveOut+DropValue → string_arc's
+  `moved_out_locals` fold skips them) and return sources are alias-walk
+  skipped; the sweep is a legacy backstop firing only where the block-path
+  `moved_in` tracking can't prove death, and the lattice proves ALL of those
+  emissions dead or path-dependent. Recommendation: GO — Array
+  release-elision as its own future emission slice (predicted delta
+  scope_exit_arraydrop 156,308 → 4,620, strings byte-identical, memcheck
+  in-gate; must re-verify no array analog of the 0.27.145 return-retain
+  hazard). NO implementation done. Slice 4a note: its store_value tripwire
+  remains gated on the C2-singleton fix (see reconciliation entry above).
+- 2026-07-13: **Slice 3 review round 1: note-site coverage pin added.** The
+  direct-API pin didn't exercise the string_arc NOTE SITE; new
+  `test_arraydrop_note_site_covers_return_sweep` runs insert_string_arc
+  (audit env on) over a func with three real Array<String> locals: uninit
+  (swept, uninit/must_not_drop), zero-init-stored (swept,
+  tombstoned/must_not_drop), moved-in sink (swept, live/must_drop) — and a
+  moved-out local proven NOT recorded (string_arc's moved_out_locals fold
+  skips it; scope_exit_arraydrop == 3 exactly). Reporter 14/14;
+  stage2+guardrails 338/338. No non-test changes in this round.

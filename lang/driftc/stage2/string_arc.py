@@ -1744,6 +1744,25 @@ def insert_string_arc(
 					)
 					if _sv is _DropVerdict.MUST_NOT_DROP:
 						skip_cleanup_locals.add(_sl)
+			if _audit is not None:
+				# Slice 3 measurement (report-only): record each Array
+				# local the return-boundary sweep is about to drop, with
+				# its DropPolicy needs_drop axis — the reporter derives
+				# the raw-state/verdict mix that sizes the Array
+				# release-elision win.  Same boundary-point convention
+				# as note_return_boundary.  The drop-before-overwrite
+				# array drop (StoreLocal path) is deliberately OUT of
+				# this measurement's scope.
+				_ad_point = (block.name, len(block.instructions))
+				for _adl in sorted(array_locals):
+					if _adl in skip_cleanup_locals:
+						continue
+					_ad_ty = local_types.get(_adl)
+					try:
+						_ad_nd = bool(_compute_drop_policy(type_table, _ad_ty).needs_drop) if _ad_ty is not None else False
+					except Exception:
+						_ad_nd = False
+					_audit.note_array_drop(_adl, point=_ad_point, needs_drop=_ad_nd)
 			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
 			if _audit is not None:
