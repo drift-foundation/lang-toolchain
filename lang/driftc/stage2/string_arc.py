@@ -1125,6 +1125,19 @@ def insert_string_arc(
 				owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):
 				owned_values.add(instr.dest)
+			elif isinstance(instr, M.ZeroValue):
+				# Zeroed String bytes are a valid OWNED empty value —
+				# retain AND release of a zeroed String are both runtime
+				# no-ops — so a fresh input-stream ZeroValue dest is
+				# owned/no-stake-needed.  Without this, the store paths'
+				# `_ensure_owned` emitted a dead retain of zeroed bytes;
+				# the single wild carrier was the `captures(move <String>)`
+				# env-slot ZERO-BACK (`StoreRef(env_field, ZeroValue)`) in
+				# hidden-lambda prologues — the last invisible-stake
+				# residual (c2_invisible_stake / store_value_retain
+				# singletons, reconciled 2026-07-13, PROGRESS).
+				if _is_string_tid(instr.ty):
+					owned_values.add(instr.dest)
 			elif isinstance(instr, M.CopyValue):
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)

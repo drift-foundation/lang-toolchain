@@ -438,6 +438,52 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
 
 
+def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
+	"""C2-singleton fix (2026-07-13): storing a fresh ZeroValue String —
+	the `captures(move <String>)` env-slot zero-back shape — must NOT
+	stake: zeroed String bytes are a valid owned empty value (retain and
+	release are both runtime no-ops).  Pre-fix, the StoreRef path's
+	`_ensure_owned` emitted a dead retain here — the last
+	c2_invisible_stake / store_value_retain residual."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	# "%z" MUST be in func.local_types (review finding): the store path's
+	# `_ensure_owned` gates on `_is_string_value(val)` =
+	# `local_types.get(val) is String`.  Production HIR lowering records
+	# ZeroValue dest types in local_types (the wild carrier's `.t10` has
+	# it), and the regression depends on that metadata — without it the
+	# pin passes VACUOUSLY (early return before the stake decision) and
+	# proves nothing about the ZeroValue-owned classification.
+	func = _make_func(
+		"zb", params=[], locals_=["x"],
+		types={"x": string_ty, "%z": string_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%c", value="owned-by-slot"),
+		M.StoreLocal(local="x", value="%c"),
+		M.AddrOfLocal(dest="%p", local="x", is_mut=True),
+		M.ZeroValue(dest="%z", ty=string_ty),
+		M.StoreRef(ptr="%p", value="%z", inner_ty=string_ty),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::zb")
+	# The zero-back must not stake — no store_value_retain, no C2.
+	assert agg.get("site_class:store_value_retain", 0) == 0, agg
+	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
+	# Overwrite releases are still emitted (one for the initial
+	# StoreLocal over x's uninit slot, one for the StoreRef over the
+	# slot's old value) — the fix touches ONLY the stored-value
+	# classification, never the release side.
+	assert agg.get("site_class:overwrite_release", 0) == 2, agg
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

@@ -783,3 +783,34 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   moved-out local proven NOT recorded (string_arc's moved_out_locals fold
   skips it; scope_exit_arraydrop == 3 exactly). Reporter 14/14;
   stage2+guardrails 338/338. No non-test changes in this round.
+- 2026-07-13: **C2-singleton FIX landed (Slice 4a prerequisite) — invisible-stake
+  program closed over the FULL tool universe.** One-classification change in
+  `string_arc.py`: String-typed input-stream ZeroValue dests join
+  `owned_values` (zeroed String bytes are a valid owned empty value; retain and
+  release are both runtime no-ops), so the store paths'
+  `_can_move_owned_once` takes the direct no-retain route for the
+  `captures(move <String>)` env-slot zero-back. Nothing else touched.
+  Corpus acceptance (`build/tmp/cleanup-c2fix` vs cleanup-slice3, tool v1.4.0,
+  exit 0): c2_invisible_stake 1→0, site_class:store_value_retain 1→0, and
+  events 2,775,744→2,775,743 (−1 — ARITHMETICALLY ENTAILED: the removed retain
+  WAS one event; a delta where the site-class dropped but events stayed flat
+  would be impossible). EVERY other counter +0, hard gates zero. C2 is now 0
+  over the 924-fixture universe — the narrative caveat from the reconciliation
+  entry is retired.
+  Pins: `test_zerovalue_store_needs_no_stake` (zero-back StoreRef → no
+  store_value_retain / no C2; overwrite releases untouched at 2) + NEW
+  memcheck carrier `test_spawn_cb_move_capture_zero_back.py` (HEAP-string
+  move-capture across 8 spawn/join cycles; over-retain → definitely-lost,
+  over-release → Invalid read/free; deliberately NOT an e2e fixture so the
+  corpus universe stays fixed mid-phase). Batteries: reporter 15/15;
+  stage2+guardrails 339/339; FULL memcheck suite 97 passed / 1 skipped
+  (emission-change gate). Slice 4a's store_value tripwire is now UNBLOCKED.
+- 2026-07-13: **C2-fix review round 1: vacuous-pin finding fixed.** The
+  zero-back unit pin's ZeroValue temp `%z` was not in func.local_types, so
+  `_ensure_owned` early-returned on `_is_string_value` and the pin passed
+  WITHOUT the fix (no teeth). Fixed: `%z: String` added to the synthetic
+  func's local_types with a comment explaining the metadata is intentional
+  (production HIR lowering records ZeroValue dest types; the regression
+  depends on it). Teeth PROVEN: with the ZeroValue-owned classification
+  temporarily disabled the pin now FAILS; restored, battery 15/15. No
+  non-test changes in this round (string_arc diff unchanged at +13).
