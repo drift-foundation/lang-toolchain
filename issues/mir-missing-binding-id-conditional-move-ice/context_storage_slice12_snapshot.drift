@@ -1,0 +1,1220 @@
+// M2: minimal replaceable storage interface for the LMDB engine POC.
+//
+// LMDB is storage-only: this contract speaks opaque bytes; no DriftQuery
+// semantics leak in. Two adapters implement it later (M4): in-memory (oracle) and
+// LMDB (behind the unsafe-external boundary).
+//
+// AFFINITY (M1 finding): the safety property LMDB requires is that **every storage
+// operation runs on the carrier OS thread that opened the transaction**. This
+// contract enforces exactly that — no more, no less:
+//   1. STRUCTURAL — transactions are reached only through `with_read_txn` /
+//      `with_write_txn`, which open the handle, lend it to the body by *borrow*
+//      (`&ReadTxn`/`&WriteTxn`), and close it. Handles are NOT `Copy` and are never
+//      returned, so a body cannot copy one out or store it past the borrow.
+//   2. PER-OPERATION — each handle records the `owner` carrier captured at `begin`.
+//      Every operation validates `check_carrier(owner)` and fails
+//      `STORAGE_AFFINITY_VIOLATION` if it is *currently running* on a non-owner
+//      carrier. Enforced at TWO points, because the raw `Storage` SPI is callable
+//      (a body can capture `store`): (a) the `txn_*` wrappers check before
+//      delegating (ergonomic path), and (b) each adapter op MUST also check first
+//      (the real guarantee; verified by M4 conformance tests).
+//   3. SCOPED SCANS — no escapable cursor; `scan` drives a visitor to completion in
+//      one synchronous backend call.
+//
+//   4. EXECUTOR-ROUTED (write-activity-api slice 12): when the adapter carries a
+//      `BlockingExecutor` (LMDB does; Mem does not), the scoped drivers ship the whole
+//      begin→body→end unit to it as ONE labeled closure (`run_blocking_on`) — one
+//      transaction per submitted closure, the certified 0.33.80 blocking-FFI boundary.
+//      The submitting fiber PARKS (its carrier stays free); the transaction runs
+//      start-to-finish on one executor worker thread, so blocking `mdb_*` calls never
+//      pin a cooperative carrier, and the old LIMITS gap ("a body suspending while a
+//      txn is open pins a reader slot"; "check_carrier cannot see migrate-and-return")
+//      is closed STRUCTURALLY: no transaction is ever open on a cooperative fiber at
+//      all, and closure bodies perform no cooperative operations (their accumulator
+//      `conc.lock` is uncontended by construction — the submitter is parked and is the
+//      only other Arc holder). `check_carrier` stays as defense-in-depth.
+//      One deliberate exception stays off the executor: `mdb_env_close` in
+//      LmdbStorage's `destroy` (drop-site execution, no txn, no sync at close; still
+//      compiler-instrumented, so USR2 names it if it ever wedges). Executor lifetime
+//      note: executors are process-lifetime in the 0.33.80 facility (no user destroy
+//      yet), so each `new_lmdb_storage` call leaves one parked worker thread behind
+//      until process exit — bounded by opens-per-process (one in production; a few
+//      dozen in test binaries), joined by the runtime at exit.
+
+module dqc.storage;
+
+import std.core as core;
+import std.concurrent as conc;
+import std.io as io;
+import std.mem as mem;
+
+export {
+    StorageError,
+    STORAGE_BACKEND,
+    STORAGE_AFFINITY_VIOLATION,
+    STORAGE_CORRUPT,
+    STORAGE_TXN_INVALID,
+    STORAGE_CONCURRENT_CONFLICT,
+    STORAGE_UNAVAILABLE,
+    ExecHandle,
+    KeyValue,
+    ReadTxn,
+    WriteTxn,
+    Storage,
+    carrier_self,
+    check_carrier,
+    txn_get,
+    txn_get_in_write,
+    txn_scan,
+    txn_scan_prefix,
+    txn_put,
+    txn_del,
+    with_read_txn,
+    with_write_txn,
+    MemStorage,
+    new_mem_storage,
+    LmdbStorage,
+    new_lmdb_storage,
+    new_lmdb_storage_with_policy,
+    test_make_read_txn,
+    test_wedge_executor
+};
+
+// ── error model ─────────────────────────────────────────────────────────
+pub const STORAGE_BACKEND: Int = 1;             // backend (e.g. LMDB) returned an error rc
+pub const STORAGE_AFFINITY_VIOLATION: Int = 2;  // operation reached on the wrong carrier OS thread
+pub const STORAGE_CORRUPT: Int = 3;             // decode/layout invariant violated
+// STORAGE_TXN_INVALID = 4 (declared below, kept in its original position)
+pub const STORAGE_CONCURRENT_CONFLICT: Int = 5; // write-activity-api review finding, P1: a commit-time
+                                                 // re-check (dqc.txstore.commit_activity) found the
+                                                 // conflict domain already claimed by another writer
+                                                 // since this activity's own pre-commit duplicate check
+                                                 // — see that function's own header comment
+pub const STORAGE_TXN_INVALID: Int = 4;         // transaction already ended / not owned
+pub const STORAGE_UNAVAILABLE: Int = 6;         // write-activity-api slice 12: the scoped driver could
+                                                 // not get its transaction closure onto the adapter's
+                                                 // blocking executor (admission busy/timeout/cancelled).
+                                                 // By the 0.33.80 facility's admission/join asymmetry
+                                                 // this PROVES the transaction never began — nothing
+                                                 // was read or written. It signals admission
+                                                 // SATURATION (queue_len + running at queue_limit past
+                                                 // the Block deadline) or shutdown — NOT a wedged
+                                                 // worker by itself (an admitted closure behind a
+                                                 // wedged worker parks its submitter on join instead;
+                                                 // see slice12-design.md §1.5/§6).
+
+// Fields are `pub`: consumers (e.g. the activity) inspect errors, and an error
+// value carries no capability — forging one is harmless.
+pub struct StorageError {
+    pub kind: Int,      // one of STORAGE_*
+    pub rc: Int,        // backend return code (0 if not applicable)
+    pub msg: String,
+}
+
+// ── byte-oriented data ──────────────────────────────────────────────────
+// Fields are `pub`: the scan visitor reads `key`/`value`; forging a row is harmless.
+pub struct KeyValue {
+    pub key: Array<Byte>,
+    pub value: Array<Byte>,
+}
+
+// Per-backend transaction handles. `id` is backend-defined; `owner` is the carrier
+// OS thread that opened the transaction. Deliberately NOT `core.Copy`: the scoped
+// drivers lend a handle by borrow (`&ReadTxn`/`&WriteTxn`) and a body cannot copy
+// it out or retain it past the borrow.
+//
+// Handle fields are non-`pub` (private to this module): external code cannot read
+// `owner` or forge a handle via `ReadTxn(id = …, owner = …)`. The trade-off is that
+// **adapters must live in this module** (`lmdb_engine.storage`) to mint handles and
+// read their backend `id` — that is the intended POC layout (interface + both
+// adapters co-located; only external consumers like the activity are a separate
+// module). If adapters ever need to live in their own module, add module-internal
+// `mk_*`/accessor functions here instead of making these fields `pub`.
+pub struct ReadTxn { id: Uint, owner: Uint, }
+pub struct WriteTxn { id: Uint, owner: Uint, }
+
+// ── carrier identity + per-op affinity check ────────────────────────────
+extern "C" fn pthread_self() nothrow -> Uint;
+
+// The current carrier OS thread id. Backends capture this at `begin_*` to stamp a
+// handle's `owner`.
+pub fn carrier_self() nothrow -> Uint {
+    unsafe {
+        return pthread_self();
+    }
+}
+
+// TEST-ONLY seam: mint a ReadTxn with a chosen `owner` and no backend txn (id=0).
+// Lets a test prove the per-op carrier check rejects a foreign-carrier op WITHOUT
+// real cross-carrier scheduling — every op calls `check_carrier(txn.owner)` before
+// touching the backend, so a foreign owner is rejected before `id` is ever used.
+// NOT FOR PRODUCTION — POC TEST SEAM (tracked debt).
+//
+// Invariant we want: outside `lmdb_engine.storage`, code can RECEIVE borrowed txn
+// handles from the scoped drivers, but cannot MINT, COPY, or RETAIN them. This
+// function intentionally violates the "mint" part so the affinity proof doesn't
+// need real cross-carrier scheduling. It cannot open a real transaction.
+//
+// Staged plan to retire it:
+//   1. Keep ONLY for the POC while affinity behavior is being proven.
+//   2. Move behind a test-only build/module boundary once DriftQuery has
+//      package/test visibility support.
+//   3. Replace the synthetic-handle test with a real scheduler/carrier test when the
+//      runtime exposes a clean way to force/observe carrier migration.
+//   4. Remove the exported seam from production builds entirely.
+pub fn test_make_read_txn(owner: Uint) nothrow -> ReadTxn {
+    return ReadTxn(id = cast<Uint>(0), owner = owner);
+}
+
+// TEST-ONLY seam (write-activity-api slice 12; mirrors test_make_read_txn's convention): occupy the
+// store's blocking executor with one stuck foreign call (`usleep`) for `holdMs` — lets tests build
+// saturation (a tiny-queue policy plus one wedge = queue_len + running at queue_limit) and
+// non-pinning scenarios deterministically, without touching LMDB state. Fire-and-forget: the
+// VirtualThread handle is dropped unjoined (exactly-once capture cleanup is the 0.33.79+ contract).
+// Returns false when the store has no executor (Mem) or submission was refused.
+pub fn test_wedge_executor(store: &Storage, holdMs: Int) nothrow -> Bool {
+    match store.exec_handle() {
+        None => { return false; },
+        Some(h) => {
+            val hexec = h.exec;
+            val hold = holdMs;
+            match conc.spawn_blocking_on(&hexec, "lmdb.test.wedge", core.callback0(|| captures(copy hold) => {
+                unsafe {
+                    val _ = usleep(cast<Uint32>(hold * 1000));
+                }
+                return 0;
+            })) {
+                core.Result::Ok(_) => { return true; },
+                core.Result::Err(_) => { return false; },
+            }
+        },
+    }
+}
+
+// MUST be called at the start of every backend operation, passing the handle's
+// `owner`. Point-in-time check: fails if THIS operation is currently running on a
+// carrier other than the one that opened the transaction. (It cannot observe a
+// suspension that already returned to the owner carrier — see the header LIMITS.)
+pub fn check_carrier(owner: Uint) nothrow -> core.Result<Void, StorageError> {
+    if carrier_self() != owner {
+        return core.Result::Err(StorageError(kind = STORAGE_AFFINITY_VIOLATION, rc = 0, msg = "operation running on a different carrier than opened the transaction"));
+    }
+    return core.Result::Ok(core.void_value());
+}
+
+// ── executor handle (write-activity-api slice 12) ───────────────────────
+// Everything a scoped driver needs to run one transaction closure on the adapter's
+// blocking executor: the executor itself plus the plain-data words (MDB_env*, MDB_dbi)
+// that reconstruct a non-owning `LmdbView` on the worker thread. Deliberately NOT
+// `Copy` (a struct containing a `BlockingExecutor` field fails the structural-Copy v1
+// check, E_COPY_IMPL_NONCOPY_TARGET) — the drivers destructure it instead. Fields are
+// module-private like ReadTxn/WriteTxn's: external code cannot forge one, and only
+// this module's drivers consume them.
+pub struct ExecHandle {
+    exec: conc.BlockingExecutor,
+    env: RawPtr<Byte>,   // MDB_env*
+    dbi: Uint32,         // MDB_dbi
+}
+
+// ── the replaceable backend contract ────────────────────────────────────
+// All operations are byte-oriented and take a borrowed transaction handle.
+// ADAPTER CONTRACT: every op MUST validate `check_carrier(txn.owner)` first — this
+// includes the lifecycle ops (`commit_write`, `abort_write`, `end_read`), not just
+// `get`/`scan`/`put`/`del`, because aborting/committing a backend txn off its owner
+// thread is also unsafe (UB in LMDB). Reporting: `Result`-returning ops return
+// `Err(STORAGE_AFFINITY_VIOLATION)`; the `Void` cleanup ops (`abort_write`,
+// `end_read`) cannot report, so off-carrier they are a safe NO-OP (drivers always
+// call them on the owner carrier, so this never fires in correct use). The `txn_*`
+// wrappers below also check (defense-in-depth + ergonomics), but because the raw
+// SPI is callable directly the adapter check is the real guarantee.
+pub interface Storage {
+    // transaction lifecycle. begin_* stamps owner = carrier_self().
+    fn begin_read(self: &Self) nothrow -> core.Result<ReadTxn, StorageError>;
+    fn end_read(self: &Self, txn: &ReadTxn) nothrow -> Void;
+    fn begin_write(self: &Self) nothrow -> core.Result<WriteTxn, StorageError>;
+    // commit_write has two distinct failure modes:
+    //   (a) PRE-COMMIT AFFINITY REJECTION — if called off the owner carrier, it
+    //       returns Err(STORAGE_AFFINITY_VIOLATION) and does NOT commit (committing
+    //       off-thread is UB) and does NOT abort (aborting off-thread is also UB).
+    //       The `txn` argument is still consumed by value, so the backend txn is
+    //       LEAKED (left open). This is a pure misuse path — the drivers always
+    //       commit on the owner carrier, so it never occurs in correct use.
+    //   (b) BACKEND COMMIT FAILURE — once on the owner carrier, the backend commit
+    //       runs; whether it returns Ok or Err the txn handle is CONSUMED and CLOSED
+    //       (matches LMDB `mdb_txn_commit`, which frees the txn regardless). So the
+    //       driver never aborts after a backend commit — there is nothing left to
+    //       abort.
+    // `abort_write` is only for the body-failure path (body returned Err before
+    // commit). `commit_write` always consumes its `txn` argument by value.
+    fn commit_write(self: &Self, txn: WriteTxn) nothrow -> core.Result<Void, StorageError>;
+    fn abort_write(self: &Self, txn: WriteTxn) nothrow -> Void;
+
+    // primary-key lookup within a read transaction
+    fn get(self: &Self, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError>;
+
+    // write-activity-api review finding, P1: primary-key lookup within the CURRENTLY OPEN write
+    // transaction — lets a write body atomically re-check a key's just-before-write state (LMDB's
+    // mdb_get is transaction-handle-agnostic: it works identically whether that handle came from
+    // mdb_txn_begin's read-only or read-write flag, since a write txn is a strict superset of read
+    // capability — no separate/nested read txn is needed or opened). Since LMDB permits at most one
+    // ACTIVE write transaction per environment at a time, this read is the atomic, race-free "is this
+    // still true right now" check a pre-commit read (taken in its own earlier, separate read txn)
+    // cannot by itself provide once more than one writer can be staging concurrently (see
+    // dqc.txstore.commit_activity, the sole caller).
+    fn get_in_write(self: &Self, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError>;
+
+    // scoped ordered (primary-key order) scan: drives `visitor` once per row in key
+    // order inside one synchronous call; the cursor never escapes. `visitor`
+    // returns true to continue, false to stop early.
+    fn scan(self: &Self, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError>;
+
+    // scoped ordered prefix scan: like `scan`, but the backend SEEKS to the first key >= `prefix`
+    // and drives `visitor` only over the contiguous run of keys that START WITH `prefix`, stopping at
+    // the first key that does not. This is the table-namespace read primitive — a table read touches
+    // ONLY its own namespace's keys, never the whole env. Backends MUST implement this as a real
+    // seek/range (LMDB cursor seek-to-range; Mem internal seek), NOT a full scan + client filter.
+    // `visitor` returns true to continue, false to stop early.
+    fn scan_prefix(self: &Self, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError>;
+
+    // test-only seed/write path (never used by the readonly activity path)
+    fn put(self: &Self, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError>;
+    fn del(self: &Self, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError>;
+
+    // write-activity-api slice 12: the adapter's blocking-executor handle, if it has one.
+    // `Some` means "this adapter's transactions are blocking foreign work — the scoped
+    // drivers MUST ship each begin→body→end unit to this executor as one labeled
+    // closure" (LmdbStorage). `None` means "run inline on the calling fiber" (MemStorage
+    // — pure in-process; and LmdbView — it IS the already-routed worker-side view, so
+    // returning None here is also what makes driver recursion impossible).
+    fn exec_handle(self: &Self) nothrow -> Optional<ExecHandle>;
+}
+
+// ── sanctioned per-operation entry points (ergonomic + defense-in-depth) ─
+// Bodies SHOULD call these rather than the raw `Storage` methods: each validates
+// the carrier before delegating. This is NOT the sole guarantee — the raw SPI is
+// callable directly (a body can capture `store`), so the adapter ALSO checks (see
+// the ADAPTER CONTRACT above). These wrappers make the checked path the easy path.
+pub fn txn_get(store: &Storage, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.get(txn, key);
+}
+
+pub fn txn_get_in_write(store: &Storage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.get_in_write(txn, key);
+}
+
+pub fn txn_scan(store: &Storage, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.scan(txn, move visitor);
+}
+
+pub fn txn_scan_prefix(store: &Storage, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.scan_prefix(txn, prefix, move visitor);
+}
+
+pub fn txn_put(store: &Storage, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.put(txn, key, value);
+}
+
+pub fn txn_del(store: &Storage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+    match check_carrier(txn.owner) {
+        Err(e) => { return core.Result::Err(e); },
+        Ok(_) => { }
+    }
+    return store.del(txn, key);
+}
+
+// ── scoped drivers (the only sanctioned entry points) ───────────────────
+
+// Executor admission failure → STORAGE_UNAVAILABLE (write-activity-api slice 12). The
+// concurrency kind (busy/timeout/cancelled) rides in `msg`; by the facility's
+// admission/join asymmetry this error PROVES the transaction closure never ran.
+fn exec_unavailable_err(e: conc.ConcurrencyError) nothrow -> StorageError {
+    return StorageError(kind = STORAGE_UNAVAILABLE, rc = 0, msg = "storage executor admission failed (" + (e.kind + "") + "): transaction never began");
+}
+
+// The read-transaction unit — begin → body → end, on the CALLING thread. Shared by
+// with_read_txn's inline (Mem) arm and, worker-side, by its submitted closure. Also
+// deliberately a plain generic FUNCTION: naming core.Result<R, …> in a match arm
+// inside a boxed lambda trips an SSA-contract ICE on driftc 0.33.81 (minimal repro
+// filed: drift-lang/issues/generic-lambda-match-result-ssa-ice/), and this shape
+// keeps the generic match out of the lambda entirely.
+fn run_read_unit<R>(store: &Storage, var body: core.Callback2<&Storage, &ReadTxn, core.Result<R, StorageError>>) nothrow -> core.Result<R, StorageError> {
+    return match store.begin_read() {
+        Err(e) => { core.Result::Err(e) },
+        Ok(txn) => {
+            val out = body.call(store, &txn);
+            store.end_read(&txn);
+            move out
+        }
+    };
+}
+
+// The write-transaction unit — begin → body → commit-on-Ok/abort-on-Err, on the
+// CALLING thread. Same sharing/ICE-avoidance rationale as run_read_unit.
+fn run_write_unit<R>(store: &Storage, var body: core.Callback2<&Storage, &WriteTxn, core.Result<R, StorageError>>) nothrow -> core.Result<R, StorageError> {
+    return match store.begin_write() {
+        Err(e) => { core.Result::Err(e) },
+        Ok(txn) => {
+            match body.call(store, &txn) {
+                Err(e) => {
+                    store.abort_write(move txn);
+                    core.Result::Err(e)
+                },
+                Ok(out) => {
+                    match store.commit_write(move txn) {
+                        Err(ce) => { core.Result::Err(ce) },
+                        Ok(_) => { core.Result::Ok(move out) }
+                    }
+                }
+            }
+        }
+    };
+}
+
+// Run `body` inside a read transaction. The ReadTxn is opened by the driver, lent to
+// the synchronous `body` by borrow, and ended by the driver — it never escapes. The
+// store is handed to `body` as its FIRST ARGUMENT (not a capture): bodies must stay
+// reference-capture-free so they can cross the executor submission (E_ESCAPE_REF_CAPTURE
+// forbids a boxed callback carrying a `&` capture into run_blocking_on). `label` names
+// the operation for USR2 liveness (`lmdb.<area>.<op>`, ≤ 48 bytes — see
+// slice12-design.md §4.5); it is unused on the inline path.
+//
+// Routing (slice 12): when the adapter carries a blocking executor (exec_handle →
+// Some), the WHOLE unit runs as one labeled closure on that executor — one transaction
+// per submitted closure — and the calling fiber parks without pinning its carrier.
+// Admission failure surfaces as STORAGE_UNAVAILABLE (the txn never began). When it
+// doesn't (MemStorage), the unit runs inline exactly as before.
+pub fn with_read_txn<R>(store: &Storage, label: String, var body: core.Callback2<&Storage, &ReadTxn, core.Result<R, StorageError>>) nothrow -> core.Result<R, StorageError> {
+    match store.exec_handle() {
+        None => {
+            val _ = label;
+            return run_read_unit(store, move body);
+        },
+        Some(h) => {
+            val hexec = h.exec;
+            val henv = h.env;
+            val hdbi = h.dbi;
+            match conc.run_blocking_on(&hexec, move label, core.callback0(|| captures(copy henv, copy hdbi, move body) => {
+                var vw: Storage = LmdbView(env = henv, dbi = hdbi);
+                return run_read_unit(&vw, move body);
+            })) {
+                core.Result::Ok(r) => { return move r; },
+                core.Result::Err(ce) => { return core.Result<R, StorageError>::Err(exec_unavailable_err(move ce)); },
+            }
+        },
+    }
+}
+
+// Write-transaction driver. `body` returns `Result<R, StorageError>`: the transaction
+// is committed only when the body succeeds, and aborted on any `Err` — a logical
+// failure in the body never commits. Same store-as-argument, label, and executor
+// routing contract as with_read_txn above.
+pub fn with_write_txn<R>(store: &Storage, label: String, var body: core.Callback2<&Storage, &WriteTxn, core.Result<R, StorageError>>) nothrow -> core.Result<R, StorageError> {
+    match store.exec_handle() {
+        None => {
+            val _ = label;
+            return run_write_unit(store, move body);
+        },
+        Some(h) => {
+            val hexec = h.exec;
+            val henv = h.env;
+            val hdbi = h.dbi;
+            match conc.run_blocking_on(&hexec, move label, core.callback0(|| captures(copy henv, copy hdbi, move body) => {
+                var vw: Storage = LmdbView(env = henv, dbi = hdbi);
+                return run_write_unit(&vw, move body);
+            })) {
+                core.Result::Ok(r) => { return move r; },
+                core.Result::Err(ce) => { return core.Result<R, StorageError>::Err(exec_unavailable_err(move ce)); },
+            }
+        },
+    }
+}
+
+// Lexicographic byte comparison (local to the storage layer; -1/0/1). A proper
+// prefix sorts before its extension.
+fn bytes_cmp(a: &Array<Byte>, b: &Array<Byte>) nothrow -> Int {
+    val na = a.len();
+    val nb = b.len();
+    var i = 0;
+    while i < na {
+        if i >= nb { return 1; }
+        val ai = cast<Int>(a[i]);
+        val bi = cast<Int>(b[i]);
+        if ai < bi { return -1; }
+        if ai > bi { return 1; }
+        i = i + 1;
+    }
+    if nb > na { return -1; }
+    return 0;
+}
+
+// True iff `key` starts with `prefix` (`key[0..prefix.len()] == prefix`).
+fn bytes_has_prefix(key: &Array<Byte>, prefix: &Array<Byte>) nothrow -> Bool {
+    val np = prefix.len();
+    if key.len() < np { return false; }
+    var i = 0;
+    while i < np {
+        if key[i] != prefix[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// ── in-memory adapter (M4): the conformance oracle ──────────────────────
+// Stores opaque (key,value) byte pairs. Write isolation: begin_write snapshots
+// committed entries into `staging`; put/del mutate staging; commit replaces
+// entries with staging; abort discards it (so a body `Err` -> abort leaves
+// committed state unchanged). Single active write txn (POC). State lives behind a
+// Mutex for interior mutability (interface methods take `&Self`).
+pub struct MemState {
+    entries: Array<KeyValue>,
+    staging: Array<KeyValue>,
+    staging_active: Bool,
+}
+
+pub struct MemStorage {
+    state: conc.Mutex<MemState>,
+}
+
+pub fn new_mem_storage() nothrow -> MemStorage {
+    var empty1: Array<KeyValue> = [];
+    var empty2: Array<KeyValue> = [];
+    return MemStorage(state = conc.mutex(MemState(entries = move empty1, staging = move empty2, staging_active = false)));
+}
+
+fn copy_bytes(a: &Array<Byte>) nothrow -> Array<Byte> {
+    var out: Array<Byte> = [];
+    var i = 0;
+    val n = a.len();
+    while i < n { out.push(a[i]); i = i + 1; }
+    return move out;
+}
+
+fn kv_clone(kv: &KeyValue) nothrow -> KeyValue {
+    return KeyValue(key = copy_bytes(&kv.key), value = copy_bytes(&kv.value));
+}
+
+fn clone_entries(src: &Array<KeyValue>) nothrow -> Array<KeyValue> {
+    var out: Array<KeyValue> = [];
+    var i = 0;
+    val n = src.len();
+    while i < n {
+        out.push(kv_clone(&src[i]));
+        i = i + 1;
+    }
+    return move out;
+}
+
+fn find_idx(entries: &Array<KeyValue>, key: &Array<Byte>) nothrow -> Int {
+    var i = 0;
+    val n = entries.len();
+    while i < n {
+        if bytes_cmp(&entries[i].key, key) == 0 { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// Selection sort into key order (primary-key order); small POC data sets.
+fn sorted_copy(entries: &Array<KeyValue>) nothrow -> Array<KeyValue> {
+    var work = clone_entries(entries);
+    var out: Array<KeyValue> = [];
+    while work.len() > 0 {
+        var mi = 0;
+        var i = 1;
+        val n = work.len();
+        while i < n {
+            if bytes_cmp(&work[i].key, &work[mi].key) < 0 { mi = i; }
+            i = i + 1;
+        }
+        out.push(work.swap_remove(mi));
+    }
+    return move out;
+}
+
+implement Storage for MemStorage {
+    pub fn begin_read(self: &MemStorage) nothrow -> core.Result<ReadTxn, StorageError> {
+        val _ = self;
+        return core.Result::Ok(ReadTxn(id = cast<Uint>(0), owner = carrier_self()));
+    }
+
+    pub fn end_read(self: &MemStorage, txn: &ReadTxn) nothrow -> Void {
+        val _ = self;
+        val _ = txn;
+    }
+
+    pub fn begin_write(self: &MemStorage) nothrow -> core.Result<WriteTxn, StorageError> {
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        if st.staging_active {
+            return core.Result::Err(StorageError(kind = STORAGE_TXN_INVALID, rc = 0, msg = "a write txn is already active"));
+        }
+        st.staging = clone_entries(&st.entries);
+        st.staging_active = true;
+        return core.Result::Ok(WriteTxn(id = cast<Uint>(0), owner = carrier_self()));
+    }
+
+    pub fn commit_write(self: &MemStorage, txn: WriteTxn) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => {
+                var g0 = conc.lock(&self.state);
+                val st0 = g0.get_mut();
+                st0.staging_active = false;
+                var e1: Array<KeyValue> = [];
+                st0.staging = move e1;
+                return core.Result::Err(e);
+            },
+            Ok(_) => { }
+        }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        if st.staging_active {
+            st.entries = clone_entries(&st.staging);
+            st.staging_active = false;
+            var e2: Array<KeyValue> = [];
+            st.staging = move e2;
+        }
+        return core.Result::Ok(core.void_value());
+    }
+
+    pub fn abort_write(self: &MemStorage, txn: WriteTxn) nothrow -> Void {
+        // Lifecycle ops obey the affinity rule (uniform with LMDB). Off-carrier ->
+        // no-op (Void can't report); drivers always call on the owner carrier.
+        if carrier_self() != txn.owner { return; }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        st.staging_active = false;
+        var e: Array<KeyValue> = [];
+        st.staging = move e;
+    }
+
+    pub fn get(self: &MemStorage, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        val idx = find_idx(&st.entries, key);
+        if idx < 0 {
+            return core.Result::Ok(Optional<Array<Byte> >::None());
+        }
+        return core.Result::Ok(Optional::Some(copy_bytes(&st.entries[idx].value)));
+    }
+
+    // write-activity-api review finding, P1: reads `st.staging`, NOT `st.entries` — `staging` is the
+    // write txn's own working copy (seeded from `entries` at `begin_write`, mutated by `put`/`del`,
+    // only folded back into `entries` at commit) — matching LMDB's own "a write txn's mdb_get sees its
+    // own uncommitted puts" semantics exactly (see this interface method's own doc comment on `Storage`).
+    pub fn get_in_write(self: &MemStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        if not st.staging_active {
+            return core.Result::Err(StorageError(kind = STORAGE_TXN_INVALID, rc = 0, msg = "no active write txn"));
+        }
+        val idx = find_idx(&st.staging, key);
+        if idx < 0 {
+            return core.Result::Ok(Optional<Array<Byte> >::None());
+        }
+        return core.Result::Ok(Optional::Some(copy_bytes(&st.staging[idx].value)));
+    }
+
+    pub fn scan(self: &MemStorage, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        var rows: Array<KeyValue> = [];
+        {
+            var g = conc.lock(&self.state);
+            val st = g.get_mut();
+            rows = sorted_copy(&st.entries);
+        }
+        var i = 0;
+        val n = rows.len();
+        while i < n {
+            var kv = kv_clone(&rows[i]);
+            val cont = visitor.call(move kv);
+            if not cont { return core.Result::Ok(core.void_value()); }
+            i = i + 1;
+        }
+        return core.Result::Ok(core.void_value());
+    }
+
+    pub fn scan_prefix(self: &MemStorage, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        // Oracle seek: sort once into key order, then walk only the CONTIGUOUS prefix run. Because
+        // entries are sorted, all prefix-matching keys are adjacent — once a match has been seen and a
+        // non-match follows, the run is over, so we stop without touching later namespaces' keys.
+        var rows: Array<KeyValue> = [];
+        {
+            var g = conc.lock(&self.state);
+            val st = g.get_mut();
+            rows = sorted_copy(&st.entries);
+        }
+        var i = 0;
+        val n = rows.len();
+        var started = false;
+        while i < n {
+            if bytes_has_prefix(&rows[i].key, prefix) {
+                started = true;
+                var kv = kv_clone(&rows[i]);
+                val cont = visitor.call(move kv);
+                if not cont { return core.Result::Ok(core.void_value()); }
+            } else if started {
+                return core.Result::Ok(core.void_value());
+            }
+            i = i + 1;
+        }
+        return core.Result::Ok(core.void_value());
+    }
+
+    pub fn put(self: &MemStorage, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        if not st.staging_active {
+            return core.Result::Err(StorageError(kind = STORAGE_TXN_INVALID, rc = 0, msg = "no active write txn"));
+        }
+        val idx = find_idx(&st.staging, key);
+        if idx >= 0 { val _ = st.staging.swap_remove(idx); }
+        st.staging.push(KeyValue(key = copy_bytes(key), value = copy_bytes(value)));
+        return core.Result::Ok(core.void_value());
+    }
+
+    pub fn del(self: &MemStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        var g = conc.lock(&self.state);
+        val st = g.get_mut();
+        if not st.staging_active {
+            return core.Result::Err(StorageError(kind = STORAGE_TXN_INVALID, rc = 0, msg = "no active write txn"));
+        }
+        val idx = find_idx(&st.staging, key);
+        if idx >= 0 { val _ = st.staging.swap_remove(idx); }
+        return core.Result::Ok(core.void_value());
+    }
+
+    pub fn exec_handle(self: &MemStorage) nothrow -> Optional<ExecHandle> {
+        // pure in-process oracle — no FFI, no thread-affine state, no executor;
+        // the scoped drivers run Mem transactions inline on the calling fiber.
+        val _ = self;
+        return Optional<ExecHandle>::None();
+    }
+}
+
+// ── LMDB adapter (M4 4b): LmdbStorage implement Storage ─────────────────
+// Behind the typed unsafe-external boundary (Drift FFI -> liblmdb). Reuses the M1
+// spike's extern decls + MDB_val marshaling. Each op stamps/validates the carrier.
+extern "C" fn mdb_env_create(env_out: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_env_set_mapsize(env: RawPtr<Byte>, size: Uint) nothrow -> Int32;
+extern "C" fn mdb_env_open(env: RawPtr<Byte>, path: RawPtr<Byte>, flags: Uint32, mode: Uint32) nothrow -> Int32;
+extern "C" fn mdb_env_close(env: RawPtr<Byte>) nothrow -> Void;
+extern "C" fn mdb_txn_begin(env: RawPtr<Byte>, parent: RawPtr<Byte>, flags: Uint32, txn_out: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_txn_commit(txn: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_txn_abort(txn: RawPtr<Byte>) nothrow -> Void;
+extern "C" fn mdb_dbi_open(txn: RawPtr<Byte>, name: RawPtr<Byte>, flags: Uint32, dbi_out: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_get(txn: RawPtr<Byte>, dbi: Uint32, key: RawPtr<Byte>, data: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_put(txn: RawPtr<Byte>, dbi: Uint32, key: RawPtr<Byte>, data: RawPtr<Byte>, flags: Uint32) nothrow -> Int32;
+extern "C" fn mdb_del(txn: RawPtr<Byte>, dbi: Uint32, key: RawPtr<Byte>, data: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_cursor_open(txn: RawPtr<Byte>, dbi: Uint32, cursor_out: RawPtr<Byte>) nothrow -> Int32;
+extern "C" fn mdb_cursor_get(cursor: RawPtr<Byte>, key: RawPtr<Byte>, data: RawPtr<Byte>, op: Uint32) nothrow -> Int32;
+extern "C" fn mdb_cursor_close(cursor: RawPtr<Byte>) nothrow -> Void;
+extern "C" fn mdb_strerror(err: Int32) nothrow -> RawPtr<Byte>;
+extern "C" fn strlen(s: RawPtr<Byte>) nothrow -> Int;
+extern "C" fn usleep(usec: Uint32) nothrow -> Int32;   // TEST-ONLY seam (test_wedge_executor)
+
+const MDB_OK: Int = 0;
+const MDB_NOTFOUND: Int = -30798;
+const MDB_NOSUBDIR: Int = 16384;     // 0x4000  env flag
+const MDB_TXN_RDONLY: Int = 131072;  // 0x20000 txn flag
+const MDB_CUR_FIRST: Int = 0;        // MDB_cursor_op MDB_FIRST
+const MDB_CUR_NEXT: Int = 8;         // MDB_cursor_op MDB_NEXT
+const MDB_CUR_SET_RANGE: Int = 17;   // MDB_cursor_op MDB_SET_RANGE (seek to first key >= given key)
+
+fn l_null() nothrow -> RawPtr<Byte> { return cast<RawPtr<Byte> >(cast<Uint>(0)); }
+fn l_wordptr(p: RawPtr<Byte>) nothrow -> mem.Ptr<Uint> { return cast<mem.Ptr<Uint> >(p); }
+fn l_read_word(p: RawPtr<Byte>) nothrow -> Uint { unsafe { return mem.ptr_read<type Uint>(l_wordptr(p)); } }
+fn l_write_word(p: RawPtr<Byte>, i: Int, v: Uint) nothrow -> Void { unsafe { mem.ptr_write<type Uint>(mem.ptr_offset<type Uint>(l_wordptr(p), i), v); } }
+
+// MDB_val { size_t mv_size; void* mv_data; } backed by a 16-byte buffer.
+fn mdbval_set(slot: RawPtr<Byte>, size: Uint, data: RawPtr<Byte>) nothrow -> Void {
+    l_write_word(slot, 0, size);
+    l_write_word(slot, 1, cast<Uint>(data));
+}
+fn mdbval_size(slot: RawPtr<Byte>) nothrow -> Uint { return l_read_word(slot); }
+fn mdbval_data(slot: RawPtr<Byte>) nothrow -> RawPtr<Byte> {
+    unsafe { return cast<RawPtr<Byte> >(mem.ptr_read<type Uint>(mem.ptr_offset<type Uint>(l_wordptr(slot), 1))); }
+}
+
+fn l_cstr(s: String) nothrow -> io.Buffer {
+    val n = s.byte_length();
+    var bf = io.buffer(n + 1);
+    var i = 0;
+    while i < n { io.buffer_write(&mut bf, i, core.string_byte_at(&s, i)); i = i + 1; }
+    io.buffer_write(&mut bf, n, cast<Byte>(0));
+    return move bf;
+}
+fn l_from_cstr(p: RawPtr<Byte>) nothrow -> String {
+    unsafe {
+        if mem.ptr_is_null<type Byte>(p) { return ""; }
+        val len = strlen(p);
+        if len <= 0 { return ""; }
+        var bf = io.buffer(len);
+        var i = 0;
+        while i < len { io.buffer_write(&mut bf, i, mem.ptr_read<type Byte>(mem.ptr_offset<type Byte>(p, i))); i = i + 1; }
+        return core.string_from_utf8_bytes(io.buffer_ptr(&bf), len);
+    }
+}
+fn l_bytes_buf(a: &Array<Byte>) nothrow -> io.Buffer {
+    val n = a.len();
+    var bf = io.buffer(n);
+    var i = 0;
+    while i < n { io.buffer_write(&mut bf, i, a[i]); i = i + 1; }
+    return move bf;
+}
+fn l_ptr_to_bytes(p: RawPtr<Byte>, len: Int) nothrow -> Array<Byte> {
+    unsafe {
+        var out: Array<Byte> = [];
+        var i = 0;
+        while i < len { out.push(mem.ptr_read<type Byte>(mem.ptr_offset<type Byte>(p, i))); i = i + 1; }
+        return move out;
+    }
+}
+fn lmdb_err(op: String, rc: Int32) nothrow -> StorageError {
+    unsafe {
+        return StorageError(kind = STORAGE_BACKEND, rc = cast<Int>(rc), msg = op + ": " + l_from_cstr(mdb_strerror(rc)));
+    }
+}
+fn l_is_ok(rc: Int32) nothrow -> Bool { return cast<Int>(rc) == MDB_OK; }
+
+// Non-owning, plain-data view of an open LMDB env (write-activity-api slice 12): the
+// worker-side face of LmdbStorage. Carries only the two words the real op bodies need
+// (MDB_env*, MDB_dbi) and implements the FULL Storage contract — LmdbStorage's own impl
+// delegates here, so there is exactly one copy of each LMDB op body. Copy on purpose
+// (two words); no Destructible — it closes NOTHING (LmdbStorage owns the env's
+// lifecycle). Its exec_handle is None: a view only ever executes on an executor worker
+// (or under a test that constructed it deliberately), so drivers seeing a view run
+// inline — that is also what makes driver recursion through the executor impossible.
+pub struct LmdbView {
+    env: RawPtr<Byte>,   // MDB_env*
+    dbi: Uint32,         // MDB_dbi
+}
+
+implement core.Copy for LmdbView {
+}
+
+pub struct LmdbStorage {
+    env: RawPtr<Byte>,   // MDB_env* — typed as the pointer it is (toolchain team review note 3 on
+                         // the leak report: a plain Uint word erases the last statically visible
+                         // trace that a field is a handle needing cleanup)
+    dbi: Uint32,         // MDB_dbi
+    exec: conc.BlockingExecutor,   // write-activity-api slice 12: this env's named blocking
+                                    // executor — every transaction unit (and the env open itself)
+                                    // runs on its worker(s), never on a cooperative carrier
+}
+
+// The env bring-up FFI unit (MDB_NOSUBDIR: a single file; unnamed DB opened via one
+// bootstrap write txn) — one closure-shaped unit, run ON the storage executor by
+// new_lmdb_storage_with_policy (label `lmdb.env.open`), so even a wedged env open on a
+// bad mount is a named, diagnosable executor event rather than a pinned carrier.
+fn lm_env_open(path: String) nothrow -> core.Result<LmdbView, StorageError> {
+    unsafe {
+        var eslot = io.buffer(8);
+        val rc1 = mdb_env_create(io.buffer_ptr(&eslot));
+        if not l_is_ok(rc1) { return core.Result::Err(lmdb_err("mdb_env_create", rc1)); }
+        val env = l_read_word(io.buffer_ptr(&eslot));
+        val envp = cast<RawPtr<Byte> >(env);
+        // From here on, close the env on any failure so init never leaks it.
+        val rc2 = mdb_env_set_mapsize(envp, cast<Uint>(10485760));
+        if not l_is_ok(rc2) { mdb_env_close(envp); return core.Result::Err(lmdb_err("mdb_env_set_mapsize", rc2)); }
+        val pb = l_cstr(path);
+        val rc3 = mdb_env_open(envp, io.buffer_ptr(&pb), cast<Uint32>(MDB_NOSUBDIR), cast<Uint32>(420));
+        if not l_is_ok(rc3) { mdb_env_close(envp); return core.Result::Err(lmdb_err("mdb_env_open", rc3)); }
+        var tslot = io.buffer(8);
+        val rc4 = mdb_txn_begin(envp, l_null(), cast<Uint32>(0), io.buffer_ptr(&tslot));
+        if not l_is_ok(rc4) { mdb_env_close(envp); return core.Result::Err(lmdb_err("mdb_txn_begin(dbi)", rc4)); }
+        val txn = cast<RawPtr<Byte> >(l_read_word(io.buffer_ptr(&tslot)));
+        var dslot = io.buffer(4);
+        val rc5 = mdb_dbi_open(txn, l_null(), cast<Uint32>(0), io.buffer_ptr(&dslot));
+        if not l_is_ok(rc5) { mdb_txn_abort(txn); mdb_env_close(envp); return core.Result::Err(lmdb_err("mdb_dbi_open", rc5)); }
+        val dbi = mem.ptr_read<type Uint32>(cast<mem.Ptr<Uint32> >(io.buffer_ptr(&dslot)));
+        val rc6 = mdb_txn_commit(txn);
+        if not l_is_ok(rc6) { mdb_env_close(envp); return core.Result::Err(lmdb_err("mdb_txn_commit(dbi)", rc6)); }
+        return core.Result::Ok(LmdbView(env = envp, dbi = dbi));
+    }
+}
+
+// Open an LMDB env at `path` with the pinned default storage-executor policy
+// (slice12-design.md §3): 1 worker — LMDB's global writer lock means extra workers
+// only parallelize read txns (toolchain sizing guidance), and one worker preserves the
+// store-wide single-writer ordering commit_activity's revalidation relies on trivially
+// — with the blocking preset's queue limit 64 / Block(5s) / 256 KiB stacks, named
+// "storage-lmdb".
+pub fn new_lmdb_storage(path: String) nothrow -> core.Result<LmdbStorage, StorageError> {
+    var b = conc.blocking_executor_builder();
+    b.min_threads(1);
+    b.max_threads(1);
+    return new_lmdb_storage_with_policy(move path, b.build(), "storage-lmdb");
+}
+
+// Policy-explicit sibling (slice12-design.md §11 item 3): the seam tests use to build
+// tiny-queue/short-timeout/multi-worker instances (saturation, USR2 harness), and the
+// natural future home for operator tuning. The executor is built FIRST so the env
+// bring-up itself runs on it as the `lmdb.env.open` unit.
+pub fn new_lmdb_storage_with_policy(path: String, policy: conc.ExecutorPolicy, name: String) nothrow -> core.Result<LmdbStorage, StorageError> {
+    val ex = conc.build_blocking_executor(policy, move name);
+    match conc.run_blocking_on(&ex, "lmdb.env.open", core.callback0(|| captures(move path) => {
+        return lm_env_open(path + "");
+    })) {
+        core.Result::Ok(r) => {
+            match r {
+                Err(e) => { return core.Result::Err(e); },
+                Ok(vw) => { return core.Result::Ok(LmdbStorage(env = vw.env, dbi = vw.dbi, exec = ex)); },
+            }
+        },
+        core.Result::Err(ce) => { return core.Result::Err(exec_unavailable_err(move ce)); },
+    }
+}
+
+implement Storage for LmdbView {
+    pub fn begin_read(self: &LmdbView) nothrow -> core.Result<ReadTxn, StorageError> {
+        unsafe {
+            var slot = io.buffer(8);
+            val rc = mdb_txn_begin(self.env, l_null(), cast<Uint32>(MDB_TXN_RDONLY), io.buffer_ptr(&slot));
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_txn_begin(read)", rc)); }
+            return core.Result::Ok(ReadTxn(id = l_read_word(io.buffer_ptr(&slot)), owner = carrier_self()));
+        }
+    }
+
+    pub fn end_read(self: &LmdbView, txn: &ReadTxn) nothrow -> Void {
+        val _ = self;
+        // Lifecycle ops obey the affinity rule too (mdb_txn_abort off the owner
+        // thread is UB). On a foreign carrier this is a safe NO-OP — a Void method
+        // cannot report, and the drivers always call on the owner carrier, so this
+        // never fires in correct use. (Off-carrier misuse leaks the txn rather than
+        // risking UB — the lesser evil.)
+        if carrier_self() == txn.owner {
+            unsafe { mdb_txn_abort(cast<RawPtr<Byte> >(txn.id)); }
+        }
+    }
+
+    pub fn begin_write(self: &LmdbView) nothrow -> core.Result<WriteTxn, StorageError> {
+        unsafe {
+            var slot = io.buffer(8);
+            val rc = mdb_txn_begin(self.env, l_null(), cast<Uint32>(0), io.buffer_ptr(&slot));
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_txn_begin(write)", rc)); }
+            return core.Result::Ok(WriteTxn(id = l_read_word(io.buffer_ptr(&slot)), owner = carrier_self()));
+        }
+    }
+
+    pub fn commit_write(self: &LmdbView, txn: WriteTxn) nothrow -> core.Result<Void, StorageError> {
+        val _ = self;
+        // Affinity: committing off the owner thread is UB. On a foreign carrier we
+        // REJECT (return Err) and do NOT commit — the txn stays open for the owner.
+        // (This is the one case where commit_write does not close the txn; an
+        // off-carrier commit cannot safely close it.)
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val rc = mdb_txn_commit(cast<RawPtr<Byte> >(txn.id));
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_txn_commit", rc)); }
+            return core.Result::Ok(core.void_value());
+        }
+    }
+
+    pub fn abort_write(self: &LmdbView, txn: WriteTxn) nothrow -> Void {
+        val _ = self;
+        // Same affinity rule as end_read: off-carrier -> safe no-op (see end_read).
+        if carrier_self() == txn.owner {
+            unsafe { mdb_txn_abort(cast<RawPtr<Byte> >(txn.id)); }
+        }
+    }
+
+    pub fn get(self: &LmdbView, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            val kb = l_bytes_buf(key);
+            var kval = io.buffer(16);
+            var vval = io.buffer(16);
+            mdbval_set(io.buffer_ptr(&kval), cast<Uint>(key.len()), io.buffer_ptr(&kb));
+            val rc = mdb_get(tp, self.dbi, io.buffer_ptr(&kval), io.buffer_ptr(&vval));
+            if cast<Int>(rc) == MDB_NOTFOUND { return core.Result::Ok(Optional<Array<Byte> >::None()); }
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_get", rc)); }
+            val sz = cast<Int>(mdbval_size(io.buffer_ptr(&vval)));
+            val bytes = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&vval)), sz);
+            return core.Result::Ok(Optional::Some(move bytes));
+        }
+    }
+
+    // write-activity-api review finding, P1: identical to `get` above except taking `&WriteTxn` —
+    // `mdb_get` itself is transaction-handle-agnostic (works the same whether `txn.id` came from
+    // mdb_txn_begin's read-only or read-write flag), so this is the SAME call against the CURRENTLY
+    // OPEN write transaction's own handle, seeing its own uncommitted puts plus everything already
+    // durably committed — no separate/nested read txn needed (see this interface method's own doc
+    // comment on `Storage`).
+    pub fn get_in_write(self: &LmdbView, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            val kb = l_bytes_buf(key);
+            var kval = io.buffer(16);
+            var vval = io.buffer(16);
+            mdbval_set(io.buffer_ptr(&kval), cast<Uint>(key.len()), io.buffer_ptr(&kb));
+            val rc = mdb_get(tp, self.dbi, io.buffer_ptr(&kval), io.buffer_ptr(&vval));
+            if cast<Int>(rc) == MDB_NOTFOUND { return core.Result::Ok(Optional<Array<Byte> >::None()); }
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_get", rc)); }
+            val sz = cast<Int>(mdbval_size(io.buffer_ptr(&vval)));
+            val bytes = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&vval)), sz);
+            return core.Result::Ok(Optional::Some(move bytes));
+        }
+    }
+
+    pub fn scan(self: &LmdbView, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            var curslot = io.buffer(8);
+            val rc0 = mdb_cursor_open(tp, self.dbi, io.buffer_ptr(&curslot));
+            if not l_is_ok(rc0) { return core.Result::Err(lmdb_err("mdb_cursor_open", rc0)); }
+            val cur = cast<RawPtr<Byte> >(l_read_word(io.buffer_ptr(&curslot)));
+            var kval = io.buffer(16);
+            var vval = io.buffer(16);
+            var op = MDB_CUR_FIRST;
+            var go = true;
+            while go {
+                val rc = mdb_cursor_get(cur, io.buffer_ptr(&kval), io.buffer_ptr(&vval), cast<Uint32>(op));
+                if cast<Int>(rc) == MDB_NOTFOUND {
+                    go = false;
+                } else {
+                    if not l_is_ok(rc) { mdb_cursor_close(cur); return core.Result::Err(lmdb_err("mdb_cursor_get", rc)); }
+                    val ksz = cast<Int>(mdbval_size(io.buffer_ptr(&kval)));
+                    val vsz = cast<Int>(mdbval_size(io.buffer_ptr(&vval)));
+                    val kb = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&kval)), ksz);
+                    val vb = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&vval)), vsz);
+                    var kv = KeyValue(key = move kb, value = move vb);
+                    val cont = visitor.call(move kv);
+                    if not cont { go = false; } else { op = MDB_CUR_NEXT; }
+                }
+            }
+            mdb_cursor_close(cur);
+            return core.Result::Ok(core.void_value());
+        }
+    }
+
+    pub fn scan_prefix(self: &LmdbView, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            var curslot = io.buffer(8);
+            val rc0 = mdb_cursor_open(tp, self.dbi, io.buffer_ptr(&curslot));
+            if not l_is_ok(rc0) { return core.Result::Err(lmdb_err("mdb_cursor_open", rc0)); }
+            val cur = cast<RawPtr<Byte> >(l_read_word(io.buffer_ptr(&curslot)));
+            // Seed the key slot with `prefix` and SEEK to the first key >= prefix; thereafter MDB_NEXT.
+            // Stop at MDB_NOTFOUND or the first key that no longer starts with `prefix` (keys are in
+            // ascending byte order, so the prefix run is contiguous — no later namespace is touched).
+            val pb = l_bytes_buf(prefix);
+            var kval = io.buffer(16);
+            var vval = io.buffer(16);
+            mdbval_set(io.buffer_ptr(&kval), cast<Uint>(prefix.len()), io.buffer_ptr(&pb));
+            var op = MDB_CUR_SET_RANGE;
+            var go = true;
+            while go {
+                val rc = mdb_cursor_get(cur, io.buffer_ptr(&kval), io.buffer_ptr(&vval), cast<Uint32>(op));
+                if cast<Int>(rc) == MDB_NOTFOUND {
+                    go = false;
+                } else {
+                    if not l_is_ok(rc) { mdb_cursor_close(cur); return core.Result::Err(lmdb_err("mdb_cursor_get", rc)); }
+                    val ksz = cast<Int>(mdbval_size(io.buffer_ptr(&kval)));
+                    val kb = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&kval)), ksz);
+                    if not bytes_has_prefix(&kb, prefix) {
+                        go = false;
+                    } else {
+                        val vsz = cast<Int>(mdbval_size(io.buffer_ptr(&vval)));
+                        val vb = l_ptr_to_bytes(mdbval_data(io.buffer_ptr(&vval)), vsz);
+                        var kv = KeyValue(key = move kb, value = move vb);
+                        val cont = visitor.call(move kv);
+                        if not cont { go = false; } else { op = MDB_CUR_NEXT; }
+                    }
+                }
+            }
+            mdb_cursor_close(cur);
+            return core.Result::Ok(core.void_value());
+        }
+    }
+
+    pub fn put(self: &LmdbView, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            val kb = l_bytes_buf(key);
+            val vb = l_bytes_buf(value);
+            var kval = io.buffer(16);
+            var vval = io.buffer(16);
+            mdbval_set(io.buffer_ptr(&kval), cast<Uint>(key.len()), io.buffer_ptr(&kb));
+            mdbval_set(io.buffer_ptr(&vval), cast<Uint>(value.len()), io.buffer_ptr(&vb));
+            val rc = mdb_put(tp, self.dbi, io.buffer_ptr(&kval), io.buffer_ptr(&vval), cast<Uint32>(0));
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_put", rc)); }
+            return core.Result::Ok(core.void_value());
+        }
+    }
+
+    pub fn del(self: &LmdbView, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        match check_carrier(txn.owner) {
+            Err(e) => { return core.Result::Err(e); },
+            Ok(_) => { }
+        }
+        unsafe {
+            val tp = cast<RawPtr<Byte> >(txn.id);
+            val kb = l_bytes_buf(key);
+            var kval = io.buffer(16);
+            mdbval_set(io.buffer_ptr(&kval), cast<Uint>(key.len()), io.buffer_ptr(&kb));
+            val rc = mdb_del(tp, self.dbi, io.buffer_ptr(&kval), l_null());
+            if cast<Int>(rc) == MDB_NOTFOUND { return core.Result::Ok(core.void_value()); }
+            if not l_is_ok(rc) { return core.Result::Err(lmdb_err("mdb_del", rc)); }
+            return core.Result::Ok(core.void_value());
+        }
+    }
+    pub fn exec_handle(self: &LmdbView) nothrow -> Optional<ExecHandle> {
+        // the view IS the already-routed worker-side face — see its struct comment.
+        val _ = self;
+        return Optional<ExecHandle>::None();
+    }
+}
+
+// The owning adapter: every op delegates to the one shared LmdbView body; exec_handle
+// is what routes this adapter's transactions onto its blocking executor (the scoped
+// drivers consume it — see with_read_txn/with_write_txn).
+implement Storage for LmdbStorage {
+    pub fn begin_read(self: &LmdbStorage) nothrow -> core.Result<ReadTxn, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.begin_read();
+    }
+
+    pub fn end_read(self: &LmdbStorage, txn: &ReadTxn) nothrow -> Void {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        v.end_read(txn);
+    }
+
+    pub fn begin_write(self: &LmdbStorage) nothrow -> core.Result<WriteTxn, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.begin_write();
+    }
+
+    pub fn commit_write(self: &LmdbStorage, txn: WriteTxn) nothrow -> core.Result<Void, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.commit_write(move txn);
+    }
+
+    pub fn abort_write(self: &LmdbStorage, txn: WriteTxn) nothrow -> Void {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        v.abort_write(move txn);
+    }
+
+    pub fn get(self: &LmdbStorage, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.get(txn, key);
+    }
+
+    pub fn get_in_write(self: &LmdbStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.get_in_write(txn, key);
+    }
+
+    pub fn scan(self: &LmdbStorage, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.scan(txn, move visitor);
+    }
+
+    pub fn scan_prefix(self: &LmdbStorage, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.scan_prefix(txn, prefix, move visitor);
+    }
+
+    pub fn put(self: &LmdbStorage, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.put(txn, key, value);
+    }
+
+    pub fn del(self: &LmdbStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        val v = LmdbView(env = self.env, dbi = self.dbi);
+        return v.del(txn, key);
+    }
+
+    pub fn exec_handle(self: &LmdbStorage) nothrow -> Optional<ExecHandle> {
+        return Optional::Some(ExecHandle(exec = self.exec, env = self.env, dbi = self.dbi));
+    }
+}
+
+// pre-existing resource-leak defect, found running the write-activity-api Slice 10 suite under
+// Valgrind memcheck (reproduced identically against the unmodified storage_test.drift, confirming
+// this predates and is unrelated to Slice 10 — see work/write-activity-api/leak-report.md for the
+// full writeup): `LmdbStorage.env` is a raw MDB_env* (stored as a `Uint` word, read straight out of
+// the FFI call in new_lmdb_storage — see above) with no `Destructible` impl, so `mdb_env_close` was
+// only ever called on new_lmdb_storage's OWN failure-recovery paths, never on a successfully-opened
+// handle's normal end-of-life. `implement Destructible` is opt-in in this language (see
+// std.core.Destructible's own doc comment) — nothing here is a compiler/runtime defect; this repo's
+// own code simply never wrote the missing half of the FFI resource's lifecycle. `LmdbStorage` is
+// referenced only within this module (every other file goes through the `Storage` interface, which
+// already tolerates a non-Copy concrete implementor — MemStorage isn't Copy either), so adding
+// Destructible here is a self-contained fix.
+implement core.Destructible for LmdbStorage {
+    // toolchain team review note 1 on the leak report: the spec's concrete signature is
+    // `pub fn destroy(var self: T) nothrow -> Void` (drift-lang-spec §5.11) — matching it exactly,
+    // not the `var`-less form that happened to compile. No liveness/null guard on `self.env` (review
+    // note 2): destructors run on fully-formed values only, guaranteed since 0.33.79.
+    pub fn destroy(var self: LmdbStorage) nothrow -> Void {
+        unsafe {
+            mdb_env_close(self.env);
+        }
+    }
+}

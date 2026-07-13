@@ -1,0 +1,214 @@
+// Single-file reduction attempt for E-AUTO-91e8ffe5: the dqc.storage interface shape
+// (12 methods incl. lifecycle ops taking the txn BY VALUE, scan visitors, exec_handle)
+// mirrored locally, plus the mode-switched wrapper with conditional early-returns.
+module main;
+
+import std.core as core;
+import std.format as fmt;
+import std.concurrent as conc;
+
+pub struct StorageError { pub kind: Int, pub rc: Int, pub msg: String }
+pub struct KeyValue { pub key: Array<Byte>, pub value: Array<Byte> }
+pub struct ReadTxn { id: Uint, owner: Uint, }
+pub struct WriteTxn { id: Uint, owner: Uint, }
+pub struct ExecHandle { exec: conc.BlockingExecutor, env: Uint, dbi: Uint32, }
+
+pub interface Storage {
+    fn begin_read(self: &Self) nothrow -> core.Result<ReadTxn, StorageError>;
+    fn end_read(self: &Self, txn: &ReadTxn) nothrow -> Void;
+    fn begin_write(self: &Self) nothrow -> core.Result<WriteTxn, StorageError>;
+    fn commit_write(self: &Self, txn: WriteTxn) nothrow -> core.Result<Void, StorageError>;
+    fn abort_write(self: &Self, txn: WriteTxn) nothrow -> Void;
+    fn get(self: &Self, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError>;
+    fn get_in_write(self: &Self, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError>;
+    fn scan(self: &Self, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError>;
+    fn scan_prefix(self: &Self, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError>;
+    fn put(self: &Self, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError>;
+    fn del(self: &Self, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError>;
+    fn exec_handle(self: &Self) nothrow -> Optional<ExecHandle>;
+}
+
+pub struct StubStorage { base: Int }
+
+implement Storage for StubStorage {
+    pub fn begin_read(self: &StubStorage) nothrow -> core.Result<ReadTxn, StorageError> {
+        val _ = self;
+        return core.Result::Ok(ReadTxn(id = cast<Uint>(0), owner = cast<Uint>(0)));
+    }
+    pub fn end_read(self: &StubStorage, txn: &ReadTxn) nothrow -> Void {
+        val _ = self;
+        val _ = txn;
+    }
+    pub fn begin_write(self: &StubStorage) nothrow -> core.Result<WriteTxn, StorageError> {
+        val _ = self;
+        return core.Result::Ok(WriteTxn(id = cast<Uint>(0), owner = cast<Uint>(0)));
+    }
+    pub fn commit_write(self: &StubStorage, txn: WriteTxn) nothrow -> core.Result<Void, StorageError> {
+        val _ = self;
+        val _ = txn;
+        return core.Result::Ok(core.void_value());
+    }
+    pub fn abort_write(self: &StubStorage, txn: WriteTxn) nothrow -> Void {
+        val _ = self;
+        val _ = txn;
+    }
+    pub fn get(self: &StubStorage, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+        val _ = txn;
+        val _ = key;
+        val _ = self;
+        return core.Result::Ok(Optional<Array<Byte> >::None());
+    }
+    pub fn get_in_write(self: &StubStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte>>, StorageError> {
+        val _ = txn;
+        val _ = key;
+        val _ = self;
+        return core.Result::Ok(Optional<Array<Byte> >::None());
+    }
+    pub fn scan(self: &StubStorage, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        val _ = txn;
+        val _ = self;
+        var k: Array<Byte> = [];
+        var v: Array<Byte> = [];
+        var kv = KeyValue(key = move k, value = move v);
+        val _c = visitor.call(move kv);
+        return core.Result::Ok(core.void_value());
+    }
+    pub fn scan_prefix(self: &StubStorage, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        val _ = txn;
+        val _ = prefix;
+        val _ = self;
+        var k: Array<Byte> = [];
+        var v: Array<Byte> = [];
+        var kv = KeyValue(key = move k, value = move v);
+        val _c = visitor.call(move kv);
+        return core.Result::Ok(core.void_value());
+    }
+    pub fn put(self: &StubStorage, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        val _ = txn;
+        val _ = key;
+        val _ = value;
+        val _ = self;
+        return core.Result::Ok(core.void_value());
+    }
+    pub fn del(self: &StubStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        val _ = txn;
+        val _ = key;
+        val _ = self;
+        return core.Result::Ok(core.void_value());
+    }
+    pub fn exec_handle(self: &StubStorage) nothrow -> Optional<ExecHandle> {
+        val _ = self;
+        return Optional<ExecHandle>::None();
+    }
+}
+
+const MODE_FAIL_SCAN_PREFIX: Int = 1;
+const MODE_FAIL_F_PUTS_AFTER_FIRST: Int = 2;
+
+pub struct FailState { mode: Int, fPuts: Int, }
+pub struct FailingStorage { inner: Storage, state: conc.Arc<conc.Mutex<FailState> >, }
+
+fn invocation_f_prefix() nothrow -> Array<Byte> {
+    var out: Array<Byte> = [];
+    out.push(cast<Byte>(7));
+    return move out;
+}
+fn bytes_starts_with(key: &Array<Byte>, prefix: &Array<Byte>) nothrow -> Bool {
+    if key.len() < prefix.len() { return false; }
+    var i = 0;
+    while i < prefix.len() {
+        if key[i] != prefix[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+fn injected_unavailable(what: String) nothrow -> StorageError {
+    return StorageError(kind = 6, rc = 0, msg = "injected (FailingStorage): " + (what + ""));
+}
+
+implement Storage for FailingStorage {
+    pub fn begin_read(self: &FailingStorage) nothrow -> core.Result<ReadTxn, StorageError> {
+        return self.inner.begin_read();
+    }
+    pub fn end_read(self: &FailingStorage, txn: &ReadTxn) nothrow -> Void {
+        self.inner.end_read(txn);
+    }
+    pub fn begin_write(self: &FailingStorage) nothrow -> core.Result<WriteTxn, StorageError> {
+        return self.inner.begin_write();
+    }
+    pub fn commit_write(self: &FailingStorage, txn: WriteTxn) nothrow -> core.Result<Void, StorageError> {
+        return self.inner.commit_write(move txn);
+    }
+    pub fn abort_write(self: &FailingStorage, txn: WriteTxn) nothrow -> Void {
+        self.inner.abort_write(move txn);
+    }
+    pub fn get(self: &FailingStorage, txn: &ReadTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        return self.inner.get(txn, key);
+    }
+    pub fn get_in_write(self: &FailingStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Optional<Array<Byte> >, StorageError> {
+        return self.inner.get_in_write(txn, key);
+    }
+    pub fn scan(self: &FailingStorage, txn: &ReadTxn, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        return self.inner.scan(txn, move visitor);
+    }
+    pub fn scan_prefix(self: &FailingStorage, txn: &ReadTxn, prefix: &Array<Byte>, var visitor: core.Callback1<KeyValue, Bool>) nothrow -> core.Result<Void, StorageError> {
+        // the param is moved UNCONDITIONALLY into vopt (a conditionally-moved var param trips a MIR
+        // lowering contract failure on driftc 0.33.81 — "missing binding_id for local read"); the
+        // fail branch then just drops vopt.
+        var vopt: Optional<core.Callback1<KeyValue, Bool> > = Optional::Some(move visitor);
+        var failMode = false;
+        {
+            var sh = self.state.clone();
+            var g = conc.lock(sh);
+            val fs = g.get_mut();
+            if fs.mode == MODE_FAIL_SCAN_PREFIX { failMode = true; }
+        }
+        if failMode {
+            return core.Result::Err(injected_unavailable("scan_prefix"));
+        }
+        match vopt {
+            None => { return core.Result::Err(injected_unavailable("scan_prefix (visitor unexpectedly absent)")); },
+            Some(v) => {
+                var vis = move v;
+                return self.inner.scan_prefix(txn, prefix, move vis);
+            },
+        }
+    }
+    pub fn put(self: &FailingStorage, txn: &WriteTxn, key: &Array<Byte>, value: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        var sh = self.state.clone();
+        var g = conc.lock(sh);
+        val fs = g.get_mut();
+        if fs.mode == MODE_FAIL_F_PUTS_AFTER_FIRST {
+            val fpfx = invocation_f_prefix();
+            if bytes_starts_with(key, &fpfx) {
+                fs.fPuts = fs.fPuts + 1;
+                if fs.fPuts >= 2 {
+                    return core.Result::Err(injected_unavailable("namespace-F put #" + fmt.format_int(fs.fPuts)));
+                }
+            }
+        }
+        return self.inner.put(txn, key, value);
+    }
+    pub fn del(self: &FailingStorage, txn: &WriteTxn, key: &Array<Byte>) nothrow -> core.Result<Void, StorageError> {
+        return self.inner.del(txn, key);
+    }
+    pub fn exec_handle(self: &FailingStorage) nothrow -> Optional<ExecHandle> {
+        // None => the drivers run this wrapper's transactions INLINE, so every op (including the
+        // injected failures) passes through the wrapper — the executor path would reconstruct a raw
+        // LmdbView worker-side and bypass the wrapper entirely. Test-only deviation, see header.
+        val _ = self;
+        return Optional<ExecHandle>::None();
+    }
+}
+
+
+
+pub fn main() nothrow -> Int {
+    var inner: Storage = StubStorage(base = 0);
+    var w: Storage = FailingStorage(inner = move inner, state = conc.arc(conc.mutex(FailState(mode = 0, fPuts = 0))));
+    match w.begin_read() {
+        Err(_) => { return 1; },
+        Ok(t) => { w.end_read(&t); },
+    }
+    return 0;
+}

@@ -1205,7 +1205,15 @@ class LlvmModuleBuilder:
 			ret_llty_str = "void"
 		# Use the raw function name (no Drift mangling) as the C symbol.
 		c_symbol = sig.name
-		self._extern_c_declares.append(f"declare {ret_llty_str} @{c_symbol}({params_str})")
+		decl = f"declare {ret_llty_str} @{c_symbol}({params_str})"
+		# Two modules in one compilation unit may declare the same C symbol
+		# (e.g. both declare `usleep`).  LLVM rejects a repeated `declare`
+		# for the same symbol even when identical — dedup exact repeats.
+		# A repeat with a DIFFERENT signature is a genuine conflict and is
+		# left to fail at the LLVM level as before.
+		if decl in self._extern_c_declares:
+			return
+		self._extern_c_declares.append(decl)
 
 	def ensure_comdat(self, name: str) -> None:
 		self.comdats.add(name)

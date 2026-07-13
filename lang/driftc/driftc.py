@@ -7186,12 +7186,26 @@ def compile_stubbed_funcs(
 			param_mutable = None
 			if spec.lambda_expr is not None:
 				param_mutable = {p.name: bool(getattr(p, "is_mutable", False)) for p in spec.lambda_expr.params}
+			# A lambda hoisted out of a generic INSTANTIATION is re-checked
+			# as a standalone function, but its body may still name the
+			# enclosing template's type params (e.g. `core.Result<R, Int>`
+			# in a match arm).  The origin's TypedFn records the
+			# name→TypeId bindings its body was checked under
+			# (`preseed_type_params`); without forwarding them the lambda
+			# body resolves `R` as an unknown nominal and the arm type
+			# diverges from the concrete declared signature (the SSA
+			# return-type contract ICE).  Forwarding is transitive for
+			# nested lambdas: this lambda's TypedFn records the same map.
+			origin_preseed_type_params = dict(
+				getattr(origin_typed, "preseed_type_params", None) or {}
+			) if origin_typed is not None else {}
 			hidden_typed = type_checker.check_function(
 				fn_id=spec.fn_id,
 				body=lambda_body,
 				param_types=param_types,
 				param_mutable=param_mutable,
 				return_type=spec.return_type_id,
+				preseed_type_params=origin_preseed_type_params or None,
 				signatures_by_id=signatures_by_id,
 				function_keys_by_fn_id=function_keys_by_fn_id,
 				callable_registry=callable_registry,
@@ -7683,12 +7697,22 @@ def compile_stubbed_funcs(
 		param_mutable = None
 		if spec.lambda_expr is not None:
 			param_mutable = {p.name: bool(getattr(p, "is_mutable", False)) for p in spec.lambda_expr.params}
+		# Forward the origin function's type-param bindings, mirroring the
+		# hidden-lambda loop above: a captureless lambda inside a generic
+		# instantiation may name the template's type params in its body.
+		_cl_origin_typed = (
+			typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
+		)
+		_cl_origin_preseed = dict(
+			getattr(_cl_origin_typed, "preseed_type_params", None) or {}
+		) if _cl_origin_typed is not None else {}
 		lambda_result = type_checker.check_function(
 			fn_id=spec.fn_id,
 			body=lambda_body,
 			param_types=param_types,
 			param_mutable=param_mutable,
 			return_type=spec.return_type,
+			preseed_type_params=_cl_origin_preseed or None,
 			signatures_by_id=signatures_by_id,
 			function_keys_by_fn_id=function_keys_by_fn_id,
 			callable_registry=callable_registry,

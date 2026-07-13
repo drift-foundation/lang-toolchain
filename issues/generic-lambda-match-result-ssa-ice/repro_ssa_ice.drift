@@ -1,0 +1,35 @@
+// ICE reduction attempt 2: the drift-query Slice 12 driver shape, minus the executor —
+// a generic fn whose boxed lambda matches a Result and returns core.Result<R,...> from
+// one arm and a moved body-result from the other. cb.call() invoked directly.
+module main;
+
+import std.core as core;
+
+struct T { id: Uint }
+
+fn begin_t() nothrow -> core.Result<T, Int> {
+	return core.Result::Ok(T(id = cast<Uint>(7)));
+}
+
+fn f<R>(var body: core.Callback1<&T, core.Result<R, Int>>) nothrow -> core.Result<R, Int> {
+	var cb = core.callback0(|| captures(move body) => {
+		match begin_t() {
+			Err(e) => { return core.Result<R, Int>::Err(e); },
+			Ok(t) => {
+				val out = body.call(&t);
+				return move out;
+			},
+		}
+	});
+	return cb.call();
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	match f(core.callback1(| t: &T | => { return core.Result<Int, Int>::Ok(cast<Int>(t.id)); })) {
+		core.Result::Ok(v) => {
+			if v == 7 { return 0; }
+			return 2;
+		},
+		core.Result::Err(_) => { return 1; },
+	}
+}

@@ -1,0 +1,25 @@
+// ICE reduction attempt 1: match naming core.Result<R,...> inside a boxed lambda
+// in a generic function.
+module main;
+
+import std.core as core;
+
+fn f<R>(var body: core.Callback0<core.Result<R, Int>>) nothrow -> core.Result<R, Int> {
+	var cb = core.callback0(|| captures(move body) => {
+		match body.call() {
+			core.Result::Err(e) => { return core.Result<R, Int>::Err(e); },
+			core.Result::Ok(v) => { return core.Result<R, Int>::Ok(move v); },
+		}
+	});
+	return cb.call();
+}
+
+pub fn main(argv: Array<String>) nothrow -> Int {
+	match f(core.callback0(|| => { return core.Result<Int, Int>::Ok(41); })) {
+		core.Result::Ok(v) => {
+			if v == 41 { return 0; }
+			return 2;
+		},
+		core.Result::Err(_) => { return 1; },
+	}
+}
