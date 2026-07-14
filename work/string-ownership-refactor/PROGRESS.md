@@ -1085,3 +1085,76 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   tripwired-or-siteless; 4a′/4b′ branch deletion awaits one clean cert
   cycle with zero firings; next campaign steps per SLICE4B-INVENTORY §4
   (temp_lastuse migration measurement first).
+- 2026-07-14: **temp_lastuse_release measurement checkpoint COMPLETE
+  (report-only) — TLR-MEASUREMENT.md; STOPPED for TLR-1 approval.** Method:
+  one scratch corpus run with temporary producer tagging; tree restored
+  byte-identical (git diff empty; reporter 26/26); scratch run itself
+  universe-identical 924/344/49, exit 0, all nine gates zero, buckets sum
+  losslessly to 618,744. FINDINGS: (1) split settled BY CONSTRUCTION —
+  100% _note_use, 0% _ensure_owned (post-4b any proven-String _ensure_owned
+  call trips; green 4b acceptance = zero such releases; corollary:
+  _ensure_owned's release arm is dead-in-effect → joins 4b′ deletion).
+  (2) only 2 of 37 _note_use sites can release (consume=False: the generic
+  instruction fallthrough + non-Return terminator operands) — the class is
+  precisely "owned creator temps whose LAST use is non-consuming" (concat
+  chains, comparisons). (3) producer histogram: ConstString 286,424 /
+  StringConcat 192,523 / Call 114,780 / CopyValue 11,095 (string_stakes
+  over-staking churn signal, sub-finding) / cross-block 'none' 7,398 /
+  StringFrom* 6,479 / Exc* 45. (4) ledger does NOT model SSA temp
+  lifetimes (named locals only) — migration = B-arch play: a pre-ledger
+  release-materialization pass, then tripwire, then delete.
+  PROPOSAL TLR-1 (smallest): materialize block-local ConstString last-use
+  releases under a NEW site class; sum-conservation acceptance
+  (temp_lastuse −N, materialized +N, all else +0), output-MIR identity pin,
+  memcheck in gate; stop triggers incl. non-conservation and any
+  cross-scope touch. 4a′/4b′ deletion still awaits a clean cert cycle.
+- 2026-07-14: **TLR-1 design REVISED per review (stop/report — no
+  implementation).** The review blocker acknowledged: "pre-ledger pass" and
+  "byte-identical" were contradictory (a pre-ledger pass changes the ledger
+  snapshot and downstream inputs). Revised design appended to
+  TLR-MEASUREMENT.md: **option B chosen** — an in-string_arc classification
+  SHIM at the single `_note_use` release point. Answers on record: (1) pass
+  order/ledger UNCHANGED (no new pass, no rebuild — the snapshot is
+  bit-for-bit today's); (2) double-release vacuous (one author; the
+  question becomes real only in TLR-2's extraction and lives in ITS design
+  gate); (3) output MIR BYTE-IDENTICAL by identity (only the env-gated
+  audit tag differs) + output-MIR pin; (4) new
+  SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE joins the closed enumeration +
+  finalize's _counted_only (RELEASE-kind: C1/C2/C3 untouched; events +0);
+  (5) smallest non-vacuous pin: one fn, both split directions (ConstString
+  temps at a StringEq → materialized; a Concat-result temp and a
+  cross-block ConstString → stay temp_lastuse) + release-position identity.
+  Qualification predicate needs NO new analysis: the per-block producers
+  map + the existing live_out guard already imply block-locality, so the
+  expected transfer is EXACTLY the measured 286,424 (deviation = finding,
+  not tolerance). TLR-2 (extraction, placement A: late pass immediately
+  before string_arc, ledger rebuilt after, recognition handshake,
+  behavior-equivalent not byte-identical) gets its own design gate.
+  Awaiting TLR-1 approval.
+- 2026-07-14: **TLR-1 LANDED (option-B shim, per approved revised design + 2
+  review tightenings) — acceptance EXACT; STOPPED for review.**
+  Implementation: classification split at `_note_use`'s single release point
+  — `isinstance(producers.get(val), M.ConstString)` selects the NEW
+  `materialized_lastuse_release` tag; the SAME StringRelease is emitted on
+  the SAME path at the SAME position, unconditionally. No new pass, no
+  ledger change, no pipeline-order change; output MIR byte-identical by
+  identity (env-gated audit tag is the only difference).
+  TIGHTENINGS APPLIED: (1) TLR-MEASUREMENT.md §5's pre-ledger-pass sketch
+  struck through and marked SUPERSEDED in place (single authoritative plan);
+  (2) NEW reporter pin `test_materialized_lastuse_is_closed_counted_only`
+  (member of the closed enumeration, counted-only: not UNTAGGED, not
+  UNCLASSIFIED, no C1/C2/C3 entry).
+  Handshake pin `test_tlr1_shim_splits_and_emission_is_identical`: both
+  split directions (block-local ConstStrings at a StringEq → materialized
+  ×4; a Concat-result temp AND a cross-block ConstString → temp_lastuse ×2)
+  + release-position identity in the OUTPUT MIR.
+  Batteries: reporter 28/28; stage2+guardrails 352/352; FULL memcheck
+  98 + 1 skip.
+  ACCEPTANCE (build/tmp/cleanup-tlr1 vs cleanup-4b, tool v1.6.0, exit 0):
+  temp_lastuse_release 618,744 → 332,320 (−286,424);
+  materialized_lastuse_release +286,424 — EXACTLY the measured ConstString
+  bucket, zero deviation; events +0; EVERY other counter +0; universe
+  identical 924/344/49; all nine hard gates zero. New phase reference:
+  cleanup-tlr1. The shim's tag boundary is now the corpus-proven ownership
+  boundary for the TLR-2 extraction pass (separate design gate; NOT
+  started, per instruction).

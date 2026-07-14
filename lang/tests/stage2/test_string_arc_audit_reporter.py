@@ -884,6 +884,99 @@ def test_destructor_self_tag_is_untagged() -> None:
 	assert audit.events[0].site_class.startswith("UNTAGGED:")
 
 
+def test_tlr1_shim_splits_and_emission_is_identical(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-1 option-B shim, both split directions + emission identity:
+	- ConstString temps last-used NON-consumingly (StringEq operands, a
+	  generic-fallthrough consumer) → `materialized_lastuse_release`;
+	- a StringConcat-result temp used the same way → stays
+	  `temp_lastuse_release` (producer not ConstString);
+	- a ConstString produced in ANOTHER block, last-used here → stays
+	  `temp_lastuse_release` (the per-block producers map resolves it to
+	  none — the cross-block tail is NOT claimed by the shim);
+	- each StringRelease sits immediately after its temp's last-use
+	  instruction — the same positions the pre-shim code emitted."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	bool_ty = tt.ensure_bool()
+	func = _make_func("tlr", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%x1", value="a"),   # cross-block producer
+	]
+	entry.terminator = M.Goto(target="body")
+	body = M.BasicBlock(name="body")
+	body.instructions = [
+		M.ConstString(dest="%c1", value="a"),
+		M.ConstString(dest="%c2", value="b"),
+		M.StringEq(dest="%e1", left="%c1", right="%c2"),      # last use of %c1, %c2
+		M.ConstString(dest="%c3", value="c"),
+		M.ConstString(dest="%c4", value="d"),
+		M.StringConcat(dest="%cc", left="%c3", right="%c4"),  # consumes-by-fallthrough %c3, %c4
+		M.StringEq(dest="%e2", left="%cc", right="%x1"),      # last use of %cc (Concat) and %x1 (cross-block)
+	]
+	body.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "body": body}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::tlr")
+	# Split: %c1, %c2, %c3, %c4 are block-local ConstString → materialized;
+	# %cc (Concat producer) and %x1 (cross-block producer) → temp_lastuse.
+	assert agg.get("site_class:materialized_lastuse_release") == 4, agg
+	assert agg.get("site_class:temp_lastuse_release") == 2, agg
+	# Closed/counted-only: nothing UNTAGGED, nothing UNCLASSIFIED.
+	assert "untagged" not in agg, agg
+	assert agg.get("unclassified", 0) == 0, agg
+	# Emission identity: each temp's StringRelease sits immediately after
+	# its last-use instruction in the OUTPUT MIR.
+	out_body = func.blocks["body"].instructions
+	def _release_follows(last_use_pred, subjects):
+		for i, ins in enumerate(out_body):
+			if last_use_pred(ins):
+				trailing = set()
+				j = i + 1
+				while j < len(out_body) and type(out_body[j]).__name__ == "StringRelease":
+					trailing.add(out_body[j].value)
+					j += 1
+				assert subjects <= trailing, (subjects, trailing, out_body)
+				return
+		raise AssertionError("last-use instruction not found in output MIR")
+	_release_follows(lambda ins: type(ins).__name__ == "StringEq" and getattr(ins, "dest", None) == "%e1", {"%c1", "%c2"})
+	_release_follows(lambda ins: type(ins).__name__ == "StringEq" and getattr(ins, "dest", None) == "%e2", {"%cc", "%x1"})
+
+
+def test_materialized_lastuse_is_closed_counted_only() -> None:
+	"""Reporter contract pin (review tightening): the new
+	`materialized_lastuse_release` class is a member of the closed
+	enumeration (not UNTAGGED) and is counted-only — it does not enter
+	C1 (not a scope_exit_release), C2 (not RETAIN-kind), C3 (not
+	MOVEOUT-kind), and never lands in UNCLASSIFIED."""
+	assert R.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE in R.STRING_ARC_SITE_CLASSES
+	tt = TypeTable()
+	func = _string_shuffle_func(tt)
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+	audit = R.StringArcAudit("test::mcl")
+	audit.note(
+		R.STAKE_RELEASE, ".t7", R.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
+		pre_point=("entry", 0), post_point=("entry", 0),
+	)
+	# A return boundary so the C1 comparison actually runs.
+	boundary = ("entry", len(func.blocks["entry"].instructions))
+	audit.note_return_boundary(boundary, string_locals=["x"], skipped=["x"])
+	agg = audit.finalize(l_pre=l_pre, l_post=None, needs_drop=lambda _l: True)
+	assert audit.untagged == 0
+	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
+	assert agg.get(R.DIV_UNCLASSIFIED, 0) == 0, agg
+	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
+	assert agg.get("c3_moveout_not_owned", 0) == 0, agg
+	assert agg.get("c3_moveout_owned", 0) == 0, agg
+	# C1 saw only the boundary bookkeeping, not the release event.
+	assert agg.get(R.DIV_C1_RELEASE_WITHOUT_MUST_DROP, 0) == 0, agg
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

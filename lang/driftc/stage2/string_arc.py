@@ -958,9 +958,21 @@ def insert_string_arc(
 				return
 			if use_counts[val] == 0 and val in owned_values and val not in live_out.get(block.name, set()):
 				if _audit is not None:
+					# TLR-1 (option-B shim): classification split ONLY —
+					# the SAME StringRelease is emitted on the SAME path
+					# at the SAME position below.  Block-local ConstString
+					# temps (the per-block producers map implies co-block
+					# production; the live_out guard above implies the
+					# temp is dead after this block) are the TLR-2
+					# extraction pass's future ownership boundary.
+					_tlr_cls = (
+						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE
+						if isinstance(producers.get(val), M.ConstString)
+						else _ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE
+					)
 					_audit.note(
 						_ledger_reporter.STAKE_RELEASE, val,
-						_ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE,
+						_tlr_cls,
 						pre_point=_audit_point[0],
 						post_point=(block.name, len(new_instrs)),
 					)

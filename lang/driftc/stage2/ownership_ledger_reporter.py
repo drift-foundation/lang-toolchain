@@ -327,6 +327,13 @@ SITE_CLASS_RETURN_RETAIN_SITE3 = "return_retain_site3"
 SITE_CLASS_OVERWRITE_RELEASE = "overwrite_release"
 SITE_CLASS_SCOPE_EXIT_RELEASE = "scope_exit_release"
 SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
+# TLR-1 (2026-07-14, option-B shim): the block-local-ConstString subset of
+# temp last-use releases, tagged at the SAME emission point with the SAME
+# instruction — only the audit classification differs.  This is the
+# counter split that precedes the TLR-2 extraction (a real pass with its
+# own design gate); the tag boundary IS the future pass's ownership
+# boundary.  Counted-only, exactly like temp_lastuse_release.
+SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE = "materialized_lastuse_release"
 SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 = "drop_before_overwrite_site4"
 SITE_CLASS_MOVEOUT_EXPANSION = "moveout_expansion"
 SITE_CLASS_DESTRUCTOR_SELF = "destructor_self"
@@ -339,6 +346,7 @@ STRING_ARC_SITE_CLASSES = frozenset({
 	SITE_CLASS_OVERWRITE_RELEASE,
 	SITE_CLASS_SCOPE_EXIT_RELEASE,
 	SITE_CLASS_TEMP_LASTUSE_RELEASE,
+	SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
 	SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
 	SITE_CLASS_MOVEOUT_EXPANSION,
 	# SITE_CLASS_DESTRUCTOR_SELF retired (slice 4b) — see the
@@ -821,6 +829,7 @@ class StringArcAudit:
 		# boundaries).
 		_counted_only = {
 			SITE_CLASS_TEMP_LASTUSE_RELEASE,
+			SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
 			SITE_CLASS_OVERWRITE_RELEASE,
 			SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
 			SITE_CLASS_SCOPE_EXIT_RELEASE,
