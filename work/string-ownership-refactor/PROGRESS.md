@@ -1039,3 +1039,49 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   (2) deletion-campaign consequence: the return-boundary array sweep is now
   PATH_DEPENDENT-only — a future slice can either flag-model those 4,620 or
   fold the sweep into cleanup_authoring, then delete `_drop_all_arrays`.
+- 2026-07-14: **Deletion-campaign checkpoint (report-only) — SLICE4B-INVENTORY.md
+  written; STOPPED for approval.** Inventory from the committed
+  cleanup-arrelide reference: corpus-zero retain fallbacks remaining =
+  call_arg_retain (3 sites), value_position_retain (9 sites: 2 explicit +
+  7 default-class), return_retain_site3 (1 site, audit already loud), all
+  funneling through _ensure_owned's SINGLE terminal StringRetain;
+  destructor_self has NO emission site (enumeration residue). Live classes:
+  temp_lastuse_release 618,744 / overwrite_release 233,519 /
+  scope_exit_release 68,562 (String, post-elision) / scope_exit_arraydrop
+  4,620 (all path-dependent) / site4 14; moveout_expansion 1,851,213
+  structural (B-repr). PROPOSAL (smallest slice, "4b"): central retain-arm
+  tripwire in _ensure_owned (converts all 3 corpus-zero classes at once,
+  preserving move pre-checks, untyped pass-through, and last-use-release
+  bookkeeping — the 4a two-arm lesson) + retire destructor_self from the
+  closed enumeration (future use → UNTAGGED, already a hard gate). Expected
+  acceptance: EVERY counter +0 vs cleanup-arrelide, gates zero; trigger
+  pins per class + UNTAGGED pin; memcheck in gate; optional site-class gate
+  promotion. NOT in 4b: 4a′ deletion of tripwired store_value branches
+  (awaits cert cycle); all live-class migrations (sequenced in the report).
+- 2026-07-14: **Slice 4b LANDED (per approved SLICE4B-INVENTORY.md + 3 review
+  amendments) — every remaining late-retain class fail-closed; STOPPED for
+  review.** Implementation: `_ensure_owned`'s terminal StringRetain replaced
+  by the shared `_dead_stake_tripwire` — fail-closing call_arg_retain
+  (3 sites), value_position_retain (9 sites), return_retain_site3 (1 site)
+  at their single funnel; move/owned pre-checks, the untyped pass-through,
+  and the LIVE last-use-release bookkeeping untouched (4a two-arm lesson).
+  AMENDMENTS APPLIED: (1) hard-gate promotion MANDATORY — the four
+  site_class:* retain counters joined HARD_GATES (tool v1.6.0; protects
+  against tripwire bypasses and direct audit notes); (2) tripwire
+  docstring/message + intake doc generalized to the shared 4a/4b wording;
+  (3) destructor_self RETIRED from STRING_ARC_SITE_CLASSES with the
+  "retained for completeness" comment rewritten (constant kept for
+  historical parsing; any future use → UNTAGGED, already gated).
+  PINS: +4 — synthetic trigger per family (call_arg via CallIndirect
+  param_types; value_position via ArrayLit view element; return_site3 via a
+  LoadRef view the alias walk cannot approve) + destructor_self-is-UNTAGGED.
+  Batteries: reporter 26/26; stage2+guardrails+gate-pins 357/357; FULL
+  memcheck 98 + 1 skip.
+  ACCEPTANCE (build/tmp/cleanup-4b vs cleanup-arrelide, tool v1.6.0,
+  exit 0): universe identical 924/344/49; EVERY counter +0; all NINE hard
+  gates zero on the new side (four new site-class gates active). New phase
+  reference: cleanup-4b.
+  DELETION LADDER STATE: all five late-retain classes now
+  tripwired-or-siteless; 4a′/4b′ branch deletion awaits one clean cert
+  cycle with zero firings; next campaign steps per SLICE4B-INVENTORY §4
+  (temp_lastuse migration measurement first).

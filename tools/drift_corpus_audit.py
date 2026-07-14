@@ -45,7 +45,7 @@ import tempfile
 import time
 from pathlib import Path
 
-TOOL_VERSION = "1.5.0"
+TOOL_VERSION = "1.6.0"
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 
@@ -76,6 +76,14 @@ HARD_GATES = (
 	# unpaired re-move of consumed storage — the zero-read bug class —
 	# and fails the corpus loudly.
 	"c3_moveout_not_owned",
+	# Promoted 2026-07-14 with slice 4b: every late-retain stake class
+	# is fail-closed at emission (the shared dead-stake tripwire), so a
+	# nonzero counter here means an emission BYPASSED the tripwire (or
+	# a direct audit note reintroduced the class) — gate it regardless.
+	"site_class:store_value_retain",
+	"site_class:call_arg_retain",
+	"site_class:value_position_retain",
+	"site_class:return_retain_site3",
 )
 
 

@@ -312,11 +312,14 @@ STAKE_MOVEOUT_EXPANSION = "MOVEOUT_EXPANSION"
 # `_ensure_owned`/`_note_use`), `store_value_retain` (stake for the copy
 # written by StoreLocal/StoreRef/ArrayIndexStore), and
 # `value_position_retain` (ctor/exc-ABI/array-elem value positions) were
-# added because real emission sites did not fit the draft tags;
-# `destructor_self` is retained for completeness but is structurally
-# unused since Phase 4 site-3 sub-step 2 retired the site-local
-# destructor-self path.  A note() with a tag outside this set is counted
-# UNTAGGED — itself a finding.
+# added because real emission sites did not fit the draft tags.
+# `destructor_self` was RETIRED from the closed set in slice 4b
+# (2026-07-14): it had NO emission site anywhere (structurally unused
+# since Phase 4 site-3 sub-step 2 retired the site-local
+# destructor-self path), so keeping it in the enumeration only kept a
+# dead tag acceptable.  The constant remains defined for historical
+# aggregate parsing; any future note() with it — like any tag outside
+# this set — is counted UNTAGGED, which is a hard corpus gate.
 SITE_CLASS_CALL_ARG_RETAIN = "call_arg_retain"
 SITE_CLASS_STORE_VALUE_RETAIN = "store_value_retain"
 SITE_CLASS_VALUE_POSITION_RETAIN = "value_position_retain"
@@ -338,7 +341,8 @@ STRING_ARC_SITE_CLASSES = frozenset({
 	SITE_CLASS_TEMP_LASTUSE_RELEASE,
 	SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
 	SITE_CLASS_MOVEOUT_EXPANSION,
-	SITE_CLASS_DESTRUCTOR_SELF,
+	# SITE_CLASS_DESTRUCTOR_SELF retired (slice 4b) — see the
+	# enumeration comment above.
 })
 
 # Divergence classes (closed set, plan §11.2).

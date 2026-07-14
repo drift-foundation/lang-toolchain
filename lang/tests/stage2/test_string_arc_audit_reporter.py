@@ -786,6 +786,104 @@ def test_c3_catch_binder_dead_cleanup_drop_is_zero_safe(monkeypatch, tmp_path: P
 	assert agg.get(R.AGREE_C3_ZERO_SAFE, 0) >= 2, agg
 
 
+def _view_prelude(tt: TypeTable):
+	"""[ConstString %c, StoreLocal x %c, LoadLocal %v x] — `%v` is a
+	proven-String VIEW (LoadLocal dests are discarded from owned_values),
+	so any late-retain consumer of it reaches `_ensure_owned`'s
+	fail-closed retain arm."""
+	string_ty = tt.ensure_string()
+	instrs = [
+		M.ConstString(dest="%c", value="a"),
+		M.StoreLocal(local="x", value="%c"),
+		M.LoadLocal(dest="%v", local="x"),
+	]
+	return string_ty, instrs
+
+
+def _expect_tripwire(func, tt, site_class: str) -> str:
+	_attach_ledger(func)
+	try:
+		insert_string_arc(func, type_table=tt, fn_infos={})
+	except AssertionError as err:
+		msg = str(err)
+		assert f"string_arc dead-stake tripwire [{site_class}]" in msg, msg
+		assert "issues/string-arc-dead-stake-tripwire/" in msg, msg
+		return msg
+	raise AssertionError(f"{site_class} late-retain arm did not trip")
+
+
+def test_dead_call_arg_stake_tripwire_fires(monkeypatch) -> None:
+	"""Slice 4b: a proven-String VIEW at a by-value String call arg —
+	the call_arg_retain fallback — is fail-closed."""
+	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
+	tt = TypeTable()
+	string_ty, instrs = _view_prelude(tt)
+	func = _make_func("twc", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = instrs + [
+		M.CallIndirect(dest=None, callee="%f", args=["%v"],
+			param_types=[string_ty], user_ret_type=tt.ensure_void(),
+			can_throw=False),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_expect_tripwire(func, tt, "call_arg_retain")
+
+
+def test_dead_value_position_stake_tripwire_fires(monkeypatch) -> None:
+	"""Slice 4b: a proven-String VIEW as an array-literal element — a
+	value_position_retain (default-class) fallback — is fail-closed."""
+	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
+	tt = TypeTable()
+	string_ty, instrs = _view_prelude(tt)
+	arr_ty = tt.new_array(string_ty)
+	func = _make_func("twv", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = instrs + [
+		M.ArrayLit(dest="%a", elem_ty=string_ty, elements=["%v"]),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_expect_tripwire(func, tt, "value_position_retain")
+
+
+def test_dead_return_site3_stake_tripwire_fires(monkeypatch) -> None:
+	"""Slice 4b: a proven-String VIEW as the returned value that no
+	move rule approves — the structurally-extinct return_retain_site3
+	fallback — is fail-closed."""
+	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("twr", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	# A LoadRef view: the site-3 alias walk only approves plain
+	# LoadLocal chain endpoints (can_move_from_skipped_local), so a
+	# ref-loaded String value falls through to the retain arm.
+	entry.instructions = [
+		M.ConstString(dest="%c", value="a"),
+		M.StoreLocal(local="x", value="%c"),
+		M.AddrOfLocal(dest="%p", local="x", is_mut=False),
+		M.LoadRef(dest="%v", ptr="%p", inner_ty=string_ty),
+	]
+	entry.terminator = M.Return(value="%v")
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_expect_tripwire(func, tt, "return_retain_site3")
+
+
+def test_destructor_self_tag_is_untagged() -> None:
+	"""Slice 4b enumeration retirement: `destructor_self` has no
+	emission site anywhere; a note() carrying it now lands in UNTAGGED —
+	already a hard corpus gate — instead of a dead accepted tag."""
+	audit = R.StringArcAudit("test::ds")
+	audit.note(R.STAKE_RETAIN, "%v", R.SITE_CLASS_DESTRUCTOR_SELF,
+		pre_point=("b", 0), post_point=("b", 0))
+	assert audit.untagged == 1
+	assert audit.events[0].site_class.startswith("UNTAGGED:")
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

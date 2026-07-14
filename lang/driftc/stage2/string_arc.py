@@ -317,17 +317,22 @@ def insert_string_arc(
 				out.append(M.StringRelease(value=val))
 				owned.discard(val)
 				move_only_values.discard(val)
-		tmp = _new_temp()
-		if _audit is not None:
-			_audit.note(
-				_ledger_reporter.STAKE_RETAIN, val, site_class,
-				pre_point=_audit_point[0],
-				post_point=(block.name, len(out)),
-			)
-		out.append(M.StringRetain(dest=tmp, value=val))
-		local_types[tmp] = string_ty
-		owned.add(tmp)
-		return tmp
+		# Slice 4b: the terminal late-retain arm — reached only for a
+		# PROVEN-String value that no move/owned pre-check approved —
+		# is corpus-zero for EVERY remaining site class funneling here
+		# (call_arg_retain, value_position_retain, return_retain_site3;
+		# store_value_retain was rerouted to its own tripwires in 4a)
+		# and is now fail-closed.  The untyped pass-through above and
+		# the last-use RELEASE bookkeeping (live, temp_lastuse_release)
+		# are intentionally untouched — the 4a two-arm lesson.
+		_dead_stake_tripwire(
+			val,
+			site_class=site_class,
+			target=f"late-retain consume ({site_class})",
+			block_name=block.name,
+			idx=_audit_point[0][1],
+		)
+		return val  # unreachable — _dead_stake_tripwire always raises
 
 	def _dead_stake_tripwire(
 		val: str,
@@ -337,13 +342,18 @@ def insert_string_arc(
 		block_name: str,
 		idx: int,
 	) -> None:
-		"""Slice 4a fail-closed tripwire: this stake class is corpus-zero
-		(B-arch-1d drove store_value_retain 7,624 → 0; the C2 ZeroValue
-		fix removed the last wild carrier) and its fallback is now a
-		loud, structured internal error pending deletion after a clean
-		cert cycle.  The AssertionError is converted to a clean
-		`internal:` diagnostic at the driver's string_arc boundary —
-		operators never see a Python traceback."""
+		"""Shared dead-stake tripwire (string-cleanup slices 4a/4b):
+		every LATE-RETAIN stake class string_arc could still emit —
+		store_value_retain (4a: rerouted store arms), call_arg_retain,
+		value_position_retain, return_retain_site3 (4b: the central
+		`_ensure_owned` retain arm) — is corpus-zero (B-arch drove the
+		inventory 114,107 → 0; the C2 ZeroValue fix removed the last
+		wild carrier) and fail-closed pending deletion after a clean
+		cert cycle.  Only the PROVEN-String retain arm trips; untyped
+		pass-through and move/owned pre-checks are untouched.  The
+		AssertionError is converted to a clean `internal:` diagnostic
+		at the driver's string_arc boundary — operators never see a
+		Python traceback."""
 		producer = "unknown"
 		_blk = func.blocks.get(block_name)
 		if _blk is not None:
@@ -356,7 +366,7 @@ def insert_string_arc(
 			f"fn '{func.name}', block '{block_name}'[{idx}], "
 			f"value '{val}' -> {target}, producer={producer}. "
 			f"This stake class is corpus-zero and fail-closed pending "
-			f"deletion (string-cleanup slice 4a). A firing on real "
+			f"deletion (string-cleanup slices 4a/4b). A firing on real "
 			f"source is a LANGUAGE_BUG: file "
 			f"issues/string-arc-dead-stake-tripwire/ with the compiling "
 			f"source and this full message."

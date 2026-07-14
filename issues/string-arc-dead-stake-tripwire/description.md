@@ -3,13 +3,15 @@ Summary: intake for firings of the string_arc dead-stake tripwire
 tripwire [<site-class>]: ...)`)
 
 What this error means
-- `string_arc`'s store-path stake fallback (`_ensure_owned` with site class
-  `store_value_retain`) is FAIL-CLOSED as of string-cleanup slice 4a
-  (2026-07-13): the RETAIN arm of that fallback — reached only for a
-  proven-String stored value that is neither move-only nor an owned
-  single-use temp — was driven to zero corpus-wide (B-arch-1d, 7,624 → 0;
-  the C2 ZeroValue fix removed the last wild carrier) and is scheduled for
-  deletion after a clean certification cycle.
+- EVERY late-retain stake class `string_arc` could still emit is
+  FAIL-CLOSED: `store_value_retain` (slice 4a, 2026-07-13: the three store
+  arms) and `call_arg_retain` / `value_position_retain` /
+  `return_retain_site3` (slice 4b, 2026-07-14: the central `_ensure_owned`
+  retain arm).  Each RETAIN arm — reached only for a proven-String value
+  that no move/owned pre-check approved — was driven to zero corpus-wide
+  (B-arch, 114,107 → 0; the C2 ZeroValue fix removed the last wild
+  carrier) and is scheduled for deletion after a clean certification
+  cycle.
 - A firing therefore means the compiler reached a stake-emission path that
   the whole 924-fixture corpus plus a full cert cycle claimed unreachable:
   a LANGUAGE_BUG in stake classification (string_stakes/string_arc
