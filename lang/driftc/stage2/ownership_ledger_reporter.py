@@ -374,8 +374,13 @@ DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
 #    ledger's CFG walk (population C: dead catch machinery from
 #    `try <nothrow-expr> catch`).  state_pre's UNINIT there is a
 #    fallback, not a verdict; counted separately, never divergent.
-# Raw MOVED_OUT re-moves (population E) intentionally remain
-# DIV_C3_MOVEOUT_NOT_OWNED pending individual triage.
+# Raw MOVED_OUT (E-triage resolution, 2026-07-13): a MOVED_OUT MoveOut
+# WITH the immediate-DropValue pairing is a compiler-authored dead drop
+# of zero-backed storage (shape 3) → AGREE_C3_ZERO_SAFE.  An UNPAIRED
+# MOVED_OUT re-move (store/call/scrutinee consumer — the shapes-1/2
+# value-corruption class, fixed at the source in 0.33.83) stays
+# DIV_C3_MOVEOUT_NOT_OWNED, which is a HARD corpus gate as of the
+# shape-3 close-out.
 AGREE_C3_FLAG_GUARDED = "c3_moveout_flag_guarded"
 AGREE_C3_ZERO_SAFE = "c3_moveout_zero_safe"
 OBS_C3_UNREACHABLE_BLOCK = "c3_moveout_unreachable_block"
@@ -762,6 +767,18 @@ class StringArcAudit:
 				# Population D: the lattice's own tombstone guarantee —
 				# zero/tombstone bytes were written in place; moving
 				# them is a byte-copy of drop-safe storage.
+				_bump(agg, AGREE_C3_ZERO_SAFE)
+			elif raw is LiveState.MOVED_OUT and ev.moveout_feeds_drop:
+				# E-triage shape 3 (2026-07-13, post shapes-1/2 fixes):
+				# a MoveOut of MOVED_OUT storage that feeds an
+				# IMMEDIATELY-FOLLOWING DropValue is a compiler-authored
+				# dead drop of zero-backed bytes (the MoveOut expansion
+				# zero-stores; zeroed bytes are drop-safe by the global
+				# ZeroValue convention) — e.g. the catch-arm binder
+				# cleanup after a user `move e`.  The DROP PAIRING is
+				# load-bearing: an unpaired MOVED_OUT re-move (a
+				# store/call/scrutinee consumer — the shapes-1/2 bug
+				# class) stays divergent below.
 				_bump(agg, AGREE_C3_ZERO_SAFE)
 			elif (
 				raw is LiveState.MAYBE_UNINIT

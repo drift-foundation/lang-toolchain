@@ -982,3 +982,28 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   classification, &IoError predicate signatures + auto-borrow note,
   E_USE_AFTER_MOVE restructuring guidance, bare-match stays legal/consuming).
   Pins re-run 7/7.
+- 2026-07-13: **Shape 3 CLOSED — C3 divergence at TRUE ZERO and promoted to
+  HARD GATE.** Reporter-only ladder extension per instruction: raw MOVED_OUT
+  classifies `c3_moveout_zero_safe` ONLY with the immediate-DropValue pairing
+  (the snapshotted `moveout_feeds_drop` fact) — the compiler-authored dead
+  drop of zero-backed storage (catch-binder cleanup after a user move).
+  UNPAIRED MOVED_OUT re-moves (the shapes-1/2 store/call/scrutinee
+  value-corruption class, source-fixed in 0.33.83) remain divergent — pinned
+  both ways (paired → zero_safe; unpaired + zero-safe-predicate-true →
+  DIVERGENT: the pairing is load-bearing and the predicate cannot substitute).
+  Pins: ladder pin reworked + NEW end-to-end catch-binder pin
+  (materialize → user move → authored MoveOut(e)+DropValue → reclassifies;
+  fn-level c3_moveout_not_owned == 0). Reporter battery 21/21; stage2 FULL
+  334/334; tool pins 7/7.
+  GATE PROMOTION: `c3_moveout_not_owned` added to HARD_GATES
+  (tools/drift_corpus_audit.py, tool v1.5.0 — gate-set change only;
+  acquisition semantics unchanged).
+  ACCEPTANCE (build/tmp/cleanup-shape3 vs cleanup-efix, exit 0, gate ACTIVE
+  on the new side): universe identical 924/344/49; c3_moveout_not_owned
+  1 → 0 (−1); c3_moveout_zero_safe +1 (the exact event); EVERY other counter
+  +0. New phase reference: cleanup-shape3, manifest sha256
+  3537978414a59214dc37de058fc8c8d7d9025ecb57c068d836f4e4b7346c5ae6.
+  The E-population program is COMPLETE: 7 events → 2 LANGUAGE_BUG families
+  source-fixed (+1 found en route), 1 dead-drop shape structurally
+  recognized, 0 allowlists, divergence class now fail-closed corpus-wide.
+  STOPPED for review before Array release-elision.

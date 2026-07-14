@@ -45,7 +45,7 @@ import tempfile
 import time
 from pathlib import Path
 
-TOOL_VERSION = "1.4.0"
+TOOL_VERSION = "1.5.0"
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 
@@ -69,6 +69,13 @@ HARD_GATES = (
 	"untagged",
 	"c1_must_drop_without_release",
 	"post_ledger_build_failed",
+	# Promoted 2026-07-13 after the E-population close-out: shapes 1-2
+	# (value corruption) fixed at the source in 0.33.83; shape 3 (dead
+	# paired cleanup drop of MOVED_OUT storage) reclassifies
+	# c3_moveout_zero_safe.  Any remaining divergent MoveOut is an
+	# unpaired re-move of consumed storage — the zero-read bug class —
+	# and fails the corpus loudly.
+	"c3_moveout_not_owned",
 )
 
 

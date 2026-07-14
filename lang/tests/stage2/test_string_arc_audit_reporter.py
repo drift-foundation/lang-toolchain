@@ -336,12 +336,20 @@ def test_c3_zero_safe_ladder_requires_drop_pairing_and_predicate() -> None:
 	assert no_drop.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, no_drop
 	not_safe = run(True, False)
 	assert not_safe.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, not_safe
-	# Population E: MOVED_OUT at drop_x's post-MoveOut point — x was
-	# moved by drop_x[0], so at index 1 it is MOVED_OUT.  Both legs true
-	# must NOT bless it.
-	e_shape = run(True, True, raw_point=("drop_x", 1))
-	assert e_shape.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, e_shape
-	assert e_shape.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, e_shape
+	# Shape-3 rule (E-triage close-out): MOVED_OUT at drop_x's
+	# post-MoveOut point — x was moved by drop_x[0], so at index 1 it is
+	# MOVED_OUT.  WITH the immediate-DropValue pairing it is the
+	# compiler-authored dead drop of zero-backed storage → zero-safe.
+	paired_moved_out = run(True, True, raw_point=("drop_x", 1))
+	assert paired_moved_out.get(R.AGREE_C3_ZERO_SAFE, 0) == 1, paired_moved_out
+	assert paired_moved_out.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, paired_moved_out
+	# WITHOUT the pairing (a store/call/scrutinee consumer — the
+	# shapes-1/2 value-corruption class) it stays DIVERGENT: the drop
+	# pairing is load-bearing, and the zero-safety predicate cannot
+	# substitute for it (zero_safe=True here).
+	unpaired_moved_out = run(False, True, raw_point=("drop_x", 1))
+	assert unpaired_moved_out.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, unpaired_moved_out
+	assert unpaired_moved_out.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, unpaired_moved_out
 
 
 def test_arraydrop_measurement_mix_and_inertness() -> None:
@@ -668,6 +676,51 @@ def test_array_index_load_unchecked_dest_is_owned_at_extraction(monkeypatch, tmp
 	# instruction-typed and owned (moved into the store); pre-fix it was
 	# invisible to the ownership machinery entirely.
 	assert func.local_types.get("%e") == string_ty, dict(func.local_types)
+
+
+def test_c3_catch_binder_dead_cleanup_drop_is_zero_safe(monkeypatch, tmp_path: Path) -> None:
+	"""E-triage shape 3, end to end through insert_string_arc: the
+	catch-arm binder is materialized, MOVED BY THE USER (`val moved =
+	move e`), and the compiler-authored end-of-arm cleanup still emits
+	`MoveOut(e) → DropValue` — a dead drop of zero-backed storage.  The
+	shape mirrors catch_binder_visible_in_arm's try_catch_0 block.  It
+	must reclassify `c3_moveout_zero_safe`, leaving
+	c3_moveout_not_owned at 0 for the fn."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	err_ty = tt.ensure_error()
+	func = _make_func(
+		"cb3", params=[],
+		locals_=["__try_err.t1", "e", "moved"],
+		types={"__try_err.t1": err_ty, "e": err_ty, "moved": err_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ZeroValue(dest="%z", ty=err_ty),
+		M.StoreLocal(local="__try_err.t1", value="%z"),
+		M.MoveOut(dest="%b", local="__try_err.t1", ty=err_ty),
+		M.StoreLocal(local="e", value="%b"),
+		M.MoveOut(dest="%m", local="e", ty=err_ty),           # user: val moved = move e
+		M.StoreLocal(local="moved", value="%m"),
+		M.MoveOut(dest="%c1", local="moved", ty=err_ty),      # authored cleanup of moved ✓
+		M.DropValue(value="%c1", ty=err_ty),
+		M.MoveOut(dest="%c2", local="e", ty=err_ty),          # authored cleanup of e — ALREADY MOVED
+		M.DropValue(value="%c2", ty=err_ty),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::cb3")
+	# The dead cleanup drop of the moved binder reclassifies zero-safe;
+	# nothing in this fn stays divergent.  (The other MoveOuts: the
+	# binder materialization from the zero-init'd __try_err is
+	# TOMBSTONED→zero_safe; the two user/cleanup moves of live locals
+	# are owned.)
+	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
+	assert agg.get(R.AGREE_C3_ZERO_SAFE, 0) >= 2, agg
 
 
 def test_untagged_note_is_a_finding() -> None:
