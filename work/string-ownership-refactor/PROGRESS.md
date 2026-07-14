@@ -1007,3 +1007,35 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   source-fixed (+1 found en route), 1 dead-drop shape structurally
   recognized, 0 allowlists, divergence class now fail-closed corpus-wide.
   STOPPED for review before Array release-elision.
+- 2026-07-14: **Array release-elision LANDED (emission slice) — acceptance
+  EXACT; STOPPED for review before the next string_arc deletion step.**
+  Implementation: one ledger fold in string_arc's Return-boundary section,
+  exactly mirroring the String elision — Array locals whose boundary verdict
+  is MUST_NOT_DROP join skip_cleanup_locals; PATH_DEPENDENT keeps the
+  unconditional null-safe drop (first-slice discipline); unknown DropPolicy →
+  conservative keep; `_ledger is None` → legacy. Strings untouched (separate
+  fold). 0.27.145-hazard note recorded in-code: arrays have no late
+  retain-wrap at return, so MOVED_OUT verdicts stay valid post-rewrite.
+  PINS: note-site pin reworked into the elision pin (uninit/tombstoned
+  elided; LIVE `sink` kept = the live-direction guard; OUTPUT-MIR ArrayDrop
+  counts asserted per local — sink 2 [overwrite+sweep], a_live 1 [overwrite
+  only; sweep gone], a_uninit 0, a_moved 1) + NEW PATH_DEPENDENT-kept pin
+  (diamond → maybe_uninit → drop retained). NEW memcheck carrier
+  test_array_release_elision.py — heap-backed Array<String> rows ×3
+  (live-at-exit / moved-to-caller / conditionally-moved), over-elision reads
+  as definitely-lost, kept-drop-after-move as Invalid free; valgrind clean.
+  Batteries: reporter 22/22; memcheck FULL 98 passed + 1 skip;
+  stage2+borrow+guardrails 436/436.
+  ACCEPTANCE (build/tmp/cleanup-arrelide vs cleanup-shape3, tool v1.5.0,
+  exit 0): universe identical 924/344/49 (manifest identical to shape3 —
+  no source/env change); scope_exit_arraydrop 156,308 → 4,620 (−151,688 =
+  EXACTLY the must_not_drop population; residual = EXACTLY the 4,620
+  path-dependent drops, itemized by arraydrop_state:maybe_uninit);
+  arraydrop uninit −141,391 → 0, moved_out −10,297 → 0; EVERY String
+  counter byte-identical; hard gates zero incl. c3_moveout_not_owned.
+  New phase reference: cleanup-arrelide.
+  NOTES for review: (1) version bump not included — emission change likely
+  rides the next release (0.33.84?) with a history entry at your call;
+  (2) deletion-campaign consequence: the return-boundary array sweep is now
+  PATH_DEPENDENT-only — a future slice can either flag-model those 4,620 or
+  fold the sweep into cleanup_authoring, then delete `_drop_all_arrays`.

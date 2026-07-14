@@ -400,14 +400,21 @@ def test_arraydrop_measurement_mix_and_inertness() -> None:
 
 def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) -> None:
 	"""End-to-end coverage of the string_arc NOTE SITE (the direct-API pin
-	above does not exercise it): insert_string_arc over a func with real
-	Array locals reaching the return-boundary sweep, audit env on.
+	above does not exercise it) AND of the Array release-elision fold:
+	insert_string_arc over a func with real Array locals reaching the
+	return-boundary sweep, audit env on.
 
-	- `a_uninit` (never written) and `a_live` (stored) are swept →
-	  recorded with their raw states and verdicts;
+	- `a_uninit` (never written → UNINIT) and `a_live` (zero-init-stored
+	  → TOMBSTONED) have MUST_NOT_DROP boundary verdicts → their sweep
+	  drops are ELIDED and nothing is recorded for them;
+	- `sink` (holds a moved-in array → LIVE, MUST_DROP) keeps its sweep
+	  drop and is the recorded row — the live-direction guard;
 	- `a_moved` is moved out IN the return block, so string_arc's own
 	  `moved_out_locals` fold puts it in skip_cleanup_locals → the sweep
-	  skips it and it must NOT be recorded."""
+	  skips it and it must NOT be recorded;
+	- the OUTPUT-MIR ArrayDrop counts prove the elision in emission, not
+	  just the audit view (drop-before-overwrite drops are out of the
+	  elision's scope and remain)."""
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -432,20 +439,76 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 	_attach_ledger(func)
 	insert_string_arc(func, type_table=tt, fn_infos={})
 	agg = _fn_agg(out, "test::asw")
-	# Swept: a_uninit + a_live + sink (holds the moved-in array, LIVE at
-	# the boundary); skipped: a_moved (moved_out_locals fold).
-	assert agg.get("site_class:scope_exit_arraydrop") == 3, agg
-	assert agg.get("arraydrop_state:uninit") == 1, agg
-	# a_live was zero-init-stored → the walker records the zero-store as
-	# TOMBSTONED; sink holds a real moved-in value → LIVE.  Both states
-	# recorded; a_moved contributes nothing.
-	assert agg.get("arraydrop_state:tombstoned") == 1, agg
+	# ARRAY RELEASE ELISION (emission slice): MUST_NOT_DROP boundary
+	# verdicts are now ELIDED from the sweep — a_uninit (UNINIT) and
+	# a_live (zero-init-stored → TOMBSTONED) no longer emit or record a
+	# drop.  Only `sink` (holds the moved-in array — LIVE, MUST_DROP)
+	# is swept; a_moved stays skipped via the moved_out_locals fold.
+	# This doubles as the LIVE-direction pin: a live array's sweep drop
+	# must never be elided.
+	assert agg.get("site_class:scope_exit_arraydrop") == 1, agg
 	assert agg.get("arraydrop_state:live") == 1, agg
-	assert agg.get("arraydrop_state:moved_out") is None, agg
-	# Verdicts recorded for every swept drop (uninit/tombstoned →
-	# must_not_drop; live Array<String> → must_drop).
-	assert agg.get("arraydrop_verdict:must_not_drop") == 2, agg
 	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
+	assert agg.get("arraydrop_state:uninit") is None, agg
+	assert agg.get("arraydrop_state:tombstoned") is None, agg
+	assert agg.get("arraydrop_state:moved_out") is None, agg
+	assert agg.get("arraydrop_verdict:must_not_drop") is None, agg
+	# The elision is real in the OUTPUT MIR, not just the audit view.
+	# Count ArrayDrops per SOURCE local (via the LoadLocal feeding each
+	# drop).  a_live/a_moved keep exactly ONE drop each — the
+	# drop-before-overwrite emitted at their StoreLocal, which is OUT of
+	# this slice's scope — but their RETURN-SWEEP drop is gone (pre-
+	# elision a_live had 2).  sink keeps its sweep drop (LIVE);
+	# a_uninit has none at all.
+	loaded_by = {}
+	drop_counts: dict = {}
+	for blk in func.blocks.values():
+		for ins in blk.instructions:
+			if type(ins).__name__ == "LoadLocal":
+				loaded_by[ins.dest] = ins.local
+			elif type(ins).__name__ == "ArrayDrop":
+				src = loaded_by.get(getattr(ins, "array", None))
+				drop_counts[src] = drop_counts.get(src, 0) + 1
+	# sink = 2: its own StoreLocal's drop-before-overwrite + the KEPT
+	# sweep drop (LIVE at the boundary).
+	assert drop_counts.get("sink", 0) == 2, drop_counts
+	assert drop_counts.get("a_uninit", 0) == 0, drop_counts
+	assert drop_counts.get("a_live", 0) == 1, drop_counts
+	assert drop_counts.get("a_moved", 0) == 1, drop_counts
+
+
+def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) -> None:
+	"""First-slice discipline: a PATH_DEPENDENT array boundary verdict
+	keeps today's unconditional null-safe drop — only MUST_NOT_DROP is
+	elided."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	arr_ty = tt.new_array(tt.ensure_string())
+	func = _make_func("apd", params=[], locals_=["arr"], types={"arr": arr_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.ConstBool(dest="%c", value=True)]
+	entry.terminator = M.IfTerminator(cond="%c", then_target="init", else_target="join")
+	init = M.BasicBlock(name="init")
+	init.instructions = [
+		M.ZeroValue(dest="%z", ty=arr_ty),
+		M.StoreLocal(local="arr", value="%z"),
+		M.MoveOut(dest="%m", local="arr", ty=arr_ty),
+		M.StoreLocal(local="arr", value="%m"),
+	]
+	init.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	join.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "init": init, "join": join}
+	func.entry = "entry"
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::apd")
+	# arr at the join boundary: LIVE on the init path, UNINIT on the
+	# else path → MAYBE_UNINIT → PATH_DEPENDENT → drop KEPT.
+	assert agg.get("site_class:scope_exit_arraydrop") == 1, agg
+	assert agg.get("arraydrop_state:maybe_uninit") == 1, agg
+	assert agg.get("arraydrop_verdict:path_dependent") == 1, agg
 
 
 def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:

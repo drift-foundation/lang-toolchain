@@ -1859,6 +1859,47 @@ def insert_string_arc(
 					)
 					if _sv is _DropVerdict.MUST_NOT_DROP:
 						skip_cleanup_locals.add(_sl)
+			# ARRAY RELEASE ELISION (2026-07-13 slice; Slice 3
+			# measurement GO — SLICE3-ARRAY-MEASUREMENT.md): Array
+			# locals whose return-boundary ledger verdict is
+			# MUST_NOT_DROP are elided from the sweep.  The measurement
+			# proved the sweep is a legacy backstop over dead storage:
+			# 156,308 swept drops corpus-wide with ZERO live and ZERO
+			# must_drop — 141,391 uninit + 10,297 moved_out (both
+			# provably nothing-owned; MOVED_OUT storage is zero-backed
+			# by the MoveOut expansion) + 4,620 maybe_uninit.
+			# PATH_DEPENDENT keeps today's unconditional null-safe drop
+			# (first-slice discipline, exactly mirroring the String
+			# elision above).  Live arrays never reach the sweep
+			# (cleanup_authoring owns their drops; return sources are
+			# alias-walk skipped) — and if one ever did, MUST_DROP is
+			# not elided.  The 0.27.145-class hazard does not apply to
+			# arrays: there is no late retain-wrap at the array return
+			# boundary (return-by-move only), so the lattice's
+			# MOVED_OUT verdict is not invalidated post-rewrite (pinned
+			# by the heap-Array<String> memcheck rows in
+			# lang/tests/memcheck/test_array_release_elision.py).
+			# Strings untouched — the separate fold above.
+			if _ledger is not None:
+				_ledger_point_arr = (block.name, len(block.instructions))
+				for _al in sorted(array_locals):
+					if _al in skip_cleanup_locals:
+						continue
+					_al_ty = local_types.get(_al)
+					if _al_ty is None:
+						continue
+					try:
+						_al_nd = bool(_compute_drop_policy(type_table, _al_ty).needs_drop)
+					except Exception:
+						# Unknown policy → conservative: keep the drop.
+						continue
+					_av = _ledger.verdict_at(
+						_ledger_point_arr,
+						_al,
+						needs_drop=_al_nd,
+					)
+					if _av is _DropVerdict.MUST_NOT_DROP:
+						skip_cleanup_locals.add(_al)
 			if _audit is not None:
 				# Slice 3 measurement (report-only): record each Array
 				# local the return-boundary sweep is about to drop, with
