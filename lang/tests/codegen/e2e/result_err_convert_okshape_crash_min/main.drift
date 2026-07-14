@@ -9,7 +9,7 @@ fn h() nothrow -> core.Result<String, json.JsonErrorData> {
 
 fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
   match h() {
-    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Err(e) => { return core.Result::Err(move e); },
     core.Result::Ok(v) => { return core.Result::Ok(json.JsonNode::String(v)); }
   }
 }

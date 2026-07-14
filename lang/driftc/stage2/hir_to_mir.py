@@ -1663,16 +1663,43 @@ class HIRToMIR:
 						self._local_types[source_local] = scrut_ty
 						self.b.emit(M.StoreLocal(local=source_local, value=scrut_val))
 					if source_local is not None and not self._should_copy_value(scrut_ty):
-						arm_scrut_moved_in = self.b.new_temp()
-						self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=source_local, ty=scrut_ty))
-						self._local_types[arm_scrut_moved_in] = scrut_ty
+						# MOVE-captured scrutinee (E-triage follow-on,
+						# 2026-07-13): inside a callback lambda the
+						# scrutinee's storage is the ENV SLOT, not the
+						# never-materialized local — `MoveOut(local)`
+						# here read ZEROED bytes (probe: match on a
+						# move-captured Result<String, Int> printed an
+						# empty payload while the tag dispatch, whose
+						# HVar read IS capture-aware, chose the right
+						# arm).  Route the consume through the same
+						# capture-slot helper `_visit_expr_HMove` uses
+						# (env-slot load + zero-back + live-flag clear);
+						# arms are exclusive, so the one executing arm
+						# owns the single slot consume.  This is exactly
+						# the per-site capture routing the
+						# implicit-move refactor trigger predicts —
+						# recorded in the trigger ruling.
+						arm_scrut_moved_in = None
+						if (
+							self._lambda_is_callback
+							and self._lambda_capture_slots is not None
+							and isinstance(expr.scrutinee, H.HVar)
+						):
+							_scrut_cap_key = self._capture_key_for_expr(expr.scrutinee)
+							if _scrut_cap_key is not None:
+								arm_scrut_moved_in = self._move_from_callback_capture_slot(_scrut_cap_key)
+						scrut_from_capture_slot = arm_scrut_moved_in is not None
+						if arm_scrut_moved_in is None:
+							arm_scrut_moved_in = self.b.new_temp()
+							self.b.emit(M.MoveOut(dest=arm_scrut_moved_in, local=source_local, ty=scrut_ty))
+							self._local_types[arm_scrut_moved_in] = scrut_ty
 						self.b.emit(M.StoreLocal(local=arm_scrut_local, value=arm_scrut_moved_in))
 						if mark_source_moved:
 							# Patch 6c: HIR-side `_mark_moved` retired —
 							# the lattice tracks the consumption via the
 							# MoveOut emitted at line 1450.
 							pass
-						else:
+						elif not scrut_from_capture_slot:
 							# Value-producing match: we cannot globally
 							# mark `source_local` moved, because sibling
 							# arms that do not invoke this helper (e.g.
@@ -1690,6 +1717,9 @@ class HIRToMIR:
 							# while untaken-arm paths leave the original
 							# storage intact.  Path-sensitive via
 							# runtime state, no `_moved_locals` mutation.
+							# (Skipped for a capture-slot consume: the
+							# helper already zero-backed the ENV slot;
+							# the local has no storage to tombstone.)
 							tomb = self.b.new_temp()
 							self.b.emit(M.TombstoneValue(dest=tomb, ty=scrut_ty))
 							self._local_types[tomb] = scrut_ty

@@ -348,7 +348,7 @@ fn _string_from_validated_bytes(bytes: &Array<Byte>) nothrow -> String {
 /// scalar boundary.
 pub fn source_cursor(bytes: &Array<Byte>, source_id: String) nothrow -> core.Result<SourceCursor, SourceError> {
 	match _validate_utf8(bytes, source_id) {
-		core.Result::Err(err) => { return core.Result::Err(err); },
+		core.Result::Err(err) => { return core.Result::Err(move err); },
 		core.Result::Ok(_) => { }
 	}
 	// Single validation pass: `_validate_utf8` already proved the bytes

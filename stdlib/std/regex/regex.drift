@@ -251,10 +251,10 @@ pub fn compile(pattern: &String) nothrow -> core.Result<Regex, RegexError> {
 				return core.Result::Err(RegexError(tag = tag, offset = p.pos));
 			}
 			val nfa = _nfa_compile(&node);
-			return core.Result::Ok(Regex(root = node, nfa = move nfa));
+			return core.Result::Ok(Regex(root = move node, nfa = move nfa));
 		},
 		core.Result::Err(e) => {
-			return core.Result::Err(e);
+			return core.Result::Err(move e);
 		}
 	}
 }
@@ -262,17 +262,17 @@ pub fn compile(pattern: &String) nothrow -> core.Result<Regex, RegexError> {
 // alternation = sequence ('|' sequence)*
 fn _parse_alternation(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	match _parse_sequence(p) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(first) => {
 			if _peek(p) != 124 {
-				return core.Result::Ok(first);
+				return core.Result::Ok(move first);
 			}
 			var branches = Array<type RegexNode>::with_capacity(4);
 			branches.push(first);
 			while _peek(p) == 124 {
 				p.pos = p.pos + 1;
 				match _parse_sequence(p) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(branch) => {
 						branches.push(branch);
 					}
@@ -293,7 +293,7 @@ fn _parse_sequence(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError>
 			break;
 		}
 		match _parse_quantified(p) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(node) => {
 				children.push(node);
 			}
@@ -302,7 +302,7 @@ fn _parse_sequence(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError>
 	if children.len == 1 {
 		// Unwrap single-element group to keep AST lean.
 		match children.pop() {
-			Optional::Some(only) => { return core.Result::Ok(only); },
+			Optional::Some(only) => { return core.Result::Ok(move only); },
 			Optional::None() => { }
 		}
 	}
@@ -312,10 +312,10 @@ fn _parse_sequence(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError>
 // quantified = atom ('*' | '+' | '?')?
 fn _parse_quantified(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	match _parse_atom(p) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(atom) => {
 			if _at_end(p) {
-				return core.Result::Ok(atom);
+				return core.Result::Ok(move atom);
 			}
 			val ch = _peek(p);
 			if ch == 42 {
@@ -336,7 +336,7 @@ fn _parse_quantified(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 				wrap.push(atom);
 				return core.Result::Ok(RegexNode::Repeat(child = move wrap, quant = Quantifier::Question()));
 			}
-			return core.Result::Ok(atom);
+			return core.Result::Ok(move atom);
 		}
 	}
 }
@@ -367,14 +367,14 @@ fn _parse_atom(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	if ch == 40 {
 		p.pos = p.pos + 1;
 		match _parse_alternation(p) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(inner) => {
 				if _at_end(p) or _peek(p) != 41 {
 					val tag = "unclosed-group";
 					return _err(&tag, p.pos);
 				}
 				p.pos = p.pos + 1;
-				return core.Result::Ok(inner);
+				return core.Result::Ok(move inner);
 			}
 		}
 	}
@@ -545,26 +545,26 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 			// \t \n \r inside class.
 			if esc == 116 {
 				match _maybe_range(p, cast<Byte>(9), &mut ranges) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			if esc == 110 {
 				match _maybe_range(p, cast<Byte>(10), &mut ranges) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			if esc == 114 {
 				match _maybe_range(p, cast<Byte>(13), &mut ranges) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			// Metachar escapes inside class: \] \\ \^ \-
 			if esc == 93 or esc == 92 or esc == 94 or esc == 45 {
 				match _maybe_range(p, cast<Byte>(esc), &mut ranges) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
@@ -575,7 +575,7 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 		// Regular byte — might be start of a range (a-z).
 		val lo = _advance(p);
 		match _maybe_range(p, lo, &mut ranges) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(_) => { }
 		}
 	}

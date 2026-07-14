@@ -374,7 +374,7 @@ implement ArgParser {
 	/// **See also:** `ParsedArgs`, `CliError`.
 	pub fn parse(self: &ArgParser, argv: &Array<String>) nothrow -> core.Result<ParsedArgs, CliError> {
 		match _validate_schema(self) {
-			Some(e) => { return core.Result::Err(e); },
+			Some(e) => { return core.Result::Err(move e); },
 			None => { }
 		}
 		var flag_option_indices: Array<Int> = [];

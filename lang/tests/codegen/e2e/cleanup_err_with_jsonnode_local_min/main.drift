@@ -11,7 +11,7 @@ fn mk_err() nothrow -> core.Result<String, json.JsonErrorData> {
 fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
   var hm = c.hash_map<type String, json.JsonNode>();
   match mk_err() {
-    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Err(e) => { return core.Result::Err(move e); },
     core.Result::Ok(_v) => { }
   }
   if hm.len() == 999 { return core.Result::Ok(json.JsonNode::Null()); }

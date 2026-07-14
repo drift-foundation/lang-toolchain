@@ -13869,7 +13869,17 @@ class TypeChecker:
 			elif isinstance(expr, H.HMatchExpr):
 				_walk_expr_for_borrowed_boundaries(expr.scrutinee)
 				for arm in expr.arms:
-					_walk_expr_for_borrowed_boundaries(arm.result)
+					# E-population shape-2 fix (2026-07-13): statement-form
+					# arm BODIES were never walked, so every call inside a
+					# match arm escaped the explicit-move gate and the
+					# borrowed-arg boundary checks — a bare non-Copy binder
+					# at a by-value arg was then silently consumed by
+					# `_lower_call_arg`'s internal MoveOut backstop and the
+					# next use read zero-backed storage.
+					if getattr(arm, "block", None) is not None:
+						_walk_block_for_borrowed_boundaries(arm.block)
+					if arm.result is not None:
+						_walk_expr_for_borrowed_boundaries(arm.result)
 
 		def _walk_block_for_borrowed_boundaries(block: H.HBlock) -> None:
 			for s in block.statements:

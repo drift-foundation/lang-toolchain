@@ -794,7 +794,7 @@ implement Condvar {
 	/// elsewhere in `std.concurrent` (`sleep` / `join_timeout`).
 	pub fn wait_timeout<T>(self: &Condvar, guard: &mut MutexGuard<T>, d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 		match _check_duration(d) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(_) => { }
 		}
 		val deadline = thread.now_ms() + d.millis;
@@ -1275,7 +1275,7 @@ implement<T> Receiver<T> {
 			}
 			val res = self.inner.get().not_empty.wait(&mut guard);
 			match res {
-				Err(e) => { return core.Result::Err(e); },
+				Err(e) => { return core.Result::Err(move e); },
 				Ok(_) => { }
 			}
 		}
@@ -1293,7 +1293,7 @@ implement<T> Receiver<T> {
 	pub fn recv_timeout(self: &mut Receiver<T>, d: Duration) nothrow -> core.Result<T, ConcurrencyError> {
 		var ok = _check_duration(d);
 		match ok {
-			Err(err) => { return core.Result::Err(err); },
+			Err(err) => { return core.Result::Err(move err); },
 			Ok(_) => { }
 		}
 		val deadline = thread.now_ms() + d.millis;
@@ -1327,7 +1327,7 @@ implement<T> Receiver<T> {
 							code = -1
 						));
 					}
-					return core.Result::Err(e);
+					return core.Result::Err(move e);
 				},
 				Ok(_) => { }
 			}
@@ -2041,7 +2041,7 @@ implement<T> VirtualThread<T> {
 	pub fn join_timeout(self: &mut VirtualThread<T>, d: Duration) nothrow -> core.Result<T, ConcurrencyError> {
 		var ok = _check_duration(d);
 		match ok {
-			Err(err) => { return core.Result::Err(err); },
+			Err(err) => { return core.Result::Err(move err); },
 			Ok(_) => { }
 		}
 		if self.joined {
@@ -2436,7 +2436,7 @@ pub fn yield_now() nothrow -> Void {
 pub fn sleep(d: Duration) nothrow -> core.Result<Void, ConcurrencyError> {
 	var ok = _check_duration(d);
 	match ok {
-		Err(err) => { return core.Result::Err(err); },
+		Err(err) => { return core.Result::Err(move err); },
 		Ok(_) => { }
 	}
 	if d.millis == 0 {

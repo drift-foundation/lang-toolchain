@@ -881,3 +881,104 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   (3) Boundary wrap phase renamed mir_validate → string_arc (phase strings
   are free-form; only non-None is enforced).
   Battery: reporter 20/20; stage2 FULL 333/333.
+- 2026-07-13: **E-population triage COMPLETE (report-only) — STOPPED for
+  scheduling.** Report: E-POPULATION-TRIAGE.md. The 7 residual
+  c3_moveout_not_owned events = THREE shapes; TWO are confirmed
+  LANGUAGE_BUGs from valid source with SILENT VALUE CORRUPTION (zeroed
+  reads), explicitly called out per instruction:
+  (1) re-match of a consumed match scrutinee (3 events,
+  match_stmt_nested_match_last_stmt) — outer match MoveOut+zero-back, inner
+  match reads zeroed storage; PROBE: Ok(5) rematch binder reads 0; non-Copy
+  String payload also accepted and reads empty. Checker/lowering mismatch.
+  (2) use-after-move of a non-Copy error binder passed BY VALUE (3 events,
+  three std_io fixtures) — `pub error` IoError by-value param moves; checker
+  fails to reject the second call; zeroed error → the fixtures' would-block
+  path RETURNS 4 TODAY (masked by EOF-first test env). Control probe: plain
+  bitcopy struct lowers as LoadLocal (no move) — the move is correct, the
+  missing rejection is the bug. Plus stdlib API smell: is_eof_error /
+  is_would_block_error should take &IoError.
+  (3) authored cleanup drop of an explicitly-moved catch binder (1 event,
+  catch_binder_visible_in_arm) — runtime-safe dead drop of zeroed error;
+  recommend reporter-side drop-paired MOVED_OUT zero-safe extension
+  (cannot mask shapes 1-2: their consumers are not drop-paired), emission
+  fix optional later.
+  RECOMMENDATION: fix shapes 1-2 as a dedicated regression-first slice
+  BEFORE Array elision (issue bundles + failing pins from the scratchpad
+  probes); expect the checker fix to REJECT the four carrier fixtures
+  (latent invalid source) → fixture rewrites + corpus reference re-record
+  in the same slice. No permanent allowlist for any of the 7; end-state:
+  c3_moveout_not_owned → true 0, then promote to hard gate.
+- 2026-07-13: **E-fix slice IN PROGRESS — STOPPED on stdlib fallout scope
+  decision (tree RED, nothing committed).** Trigger scan recorded: implicit-
+  move registry entry = considered, NOT fired (fixes restore rejection, never
+  accept implicit moves). Root causes: shape 2 = `_walk_expr_for_borrowed_
+  boundaries` never walked match `arm.block` (the explicit-move gate + all
+  borrowed-arg boundary checks skipped every call inside statement-form match
+  arms; `_lower_call_arg`'s MoveOut backstop silently consumed); shape 1 =
+  borrow checker HMatchExpr never tracked scrutinee consumption (lowering
+  moves + zero-backs non-copy scrutinees). Decided semantics: by-value match
+  of a non-Copy PLACE scrutinee consumes; later uses reject E_USE_AFTER_MOVE;
+  borrow to preserve; Copy scrutinees keep the lowering copy branch;
+  projected scrutinees excluded (partial-move rule) + flagged for audit.
+  Implemented: both fixes + io predicates → &IoError ×4 + fixture-1 rewrite +
+  5 regression-first pins (4 verified failing pre-fix); borrow suite 90/90.
+  ALSO surfaced (probe-verified, follow-up candidate): ConstShare synthesis
+  qualifies fields against the DECLARING module's import-visible world — an
+  import-less module silently cannot derive ConstShare for its error types.
+  BLOCKER: the restored gate exposes 49 stdlib sites / 9 modules
+  (JsonErrorData ×20, RegexError ×11, RegexNode ×6, ConcurrencyError ×6,
+  LoggerRuntimeState ×2, Utf8Error/SourceError/Token<K>/CliError ×1) — every
+  driftc run fails until swept; each site needs eyeball verification (the
+  double-use ones are MORE latent zero-read bugs). Decision menu in
+  E-POPULATION-TRIAGE.md fix-slice section: (a) sweep all 49 in-slice
+  (recommended), (b) split, (c) ConstShare grandfathering (rejected).
+- 2026-07-13: **E-fix slice COMPLETE (option (a) executed) — three
+  LANGUAGE_BUGs fixed; ruling recorded; stopped for review.**
+  RULING (blocking clarification resolved; recorded in
+  doc/refactor_triggers.md under the implicit-move entry): considered — NOT
+  fired — with the match SCRUTINEE recorded as the language's ONE deliberate
+  implicit-consume position (pre-existing, now TRACKED via borrow-check flow
+  state + pinned; "pattern-match consume" bullet addressed: it targets NEWLY
+  ADDED positions; sharpened fire condition: a second implicit-consume
+  position or another capture-slot mis-route fires it).
+  THIRD BUG (found by the ruling probe, live on certified 0.33.82): match on
+  a MOVE-CAPTURED non-Copy scrutinee read ZEROED payload (arm consume
+  targeted the never-materialized local; dispatch was capture-aware) — fixed
+  by routing `_ensure_arm_scrut_ptr`'s consume through
+  `_move_from_callback_capture_slot` (tombstone write-back skipped on that
+  path); valgrind-clean; pinned.
+  SWEEP: 49/49 stdlib sites = single terminal transfers → `move` spelled
+  (table in E-POPULATION-TRIAGE.md); 0 predicates (io family → &IoError
+  earlier), 0 stdlib double-uses. FIXTURES: 8 rewritten total — the 4 known
+  carriers + cleanup_err/json_like_key/loop_err_return/result_err_convert
+  (Err(e) re-wraps → move), std_time_iso ×2 (Ok(ts) → move), and
+  match_yield_qualified_ctor = ANOTHER shape-1 latent bug (inner re-match of
+  consumed zero-payload scrutinee, passed only because Block() is tag 0) →
+  fresh inner scrutinee.
+  PINS 7/7 (test_match_consume_and_arm_call_gate.py): arm-body gate
+  restoration; re-match rejection ×2; use-after-consuming-match; by-ref IO
+  intent; bare-match exception; move-captured scrutinee payload.
+  Batteries: stage2+borrow+guardrails 434/434; memcheck FULL 97+1skip.
+  CORPUS: new phase reference `build/tmp/cleanup-efix` (manifest sha256
+  bb5bd4bb406538344f32850782a63814c247c88e67d5671377138bd5f13ff434;
+  partition identical 924/344/49; mismatch = the 8 rewritten sources only).
+  Delta vs 4a-ref fully explained: c3_moveout_not_owned 7 → **1** (−6 =
+  shapes 1-2 eliminated; residual = EXACTLY shape 3's
+  catch_binder_visible_in_arm event, deferred per instruction);
+  moveout_expansion/events −3,691 (= −3,685 owned + −6 not-owned: &IoError
+  auto-borrows replaced predicate-arg moves corpus-wide); ALL other counters
+  +0; hard gates zero.
+  REMAINING to true-zero: shape 3's drop-paired MOVED_OUT reporter rule,
+  then promote c3_moveout_not_owned to the hard-gate set. Follow-ups
+  recorded: projected-place scrutinee audit; ConstShare synthesis
+  visibility; spec wording for the match exception.
+- 2026-07-13: **E-fix review round 1 (2 blocking, addressed).** (1) Stale
+  interim ruling text in E-POPULATION-TRIAGE.md ("neither accepts implicit
+  moves") rewritten as an explicit REVIEW CORRECTION superseded by the final
+  ruling (the match-scrutinee exception); the pin-file docstring carried the
+  same phrase and was fixed to match. (2) Version/history: 0.33.83 (ABI
+  stays 21) with a doc/history.md entry covering the three fixes AND the
+  SOURCE-COMPAT BREAK migration guidance (move for terminal transfer, &e for
+  classification, &IoError predicate signatures + auto-borrow note,
+  E_USE_AFTER_MOVE restructuring guidance, bare-match stays legal/consuming).
+  Pins re-run 7/7.

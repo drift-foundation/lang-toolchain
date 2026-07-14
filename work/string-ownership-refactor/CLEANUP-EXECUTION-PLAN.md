@@ -197,3 +197,37 @@ site-4 decisions (a correctness-preserving emission win, e.g. PATH_DEPENDENT
 release elision). It must ship behind its own acceptance table with PREDICTED
 emission deltas, memcheck lanes in-gate, and a fresh corpus reference — never
 inside a byte-identical-acceptance slice.
+
+---
+
+## B-repr handoff / entry criteria (pinned 2026-07-13)
+
+Makes the phase sequence OPERATIONAL, not just historical context.
+
+**Phase boundary.** The current phase remains B-arch/String AUTHORITY cleanup
+only. B-repr/B5 (representation change) is a COMMITTED FOLLOW-ON — it is not
+part of this cleanup phase and must not be combined with authority migration
+work in any slice.
+
+**Entry criteria for B-repr (all required):**
+1. `string_arc.py` DELETED — or every remaining responsibility explicitly
+   modeled under a generic authority and pinned (no implicit residue).
+2. Residual C3/E decisions CLOSED: the E-population shapes resolved per
+   E-POPULATION-TRIAGE.md (two LANGUAGE_BUG fixes + the drop-paired
+   MOVED_OUT rule or its emission-side alternative);
+   `c3_moveout_not_owned` at true zero and promoted to the hard-gate set.
+3. Array release-elision either LANDED or CONSCIOUSLY DEFERRED with the
+   Slice 3 measurement cited as the deferral basis
+   (SLICE3-ARRAY-MEASUREMENT.md).
+4. Memcheck suite + ownership matrices clean on the phase-exit tree.
+
+**B-repr starts DESIGN-FIRST.** Deliverables of the design slice, before any
+implementation: managed Drift String representation; accessor/conversion
+C API; static literal layout; runtime helper signatures; ABI bump plan;
+package/app recertification plan; DriftQuery recompile coordination; FFI
+ownership tests.
+
+**Structural goal.** Drift String no longer exposes `{len, ptr}` as its
+semantic C contract; C code must use explicit borrow/owned accessor APIs so
+ownership meaning is carried by the API, never inferred from call-site
+convention.

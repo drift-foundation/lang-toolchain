@@ -1,5 +1,58 @@
 # Drift development history
 
+## 2026-07-13 (0.33.83: match ownership enforcement — three silent zero-read LANGUAGE_BUGs fixed; SOURCE-COMPAT BREAK in match arms; ABI stays 21)
+
+Fixes three value-corruption bugs sharing one observable: storage
+zero-backed by an untracked/unrejected consume, with a later read silently
+seeing ZEROED data (0 / empty string / wrong variant payload). All three
+were live on certified 0.33.82. Compiler + stdlib-signature changes; no
+runtime or ABI change — ABI stays 21.
+
+- **Match-arm bodies now enforce non-Copy ownership rules.** The
+  explicit-move call-arg gate existed but its boundary walk never descended
+  into statement-form match-arm BODIES; a bare non-Copy binder at a
+  by-value call arg inside an arm was silently consumed by lowering's
+  internal MoveOut backstop — the next use read zeroed data (e.g. std_io's
+  would-block classification really misbehaved). The walk now covers
+  `arm.block`.
+- **By-value match of a non-Copy place scrutinee is now TRACKED as
+  consuming.** Bare `match r` remains legal — this is the language's one
+  deliberate implicit-consume position (recorded, with the refactor-trigger
+  ruling, in `doc/refactor_triggers.md`) — but any LATER use of the
+  scrutinee, including a re-match, now rejects with E_USE_AFTER_MOVE.
+  Previous versions compiled the re-match and read zero-backed storage
+  (probe: `Ok(5)` re-matched to a binder read 0). Copy-classified
+  scrutinees are unaffected (non-consuming copy); projected-place
+  scrutinees (`match self.field`) keep prior behavior (partial-move rule)
+  and are flagged for audit.
+- **Match on a MOVE-CAPTURED non-Copy scrutinee inside a callback lambda
+  read a zeroed payload** (tag dispatch was capture-aware; the arm consume
+  targeted the never-materialized local). The arm consume now routes
+  through the capture-slot helper (env-slot load + zero-back + live-flag
+  clear).
+
+**MIGRATION (source-compat break).** Code that compiled on ≤0.33.82 may now
+reject — each rejection marks a spot that previously could read zeroed
+data:
+- `cannot copy 'e': ... (use move e)` at a call inside a match arm →
+  spell the intent: `move e` for a single terminal ownership transfer;
+  `&e` for classification/inspection (and prefer `&T` parameters for
+  predicate-style APIs).
+- `use after move [E_USE_AFTER_MOVE]` on a match scrutinee → the first
+  `match r` consumed it; restructure (bind what you need in the arm, or
+  match a fresh value/borrow). Bare `match r` itself stays legal.
+- stdlib API change: `io.io_error_code` / `io.is_would_block_error` /
+  `io.is_eof_error` / `io.is_line_too_long_error` now take `&IoError`
+  (call sites passing a bare error value auto-borrow — most callers need
+  no change; the old by-value signatures CONSUMED the error, which is what
+  broke repeated classification).
+- In-tree sweep under the same rules: 49 stdlib sites (all single terminal
+  transfers → `move` spelled) and 8 e2e fixtures (two of which were
+  themselves latent zero-read carriers).
+- Pins: `test_match_consume_and_arm_call_gate.py` (7 — gate restoration,
+  re-match rejection ×2, use-after-consuming-match, by-ref IO intent, the
+  bare-match exception, the move-captured scrutinee payload).
+
 ## 2026-07-13 (0.33.82: compiler-ICE hotfix — generic-lambda substitution, lambda return inference, method-body consts, extern dedup; ABI stays 21)
 
 Root-cause fixes for the two ICEs drift-query filed against certified 0.33.81

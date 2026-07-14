@@ -142,7 +142,7 @@ implement<K> TokenStream<K> require K is TokenKind {
 		}
 		if matched {
 			match self.tokens.pop_front() {
-				Some(value) => { return core.Result::Ok(value); },
+				Some(value) => { return core.Result::Ok(move value); },
 				None => { }
 			}
 		}

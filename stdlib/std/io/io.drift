@@ -643,7 +643,7 @@ pub const STREAM_MAX_LINE_BYTES_DEFAULT: Int = 65536;
 ///
 /// **See also:** `is_would_block_error`, `is_eof_error`,
 /// `is_line_too_long_error`.
-pub fn io_error_code(e: IoError) nothrow -> Int {
+pub fn io_error_code(e: &IoError) nothrow -> Int {
 	return e.code;
 }
 
@@ -685,10 +685,11 @@ pub fn io_is_eof(code: Int) nothrow -> Bool {
 /// sentinel.
 ///
 /// **Parameters:**
-/// - `e` — the `IoError` to test.
+/// - `e` — borrowed `IoError` to test (classification never
+///   consumes the error).
 ///
 /// **See also:** `io_is_would_block`, `IO_ERR_WOULD_BLOCK`.
-pub fn is_would_block_error(e: IoError) nothrow -> Bool {
+pub fn is_would_block_error(e: &IoError) nothrow -> Bool {
 	return io_is_would_block(io_error_code(e));
 }
 
@@ -696,10 +697,11 @@ pub fn is_would_block_error(e: IoError) nothrow -> Bool {
 /// sentinel.
 ///
 /// **Parameters:**
-/// - `e` — the `IoError` to test.
+/// - `e` — borrowed `IoError` to test (classification never
+///   consumes the error).
 ///
 /// **See also:** `io_is_eof`, `IO_ERR_EOF`.
-pub fn is_eof_error(e: IoError) nothrow -> Bool {
+pub fn is_eof_error(e: &IoError) nothrow -> Bool {
 	return io_is_eof(io_error_code(e));
 }
 
@@ -707,10 +709,11 @@ pub fn is_eof_error(e: IoError) nothrow -> Bool {
 /// sentinel.
 ///
 /// **Parameters:**
-/// - `e` — the `IoError` to test.
+/// - `e` — borrowed `IoError` to test (classification never
+///   consumes the error).
 ///
 /// **See also:** `io_is_line_too_long`, `IO_ERR_LINE_TOO_LONG`.
-pub fn is_line_too_long_error(e: IoError) nothrow -> Bool {
+pub fn is_line_too_long_error(e: &IoError) nothrow -> Bool {
 	return io_is_line_too_long(io_error_code(e));
 }
 

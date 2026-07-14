@@ -322,7 +322,7 @@ implement JsonParseConfigBuilder {
 	/// offending limit name in `key`) for a negative limit; `Ok(cfg)` otherwise.
 	pub fn build(self: &JsonParseConfigBuilder) nothrow -> core.Result<JsonParseConfig, JsonErrorData> {
 		match _validate_limits(&self.cfg.limits) {
-			Optional::Some(e) => { return core.Result::Err(e); },
+			Optional::Some(e) => { return core.Result::Err(move e); },
 			Optional::None() => { return core.Result::Ok(self.cfg); }
 		}
 	}
@@ -389,7 +389,7 @@ pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
 /// Validates `cfg` first (negative limit ⇒ `Err("invalid-config")`).
 pub fn parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	match _validate_limits(&cfg.limits) {
-		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
@@ -409,13 +409,13 @@ pub fn parse_strict(text: &String) nothrow -> core.Result<JsonNode, JsonErrorDat
 /// outcome as `parse_with_config` (the sidecar never changes parsing).
 pub fn parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonDoc, JsonErrorData> {
 	match _validate_limits(&cfg.limits) {
-		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
 	var sp: Optional<_SpanTree> = Optional::None();
 	match _parse_document(text, &ctx, &mut sp) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(node) => {
 			match sp {
 				Some(tree) => { return core.Result::Ok(JsonDoc(root = move node, spans = move tree, text = *text)); },
@@ -433,14 +433,14 @@ fn _parse_document(text: &String, ctx: &_ParseCtx, root_sp: &mut Optional<_SpanT
 	_skip_ws(text, &mut idx);
 	val root_start = idx;
 	match _parse_value(text, &mut idx, ctx, 1, root_sp) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(v) => {
 			_skip_ws(text, &mut idx);
 			if idx != text.byte_length() {
 				return core.Result::Err(_err_parse(text, "invalid-syntax", idx));
 			}
 			match _check_top_level(&v, ctx, root_start, text) {
-				Optional::Some(e) => { return core.Result::Err(e); },
+				Optional::Some(e) => { return core.Result::Err(move e); },
 				Optional::None() => { }
 			}
 			return core.Result::Ok(move v);
@@ -655,7 +655,7 @@ implement JsonDoc {
 				Optional::None() => { return core.Result::Err(_invalid_pointer(ptr)); },
 				Optional::Some(seg) => {
 					match _navigate_segment(&cur, &seg, &raw_seg) {
-						core.Result::Err(e) => { return core.Result::Err(e); },
+						core.Result::Err(e) => { return core.Result::Err(move e); },
 						core.Result::Ok(next) => { cur = move next; }
 					}
 				}
@@ -850,7 +850,7 @@ implement LocatedCursor {
 
 	pub fn discriminant(self: &LocatedCursor, key: &String) nothrow -> core.Result<String, JsonErrorData> {
 		match self.require_field(key) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(c) => { return c.as_string(); }
 		}
 	}
@@ -2012,7 +2012,7 @@ fn _parse_number(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 	}
 	val raw = _slice_string(text, start, *idx);
 	match _check_number_policy(text, &raw, start, ctx) {
-		Optional::Some(e) => { return core.Result::Err(e); },
+		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	return core.Result::Ok(JsonNode::Number(raw));
@@ -2046,7 +2046,7 @@ fn _parse_array(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &
 		}
 		var child_sp: Optional<_SpanTree> = Optional::None();
 		match _parse_value(text, idx, ctx, depth + 1, &mut child_sp) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => { values.push(move v); }
 		}
 		if ctx.locate {
@@ -2107,7 +2107,7 @@ fn _parse_object_throwing(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: 
 		val key_start = *idx;
 		var key = "";
 		match _parse_string(text, idx, ctx) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => { key = v; }
 		}
 		val key_end = *idx;
@@ -2137,7 +2137,7 @@ fn _parse_object_throwing(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: 
 		_skip_ws(text, idx);
 		var child_sp: Optional<_SpanTree> = Optional::None();
 		match _parse_value(text, idx, ctx, depth + 1, &mut child_sp) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => {
 				match ctx.cfg.duplicate_keys {
 					DuplicateKeyPolicy::KeepFirst() => {
@@ -2200,25 +2200,25 @@ fn _parse_value(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &
 	val b = core.string_byte_at(text, *idx);
 	if b == cast<Byte>(110) {
 		match _parse_literal(text, idx, "null", JsonNode::Null()) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
 		}
 	}
 	if b == cast<Byte>(116) {
 		match _parse_literal(text, idx, "true", JsonNode::Bool(true)) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
 		}
 	}
 	if b == cast<Byte>(102) {
 		match _parse_literal(text, idx, "false", JsonNode::Bool(false)) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
 		}
 	}
 	if b == cast<Byte>(34) {
 		match _parse_string(text, idx, ctx) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(JsonNode::String(move v)); }
 		}
 	}
@@ -2230,7 +2230,7 @@ fn _parse_value(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &
 	}
 	if b == cast<Byte>(45) or _is_digit(b) {
 		match _parse_number(text, idx, ctx) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return core.Result::Ok(move node); }
 		}
 	}
@@ -2529,7 +2529,7 @@ fn _enc_canon(node: &JsonNode, pointer: String) nothrow -> core.Result<String, J
 		String(v) => { return core.Result::Ok(_encode_string(*v)); },
 		Number(raw) => {
 			match _canon_number(raw, &pointer) {
-				Optional::Some(e) => { return core.Result::Err(e); },
+				Optional::Some(e) => { return core.Result::Err(move e); },
 				Optional::None() => { return core.Result::Ok(*raw); }
 			}
 		},
@@ -2550,7 +2550,7 @@ fn _enc_canon_array(values: &Array<JsonNode>, pointer: String) nothrow -> core.R
 		}
 		val child_ptr = pointer + "/" + _int_to_string(i);
 		match _enc_canon(&values[i], child_ptr) {
-			core.Result::Err(e) => { return core.Result::Err(e); },
+			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(s) => { out = out + s; }
 		}
 		i = i + 1;
@@ -2594,7 +2594,7 @@ fn _enc_canon_object(fields: &containers.HashMap<String, std.json.JsonNode>, poi
 			Some(v) => {
 				out = out + _encode_string(best) + ":";
 				match _enc_canon(v, child_ptr) {
-					core.Result::Err(e) => { return core.Result::Err(e); },
+					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(s) => { out = out + s; }
 				}
 			},

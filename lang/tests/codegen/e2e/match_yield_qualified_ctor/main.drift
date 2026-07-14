@@ -4,9 +4,14 @@ import std.concurrent as conc;
 
 pub fn main() nothrow -> Int {
 	val e = conc.SaturationPolicy::Block();
+	// The inner match scrutinee is a FRESH value: re-matching the
+	// consumed outer scrutinee is E_USE_AFTER_MOVE since the 2026-07-13
+	// match-consume semantics fix (pre-fix it silently read the
+	// zero-backed variant and passed only because Block() is tag 0).
+	val e2 = conc.SaturationPolicy::Block();
 	val out = match e {
 		conc.SaturationPolicy::Block() => {
-			yield match e {
+			yield match e2 {
 				conc.SaturationPolicy::Block() => { 7 },
 				default => { 1 }
 			}

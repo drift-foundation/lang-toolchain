@@ -2657,6 +2657,32 @@ class BorrowChecker:
 			# match's escape.
 			pre_scrut_loans = set(state.loans)
 			self._visit_expr(state, expr.scrutinee, consume=False, escapes=False)
+			# E-population shape-1 fix (2026-07-13, DECIDED SEMANTICS): a
+			# BY-VALUE match of a non-Copy place scrutinee CONSUMES it —
+			# the lowering moves the source into the arm scrutinee temp
+			# and zero-backs its storage, so any later read (including a
+			# re-match) observes ZEROED bytes (probe: Ok(5) re-matched to
+			# a binder read 0; a String payload read "").  Track the
+			# consumption implicitly here — bare `match r` stays legal,
+			# matching ecosystem usage — so every later use fails with
+			# the standard E_USE_AFTER_MOVE.  Matching a borrow is the
+			# ownership-preserving escape.  Non-consuming by design:
+			# ref-typed scrutinees, Copy-classified scrutinees (the
+			# lowering's `_should_copy_value` branch keeps the source
+			# live), non-place scrutinees (owned temporaries), and
+			# PROJECTED places (`match self.field` — consuming a
+			# projection would be a partial move, which Drift rejects as
+			# a language rule; that shape keeps today's behavior and is
+			# flagged for a follow-up audit in E-POPULATION-TRIAGE.md).
+			_scrut_place = place_from_expr(expr.scrutinee, base_lookup=self.base_lookup)
+			if _scrut_place is not None and not _scrut_place.projections:
+				_scrut_ty = self._type_of_place(_scrut_place)
+				if _scrut_ty is not None:
+					_scrut_td = self.type_table.get(_scrut_ty)
+					if _scrut_td.kind is not TypeKind.REF and not self._is_copy(_scrut_ty):
+						self._force_move_place_use_implicit(
+							state, _scrut_place, getattr(expr, "loc", Span())
+						)
 			new_loans = set(state.loans) - pre_scrut_loans
 			any_mut_loan = any(ln.kind is LoanKind.MUT for ln in new_loans)
 			any_escape = False

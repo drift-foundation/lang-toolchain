@@ -273,7 +273,7 @@ pub fn utf8_from_bytes(bytes: &Array<Byte>) nothrow -> core.Result<String, Utf8E
 /// Creates a `String` from a byte range `[start, end)`, validating UTF-8 encoding.
 pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<String, Utf8Error> {
 	match _validate_utf8_range(bytes, start, end) {
-		core.Result::Err(e) => { return core.Result::Err(e); },
+		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(_) => { }
 	}
 	val n = end - start;

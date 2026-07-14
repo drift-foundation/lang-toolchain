@@ -5,7 +5,7 @@ import std.time as time;
 
 fn parse_or_fail(s: String) -> core.Result<time.UtcTimestamp, Int> {
 	match time.parse_iso8601_utc(s) {
-		core.Result::Ok(ts) => { return core.Result::Ok(ts); },
+		core.Result::Ok(ts) => { return core.Result::Ok(move ts); },
 		core.Result::Err(_) => { return core.Result::Err(1); }
 	}
 }

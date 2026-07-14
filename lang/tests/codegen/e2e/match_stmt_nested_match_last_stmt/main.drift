@@ -4,9 +4,14 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val r: core.Result<Int, Int> = core.Result::Ok(1);
+	// The nested match is the arm's LAST STATEMENT (the shape this
+	// fixture pins).  The inner scrutinee is a FRESH value: re-matching
+	// the already-consumed outer scrutinee is a use-after-move since the
+	// 2026-07-13 match-consume semantics fix (E_USE_AFTER_MOVE).
 	match r {
 		Ok(v) => {
-			match r {
+			val inner: core.Result<Int, Int> = core.Result::Ok(v);
+			match inner {
 				Ok(_) => { val _x = 0; },
 				Err(_) => { val _y = 1; },
 				default => { val _z = 2; }

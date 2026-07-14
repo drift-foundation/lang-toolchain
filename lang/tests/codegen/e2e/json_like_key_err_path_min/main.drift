@@ -12,7 +12,7 @@ fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
   var fields = c.hash_map<type String, json.JsonNode>();
   var key = "";
   match key_parse_fail() {
-    core.Result::Err(e) => { return core.Result::Err(e); },
+    core.Result::Err(e) => { return core.Result::Err(move e); },
     core.Result::Ok(v) => { key = v; }
   }
   fields.insert(move key, json.JsonNode::Null());

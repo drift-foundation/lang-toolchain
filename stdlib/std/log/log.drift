@@ -1244,7 +1244,7 @@ implement Logger {
 		match _runtime_state_from_handle(self.state) {
 			Some(st) => {
 				val next = _clone_runtime_state(st, level);
-				val h = _alloc_runtime_state(next);
+				val h = _alloc_runtime_state(move next);
 				return Logger(name = self.name, min_level = level, state = h);
 			},
 			None => {
@@ -1476,7 +1476,7 @@ implement LoggerBuilder {
 		match _runtime_state_from_handle(self.parent_state) {
 			Some(st) => {
 				val next = _clone_runtime_state(st, min);
-				val h = _alloc_runtime_state(next);
+				val h = _alloc_runtime_state(move next);
 				return Logger(name = self.name, min_level = min, state = h);
 			},
 			None => {

@@ -453,6 +453,44 @@ opportunistic uplifts)" for the full rule.
   consume directly, lowering the implementation cost.  Not a
   fire trigger; a sequencing preference.
 
+- **Ruling (2026-07-13, E-population LANGUAGE_BUG slice):
+  considered — NOT fired — with one RECORDED language exception
+  and one per-site containment.**  Addressing the
+  "pattern-match consume" wording of the second trigger bullet
+  directly:
+  - The match SCRUTINEE is the language's ONE deliberate
+    implicit-consume position: bare `match r` on a non-Copy
+    place scrutinee consumes without a `move` spelling
+    (requiring `match move r` would be an ecosystem-wide
+    breaking change out of proportion to the benefit).  The
+    second bullet targets consuming positions ADDED without
+    source-level `HMove`; the scrutinee consume PRE-DATES both
+    the trigger and the 0.33.6 contract — it was never a new
+    position, it was an untracked one.  This slice made the
+    consumption TRACKED (borrow-check flow state;
+    E_USE_AFTER_MOVE on any later scrutinee use, including
+    re-match) and PINNED as an exception
+    (`test_match_consume_and_arm_call_gate.py::
+    test_bare_match_exception_legal_and_consuming`).
+  - The trigger's predicted per-site failure — a consume site
+    without `_move_from_callback_capture_slot` routing — was
+    probe-CONFIRMED at exactly this position (match on a
+    MOVE-CAPTURED non-Copy scrutinee read a ZEROED payload;
+    reproduced on certified 0.33.82) and fixed PER-SITE by
+    routing the arm consume through the capture-slot helper
+    (`_ensure_arm_scrut_ptr`), with a pin.  One known position,
+    now routed and pinned, does not outweigh the 3-5 day
+    structural rewrite.
+  - SHARPENED fire condition: this trigger FIRES if (a) any
+    SECOND implicit-consume position is added or discovered, or
+    (b) another capture-slot mis-route is found at any consume
+    site — either confirms per-site duplication is recurring
+    and the structural rewrite is the durable close.
+  - Same slice, related restoration (not an acceptance): the
+    explicit-move call-arg gate was found to never reach
+    match-arm BODIES (boundary-walk coverage hole) and was
+    restored; 49 stdlib sites then spelled `move` explicitly.
+
   **Confirmation pass result (2026-05-27).**  Drafted minimal
   regressions for HReturn / HAssign / HLet of a callback-
   captured `Arc<T>` against 0.33.6.  All three were rejected by

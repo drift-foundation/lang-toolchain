@@ -13,7 +13,7 @@ fn f() -> core.Result<json.JsonNode, json.JsonErrorData> {
   while true {
     var key = "";
     match h() {
-      core.Result::Err(e) => { return core.Result::Err(e); },
+      core.Result::Err(e) => { return core.Result::Err(move e); },
       core.Result::Ok(v) => { key = v; }
     }
     fields.insert(move key, json.JsonNode::Null());
