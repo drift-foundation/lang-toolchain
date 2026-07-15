@@ -1326,3 +1326,101 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   restarted AGAIN as cleanup-tlr2a-r2 (second kill — this fix was
   another mid-run string_arc.py edit; table/calculator are still off
   the production path, but the no-mid-run-edit rule is unconditional).
+
+- 2026-07-14 — TLR-2a REVIEW ROUND ACCEPTANCE: build/tmp/cleanup-tlr2a-r2
+  (settled tree: all five review findings + wording fix), exit 0. EVERY
+  counter +0 vs cleanup-tlr2a; universe identical 924/344/49; all nine
+  hard gates zero; materialized_lastuse_release 286,424 /
+  temp_lastuse_release 332,320 exact. cleanup-tlr2a-r2 is the phase
+  reference for TLR-2b. Commit message delivered; TLR-2b (extraction
+  pass + recognition handshake) starting per the user go-ahead.
+
+- 2026-07-14 — TLR-2b IMPLEMENTED (extraction slice per TLR-2-DESIGN.md
+  rev 3; go-ahead after cleanup-tlr2a-r2 accepted +0). VERIFICATION IN
+  FLIGHT (stage2/guardrails/memcheck/corpus). Components:
+  (1) NEW PASS `lang/driftc/stage2/string_releases.py` ::
+  `materialize_lastuse_releases(func, *, type_table, fn_infos)` — emits
+  StringRelease(%t) immediately after the draining instruction of every
+  qualified block-local ConstString temp. Consumes ONLY the shared
+  contracts (no re-implementation): `seed_string_dest_types` on a
+  private local_types COPY; NEW shared `compute_string_temp_liveness`
+  (the live-out fixpoint EXTRACTED from insert_string_arc — single
+  liveness author; identical result pre/post-materialization since
+  in-contract releases never reach block_use); contract-2
+  `compute_lastuse_release_points` per block. Same-drain-group temps
+  release consecutively in DRAIN order (last-occurrence position in the
+  draining instruction's iter_used_values walk — mirrors _note_use's
+  decrement sequence). Bottom-up insertion; terminator-drained group
+  lands at end-of-instructions. mark_ledger_dirty on change; idempotent
+  (second run recognizes its own output → no points → False).
+  (2) DRIVER: wired in the cleanup_authoring per-fn loop AFTER
+  materialize_call_arg_stakes, BEFORE _ol_build_and_attach — the one
+  ledger string_arc consumes is built on post-materialization MIR
+  (StringRelease has no ledger transfer-function arm; index shifts
+  only). No extra rebuild.
+  (3) STRING_ARC RECOGNITION: shared `recognize_materialized_releases`
+  (new public projection; `_analyze_lastuse_block` is now the single
+  core both contracts delegate to) called per block BEFORE use counting
+  (fast-path: skipped when the block has no input StringRelease). Four
+  suppression/recognition hooks: prescan-exclusion (recognized release
+  contributes no occurrence); owned_values -= recognized after the
+  per-block `set(owned_defs)` seed (the fn-wide prepass registers every
+  ConstString dest — found via the A/B pin: without this, double
+  release); ConstString rewrite-arm re-add skip (symmetric half);
+  recognition arm in the rewrite loop (copy verbatim, NO _note_use — an
+  uncounted decrement would skew _can_move_owned_once — and the audit
+  note for materialized_lastuse_release moves here: same event, new
+  author, `events` constant).
+  (4) CONTRACT HARDENING FOUND BY THE A/B PIN: the placement rule
+  "release == drain+1" was too strict — same-drain-group temps release
+  CONSECUTIVELY, so the k-th release sits at drain+1+k. Refined: the
+  gap between drain and release may contain ONLY in-contract releases
+  (any non-release instruction in the gap — a later use, a later drain
+  point — still rejects). Shape strictness added: ANY input
+  StringRelease whose operand is not a block-local ConstString String
+  temp raises `unexpected input release` (only the TLR-2b pass may
+  author pre-string_arc releases; sole other producer grep-verified:
+  none).
+  PINS: +4 — `test_tlr2b_pass_plus_arc_equals_arc_only` (A/B
+  byte-identity: pass+arc == arc-only instruction stream; audit counters
+  equal per key; 5 materialized incl. repeated-operand + two same-group
+  pairs, 1 temp_lastuse Concat control, consumed temp none);
+  `test_tlr2b_pass_is_idempotent`;
+  `test_tlr2b_out_of_contract_input_release_trips_string_arc`
+  (shape-mismatch Concat release raises through insert_string_arc);
+  `test_tlr2b_cross_block_temp_untouched` (pass no-op; configs equal;
+  0 materialized). Reporter battery 38/38.
+  EXPECTED ACCEPTANCE: every counter +0 vs cleanup-tlr2a-r2
+  (materialized stays 286,424 — same events, new author;
+  temp_lastuse stays 332,320; events unchanged); universe identical;
+  all nine hard gates zero; memcheck 98+1skip.
+
+- 2026-07-15 — TLR-2b ACCEPTED: build/tmp/cleanup-tlr2b, exit 0. EVERY
+  counter +0 vs cleanup-tlr2a-r2 (19 aggregate keys identical);
+  universe identical 924/344/49; all nine hard gates zero;
+  materialized_lastuse_release 286,424 EXACT (same events, new author —
+  the pass + string_arc recognition arm); temp_lastuse_release 332,320;
+  events 2,772,052 unchanged. Batteries: reporter 38/38; stage2
+  351/351; ledger-cache guardrails 24/24; FULL memcheck 98 + 1 skip
+  (with the pass live in the pipeline — heap-string rows are the
+  double-release/missing-release detector). cleanup-tlr2b is the new
+  phase reference. STOPPED for review. Next per the measured ladder:
+  TLR-3 family extensions (StringConcat → Call results →
+  StringFrom*/Exc* → cross-block tail → tripwire _note_use's release
+  arm); 4a'/4b' deletion still parked on a clean cert cycle.
+
+- 2026-07-15 — **B5/String representation + C interop decisions PINNED** while
+  TLR work continued. `SCOPE-B-PLAN.md` §10.2.1 is now the authoritative
+  follow-up record: Drift-native model is immutable UTF-8 `String` as
+  specialized `{len, RcBytes}` over exact storage with a hidden trailing
+  NUL; no SSO; `RcBytesFlags` limited to static/immortal plus
+  interior-NUL cache state; C never observes the native layout. Checked
+  C-string helpers are Rust-like and fallible (`with_cstr` through
+  `with_cstr4`, returning `Result<T, CStringError>` with
+  `InteriorNul(index)`); unsafe no-scan variants are explicit
+  (`with_cstr_unsafe` through `with_cstr4_unsafe`) and document prefix
+  semantics if an interior NUL exists; `with_bytes` handles
+  length-aware APIs; `CStringScope` is opaque internal pins/temps, not
+  user-visible indexing; owned C handoff remains a separate type.
+  `CLEANUP-EXECUTION-PLAN.md` now cross-references the pinned B5
+  decisions from the B-repr handoff section.

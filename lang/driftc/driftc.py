@@ -8087,6 +8087,9 @@ def compile_stubbed_funcs(
 				from lang.driftc.stage2.string_stakes import (
 					materialize_call_arg_stakes as _materialize_call_arg_stakes,
 				)
+				from lang.driftc.stage2.string_releases import (
+					materialize_lastuse_releases as _materialize_lastuse_releases,
+				)
 				for fn_id, func in mir_funcs_by_id.items():
 					_author_cleanup(func, type_table=shared_type_table)
 					# B-arch-1a: materialize by-value String call-arg
@@ -8096,6 +8099,18 @@ def compile_stubbed_funcs(
 					# already-owned stake instead of inventing a late
 					# StringRetain the ledger never sees.
 					_materialize_call_arg_stakes(
+						func,
+						type_table=shared_type_table,
+						fn_infos=checked.fn_infos_by_id,
+					)
+					# TLR-2b: materialize last-use releases for
+					# block-local ConstString temps BEFORE the ledger
+					# rebuild below — the one ledger string_arc consumes
+					# is built on post-materialization MIR (StringRelease
+					# has no ledger transfer-function arm: index shifts
+					# only).  string_arc recognizes the in-contract
+					# releases and suppresses its own bookkeeping.
+					_materialize_lastuse_releases(
 						func,
 						type_table=shared_type_table,
 						fn_infos=checked.fn_infos_by_id,

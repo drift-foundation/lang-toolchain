@@ -9,7 +9,7 @@ LoadLocal + ZeroValue + StoreLocal once retains/releases are inserted.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Mapping, Set
+from typing import Dict, Iterable, Mapping, Sequence, Set
 
 from lang.driftc.checker import FnInfo
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
@@ -515,15 +515,20 @@ def consumes_string_operand(
 	)
 
 
-def compute_lastuse_release_points(
+def _analyze_lastuse_block(
 	block: M.BasicBlock,
 	*,
 	local_types: Mapping[str, TypeId],
 	fn_infos: Mapping[FunctionId, FnInfo],
 	type_table: TypeTable,
 	live_out_names: Set[str],
-) -> dict[str, int]:
-	"""Contract 2: for each qualified block-local ConstString temp, the
+) -> tuple[dict[str, int], Set[str]]:
+	"""Shared core of contract 2 (`compute_lastuse_release_points`) and
+	the TLR-2b recognition handshake (`recognize_materialized_releases`).
+	Returns `(points, recognized_released)` — one analysis, two public
+	projections, so the calculator and the recognizer cannot drift.
+
+	Points: for each qualified block-local ConstString temp, the
 	instruction index at which its occurrence count drains to zero — the
 	position AFTER which exactly ONE release belongs (multiplicity rule:
 	repeated operands in one instruction drain together and yield one
@@ -536,20 +541,26 @@ def compute_lastuse_release_points(
 	releases; an IGNORE disqualifies — the count never drains, so
 	string_arc never releases); no Return-terminator use (consuming).
 
-	Recognition rule (TLR-2b prescan-exclusion contract, pinned now): an
+	Recognition rule (the TLR-2b prescan-exclusion contract): an
 	in-contract pre-materialized `StringRelease(%t)` contributes NO
-	occurrence to any count, and `%t` itself is excluded from the result
+	occurrence to any count, and `%t` itself is excluded from the points
 	(already released by the external author).  In-contract means BOTH:
 	- shape: `%t`'s producer is a block-local ConstString; AND
 	- placement (review-hardened): it is the UNIQUE StringRelease of
 	  `%t` in the block, `%t`'s remaining occurrences are all USE, and
-	  the release sits IMMEDIATELY AFTER the draining instruction those
-	  occurrences compute (never before a later use, never for a
-	  live-out or terminator-read temp).
-	A shape-matching release that fails placement is REJECTED fail-closed
-	(AssertionError, `unexpected input release` tag) — a mis-placed
-	release recognized silently would suppress string_arc's own release
-	while leaving a later use reading freed memory."""
+	  the release sits after the draining instruction those occurrences
+	  compute, separated only by in-contract releases of temps draining
+	  at the SAME instruction (same-group temps release consecutively;
+	  never before a later use, never past a non-release instruction,
+	  never for a live-out or terminator-read temp).
+	ANY input StringRelease that fails either half — including the shape
+	half: the only legitimate author of pre-string_arc releases is the
+	TLR-2b pass, whose family is exactly block-local ConstString — is
+	REJECTED fail-closed (AssertionError, `unexpected input release`
+	tag).  A mis-placed release recognized silently would suppress
+	string_arc's own release while leaving a later use reading freed
+	memory; an unknown-author release trusted silently would corrupt the
+	occurrence counts."""
 	string_ty = type_table.ensure_string()
 	producers: dict[str, M.MInstr] = {}
 	for ins in block.instructions:
@@ -565,9 +576,23 @@ def compute_lastuse_release_points(
 
 	# Phase 1 — SHAPE recognition (needed before occurrence counting so
 	# the exclusion below is possible); placement is validated in phase 3.
+	# A shape-MISMATCHED input release (operand not a block-local
+	# ConstString temp) is rejected here: no pass other than TLR-2b's
+	# materializer legitimately emits StringRelease before string_arc,
+	# and its family is exactly block-local ConstString.
 	release_sites: dict[str, list[int]] = {}
 	for idx, ins in enumerate(block.instructions):
-		if isinstance(ins, M.StringRelease) and _is_conststring_temp(ins.value):
+		if isinstance(ins, M.StringRelease):
+			if not _is_conststring_temp(ins.value):
+				raise AssertionError(
+					f"string_arc release-recognition tripwire "
+					f"[unexpected input release]: block '{block.name}'[{idx}], "
+					f"value '{ins.value}' — operand is not a block-local "
+					f"ConstString String temp "
+					f"(producer={type(producers.get(ins.value)).__name__}). "
+					f"Only the TLR-2b materialization pass may emit "
+					f"StringRelease before string_arc."
+				)
 			release_sites.setdefault(ins.value, []).append(idx)
 	recognized_released: Set[str] = set(release_sites)
 
@@ -602,14 +627,29 @@ def compute_lastuse_release_points(
 	for temp, rel_idxs in release_sites.items():
 		occs = occurrences.get(temp, [])
 		drain = max((i for i, _d in occs), default=None)
+		# Placement: the release sits after the draining instruction,
+		# separated ONLY by in-contract releases of temps draining at the
+		# same instruction (same-group temps release CONSECUTIVELY — the
+		# multiplicity/grouping reality string_arc's own emission
+		# produces; a gap containing ANY non-release instruction, e.g. a
+		# later use or a later drain point, still rejects).
+		placement_ok = (
+			bool(occs)
+			and drain is not None
+			and len(rel_idxs) == 1
+			and rel_idxs[0] > drain
+			and all(
+				isinstance(block.instructions[j], M.StringRelease)
+				and block.instructions[j].value in recognized_released
+				for j in range(drain + 1, rel_idxs[0])
+			)
+		)
 		in_contract = (
-			len(rel_idxs) == 1
+			placement_ok
 			and temp not in live_out_names
 			and temp not in term_used
 			and temp not in term_consumed
-			and bool(occs)
 			and all(d == DISPOSITION_USE for _i, d in occs)
-			and rel_idxs[0] == drain + 1
 		)
 		if not in_contract:
 			raise AssertionError(
@@ -646,7 +686,120 @@ def compute_lastuse_release_points(
 			and temp not in term_consumed
 		):
 			points[temp] = len(block.instructions)
+	return points, recognized_released
+
+
+def compute_lastuse_release_points(
+	block: M.BasicBlock,
+	*,
+	local_types: Mapping[str, TypeId],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+	live_out_names: Set[str],
+) -> dict[str, int]:
+	"""Contract 2: the occurrence-level release-point calculator — see
+	`_analyze_lastuse_block` for the full contract (points semantics,
+	qualification, multiplicity rule, recognition/rejection of
+	pre-materialized input releases)."""
+	points, _recognized = _analyze_lastuse_block(
+		block,
+		local_types=local_types,
+		fn_infos=fn_infos,
+		type_table=type_table,
+		live_out_names=live_out_names,
+	)
 	return points
+
+
+def recognize_materialized_releases(
+	block: M.BasicBlock,
+	*,
+	local_types: Mapping[str, TypeId],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+	live_out_names: Set[str],
+) -> Set[str]:
+	"""TLR-2b handshake: the set of temps whose pre-materialized
+	StringRelease is IN-CONTRACT (shape AND placement — see
+	`_analyze_lastuse_block`), raising fail-closed on any out-of-contract
+	input release.  string_arc's per-block prescan consults this BEFORE
+	use counting: recognized releases contribute no occurrence, their
+	temps never enter `owned_values` at the ConstString producer (a
+	second release is impossible by construction), and the rewrite loop
+	copies them through verbatim, noting `materialized_lastuse_release`
+	at the recognition arm with NO `_note_use` (symmetric with the
+	prescan exclusion — an uncounted decrement would skew move
+	decisions)."""
+	_points, recognized = _analyze_lastuse_block(
+		block,
+		local_types=local_types,
+		fn_infos=fn_infos,
+		type_table=type_table,
+		live_out_names=live_out_names,
+	)
+	return recognized
+
+
+def compute_string_temp_liveness(
+	blocks_by_name: Mapping[str, M.BasicBlock],
+	block_order: Sequence[str],
+	*,
+	local_types: Mapping[str, TypeId],
+	string_ty: TypeId,
+) -> Dict[str, Set[str]]:
+	"""Shared per-block live-out sets of String-typed SSA temps —
+	extracted verbatim from insert_string_arc's inline fixpoint (TLR-2b)
+	so the materialization pass and string_arc compute liveness with ONE
+	author.  In-contract pre-materialized releases cannot change the
+	result: their temps are defined earlier in the same block (block-local
+	ConstString producer), so the release occurrence never reaches
+	`block_use`, and defs are untouched — the pass (running on MIR without
+	releases) and string_arc (running on MIR with them) see identical
+	live-out sets by construction."""
+
+	def _is_str_temp(v: object) -> bool:
+		return isinstance(v, str) and local_types.get(v) == string_ty
+
+	use: Dict[str, Set[str]] = {}
+	defs: Dict[str, Set[str]] = {}
+	for name in block_order:
+		block = blocks_by_name[name]
+		block_use: Set[str] = set()
+		block_def: Set[str] = set()
+		seen_def: Set[str] = set()
+		for instr in block.instructions:
+			for val in iter_used_values(instr):
+				if not _is_str_temp(val):
+					continue
+				if val not in seen_def:
+					block_use.add(val)
+			dest = getattr(instr, "dest", None)
+			if dest is not None and _is_str_temp(dest):
+				block_def.add(dest)
+				seen_def.add(dest)
+		if block.terminator is not None:
+			for val in _cfg.terminator_value_uses(block.terminator):
+				if _is_str_temp(val) and val not in seen_def:
+					block_use.add(val)
+		use[name] = block_use
+		defs[name] = block_def
+
+	live_in: Dict[str, Set[str]] = {name: set() for name in block_order}
+	live_out: Dict[str, Set[str]] = {name: set() for name in block_order}
+	changed = True
+	while changed:
+		changed = False
+		for name in block_order:
+			block = blocks_by_name[name]
+			out: Set[str] = set()
+			for succ in _cfg.terminator_successors(block.terminator):
+				out |= live_in.get(succ, set())
+			new_in = use[name] | (out - defs[name])
+			if new_in != live_in[name] or out != live_out[name]:
+				live_in[name] = new_in
+				live_out[name] = out
+				changed = True
+	return live_out
 
 
 def insert_string_arc(
@@ -1107,47 +1260,17 @@ def insert_string_arc(
 	# intermediate string temps (including conversion/call-produced values).
 	_seed_dest_types()
 
-	# Compute per-block use/def for string temps (non-local value ids).
-	use: Dict[str, Set[str]] = {}
-	defs: Dict[str, Set[str]] = {}
-	for name in block_order:
-		block = func.blocks[name]
-		block_use: Set[str] = set()
-		block_def: Set[str] = set()
-		seen_def: Set[str] = set()
-		for instr in block.instructions:
-			for val in _iter_used_values(instr):
-				if not _is_string_value(val) or _is_local_name(val):
-					continue
-				if val not in seen_def:
-					block_use.add(val)
-			dest = getattr(instr, "dest", None)
-			if dest is not None and _is_string_value(dest) and not _is_local_name(dest):
-				block_def.add(dest)
-				seen_def.add(dest)
-		if block.terminator is not None:
-			for val in _iter_term_used(block.terminator):
-				if _is_string_value(val) and not _is_local_name(val) and val not in seen_def:
-					block_use.add(val)
-		use[name] = block_use
-		defs[name] = block_def
-
-	live_in: Dict[str, Set[str]] = {name: set() for name in block_order}
-	live_out: Dict[str, Set[str]] = {name: set() for name in block_order}
-	changed = True
-	while changed:
-		changed = False
-		for name in block_order:
-			block = func.blocks[name]
-			succs = _block_succs(block.terminator)
-			out = set()
-			for succ in succs:
-				out |= live_in.get(succ, set())
-			new_in = use[name] | (out - defs[name])
-			if new_in != live_in[name] or out != live_out[name]:
-				live_in[name] = new_in
-				live_out[name] = out
-				changed = True
+	# Per-block live-out for string temps — delegates to the shared
+	# module-level fixpoint (TLR-2b): single liveness author with the
+	# materialization pass.  (`_is_local_name` is always False — see its
+	# definition — so the historical name-exclusion is a no-op the shared
+	# helper drops.)
+	live_out = compute_string_temp_liveness(
+		func.blocks,
+		block_order,
+		local_types=local_types,
+		string_ty=string_ty,
+	)
 
 	# Definite local assignment across CFG.
 	preds = _block_preds()
@@ -1318,10 +1441,43 @@ def insert_string_arc(
 				new_instrs.append(M.ZeroValue(dest=zero, ty=dest_ty))
 				new_instrs.append(M.StoreLocal(local=local, value=zero))
 				local_types[zero] = dest_ty
+		# TLR-2b recognition — BEFORE use counting (the load-bearing
+		# ordering: StringRelease is a use per `_iter_used_values`, so an
+		# unrecognized materialized release would inflate its temp's
+		# count and move the last-use point).  In-contract
+		# pre-materialized releases are excluded from occurrence counts
+		# entirely; ANY out-of-contract input release fails closed inside
+		# the shared analysis (`unexpected input release`).  Fast path:
+		# blocks without input releases (every unit-test run without the
+		# materialization pass; post-pass blocks with no qualified temps)
+		# skip the analysis.
+		recognized_released: Set[str] = (
+			recognize_materialized_releases(
+				block,
+				local_types=local_types,
+				fn_infos=fn_infos,
+				type_table=type_table,
+				live_out_names=live_out.get(block.name, set()),
+			)
+			if any(isinstance(_i, M.StringRelease) for _i in block.instructions)
+			else set()
+		)
+		# TLR-2b suppression, fn-wide-prepass half: `owned_values` was
+		# seeded above from the fn-wide `owned_defs` prepass, which
+		# registers EVERY ConstString dest — an externally-released temp
+		# must not be owned or `_note_use` emits a second release at the
+		# drain.  (The ConstString rewrite arm below skips its re-add
+		# symmetrically.)
+		owned_values -= recognized_released
 		# Count uses in this block for temp string values.
 		use_counts: Dict[str, int] = {}
 		producers: Dict[str, M.MInstr] = {}
 		for instr in block.instructions:
+			if isinstance(instr, M.StringRelease) and instr.value in recognized_released:
+				# TLR-2b prescan-exclusion: contributes no occurrence
+				# (symmetric with the rewrite loop's recognition arm,
+				# which copies it through with no `_note_use`).
+				continue
 			dest = getattr(instr, "dest", None)
 			if isinstance(dest, str):
 				producers[dest] = instr
@@ -1441,6 +1597,24 @@ def insert_string_arc(
 		for _instr_idx, instr in enumerate(block.instructions):
 			if _audit is not None:
 				_audit_point[0] = (block.name, _instr_idx)
+			if isinstance(instr, M.StringRelease) and instr.value in recognized_released:
+				# TLR-2b recognition arm: copy the pre-materialized
+				# release through verbatim with NO `_note_use` — its
+				# occurrence was never counted (prescan-exclusion), so
+				# no decrement may happen either; an uncounted decrement
+				# would skew `_can_move_owned_once` decisions.  The
+				# audit note here keeps `materialized_lastuse_release`
+				# author-independent (same event, new author) and
+				# `events` constant.
+				if _audit is not None:
+					_audit.note(
+						_ledger_reporter.STAKE_RELEASE, instr.value,
+						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
+						pre_point=_audit_point[0],
+						post_point=(block.name, len(new_instrs)),
+					)
+				new_instrs.append(instr)
+				continue
 			if isinstance(instr, M.StoreLocal):
 				moved_out_locals.discard(instr.local)
 				explicitly_dropped_locals.discard(instr.local)
@@ -1594,7 +1768,11 @@ def insert_string_arc(
 				continue
 
 			if isinstance(instr, M.ConstString):
-				owned_values.add(instr.dest)
+				# TLR-2b suppression: an externally-released temp never
+				# enters `owned_values`, so `_note_use`'s release arm
+				# structurally CANNOT emit a second release for it.
+				if instr.dest not in recognized_released:
+					owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
 				owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):

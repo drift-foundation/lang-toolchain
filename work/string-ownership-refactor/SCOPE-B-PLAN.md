@@ -214,6 +214,99 @@ representation invisible to Drift source.
    regression bought with performance we have not measured a need for. Builder handle (B4) —
    still better served by a separate type.
 
+### 10.2.1 B5 native model and C-string API decisions (pinned 2026-07-15)
+
+This subsection pins the maintainer-review decisions that refine B5 from a C-layout sketch
+into a Drift-native representation plus explicit C interop surface.
+
+**Native model.** Drift `String` is an immutable UTF-8 byte string, conceptually
+`ImmutableBytes<Utf8>` / `RcSlice<Byte>`, but specialized by the compiler/runtime because it
+is hot:
+
+```
+pub final type String {
+    len: Uint
+    storage: RcBytes
+}
+
+internal final type RcBytes {
+    strong: AtomicUint
+    flags: RcBytesFlags
+    bytes: [Byte]   // runtime tail payload, always followed by one hidden NUL byte
+}
+```
+
+The C struct spelling is an implementation artifact, not the language model. Native Drift
+code observes operations (`len`, byte access, compare, hash, concat, encode), not fields.
+Copy remains retain-copy; Drop releases `storage`; mutable construction belongs in a
+separate `StringBuilder` / `BytesBuilder` that freezes into `String`.
+
+**Representation decisions.**
+- Keep inline `len`; do not move length behind the header.
+- Every String allocation reserves `len + 1` bytes and writes a hidden trailing NUL at
+  `bytes[len]`. This makes borrowed C-string views zero-copy in the common case.
+- `String` storage is exact, no offset/slice view inside the String handle. Shared substring
+  views, if added, are a separate `StringView`-style type and do not get the zero-copy C-string
+  promise.
+- No SSO in B5. The correctness cost (branchy retain/release and re-forked classification)
+  is not worth unmeasured allocation wins.
+- `RcBytesFlags` starts conservative: `STATIC` / `IMMORTAL` and interior-NUL cache state
+  (`NO_INTERIOR_NUL_KNOWN`, `HAS_INTERIOR_NUL`) are the only planned semantics. Other bits are
+  reserved; no weak count and no drop thunk.
+
+**C interop posture.** C never relies on the native `String` field layout. C code uses explicit
+borrowed or owned APIs whose names carry lifetime/ownership.
+
+Length-aware borrowed bytes always work, including strings containing `NUL`:
+
+```
+with_bytes(s, |ptr, len| { ... })
+```
+
+Checked borrowed C strings are Rust-like: native strings may contain interior NUL, but C-string
+conversion is fallible. The checked helpers validate or use the cached interior-NUL flag, then
+borrow the hidden trailing-NUL storage:
+
+```
+with_cstr(s, body)  -> Result<T, CStringError>
+with_cstr2(a, b, body) -> Result<T, CStringError>
+with_cstr3(a, b, c, body) -> Result<T, CStringError>
+with_cstr4(a, b, c, d, body) -> Result<T, CStringError>
+```
+
+`CStringError` includes `InteriorNul(index: Int)`. In throwing code, callers use
+`.or_throw()` / auto-try; in `nothrow` code they match the `Result`. The arity helpers exist
+specifically so common multi-parameter C calls do not require nested `match` ladders.
+
+Unchecked C-string helpers are intentionally named unsafe and do no scan:
+
+```
+with_cstr_unsafe(s, body)
+with_cstr2_unsafe(a, b, body)
+with_cstr3_unsafe(a, b, c, body)
+with_cstr4_unsafe(a, b, c, d, body)
+```
+
+They are memory-safe under the callback lifetime, but semantically unsafe: if a String contains
+an interior NUL, C observes only the prefix. They are for callers that have already validated
+or constructed the inputs under a stronger invariant.
+
+For complex cases, provide an opaque `CStringScope`:
+
+```
+with_cstring_scope(|scope| {
+    val p = scope.cstr(...);     // checked Result
+    val q = scope.cstr_unsafe(...);
+    val argv = scope.argv(...);
+    ...
+})
+```
+
+The scope owns internal pins/temps. Users never index into `pins`; they receive raw pointers
+or opaque scoped handles (`CArgv`) valid only until the callback returns. Owned C allocations
+(`OwnedCStr` / `OwnedCBytes`) are separate APIs reserved for handoff to C libraries that take
+ownership.
+
 ### 10.3 v2 recommendation: **B-arch first, then B-repr(B5) as a committed follow-on — sequenced, not combined**
 
 1. **Order is forced by the dependency structure, not by ABI caution:** B-repr before

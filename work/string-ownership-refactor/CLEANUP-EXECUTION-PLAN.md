@@ -231,3 +231,12 @@ ownership tests.
 semantic C contract; C code must use explicit borrow/owned accessor APIs so
 ownership meaning is carried by the API, never inferred from call-site
 convention.
+
+**Pinned B5 decisions.** See `SCOPE-B-PLAN.md` §10.2.1 for the B5 native
+model and C-string API. In short: `String` is an immutable UTF-8
+retain-copy handle `{len, RcBytes}` with exact storage and a hidden
+trailing NUL; no SSO; flags are limited to static/immortal and
+interior-NUL cache state; C interop is explicit (`with_bytes`,
+checked `with_cstr{1..4}`, unsafe no-scan `with_cstr{1..4}_unsafe`,
+opaque `CStringScope`, and owned C handoff types). C callers do not
+observe the native layout.

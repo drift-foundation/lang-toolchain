@@ -1323,6 +1323,161 @@ def test_tlr2a_semantic_string_param_conformance(monkeypatch, tmp_path: Path) ->
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
 
 
+def test_tlr2b_pass_plus_arc_equals_arc_only(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-2b A/B equivalence pin: for the migrated family the
+	materialization pass + string_arc must produce the BYTE-IDENTICAL
+	instruction stream string_arc-alone produced, with the same audit
+	counters (`materialized_lastuse_release` keeps its author-independent
+	meaning — noted at the recognition arm in B, at the TLR-1 shim in A).
+	Shapes: qualified temp; same-instruction TWO-temp group (drain-order
+	rule); repeated-operand temp (ONE release); consumed single-use
+	ConstString (no release from either author); Concat-produced temp
+	(NOT in the family — released by string_arc's own bookkeeping as
+	temp_lastuse in BOTH configs, same position)."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=["x"], types={"x": string_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.ConstString(dest="%q", value="q"),
+			M.ConstString(dest="%p", value="p"),
+			M.ConstString(dest="%r", value="r"),
+			M.ConstString(dest="%c", value="c"),
+			M.ConstString(dest="%u1", value="u1"),
+			M.ConstString(dest="%u2", value="u2"),
+			M.StringEq(dest="%e1", left="%q", right="%q"),   # %q drains (repeat → ONE release)
+			M.StringEq(dest="%e2", left="%p", right="%r"),   # %p,%r drain together (order rule)
+			M.StringConcat(dest="%cc", left="%u1", right="%u2"),  # %u1,%u2 drain; %cc = Concat temp
+			M.StringEq(dest="%e3", left="%cc", right="%cc"), # %cc drains → temp_lastuse (both configs)
+			M.StoreLocal(local="x", value="%c"),             # %c CONSUMED → no release ever
+		]
+		entry.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry}
+		func.entry = "entry"
+		for t in ("%q", "%p", "%r", "%c", "%u1", "%u2", "%cc"):
+			func.local_types[t] = string_ty
+		return func
+
+	# Config A: string_arc only (in-pass emission, TLR-1 shim).
+	fa = build("ab_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config B: materialization pass first (driver order: pass → ledger
+	# build → string_arc), then recognition.
+	fb = build("ab_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
+	agg_a = _fn_agg(out, "test::ab_a")
+	agg_b = _fn_agg(out, "test::ab_b")
+	for key in (
+		"site_class:materialized_lastuse_release",
+		"site_class:temp_lastuse_release",
+		"events",
+	):
+		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
+	# The family: %q (1), %p + %r (2), %u1 + %u2 (2) → 5 materialized;
+	# %cc stays temp_lastuse; %c consumed → nothing.
+	assert agg_b.get("site_class:materialized_lastuse_release") == 5, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+
+
+def test_tlr2b_pass_is_idempotent(monkeypatch, tmp_path: Path) -> None:
+	"""Second run recognizes its own in-contract output and computes no
+	new points — no duplicate releases, returns False."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("idem", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringEq(dest="%e", left="%a", right="%b"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is True
+	once = list(func.blocks["entry"].instructions)
+	assert [type(i).__name__ for i in once] == [
+		"ConstString", "ConstString", "StringEq", "StringRelease", "StringRelease",
+	], once
+	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is False
+	assert func.blocks["entry"].instructions == once
+
+
+def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_path: Path) -> None:
+	"""The handshake is a verified contract, not trust: insert_string_arc
+	itself (via the shared analysis in its prescan) fails closed on an
+	out-of-contract input release — here the SHAPE half: a release of a
+	Concat-produced temp (only the TLR-2b pass may author pre-string_arc
+	releases, and its family is exactly block-local ConstString)."""
+	import pytest
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("oc", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringConcat(dest="%cc", left="%a", right="%b"),
+		M.StringEq(dest="%e", left="%cc", right="%cc"),
+		M.StringRelease(value="%cc"),  # correct position, WRONG family/shape
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%a", "%b", "%cc"):
+		func.local_types[t] = string_ty
+	_attach_ledger(func)
+	with pytest.raises(AssertionError, match="unexpected input release"):
+		insert_string_arc(func, type_table=tt, fn_infos={})
+
+
+def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
+	"""Cross-block ConstString temps are OUT of the TLR-2 family (the
+	producing block sees them live-out; the using block has no in-block
+	producer): the pass emits nothing, and string_arc's own bookkeeping
+	still releases them as temp_lastuse in both configs."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=[], types={})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [M.ConstString(dest="%x", value="x")]
+		entry.terminator = M.Goto(target="next")
+		nxt = M.BasicBlock(name="next")
+		nxt.instructions = [M.StringEq(dest="%e", left="%x", right="%x")]
+		nxt.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "next": nxt}
+		func.entry = "entry"
+		func.local_types["%x"] = string_ty
+		return func
+
+	fb = build("xb_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	fa = build("xb_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	for bname in ("entry", "next"):
+		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
+	agg_a = _fn_agg(out, "test::xb_a")
+	assert agg_a.get("site_class:materialized_lastuse_release", 0) == 0, agg_a
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

@@ -171,8 +171,16 @@ rule the review flagged as the load-bearing detail:
   **In-contract requires BOTH halves (review-hardened):** SHAPE —
   `%t`'s producer is a block-local ConstString — AND **PLACEMENT** —
   it is the UNIQUE `StringRelease(%t)` in the block, `%t`'s remaining
-  occurrences are all USE, and the release sits IMMEDIATELY AFTER the
-  draining instruction `compute_lastuse_release_points` computes.
+  occurrences are all USE, and the release sits after the draining
+  instruction `compute_lastuse_release_points` computes, separated
+  only by in-contract releases of temps draining at the SAME
+  instruction (2b implementation finding, caught by the A/B pin:
+  same-drain-group temps release CONSECUTIVELY — `StringEq(%p, %r)`
+  yields `Release(%p); Release(%r)` — so strict `drain+1` rejects the
+  k-th member; a gap containing ANY non-release instruction still
+  rejects).  Shape is also enforced strictly: ANY input StringRelease
+  whose operand is not a block-local ConstString raises (no author
+  other than the 2b pass may emit pre-string_arc releases).
   Shape alone is too broad: a release placed BEFORE a later use would
   still be excluded from counting and would suppress string_arc's own
   release — turning a TLR-2b emission bug into a silent
@@ -200,7 +208,13 @@ rule the review flagged as the load-bearing detail:
   requires ownership, so it structurally CANNOT emit a second release —
   double-release prevention by construction. (Qualified temps have zero
   consuming uses by definition, so the owned-exclusion cannot change any
-  move decision.)
+  move decision.)  2b implementation finding (caught by the A/B pin):
+  the ConstString rewrite arm is only HALF the ownership registration —
+  `owned_values` is seeded per block from the fn-wide `owned_defs`
+  prepass, which registers every ConstString dest, so recognition must
+  also subtract the recognized set from that seed
+  (`owned_values -= recognized_released`); without it, a second release
+  at the drain.
 - **Audit accounting:** the recognition arm notes the event
   (RELEASE-kind, `materialized_lastuse_release`, anchored at the
   release's position) as it copies it through — the counter keeps its
