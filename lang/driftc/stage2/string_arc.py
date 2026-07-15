@@ -49,6 +49,606 @@ def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
 	return td.kind is TypeKind.VARIANT
 
 
+def iter_used_values(instr: M.MInstr) -> Iterable[str]:
+	"""Module-level single source for per-instruction String-relevant
+	operand iteration (TLR-2a contract support).  Pure — no closure
+	state; extracted verbatim from insert_string_arc's former
+	_iter_used_values closure (which now aliases this)."""
+	if isinstance(instr, M.StoreLocal):
+		yield instr.value
+	elif isinstance(instr, M.StoreRef):
+		yield instr.ptr
+		yield instr.value
+	elif isinstance(instr, M.MoveFromRef):
+		# MoveFromRef reads through `ptr`; the destination is a
+		# named local (no SSA value yielded — the local is
+		# tracked separately).
+		yield instr.ptr
+	elif isinstance(instr, M.ArrayIndexStore):
+		yield instr.array
+		yield instr.index
+		yield instr.value
+	elif isinstance(instr, M.ArrayLit):
+		yield from instr.elements
+	elif isinstance(instr, M.ArrayAlloc):
+		yield instr.length
+		yield instr.cap
+	elif isinstance(instr, M.ArrayElemInit):
+		yield instr.array
+		yield instr.index
+		yield instr.value
+	elif isinstance(instr, M.ArrayElemInitUnchecked):
+		yield instr.array
+		yield instr.index
+		yield instr.value
+	elif isinstance(instr, M.ArrayElemAssign):
+		yield instr.array
+		yield instr.index
+		yield instr.value
+	elif isinstance(instr, M.ArrayElemDrop):
+		yield instr.array
+		yield instr.index
+	elif isinstance(instr, M.ArrayElemTake):
+		yield instr.array
+		yield instr.index
+	elif isinstance(instr, M.ArrayDrop):
+		yield instr.array
+	elif isinstance(instr, M.ArrayDup):
+		yield instr.array
+	elif isinstance(instr, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
+		yield instr.array
+		yield instr.index
+	elif isinstance(instr, M.ArraySetLen):
+		yield instr.array
+		yield instr.length
+	elif isinstance(instr, M.ConstructStruct):
+		yield from instr.args
+	elif isinstance(instr, M.ConstructVariant):
+		yield from instr.args
+	elif isinstance(instr, M.StructGetField):
+		yield instr.subject
+	elif isinstance(instr, M.VariantGetField):
+		yield instr.variant
+	elif isinstance(instr, M.ConstructIfaceValue):
+		yield instr.value
+	elif isinstance(instr, M.LoadLocal):
+		# Do not yield instr.local — that is a storage-local name, not
+		# an SSA value name.  Yielding it conflated the storage namespace
+		# with the SSA-value namespace and required _is_local_name() to
+		# filter it back out, which silently mis-classified SSA values
+		# whose MIR temp counter happened to land on a name already in
+		# use as a user storage local (e.g. user `val t4 = call_ret`).
+		# Storage-local liveness is tracked separately via store_defs /
+		# assigned_in / assigned_out and via _release_local at scope exit.
+		pass
+	elif isinstance(instr, M.LoadRef):
+		yield instr.ptr
+	elif isinstance(instr, M.Call):
+		yield from instr.args
+	elif isinstance(instr, M.CallIndirect):
+		yield instr.callee
+		yield from instr.args
+	elif isinstance(instr, M.CallIface):
+		yield instr.iface
+		yield from instr.args
+	elif isinstance(instr, M.IfaceUpcast):
+		yield instr.iface
+	elif isinstance(instr, M.StringConcat):
+		yield instr.left
+		yield instr.right
+	elif isinstance(instr, M.StringEq):
+		yield instr.left
+		yield instr.right
+	elif isinstance(instr, M.StringCmp):
+		yield instr.left
+		yield instr.right
+	elif isinstance(instr, M.StringLen):
+		yield instr.value
+	elif isinstance(instr, M.StringByteAt):
+		yield instr.value
+	elif isinstance(instr, M.StringRetain):
+		yield instr.value
+	elif isinstance(instr, M.StringRelease):
+		yield instr.value
+	elif isinstance(instr, M.CopyValue):
+		yield instr.value
+	elif isinstance(instr, M.DropValue):
+		yield instr.value
+	elif isinstance(instr, M.UnaryOpInstr):
+		yield instr.operand
+	elif isinstance(instr, M.BinaryOpInstr):
+		yield instr.left
+		yield instr.right
+	elif isinstance(instr, M.AssignSSA):
+		yield instr.src
+	elif isinstance(instr, M.Phi):
+		for val in instr.incoming.values():
+			yield val
+	elif isinstance(instr, M.ConstructResultOk):
+		if instr.value is not None:
+			yield instr.value
+	elif isinstance(instr, M.ConstructResultErr):
+		yield instr.error
+	elif isinstance(instr, M.ResultOk):
+		yield instr.result
+	elif isinstance(instr, M.ResultErr):
+		yield instr.result
+	elif isinstance(instr, M.ResultIsErr):
+		yield instr.result
+	elif isinstance(instr, M.ConstructError):
+		yield instr.code
+		yield instr.event_fqn
+		if instr.payload is not None:
+			yield instr.payload
+		if instr.attr_key is not None:
+			yield instr.attr_key
+	elif isinstance(instr, M.ErrorRaise):
+		yield instr.error
+	elif isinstance(instr, M.ExcGetParamsJson):
+		yield instr.error
+	elif isinstance(instr, M.ExcSetParamsJson):
+		yield instr.error
+		yield instr.json_text
+	elif isinstance(instr, M.ExcGetContextJson):
+		yield instr.error
+	elif isinstance(instr, M.ExcAppendContextFrame):
+		yield instr.error
+		yield instr.frame_json
+	elif isinstance(instr, M.ErrorEvent):
+		yield instr.error
+	elif isinstance(instr, M.ErrorEventFqn):
+		yield instr.error
+	elif isinstance(instr, M.StringFromInt):
+		yield instr.value
+	elif isinstance(instr, M.StringFromUint):
+		yield instr.value
+	elif isinstance(instr, M.StringFromBool):
+		yield instr.value
+	elif isinstance(instr, M.StringFromFloat):
+		yield instr.value
+	elif isinstance(instr, M.MoveOut):
+		# Do not yield instr.local — same reason as LoadLocal above.
+		# It is a storage-local name, not an SSA value.  MoveOut has
+		# its own rewrite path that handles the storage-local move
+		# semantics; it does not need the name to flow through the
+		# SSA-value liveness analyses.  Yielding it would re-open the
+		# namespace-collision class for explicit `move local` shapes.
+		pass
+
+
+
+
+
+def seed_string_dest_types(
+	blocks_in_order: "list[M.BasicBlock]",
+	local_types: "Dict[str, TypeId]",
+	*,
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+) -> None:
+	"""Shared dest-type seeding (TLR-2a review finding 1): pre-seed
+	missing destination types from instruction shapes — the SAME logic
+	insert_string_arc runs internally (its `_seed_dest_types` delegates
+	here), exported so the TLR-2b pass can seed a COPY of
+	`func.local_types` before calling `compute_lastuse_release_points`
+	instead of duplicating the rules or silently missing temps whose
+	types HIR lowering did not record.  Mutates `local_types` in place."""
+	string_ty = type_table.ensure_string()
+	for block in blocks_in_order:
+		for instr in block.instructions:
+			dest = getattr(instr, "dest", None)
+			if dest is None:
+				continue
+			if local_types.get(dest) is not None:
+				continue
+			if isinstance(instr, (M.ConstString, M.StringConcat, M.StringRetain, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
+				local_types[dest] = string_ty
+				continue
+			if isinstance(instr, M.AssignSSA):
+				src_ty = local_types.get(instr.src)
+				if src_ty is not None:
+					local_types[dest] = src_ty
+				continue
+			if isinstance(instr, M.Phi):
+				for incoming in instr.incoming.values():
+					in_ty = local_types.get(incoming)
+					if in_ty is not None:
+						local_types[dest] = in_ty
+						break
+				continue
+			if isinstance(instr, M.Call):
+				info = fn_infos.get(instr.fn_id)
+				if info is not None and info.signature is not None and info.signature.return_type_id is not None and not bool(getattr(info, "declared_can_throw", False)):
+					local_types[dest] = info.signature.return_type_id
+				else:
+					sym = function_symbol(instr.fn_id)
+					if sym in {
+						"drift_string_from_cstr",
+						"drift_string_from_utf8_bytes",
+						"drift_string_from_int64",
+						"drift_string_from_uint64",
+						"drift_string_from_f64",
+						"drift_string_from_bool",
+						"drift_string_literal",
+						"drift_string_concat",
+						"drift_string_retain",
+					}:
+						local_types[dest] = string_ty
+				continue
+			if isinstance(instr, M.CallIndirect):
+				if instr.user_ret_type is not None:
+					local_types[dest] = instr.user_ret_type
+				continue
+			if isinstance(instr, M.CallIface):
+				if instr.user_ret_type is not None:
+					local_types[dest] = instr.user_ret_type
+				continue
+
+
+# ── TLR-2a shared contracts (TLR-2-DESIGN.md rev 2) ─────────────────────
+#
+# Contract 1: `consumes_string_operand` — per-operand consuming/non-
+# consuming classification, mirroring the rewrite loop's arm dispatch.
+# Contract 2: `compute_lastuse_release_points` — the occurrence-level
+# release-point calculator (multiplicity rule §3a included).
+#
+# Both are PURE functions over the input MIR.  Faithfulness note: the
+# implementation mirrors the rewrite-loop arms via a three-way DISPOSITION
+# per String operand — the review-approved two contracts under-modeled one
+# axis discovered during implementation and reported in the TLR-2a report:
+# some HANDLED arms neither consume nor note an operand at all
+# (ref-position and non-String-param call args, info-less calls, Exc/ctor
+# arms' non-selected operands).  Those are IGNORE: counted by the prescan
+# but never drained, so the temp can never reach zero and is never
+# released.  The calculator must reproduce that, or it would invent
+# releases string_arc never emits.  Conformance is pinned empirically
+# (calculator-vs-insert_string_arc agreement) in
+# test_string_arc_audit_reporter.py.
+
+DISPOSITION_CONSUME = "consume"
+DISPOSITION_USE = "use"
+DISPOSITION_IGNORE = "ignore"
+
+
+def string_operand_dispositions(
+	instr: M.MInstr,
+	*,
+	local_types: Mapping[str, TypeId],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+) -> list[tuple[str, str]]:
+	"""(operand value-id, disposition) for every STRING-TYPED SSA operand
+	of `instr`, mirroring insert_string_arc's rewrite-loop arms.  Assumes
+	well-typed MIR (e.g. a String value cannot be stored into an
+	array/destructible-typed local, so those early StoreLocal arms never
+	intercept a String operand)."""
+	string_ty = type_table.ensure_string()
+
+	def _is_str_val(v: object) -> bool:
+		return isinstance(v, str) and local_types.get(v) == string_ty
+
+	def _is_str_tid(tid) -> bool:
+		return tid == string_ty
+
+	out: list[tuple[str, str]] = []
+	if isinstance(instr, M.StoreLocal):
+		if _is_str_tid(local_types.get(instr.local)) and _is_str_val(instr.value):
+			out.append((instr.value, DISPOSITION_CONSUME))
+		elif _is_str_val(instr.value):
+			out.append((instr.value, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.MoveFromRef):
+		if _is_str_tid(instr.inner_ty) and _is_str_val(instr.ptr):
+			out.append((instr.ptr, DISPOSITION_CONSUME))
+			return out
+		# non-String MoveFromRef falls through to the generic note.
+		if _is_str_val(instr.ptr):
+			out.append((instr.ptr, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.StoreRef):
+		if _is_str_tid(instr.inner_ty):
+			if _is_str_val(instr.value):
+				out.append((instr.value, DISPOSITION_CONSUME))
+			if _is_str_val(instr.ptr):
+				out.append((instr.ptr, DISPOSITION_IGNORE))
+			return out
+		for v in (instr.ptr, instr.value):
+			if _is_str_val(v):
+				out.append((v, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.ArrayIndexStore):
+		if _is_str_tid(instr.elem_ty):
+			if _is_str_val(instr.value):
+				out.append((instr.value, DISPOSITION_CONSUME))
+			for v in (instr.array, instr.index):
+				if _is_str_val(v):
+					out.append((v, DISPOSITION_IGNORE))
+			return out
+		for v in (instr.array, instr.index, instr.value):
+			if _is_str_val(v):
+				out.append((v, DISPOSITION_USE))
+		return out
+	if isinstance(instr, (M.ArrayElemInit, M.ArrayElemInitUnchecked, M.ArrayElemAssign)):
+		if _is_str_tid(instr.elem_ty):
+			if _is_str_val(instr.value):
+				out.append((instr.value, DISPOSITION_CONSUME))
+			for v in (getattr(instr, "array", None), getattr(instr, "index", None)):
+				if _is_str_val(v):
+					out.append((v, DISPOSITION_IGNORE))
+			return out
+		for v in (getattr(instr, "array", None), getattr(instr, "index", None), instr.value):
+			if _is_str_val(v):
+				out.append((v, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.ArrayLit):
+		disp = DISPOSITION_CONSUME if _is_str_tid(instr.elem_ty) else DISPOSITION_USE
+		for e in instr.elements:
+			if _is_str_val(e):
+				out.append((e, disp))
+		return out
+	if isinstance(instr, M.ConstructStruct):
+		inst = type_table.get_struct_instance(instr.struct_ty)
+		if inst is not None:
+			for field_ty, arg in zip(inst.field_types, instr.args):
+				if not _is_str_val(arg):
+					continue
+				out.append((arg, DISPOSITION_CONSUME if _is_str_tid(field_ty) else DISPOSITION_IGNORE))
+			return out
+		for arg in instr.args:
+			if _is_str_val(arg):
+				out.append((arg, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.ConstructVariant):
+		inst = type_table.get_variant_instance(instr.variant_ty)
+		if inst is not None and instr.ctor in inst.arms_by_name:
+			arm = inst.arms_by_name[instr.ctor]
+			for field_ty, arg in zip(arm.field_types, instr.args):
+				if not _is_str_val(arg):
+					continue
+				out.append((arg, DISPOSITION_CONSUME if _is_str_tid(field_ty) else DISPOSITION_IGNORE))
+			return out
+		for arg in instr.args:
+			if _is_str_val(arg):
+				out.append((arg, DISPOSITION_USE))
+		return out
+	if isinstance(instr, M.ConstructIfaceValue):
+		if _is_str_val(instr.value):
+			out.append((instr.value, DISPOSITION_CONSUME if _is_str_tid(instr.value_ty) else DISPOSITION_IGNORE))
+		return out
+	if isinstance(instr, M.ConstructResultOk):
+		if instr.value is not None and _is_str_val(instr.value):
+			out.append((instr.value, DISPOSITION_CONSUME))
+		return out
+	if isinstance(instr, M.ConstructError):
+		if _is_str_val(instr.event_fqn):
+			out.append((instr.event_fqn, DISPOSITION_CONSUME))
+		return out
+	if isinstance(instr, M.ExcSetParamsJson):
+		if _is_str_val(instr.json_text):
+			out.append((instr.json_text, DISPOSITION_CONSUME))
+		return out
+	if isinstance(instr, M.ExcAppendContextFrame):
+		if _is_str_val(instr.frame_json):
+			out.append((instr.frame_json, DISPOSITION_CONSUME))
+		return out
+	if isinstance(instr, M.ErrorRaise):
+		for v in iter_used_values(instr):
+			if _is_str_val(v):
+				out.append((v, DISPOSITION_IGNORE))
+		return out
+	# Call params use the SEMANTIC String test (SCALAR + name), mirroring
+	# the rewrite arms' `_param_is_string` — NOT raw TypeId equality:
+	# String param TypeIds are not canonical across the package/type-table
+	# boundary (the string_stakes lesson), and a raw-equality mirror would
+	# classify a semantically-String by-value arg as IGNORE while the live
+	# arm consumes it.  (IGNORE still disqualifies the temp from
+	# release-point output, so no phantom release today — the real risk
+	# is CONTRACT DRIFT: `consumes_string_operand` would lie relative to
+	# the live arm, and future users of the predicate would decide
+	# wrongly.)
+	def _param_is_str_semantic(tid) -> bool:
+		td = type_table.get(tid)
+		return td.kind is TypeKind.SCALAR and td.name == "String"
+
+	if isinstance(instr, M.Call):
+		info = fn_infos.get(instr.fn_id)
+		if info is not None and info.signature and info.signature.param_type_ids is not None:
+			for ty_id, arg in zip(info.signature.param_type_ids, instr.args):
+				if not _is_str_val(arg):
+					continue
+				if type_table.get(ty_id).kind is TypeKind.REF:
+					out.append((arg, DISPOSITION_IGNORE))
+				elif _param_is_str_semantic(ty_id):
+					out.append((arg, DISPOSITION_CONSUME))
+				else:
+					out.append((arg, DISPOSITION_IGNORE))
+			return out
+		for arg in instr.args:
+			if _is_str_val(arg):
+				out.append((arg, DISPOSITION_IGNORE))
+		return out
+	if isinstance(instr, (M.CallIndirect, M.CallIface)):
+		param_types = list(getattr(instr, "param_types", []) or [])
+		for ty_id, arg in zip(param_types, instr.args):
+			if not _is_str_val(arg):
+				continue
+			if type_table.get(ty_id).kind is TypeKind.REF:
+				out.append((arg, DISPOSITION_IGNORE))
+			elif _param_is_str_semantic(ty_id):
+				out.append((arg, DISPOSITION_CONSUME))
+			else:
+				out.append((arg, DISPOSITION_IGNORE))
+		callee = getattr(instr, "callee", None)
+		if _is_str_val(callee):
+			out.append((callee, DISPOSITION_IGNORE))
+		return out
+	if isinstance(instr, M.DropValue):
+		if _is_str_tid(instr.ty):
+			if _is_str_val(instr.value):
+				out.append((instr.value, DISPOSITION_CONSUME))
+			return out
+		if _is_str_val(instr.value):
+			out.append((instr.value, DISPOSITION_USE))
+		return out
+	# Generic fallthrough: every String operand is a non-consuming USE.
+	for v in iter_used_values(instr):
+		if _is_str_val(v):
+			out.append((v, DISPOSITION_USE))
+	return out
+
+
+def consumes_string_operand(
+	instr: M.MInstr,
+	operand: str,
+	*,
+	local_types: Mapping[str, TypeId],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+) -> bool:
+	"""Contract 1: True iff ANY occurrence of `operand` in `instr` is
+	consuming per the rewrite-loop arm dispatch."""
+	return any(
+		v == operand and d == DISPOSITION_CONSUME
+		for v, d in string_operand_dispositions(
+			instr, local_types=local_types, fn_infos=fn_infos, type_table=type_table
+		)
+	)
+
+
+def compute_lastuse_release_points(
+	block: M.BasicBlock,
+	*,
+	local_types: Mapping[str, TypeId],
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+	live_out_names: Set[str],
+) -> dict[str, int]:
+	"""Contract 2: for each qualified block-local ConstString temp, the
+	instruction index at which its occurrence count drains to zero — the
+	position AFTER which exactly ONE release belongs (multiplicity rule:
+	repeated operands in one instruction drain together and yield one
+	release after that instruction; a terminator-drained temp maps to
+	len(block.instructions)).
+
+	Qualified: producer is a ConstString in THIS block; String-typed;
+	not in `live_out_names`; ≥1 occurrence; every occurrence has USE
+	disposition (a CONSUME disqualifies — string_arc de-owns and never
+	releases; an IGNORE disqualifies — the count never drains, so
+	string_arc never releases); no Return-terminator use (consuming).
+
+	Recognition rule (TLR-2b prescan-exclusion contract, pinned now): an
+	in-contract pre-materialized `StringRelease(%t)` contributes NO
+	occurrence to any count, and `%t` itself is excluded from the result
+	(already released by the external author).  In-contract means BOTH:
+	- shape: `%t`'s producer is a block-local ConstString; AND
+	- placement (review-hardened): it is the UNIQUE StringRelease of
+	  `%t` in the block, `%t`'s remaining occurrences are all USE, and
+	  the release sits IMMEDIATELY AFTER the draining instruction those
+	  occurrences compute (never before a later use, never for a
+	  live-out or terminator-read temp).
+	A shape-matching release that fails placement is REJECTED fail-closed
+	(AssertionError, `unexpected input release` tag) — a mis-placed
+	release recognized silently would suppress string_arc's own release
+	while leaving a later use reading freed memory."""
+	string_ty = type_table.ensure_string()
+	producers: dict[str, M.MInstr] = {}
+	for ins in block.instructions:
+		dest = getattr(ins, "dest", None)
+		if isinstance(dest, str):
+			producers[dest] = ins
+
+	def _is_conststring_temp(v: str) -> bool:
+		return (
+			isinstance(producers.get(v), M.ConstString)
+			and local_types.get(v) == string_ty
+		)
+
+	# Phase 1 — SHAPE recognition (needed before occurrence counting so
+	# the exclusion below is possible); placement is validated in phase 3.
+	release_sites: dict[str, list[int]] = {}
+	for idx, ins in enumerate(block.instructions):
+		if isinstance(ins, M.StringRelease) and _is_conststring_temp(ins.value):
+			release_sites.setdefault(ins.value, []).append(idx)
+	recognized_released: Set[str] = set(release_sites)
+
+	occurrences: dict[str, list[tuple[int, str]]] = {}
+	for idx, ins in enumerate(block.instructions):
+		if isinstance(ins, M.StringRelease) and ins.value in recognized_released:
+			continue  # prescan-exclusion: contributes no occurrence
+		for v, disp in string_operand_dispositions(
+			ins, local_types=local_types, fn_infos=fn_infos, type_table=type_table
+		):
+			if _is_conststring_temp(v):
+				occurrences.setdefault(v, []).append((idx, disp))
+
+	term_used: Set[str] = set()
+	term_consumed: Set[str] = set()
+	if block.terminator is not None:
+		is_return = isinstance(block.terminator, M.Return)
+		for v in _cfg.terminator_value_uses(block.terminator):
+			if _is_conststring_temp(v):
+				(term_consumed if is_return else term_used).add(v)
+
+	# Phase 3 — PLACEMENT validation of shape-recognized releases
+	# (review-hardened): recognition by producer shape alone would let a
+	# mis-placed release — e.g. one sitting BEFORE a later use — be
+	# excluded from counting and suppress string_arc's own release,
+	# turning an emission bug into a silent use-after-release.  Each
+	# recognized release must be the unique release of its temp, the
+	# temp's remaining occurrences must all be USE, and the release must
+	# sit immediately after the draining instruction.  Anything else is
+	# fail-closed (same AssertionError → driver-boundary diagnostic path
+	# as the dead-stake tripwires).
+	for temp, rel_idxs in release_sites.items():
+		occs = occurrences.get(temp, [])
+		drain = max((i for i, _d in occs), default=None)
+		in_contract = (
+			len(rel_idxs) == 1
+			and temp not in live_out_names
+			and temp not in term_used
+			and temp not in term_consumed
+			and bool(occs)
+			and all(d == DISPOSITION_USE for _i, d in occs)
+			and rel_idxs[0] == drain + 1
+		)
+		if not in_contract:
+			raise AssertionError(
+				f"string_arc release-recognition tripwire "
+				f"[unexpected input release]: block '{block.name}', "
+				f"value '{temp}', release at idx {rel_idxs}, "
+				f"expected unique release immediately after draining "
+				f"instruction idx {drain} "
+				f"(occurrences={occurrences.get(temp)}, "
+				f"live_out={temp in live_out_names}, "
+				f"terminator_read={temp in term_used or temp in term_consumed}). "
+				f"A pre-materialized StringRelease must match the computed "
+				f"release point exactly (TLR-2 recognition contract)."
+			)
+
+	points: dict[str, int] = {}
+	for temp, occs in occurrences.items():
+		if temp in recognized_released or temp in live_out_names:
+			continue
+		if temp in term_consumed:
+			continue
+		if any(d != DISPOSITION_USE for _i, d in occs):
+			continue
+		if temp in term_used:
+			points[temp] = len(block.instructions)
+		else:
+			points[temp] = max(i for i, _d in occs)
+	# Terminator-only-used temps (no instruction occurrence).
+	for temp in term_used:
+		if (
+			temp not in occurrences
+			and temp not in recognized_released
+			and temp not in live_out_names
+			and temp not in term_consumed
+		):
+			points[temp] = len(block.instructions)
+	return points
+
+
 def insert_string_arc(
 	func: M.MirFunc,
 	*,
@@ -463,167 +1063,10 @@ def insert_string_arc(
 				continue
 			_drop_destructible_local(local, out)
 
-	def _iter_used_values(instr: M.MInstr) -> Iterable[str]:
-		if isinstance(instr, M.StoreLocal):
-			yield instr.value
-		elif isinstance(instr, M.StoreRef):
-			yield instr.ptr
-			yield instr.value
-		elif isinstance(instr, M.MoveFromRef):
-			# MoveFromRef reads through `ptr`; the destination is a
-			# named local (no SSA value yielded — the local is
-			# tracked separately).
-			yield instr.ptr
-		elif isinstance(instr, M.ArrayIndexStore):
-			yield instr.array
-			yield instr.index
-			yield instr.value
-		elif isinstance(instr, M.ArrayLit):
-			yield from instr.elements
-		elif isinstance(instr, M.ArrayAlloc):
-			yield instr.length
-			yield instr.cap
-		elif isinstance(instr, M.ArrayElemInit):
-			yield instr.array
-			yield instr.index
-			yield instr.value
-		elif isinstance(instr, M.ArrayElemInitUnchecked):
-			yield instr.array
-			yield instr.index
-			yield instr.value
-		elif isinstance(instr, M.ArrayElemAssign):
-			yield instr.array
-			yield instr.index
-			yield instr.value
-		elif isinstance(instr, M.ArrayElemDrop):
-			yield instr.array
-			yield instr.index
-		elif isinstance(instr, M.ArrayElemTake):
-			yield instr.array
-			yield instr.index
-		elif isinstance(instr, M.ArrayDrop):
-			yield instr.array
-		elif isinstance(instr, M.ArrayDup):
-			yield instr.array
-		elif isinstance(instr, (M.ArrayIndexLoad, M.ArrayIndexLoadUnchecked)):
-			yield instr.array
-			yield instr.index
-		elif isinstance(instr, M.ArraySetLen):
-			yield instr.array
-			yield instr.length
-		elif isinstance(instr, M.ConstructStruct):
-			yield from instr.args
-		elif isinstance(instr, M.ConstructVariant):
-			yield from instr.args
-		elif isinstance(instr, M.StructGetField):
-			yield instr.subject
-		elif isinstance(instr, M.VariantGetField):
-			yield instr.variant
-		elif isinstance(instr, M.ConstructIfaceValue):
-			yield instr.value
-		elif isinstance(instr, M.LoadLocal):
-			# Do not yield instr.local — that is a storage-local name, not
-			# an SSA value name.  Yielding it conflated the storage namespace
-			# with the SSA-value namespace and required _is_local_name() to
-			# filter it back out, which silently mis-classified SSA values
-			# whose MIR temp counter happened to land on a name already in
-			# use as a user storage local (e.g. user `val t4 = call_ret`).
-			# Storage-local liveness is tracked separately via store_defs /
-			# assigned_in / assigned_out and via _release_local at scope exit.
-			pass
-		elif isinstance(instr, M.LoadRef):
-			yield instr.ptr
-		elif isinstance(instr, M.Call):
-			yield from instr.args
-		elif isinstance(instr, M.CallIndirect):
-			yield instr.callee
-			yield from instr.args
-		elif isinstance(instr, M.CallIface):
-			yield instr.iface
-			yield from instr.args
-		elif isinstance(instr, M.IfaceUpcast):
-			yield instr.iface
-		elif isinstance(instr, M.StringConcat):
-			yield instr.left
-			yield instr.right
-		elif isinstance(instr, M.StringEq):
-			yield instr.left
-			yield instr.right
-		elif isinstance(instr, M.StringCmp):
-			yield instr.left
-			yield instr.right
-		elif isinstance(instr, M.StringLen):
-			yield instr.value
-		elif isinstance(instr, M.StringByteAt):
-			yield instr.value
-		elif isinstance(instr, M.StringRetain):
-			yield instr.value
-		elif isinstance(instr, M.StringRelease):
-			yield instr.value
-		elif isinstance(instr, M.CopyValue):
-			yield instr.value
-		elif isinstance(instr, M.DropValue):
-			yield instr.value
-		elif isinstance(instr, M.UnaryOpInstr):
-			yield instr.operand
-		elif isinstance(instr, M.BinaryOpInstr):
-			yield instr.left
-			yield instr.right
-		elif isinstance(instr, M.AssignSSA):
-			yield instr.src
-		elif isinstance(instr, M.Phi):
-			for val in instr.incoming.values():
-				yield val
-		elif isinstance(instr, M.ConstructResultOk):
-			if instr.value is not None:
-				yield instr.value
-		elif isinstance(instr, M.ConstructResultErr):
-			yield instr.error
-		elif isinstance(instr, M.ResultOk):
-			yield instr.result
-		elif isinstance(instr, M.ResultErr):
-			yield instr.result
-		elif isinstance(instr, M.ResultIsErr):
-			yield instr.result
-		elif isinstance(instr, M.ConstructError):
-			yield instr.code
-			yield instr.event_fqn
-			if instr.payload is not None:
-				yield instr.payload
-			if instr.attr_key is not None:
-				yield instr.attr_key
-		elif isinstance(instr, M.ErrorRaise):
-			yield instr.error
-		elif isinstance(instr, M.ExcGetParamsJson):
-			yield instr.error
-		elif isinstance(instr, M.ExcSetParamsJson):
-			yield instr.error
-			yield instr.json_text
-		elif isinstance(instr, M.ExcGetContextJson):
-			yield instr.error
-		elif isinstance(instr, M.ExcAppendContextFrame):
-			yield instr.error
-			yield instr.frame_json
-		elif isinstance(instr, M.ErrorEvent):
-			yield instr.error
-		elif isinstance(instr, M.ErrorEventFqn):
-			yield instr.error
-		elif isinstance(instr, M.StringFromInt):
-			yield instr.value
-		elif isinstance(instr, M.StringFromUint):
-			yield instr.value
-		elif isinstance(instr, M.StringFromBool):
-			yield instr.value
-		elif isinstance(instr, M.StringFromFloat):
-			yield instr.value
-		elif isinstance(instr, M.MoveOut):
-			# Do not yield instr.local — same reason as LoadLocal above.
-			# It is a storage-local name, not an SSA value.  MoveOut has
-			# its own rewrite path that handles the storage-local move
-			# semantics; it does not need the name to flow through the
-			# SSA-value liveness analyses.  Yielding it would re-open the
-			# namespace-collision class for explicit `move local` shapes.
-			pass
+	# TLR-2a: single-source alias — the shared occurrence iterator
+	# lives at module level (iter_used_values) so the release-point
+	# calculator counts EXACTLY the occurrences this pass counts.
+	_iter_used_values = iter_used_values
 
 	def _copy_span(dst: M.MInstr, src: M.MInstr) -> None:
 		if hasattr(src, "span"):
@@ -637,57 +1080,16 @@ def insert_string_arc(
 		yield from _cfg.terminator_value_uses(term)
 
 	def _seed_dest_types() -> None:
-		"""Pre-seed missing destination types before ARC liveness/use analysis."""
-		for bname in block_order:
-			block = func.blocks[bname]
-			for instr in block.instructions:
-				dest = getattr(instr, "dest", None)
-				if dest is None:
-					continue
-				if local_types.get(dest) is not None:
-					continue
-				if isinstance(instr, (M.ConstString, M.StringConcat, M.StringRetain, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
-					local_types[dest] = string_ty
-					continue
-				if isinstance(instr, M.AssignSSA):
-					src_ty = local_types.get(instr.src)
-					if src_ty is not None:
-						local_types[dest] = src_ty
-					continue
-				if isinstance(instr, M.Phi):
-					for incoming in instr.incoming.values():
-						in_ty = local_types.get(incoming)
-						if in_ty is not None:
-							local_types[dest] = in_ty
-							break
-					continue
-				if isinstance(instr, M.Call):
-					info = fn_infos.get(instr.fn_id)
-					if info is not None and info.signature is not None and info.signature.return_type_id is not None and not bool(getattr(info, "declared_can_throw", False)):
-						local_types[dest] = info.signature.return_type_id
-					else:
-						sym = function_symbol(instr.fn_id)
-						if sym in {
-							"drift_string_from_cstr",
-							"drift_string_from_utf8_bytes",
-							"drift_string_from_int64",
-							"drift_string_from_uint64",
-							"drift_string_from_f64",
-							"drift_string_from_bool",
-							"drift_string_literal",
-							"drift_string_concat",
-							"drift_string_retain",
-						}:
-							local_types[dest] = string_ty
-					continue
-				if isinstance(instr, M.CallIndirect):
-					if instr.user_ret_type is not None:
-						local_types[dest] = instr.user_ret_type
-					continue
-				if isinstance(instr, M.CallIface):
-					if instr.user_ret_type is not None:
-						local_types[dest] = instr.user_ret_type
-					continue
+		"""Pre-seed missing destination types before ARC liveness/use
+		analysis.  Delegates to the shared module-level
+		`seed_string_dest_types` (TLR-2a) — single source with the
+		TLR-2b pass."""
+		seed_string_dest_types(
+			[func.blocks[bname] for bname in block_order],
+			local_types,
+			fn_infos=fn_infos,
+			type_table=type_table,
+		)
 
 	def _block_succs(term: M.MTerminator | None) -> list[str]:
 		# Central MIR CFG-successor contract (stage2/cfg.py).

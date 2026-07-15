@@ -977,6 +977,352 @@ def test_materialized_lastuse_is_closed_counted_only() -> None:
 	assert agg.get(R.DIV_C1_RELEASE_WITHOUT_MUST_DROP, 0) == 0, agg
 
 
+def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-2a conformance pin (contract 2 vs the live pass): run
+	`compute_lastuse_release_points` AND `insert_string_arc` over one
+	block containing every reviewed shape, and assert the calculator's
+	points equal exactly where string_arc emits materialized releases:
+	- `%q` — qualified simple temp (one StringEq use);
+	- `%r` — REPEATED-OPERAND case `StringEq(%r, %r)` (multiplicity rule
+	  §3a: ONE release, after the draining instruction);
+	- `%s` — consumed single-use ConstString (stored → CONSUME
+	  disposition → NO release by either author);
+	- `%cc` — Concat-produced temp (not the ConstString family → not in
+	  the calculator's result; string_arc still releases it under
+	  temp_lastuse_release);
+	- `%ig` — ConstString passed to an info-less Call (IGNORE
+	  disposition: counted but never drained → NO release by either)."""
+	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("cf", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%q", value="q"),
+		M.ConstString(dest="%r", value="r"),
+		M.ConstString(dest="%s", value="s"),
+		M.ConstString(dest="%c3", value="c"),
+		M.ConstString(dest="%c4", value="d"),
+		M.StringConcat(dest="%cc", left="%c3", right="%c4"),
+		M.ConstString(dest="%ig", value="i"),
+		M.StringEq(dest="%e1", left="%q", right="%cc"),          # last use of %q and %cc
+		M.StringEq(dest="%e2", left="%r", right="%r"),           # repeated operand
+		M.StoreLocal(local="x", value="%s"),                     # consuming use of %s
+		M.Call(dest=None, fn_id=FunctionId(module="t", name="opaque", ordinal=0),
+			args=["%ig"], can_throw=False),                       # info-less call: IGNORE
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+
+	points = compute_lastuse_release_points(
+		entry, local_types=dict(func.local_types) | {
+			"%q": string_ty, "%r": string_ty, "%s": string_ty,
+			"%c3": string_ty, "%c4": string_ty, "%cc": string_ty, "%ig": string_ty,
+		},
+		fn_infos={}, type_table=tt, live_out_names=set(),
+	)
+	# %q drains at the first StringEq (idx 7); %r at the repeated-operand
+	# StringEq (idx 8) — ONE point despite two occurrences; %c3/%c4 drain
+	# at the concat (idx 5).  %s (consumed), %cc (not ConstString family),
+	# %ig (IGNORE) have no points.
+	assert points == {"%q": 7, "%r": 8, "%c3": 5, "%c4": 5}, points
+
+	# live pass agreement: seed the temp types the calculator was given.
+	for k, v in {"%q": string_ty, "%r": string_ty, "%s": string_ty,
+	             "%c3": string_ty, "%c4": string_ty, "%cc": string_ty, "%ig": string_ty}.items():
+		func.local_types[k] = v
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::cf")
+	# materialized = exactly the calculator's ConstString points (4);
+	# %cc's release stays temp_lastuse; %s and %ig produce none.
+	assert agg.get("site_class:materialized_lastuse_release") == 4, agg
+	assert agg.get("site_class:temp_lastuse_release") == 1, agg
+	# and the emitted releases sit where the calculator said: for each
+	# point, the temp's StringRelease appears in the release run
+	# IMMEDIATELY following its draining instruction (located by shape —
+	# string_arc's other insertions shift raw indices).
+	out_instrs = func.blocks["entry"].instructions
+	def _releases_right_after(pred):
+		for i, ins in enumerate(out_instrs):
+			if pred(ins):
+				got = set()
+				j = i + 1
+				while j < len(out_instrs) and type(out_instrs[j]).__name__ == "StringRelease":
+					got.add(out_instrs[j].value)
+					j += 1
+				return got
+		raise AssertionError("draining instruction not found in output")
+	after_concat = _releases_right_after(lambda i: type(i).__name__ == "StringConcat" and i.dest == "%cc")
+	assert {"%c3", "%c4"} <= after_concat, after_concat
+	after_eq1 = _releases_right_after(lambda i: type(i).__name__ == "StringEq" and i.dest == "%e1")
+	assert "%q" in after_eq1, after_eq1
+	after_eq2 = _releases_right_after(lambda i: type(i).__name__ == "StringEq" and i.dest == "%e2")
+	assert after_eq2 == {"%r"}, after_eq2  # ONE release for the repeated operand
+
+
+def test_tlr2a_prescan_exclusion_contract(monkeypatch) -> None:
+	"""TLR-2b prescan-exclusion contract, pinned at the calculator now:
+	an in-contract pre-materialized StringRelease contributes NO
+	occurrence to any count — every OTHER temp's release point is
+	unchanged versus the same block without it, and the released temp is
+	excluded from the result."""
+	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	lt = {"%a": string_ty, "%b": string_ty}
+	base = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringEq(dest="%e", left="%a", right="%b"),
+	]
+	blk_plain = M.BasicBlock(name="p")
+	blk_plain.instructions = list(base)
+	blk_plain.terminator = M.Return(value=None)
+	blk_with = M.BasicBlock(name="w")
+	blk_with.instructions = list(base) + [M.StringRelease(value="%a")]
+	blk_with.terminator = M.Return(value=None)
+	plain = compute_lastuse_release_points(
+		blk_plain, local_types=lt, fn_infos={}, type_table=tt, live_out_names=set())
+	withrel = compute_lastuse_release_points(
+		blk_with, local_types=lt, fn_infos={}, type_table=tt, live_out_names=set())
+	assert plain == {"%a": 2, "%b": 2}, plain
+	# %a excluded (externally released); %b's point UNCHANGED (the
+	# release contributed no occurrence — index still 2).
+	assert withrel == {"%b": 2}, withrel
+
+
+def test_tlr2a_misplaced_input_release_is_rejected(monkeypatch) -> None:
+	"""TLR-2b recognition contract, placement half (review-hardened):
+	shape recognition alone (block-local ConstString producer) would
+	accept a StringRelease sitting BEFORE a later use of the same temp —
+	excluded from counting, suppressing string_arc's own release, and
+	leaving the later use reading freed memory.  Placement must be
+	validated against the computed release point; a mis-placed release
+	is REJECTED fail-closed, never silently recognized."""
+	import pytest
+	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	lt = {"%a": string_ty, "%b": string_ty}
+	blk = M.BasicBlock(name="m")
+	blk.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringRelease(value="%a"),           # BEFORE %a's real last use
+		M.StringEq(dest="%e", left="%a", right="%b"),
+	]
+	blk.terminator = M.Return(value=None)
+	with pytest.raises(AssertionError, match="unexpected input release"):
+		compute_lastuse_release_points(
+			blk, local_types=lt, fn_infos={}, type_table=tt, live_out_names=set())
+	# Duplicate releases of one temp are equally out of contract, even
+	# when the first sits at the correct draining point.
+	blk2 = M.BasicBlock(name="d")
+	blk2.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringEq(dest="%e", left="%a", right="%b"),
+		M.StringRelease(value="%a"),
+		M.StringRelease(value="%a"),
+	]
+	blk2.terminator = M.Return(value=None)
+	with pytest.raises(AssertionError, match="unexpected input release"):
+		compute_lastuse_release_points(
+			blk2, local_types=lt, fn_infos={}, type_table=tt, live_out_names=set())
+
+
+def test_tlr2a_seeder_closes_missing_metadata_gap(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-2a review finding 1: temps in production MIR may lack
+	local_types entries (HIR lowering does not record every temp); the
+	live pass seeds them internally via `_seed_dest_types`.  This pin
+	uses the TLR-2b calling pattern — `seed_string_dest_types` on a COPY,
+	then the calculator — with NO manual temp seeding, and asserts
+	agreement with the live pass.  Without the seeder the calculator
+	sees no String temps at all (the gap the review flagged)."""
+	from lang.driftc.stage2.string_arc import (
+		compute_lastuse_release_points,
+		seed_string_dest_types,
+	)
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	# NOTE: no %-temp entries in local_types — production-like.
+	func = _make_func("sg", params=[], locals_=["x"], types={"x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%c1", value="a"),
+		M.ConstString(dest="%c2", value="b"),
+		M.StringEq(dest="%e", left="%c1", right="%c2"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+
+	# Un-seeded: the calculator (documented contract: caller seeds) sees
+	# no String-typed temps — the gap is real, not hypothetical.
+	bare = compute_lastuse_release_points(
+		entry, local_types=dict(func.local_types),
+		fn_infos={}, type_table=tt, live_out_names=set())
+	assert bare == {}, bare
+	# The TLR-2b pattern: seed a copy, then compute.
+	seeded = dict(func.local_types)
+	seed_string_dest_types([entry], seeded, fn_infos={}, type_table=tt)
+	points = compute_lastuse_release_points(
+		entry, local_types=seeded, fn_infos={}, type_table=tt, live_out_names=set())
+	assert points == {"%c1": 2, "%c2": 2}, points
+	# Live-pass agreement on the SAME un-seeded func.
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::sg")
+	assert agg.get("site_class:materialized_lastuse_release") == 2, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+
+
+def test_tlr2a_ignore_axis_conformance(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-2a review finding 2: the IGNORE disposition axis, pinned on
+	the shapes constructible in well-typed MIR — via CallIndirect, whose
+	param types live on the instruction:
+	- `%rp` — ConstString passed at a &String (REF) param: IGNORE;
+	- `%np` — ConstString passed at a non-String by-value param: IGNORE;
+	- `%mx` — the MIXED case the review called out: one IGNORE occurrence
+	  (ref param) AND a later USE occurrence (StringEq).  The prescan
+	  counts 2 but only the USE drains → the live pass NEVER releases;
+	  the calculator must not invent a point (any non-USE occurrence
+	  disqualifies).
+	(The ctor/Exc non-selected-operand and ErrorRaise IGNOREs exist in
+	the disposition table for totality but are unreachable for String
+	operands in well-typed MIR — a String value cannot occupy a
+	non-String field/slot — so they are not constructible here.)"""
+	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	ref_string = tt.ensure_ref(string_ty)
+	int_ty = tt.ensure_int()
+	func = _make_func("ig", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%rp", value="r"),
+		M.ConstString(dest="%np", value="n"),
+		M.ConstString(dest="%mx", value="m"),
+		M.ConstString(dest="%u", value="u"),
+		M.CallIndirect(dest=None, callee="%f1", args=["%rp"],
+			param_types=[ref_string], user_ret_type=tt.ensure_void(), can_throw=False),
+		M.CallIndirect(dest=None, callee="%f2", args=["%np"],
+			param_types=[int_ty], user_ret_type=tt.ensure_void(), can_throw=False),
+		M.CallIndirect(dest=None, callee="%f3", args=["%mx"],
+			param_types=[ref_string], user_ret_type=tt.ensure_void(), can_throw=False),
+		M.StringEq(dest="%e", left="%mx", right="%u"),  # USE of %mx after its IGNORE
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	lt = dict(func.local_types)
+	lt.update({"%rp": string_ty, "%np": string_ty, "%mx": string_ty, "%u": string_ty})
+	points = compute_lastuse_release_points(
+		entry, local_types=lt, fn_infos={}, type_table=tt, live_out_names=set())
+	# Only %u (pure USE occurrences) gets a point; %rp/%np/%mx have an
+	# IGNORE occurrence → disqualified.
+	assert points == {"%u": 7}, points
+	# Live-pass agreement: exactly one materialized release (%u); none
+	# for the IGNORE temps.
+	for k, v in lt.items():
+		func.local_types.setdefault(k, v)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::ig")
+	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+	out_instrs = func.blocks["entry"].instructions
+	released = [i.value for i in out_instrs if type(i).__name__ == "StringRelease"]
+	assert released == ["%u"], released
+
+
+def test_tlr2a_semantic_string_param_conformance(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-2a review finding: call-param classification must use the
+	SEMANTIC String test (TypeKind.SCALAR + name == "String"), mirroring
+	the live arms' `_param_is_string` — raw TypeId equality is not
+	reliable for String params at the package/type-table boundary (the
+	string_stakes lesson).  Carrier: `new_scalar("String")` — a String
+	param TypeId that is NOT `ensure_string()`.  Under raw-equality
+	classification these by-value args would be IGNORE while the live
+	arms CONSUME them.  IGNORE still disqualifies the temp from
+	release-point output (no phantom release today) — the real risk is
+	CONTRACT DRIFT: `consumes_string_operand` would lie relative to the
+	live arm and future users of the predicate would decide wrongly.
+	Covers direct Call (fn_infos
+	signature), CallIndirect, and CallIface (instruction-carried
+	param_types); `%u` is the control proving real points still emit."""
+	from lang.driftc.checker import FnInfo, FnSignature
+	from lang.driftc.stage2.string_arc import (
+		DISPOSITION_CONSUME,
+		compute_lastuse_release_points,
+		string_operand_dispositions,
+	)
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	str_alias = tt.new_scalar("String")  # semantically String, non-canonical
+	assert str_alias != string_ty
+	fid = FunctionId(module="m", name="takes", ordinal=0)
+	fn_infos = {fid: FnInfo(
+		fn_id=fid, name="takes", declared_can_throw=False,
+		signature=FnSignature(
+			name="takes", param_type_ids=[str_alias],
+			return_type_id=tt.ensure_void()))}
+	func = _make_func("sp", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%d", value="d"),
+		M.ConstString(dest="%i", value="i"),
+		M.ConstString(dest="%f", value="f"),
+		M.ConstString(dest="%u", value="u"),
+		M.Call(dest=None, fn_id=fid, args=["%d"], can_throw=False),
+		M.CallIndirect(dest=None, callee="%cb", args=["%i"],
+			param_types=[str_alias], user_ret_type=tt.ensure_void(), can_throw=False),
+		M.CallIface(dest=None, iface="%ifc", args=["%f"],
+			param_types=[str_alias], user_ret_type=tt.ensure_void(),
+			can_throw=False, slot_index=0),
+		M.StringEq(dest="%e", left="%u", right="%u"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	lt = dict(func.local_types)
+	lt.update({"%d": string_ty, "%i": string_ty, "%f": string_ty, "%u": string_ty})
+	# Sharpest assertion first: the disposition table itself classifies
+	# the semantically-String by-value arg as CONSUME on all three arms.
+	for idx in (4, 5, 6):
+		arg = entry.instructions[idx].args[0]
+		disps = string_operand_dispositions(
+			entry.instructions[idx],
+			local_types=lt, fn_infos=fn_infos, type_table=tt)
+		assert (arg, DISPOSITION_CONSUME) in disps, (idx, disps)
+	points = compute_lastuse_release_points(
+		entry, local_types=lt, fn_infos=fn_infos, type_table=tt, live_out_names=set())
+	# Only the control gets a point; no phantom releases after the
+	# consumed call args.
+	assert points == {"%u": 7}, points
+	# Live-pass agreement: consumed args are moved, never released.
+	for k, v in lt.items():
+		func.local_types.setdefault(k, v)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
+	out_instrs = func.blocks["entry"].instructions
+	released = [i.value for i in out_instrs if type(i).__name__ == "StringRelease"]
+	assert released == ["%u"], released
+	agg = _fn_agg(out, "test::sp")
+	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+
+
 def test_untagged_note_is_a_finding() -> None:
 	audit = R.StringArcAudit("test::u")
 	audit.note(R.STAKE_RETAIN, "%v", "not_a_real_site", pre_point=("b", 0), post_point=("b", 0))

@@ -1158,3 +1158,171 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   cleanup-tlr1. The shim's tag boundary is now the corpus-proven ownership
   boundary for the TLR-2 extraction pass (separate design gate; NOT
   started, per instruction).
+- 2026-07-14: **TLR-2 design checkpoint WRITTEN (TLR-2-DESIGN.md) — STOPPED
+  before code.** Headline design decision: the honest hard part is that
+  "consuming-ness" is DEFINED by string_arc's consumer arms, so the slice
+  splits — TLR-2a extracts the classification into ONE shared predicate
+  (`consumes_string_operand`), pure refactor with an all-+0 corpus
+  signature BEFORE any new author exists; TLR-2b adds the pass
+  (`string_releases.py::materialize_lastuse_releases`) using the SAME
+  predicate + a conformance pin. Placement: late per-fn pass immediately
+  before string_arc and BEFORE the existing per-fn ledger build (no extra
+  rebuild; the one ledger is built on post-materialization MIR; index
+  shifts safe because StringRelease has no transfer-function arm — states
+  identical, keys shift consistently, counters position-independent).
+  Handshake: pre-scan recognition of in-contract pre-existing
+  StringRelease → temp excluded from owned_values (double-release
+  impossible BY CONSTRUCTION — _note_use requires ownership); recognition
+  arm notes the materialized_lastuse_release event (counter keeps its
+  author-independent meaning; events constant); OUT-of-contract input
+  release → dead-stake tripwire (verified contract, not trust).
+  Expected delta both sub-slices: EVERYTHING +0 vs cleanup-tlr1
+  (materialized stays 286,424; temp_lastuse stays 332,320). Output MIR:
+  behavior-equivalent committed, byte-identical as a stretch A/B check
+  (set-differences are stoppers, reorderings reportable). Regression plan
+  covers both failure directions (double-release: construction + tripwire
+  + memcheck + surplus gate; missing: conformance pin + memcheck + deficit
+  gate). Stop triggers per sub-slice enumerated. Out of scope: family
+  extensions (TLR-3+), _note_use release-arm tripwire, 4a′/4b′ deletion
+  (parked until a clean cert cycle, reaffirmed).
+- 2026-07-14: **TLR-2 design REVISION 2 (blocking review, 3 findings — all
+  incorporated; still design-only).** (1) Recognition now specified to run
+  BEFORE use counting: StringRelease IS a use per _iter_used_values, so an
+  unrecognized materialized release would inflate the prescan count and
+  MOVE the last-use point — in-contract releases are excluded from
+  counting entirely, and the rewrite loop symmetrically skips _note_use for
+  them (the original "harmless fallthrough decrement" claim retracted —
+  the counts never included the occurrence, so no decrement may happen).
+  NEW prescan-exclusion pin specified. (2) Explicit multiplicity rule §3a:
+  repeated operands in one instruction (StringEq(%c,%c)) drain to ONE
+  release AFTER the draining instruction — never per-occurrence, never
+  before; repeated-operand case added to the conformance pin. (3) Second
+  shared contract named: `compute_lastuse_release_points` (pure,
+  occurrence-level release-point calculator built on
+  `consumes_string_operand`) — TLR-2a extracts BOTH contracts + a
+  calculator-vs-string_arc conformance pin; the pass consumes contract 2,
+  never a reimplementation; the two-implementation window is explicit and
+  closes when the last family migrates. Ledger-placement argument accepted
+  as-is by review. Awaiting re-approval.
+- 2026-07-14: **TLR-2a LANDED (pure refactor, corpus all-+0) — STOPPED for
+  review before TLR-2b.** Extracted to string_arc module level:
+  (1) `iter_used_values` — the occurrence iterator, moved verbatim from the
+  closure (which now aliases it: single source for what counts as an
+  occurrence); (2) contract 1 `consumes_string_operand`; (3) contract 2
+  `compute_lastuse_release_points` (multiplicity rule §3a + the TLR-2b
+  prescan-exclusion recognition rule implemented and pinned NOW).
+  string_arc behavior UNTOUCHED (arms not rewritten — the closure→alias
+  swap is the only pass-side change; conformance is empirical per design).
+  IMPLEMENTATION FINDING (reported per the design's stop-trigger rule; no
+  stop needed because the model subsumes both contracts): the two approved
+  contracts under-modeled a THIRD operand axis — some handled arms neither
+  consume nor note an operand (ref-position/non-String call params,
+  info-less calls, ctor/Exc arms' non-selected operands, ErrorRaise).
+  Implemented as a three-way DISPOSITION (CONSUME/USE/IGNORE) per String
+  operand; IGNORE = counted-but-never-drained = never released — the
+  calculator must reproduce it or it would invent releases string_arc
+  never emits. `consumes_string_operand` is defined on top of dispositions,
+  honoring contract 1's name.
+  PINS: +2 — `test_tlr2a_calculator_conforms_to_string_arc` (calculator vs
+  live pass over one block with ALL reviewed shapes: qualified temp;
+  repeated-operand StringEq(%r,%r) → ONE point/release after the draining
+  instruction; consumed single-use ConstString → none; Concat temp → not in
+  the family, stays temp_lastuse; info-less-call IGNORE temp → none; plus
+  emitted-release positions located by draining-instruction shape) and
+  `test_tlr2a_prescan_exclusion_contract` (in-contract pre-materialized
+  release contributes NO occurrence; other temps' points unchanged;
+  released temp excluded).
+  Batteries: reporter 30/30; stage2+guardrails 354/354; FULL memcheck
+  98 + 1 skip. ACCEPTANCE (build/tmp/cleanup-tlr2a vs cleanup-tlr1,
+  exit 0): EVERY counter +0 (materialized stays 286,424; temp_lastuse
+  stays 332,320; events unchanged); universe identical; all nine hard
+  gates zero. New phase reference: cleanup-tlr2a. TLR-2b (the extraction
+  pass + string_arc recognition) awaits go-ahead.
+
+- 2026-07-14 — TLR-2a REVIEW ROUND (4 findings: 3 from the first review
+  + 1 blocking follow-up), all addressed. IN REVIEW.
+  (1) SHARED SEEDING: `seed_string_dest_types(blocks_in_order,
+  local_types, *, fn_infos, type_table)` extracted to module level
+  (verbatim mirror of the private rules: ConstString/Concat/Retain/
+  StringFrom* → String; AssignSSA/Phi propagation; Call via fn_infos or
+  drift_string_* symbols; CallIndirect/CallIface `user_ret_type`);
+  `_seed_dest_types` now delegates. PIN
+  `test_tlr2a_seeder_closes_missing_metadata_gap`: production-like func
+  with NO manual temp seeding — bare calculator sees nothing (the gap is
+  real), seeder-on-a-copy + calculator computes the right points, live
+  pass agrees (2 materialized releases).
+  (2) IGNORE-AXIS PINS: `test_tlr2a_ignore_axis_conformance` — via
+  CallIndirect instruction-carried param_types: ref-position (&String)
+  arg → IGNORE; non-String by-value param arg → IGNORE; and the MIXED
+  case (one IGNORE occurrence + a later USE occurrence) → NO release
+  from calculator OR live pass (prescan counts 2, rewrite drains 1,
+  count never reaches zero); pure-USE control temp still released
+  (calculator point + live materialized release + output-MIR
+  StringRelease list == ["%u"]). Docstring records that ctor/Exc
+  non-selected-slot and ErrorRaise IGNOREs are unreachable for String
+  operands in well-typed MIR (totality rows, not constructible).
+  (3) DESIGN REV 3 (TLR-2-DESIGN.md): new §0a records the ACTUAL
+  contract — three-way CONSUME/USE/IGNORE disposition
+  (`string_operand_dispositions`), `consumes_string_operand` as its
+  CONSUME projection, the calculator built on the full table (any
+  non-USE occurrence disqualifies), the phantom-release failure mode,
+  the shared seeder as the third contract piece 2b MUST call, and the
+  reachability note. §0 contract-1 wording fixed: arms deliberately
+  UNCHANGED in 2a (conformance by pins), not "consulted by the arms".
+  (4) BLOCKING FOLLOW-UP — RECOGNITION MUST VALIDATE PLACEMENT: shape
+  recognition alone (block-local ConstString producer) was too broad —
+  a StringRelease placed BEFORE the temp's real draining instruction
+  would still be recognized, excluded from counting, and suppress
+  string_arc's own release: a TLR-2b emission bug silently becomes a
+  use-after-release (or missing release). `compute_lastuse_release_points`
+  now runs recognition in two phases: SHAPE (before occurrence counting,
+  enabling the exclusion) then PLACEMENT validation — each recognized
+  release must be the UNIQUE StringRelease of its temp, the temp's
+  remaining occurrences all USE, temp not live-out/terminator-read, and
+  the release index == draining-instruction index + 1; anything else
+  raises the structured `unexpected input release` AssertionError (same
+  fail-closed AssertionError → driver-boundary-diagnostic path as the
+  dead-stake tripwires, live once 2b's prescan calls the calculator).
+  PIN `test_tlr2a_misplaced_input_release_is_rejected`: release BEFORE
+  a later StringEq(%t, …) → raises; duplicate releases (first one at
+  the correct point) → raises. Design §3 recognition bullet updated to
+  the two-half (shape AND placement) definition.
+  Batteries: reporter 33/33; stage2 346/346; ledger-cache guardrails
+  24/24; FULL memcheck 98 + 1 skip (run after the seeder delegation —
+  the only production-path change; the calculator edits are dead code
+  for the live pass until 2b). CORPUS: cleanup-tlr2a-r2 IN FLIGHT
+  (first run killed + restarted: mid-run string_arc.py edit would have
+  mixed tree states — tainted by the standing rule even though the
+  edited function is not on the production path). Expected: every
+  counter +0 vs cleanup-tlr2a, universe identical, all nine gates zero.
+
+- 2026-07-14 — TLR-2a REVIEW ROUND, FINDING 5 (medium): call-param
+  String classification in `string_operand_dispositions` used raw
+  TypeId equality (`ty_id == string_ty`) where the live rewrite arms
+  use the SEMANTIC `_param_is_string` (TypeKind.SCALAR && name ==
+  "String") — and String param TypeIds are not canonical across the
+  package/type-table boundary (the string_stakes lesson). A
+  semantically-String by-value arg with a non-canonical TypeId would
+  classify IGNORE in the table while the live arm CONSUMES it. (IGNORE
+  still disqualifies the temp from release-point output, so no phantom
+  release today — the real risk is CONTRACT DRIFT: the extracted
+  `consumes_string_operand` would lie relative to the live arm, and
+  future users of the predicate — the 2b pass, family migrations —
+  would decide wrongly.) FIX: `_param_is_str_semantic` helper in the
+  dispositions table; both call branches (Call via fn_infos signature;
+  CallIndirect/CallIface via instruction-carried param_types) now use
+  it; REF check order unchanged (mirrors the live arms). Non-call arms
+  deliberately stay raw-equality — the live pass's own `_is_string_tid`
+  is raw equality there, and the table mirrors the arms, not an ideal.
+  PIN `test_tlr2a_semantic_string_param_conformance`: carrier
+  `new_scalar("String")` (≠ ensure_string()); asserts (a) the
+  disposition table classifies the arg CONSUME on all three call arms,
+  (b) calculator points contain ONLY the control temp (no phantom
+  releases after consumed args), (c) live-pass agreement (output MIR
+  releases == control only; 1 materialized, 0 temp_lastuse). TEETH
+  proven: temporary revert to raw equality → pin fails; restored exact
+  (grep-verified). Design §0a updated with the semantic-predicate rule.
+  Batteries: reporter 34/34; stage2 347/347; guardrails 24/24. CORPUS:
+  restarted AGAIN as cleanup-tlr2a-r2 (second kill — this fix was
+  another mid-run string_arc.py edit; table/calculator are still off
+  the production path, but the no-mid-run-edit rule is unconditional).
