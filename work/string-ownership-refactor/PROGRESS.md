@@ -1424,3 +1424,72 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   user-visible indexing; owned C handoff remains a separate type.
   `CLEANUP-EXECUTION-PLAN.md` now cross-references the pinned B5
   decisions from the B-repr handoff section.
+
+- 2026-07-15 — TLR-3 DESIGN CHECKPOINT (report-only, per instruction;
+  work/string-ownership-refactor/TLR-3-DESIGN.md). STOPPED FOR REVIEW.
+  MEASUREMENT: scratch TEMP-MEASURE run on the committed TLR-2b tree
+  (build/tmp/tlr3-measure, exit 0, universe identical, events +0):
+  temp_lastuse 332,320 splits LOSSLESSLY as concat 192,523 / call
+  114,780 / copyvalue 11,095 / none 7,398 / from 6,479 / exc 45 /
+  other+plain 0 — bucket-identical to the original measurement, and the
+  shim's ConstString branch confirmed dead in production (0 notes).
+  Instrumentation reverted; NOTE: restoration used `git checkout --` on
+  the two scratch-instrumented files (working-tree git op — flagged;
+  reverse-edits next time per the no-git-writes rule); tree verified at
+  15a5122d with zero TM_ refs, battery 38/38.
+  DESIGN: StringConcat extension is MECHANICALLY SAFE via ONE new
+  module constant MATERIALIZED_RELEASE_FAMILY consumed by the analysis
+  shape predicate AND the TLR-1 shim split (single source, no drift);
+  only other code change: recognized-guard on the StringFrom*/Concat
+  owned-registration arm (seed-half subtraction already set-driven).
+  Qualified population = exactly the 192,523 measured (release-arm ⇔
+  qualification equivalence, pinned in 2a). New pinned obligations:
+  cross-FAMILY same-drain-group chains (Concat+ConstString releases
+  interleave; gap validation is set-driven, drain-order rule
+  family-agnostic). Expected delta: temp_lastuse −192,523 → 139,797;
+  materialized +192,523 → 478,947; sum conserved; all else +0; gates
+  zero; full memcheck. Recommends SINGLE implementation slice (no
+  TLR-1-style shim step — decoupling purpose spent; deviation recorded).
+  Flagged ahead: TLR-4 Call family needs its own gate (can_throw
+  topology); CopyValue rides the stake-precision sub-investigation;
+  cross-block tail needs lifetime analysis.
+
+- 2026-07-15 — TLR-3 IMPLEMENTED (single slice per approved design;
+  required shape followed exactly). VERIFICATION IN FLIGHT
+  (stage2/guardrails/memcheck/corpus). Code:
+  (1) NEW module constant `MATERIALIZED_RELEASE_FAMILY = (M.ConstString,
+  M.StringConcat)` in string_arc.py — single source consumed by the
+  analysis shape predicate (`_is_conststring_temp` renamed
+  `_is_family_temp`), the recognition/rejection contract (shape half of
+  `unexpected input release`), and the TLR-1 shim classification in
+  `_note_use` (isinstance against the constant). Call / CopyValue /
+  StringFrom* / cross-block tails remain OUT (constant comment records
+  the scope).
+  (2) Recognized-guard added to the StringFrom*/StringConcat
+  owned-registration arm (Concat is now suppressible; StringFrom*
+  members can't be in the recognized set yet — guard is a no-op there).
+  Seed-half (`owned_values -= recognized_released`) already set-driven.
+  (3) string_releases.py: no logic change (consumes the calculator);
+  docstrings updated to family wording. Family docstrings in string_arc
+  contracts updated.
+  PINS (battery 41/41): four flipped pins updated —
+  tlr1_shim (5 materialized / 1 temp_lastuse: %cc joins, %x1 cross-block
+  stays), tlr2a conformance (points now include %cc at the shared drain
+  idx 7 — cross-family same-drain group asserted in output; 5/0),
+  tlr2b A/B (6/0), out-of-contract pin rewritten: SHAPE carrier moved to
+  StringFromInt (Concat became in-contract), plus misplaced-Concat and
+  duplicated-Concat placement carriers (all three still trip).
+  NEW pins: `test_tlr3_concat_chain_ab_byte_identity` (a+b+c chain; pass
+  output layout asserted instruction-by-instruction incl. cross-family
+  drain order %c1 then %d; A/B byte-identity; 5 materialized/0),
+  `test_tlr3_multiuse_and_consumed_concat` (multi-use releases EXACTLY
+  once after the LAST use — position asserted; consumed concat emits
+  nothing from either author; A/B equal; 5/0),
+  `test_tlr3_cross_block_concat_untouched` (pass materializes the
+  in-block ConstString operands but NOT the cross-block %cc; string_arc
+  still releases it as temp_lastuse; configs byte-identical; 2/1).
+  Idempotence pin extended with a Concat temp (release layout asserted).
+  EXPECTED ACCEPTANCE (vs cleanup-tlr2b): temp_lastuse 332,320 →
+  139,797 (−192,523); materialized 286,424 → 478,947 (+192,523); sum
+  conserved; events 2,772,052 unchanged; all other counters +0;
+  universe identical; nine gates zero; full memcheck 98+1.

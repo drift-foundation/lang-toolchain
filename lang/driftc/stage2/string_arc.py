@@ -309,6 +309,18 @@ DISPOSITION_CONSUME = "consume"
 DISPOSITION_USE = "use"
 DISPOSITION_IGNORE = "ignore"
 
+# The materialized-release producer family (TLR ladder): block-local
+# temps produced by these instructions, with all-USE occurrences and no
+# live-out/terminator use, get their last-use release emitted by the
+# string_releases pass instead of string_arc's in-pass bookkeeping.
+# SINGLE SOURCE: the release-point analysis's shape predicate, the
+# recognition contract, and the TLR shim classification in `_note_use`
+# all consume this constant — they cannot disagree by construction.
+# TLR-1/2: (ConstString,); TLR-3 adds StringConcat (192,523 measured).
+# Call/CopyValue/StringFrom*/cross-block tails are OUT until their own
+# design gates (TLR-3-DESIGN.md §3).
+MATERIALIZED_RELEASE_FAMILY = (M.ConstString, M.StringConcat)
+
 
 def string_operand_dispositions(
 	instr: M.MInstr,
@@ -528,14 +540,15 @@ def _analyze_lastuse_block(
 	Returns `(points, recognized_released)` — one analysis, two public
 	projections, so the calculator and the recognizer cannot drift.
 
-	Points: for each qualified block-local ConstString temp, the
+	Points: for each qualified block-local family temp, the
 	instruction index at which its occurrence count drains to zero — the
 	position AFTER which exactly ONE release belongs (multiplicity rule:
 	repeated operands in one instruction drain together and yield one
 	release after that instruction; a terminator-drained temp maps to
 	len(block.instructions)).
 
-	Qualified: producer is a ConstString in THIS block; String-typed;
+	Qualified: producer is a MATERIALIZED_RELEASE_FAMILY instruction
+	(ConstString / StringConcat since TLR-3) in THIS block; String-typed;
 	not in `live_out_names`; ≥1 occurrence; every occurrence has USE
 	disposition (a CONSUME disqualifies — string_arc de-owns and never
 	releases; an IGNORE disqualifies — the count never drains, so
@@ -545,7 +558,8 @@ def _analyze_lastuse_block(
 	in-contract pre-materialized `StringRelease(%t)` contributes NO
 	occurrence to any count, and `%t` itself is excluded from the points
 	(already released by the external author).  In-contract means BOTH:
-	- shape: `%t`'s producer is a block-local ConstString; AND
+	- shape: `%t`'s producer is a block-local MATERIALIZED_RELEASE_FAMILY
+	  instruction; AND
 	- placement (review-hardened): it is the UNIQUE StringRelease of
 	  `%t` in the block, `%t`'s remaining occurrences are all USE, and
 	  the release sits after the draining instruction those occurrences
@@ -555,7 +569,8 @@ def _analyze_lastuse_block(
 	  never for a live-out or terminator-read temp).
 	ANY input StringRelease that fails either half — including the shape
 	half: the only legitimate author of pre-string_arc releases is the
-	TLR-2b pass, whose family is exactly block-local ConstString — is
+	string_releases pass, whose family is exactly
+	MATERIALIZED_RELEASE_FAMILY — is
 	REJECTED fail-closed (AssertionError, `unexpected input release`
 	tag).  A mis-placed release recognized silently would suppress
 	string_arc's own release while leaving a later use reading freed
@@ -568,30 +583,31 @@ def _analyze_lastuse_block(
 		if isinstance(dest, str):
 			producers[dest] = ins
 
-	def _is_conststring_temp(v: str) -> bool:
+	def _is_family_temp(v: str) -> bool:
 		return (
-			isinstance(producers.get(v), M.ConstString)
+			isinstance(producers.get(v), MATERIALIZED_RELEASE_FAMILY)
 			and local_types.get(v) == string_ty
 		)
 
 	# Phase 1 — SHAPE recognition (needed before occurrence counting so
 	# the exclusion below is possible); placement is validated in phase 3.
 	# A shape-MISMATCHED input release (operand not a block-local
-	# ConstString temp) is rejected here: no pass other than TLR-2b's
-	# materializer legitimately emits StringRelease before string_arc,
-	# and its family is exactly block-local ConstString.
+	# MATERIALIZED_RELEASE_FAMILY temp) is rejected here: no pass other
+	# than the string_releases materializer legitimately emits
+	# StringRelease before string_arc, and its family is exactly this
+	# constant.
 	release_sites: dict[str, list[int]] = {}
 	for idx, ins in enumerate(block.instructions):
 		if isinstance(ins, M.StringRelease):
-			if not _is_conststring_temp(ins.value):
+			if not _is_family_temp(ins.value):
 				raise AssertionError(
 					f"string_arc release-recognition tripwire "
 					f"[unexpected input release]: block '{block.name}'[{idx}], "
 					f"value '{ins.value}' — operand is not a block-local "
-					f"ConstString String temp "
+					f"MATERIALIZED_RELEASE_FAMILY String temp "
 					f"(producer={type(producers.get(ins.value)).__name__}). "
-					f"Only the TLR-2b materialization pass may emit "
-					f"StringRelease before string_arc."
+					f"Only the string_releases materialization pass may "
+					f"emit StringRelease before string_arc."
 				)
 			release_sites.setdefault(ins.value, []).append(idx)
 	recognized_released: Set[str] = set(release_sites)
@@ -603,7 +619,7 @@ def _analyze_lastuse_block(
 		for v, disp in string_operand_dispositions(
 			ins, local_types=local_types, fn_infos=fn_infos, type_table=type_table
 		):
-			if _is_conststring_temp(v):
+			if _is_family_temp(v):
 				occurrences.setdefault(v, []).append((idx, disp))
 
 	term_used: Set[str] = set()
@@ -611,7 +627,7 @@ def _analyze_lastuse_block(
 	if block.terminator is not None:
 		is_return = isinstance(block.terminator, M.Return)
 		for v in _cfg.terminator_value_uses(block.terminator):
-			if _is_conststring_temp(v):
+			if _is_family_temp(v):
 				(term_consumed if is_return else term_used).add(v)
 
 	# Phase 3 — PLACEMENT validation of shape-recognized releases
@@ -752,7 +768,7 @@ def compute_string_temp_liveness(
 	so the materialization pass and string_arc compute liveness with ONE
 	author.  In-contract pre-materialized releases cannot change the
 	result: their temps are defined earlier in the same block (block-local
-	ConstString producer), so the release occurrence never reaches
+	family producer), so the release occurrence never reaches
 	`block_use`, and defs are untouched — the pass (running on MIR without
 	releases) and string_arc (running on MIR with them) see identical
 	live-out sets by construction."""
@@ -1518,14 +1534,19 @@ def insert_string_arc(
 				if _audit is not None:
 					# TLR-1 (option-B shim): classification split ONLY —
 					# the SAME StringRelease is emitted on the SAME path
-					# at the SAME position below.  Block-local ConstString
-					# temps (the per-block producers map implies co-block
-					# production; the live_out guard above implies the
-					# temp is dead after this block) are the TLR-2
-					# extraction pass's future ownership boundary.
+					# at the SAME position below.  Block-local
+					# MATERIALIZED_RELEASE_FAMILY temps (the per-block
+					# producers map implies co-block production; the
+					# live_out guard above implies the temp is dead after
+					# this block) are the string_releases pass's
+					# ownership boundary — in production every such temp
+					# is pre-materialized and recognized, so this branch
+					# is dead there; it still classifies arc-only unit
+					# runs, which is what the A/B pins compare.  Same
+					# constant as the analysis/recognition: no drift.
 					_tlr_cls = (
 						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE
-						if isinstance(producers.get(val), M.ConstString)
+						if isinstance(producers.get(val), MATERIALIZED_RELEASE_FAMILY)
 						else _ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE
 					)
 					_audit.note(
@@ -1774,7 +1795,13 @@ def insert_string_arc(
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
-				owned_values.add(instr.dest)
+				# TLR-3: StringConcat joined MATERIALIZED_RELEASE_FAMILY —
+				# same recognized-guard as the ConstString arm (the
+				# StringFrom* members are not in the family yet; the
+				# recognized set is empty for them, so the guard is a
+				# no-op there).
+				if instr.dest not in recognized_released:
+					owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):
 				owned_values.add(instr.dest)
 			elif isinstance(instr, M.ZeroValue):

@@ -1,12 +1,15 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""TLR-2b: materialize last-use releases for block-local ConstString
-temps as explicit MIR, before the ledger build that feeds `string_arc`.
+"""TLR-2b/3: materialize last-use releases for block-local
+MATERIALIZED_RELEASE_FAMILY temps (ConstString since TLR-2b, StringConcat
+since TLR-3) as explicit MIR, before the ledger build that feeds
+`string_arc`.
 
 Problem (TLR measurement, 2026-07-14): 618,744 corpus releases of owned
 String temps whose LAST use is non-consuming existed only as
 `string_arc`'s private per-block bookkeeping (`use_counts` /
 `owned_values`) — no ledger authority models SSA temp lifetimes.  TLR-1
-split the dominant family (block-local ConstString producers, 286,424)
+split the dominant family (block-local ConstString producers, 286,424;
+TLR-3 adds StringConcat, 192,523)
 into its own audit class via an in-string_arc shim; this pass makes that
 family's releases REAL MIR with a dedicated author:
 
@@ -73,8 +76,8 @@ def materialize_lastuse_releases(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> bool:
 	"""Emit `StringRelease(%t)` immediately after the draining
-	instruction of every qualified block-local ConstString temp (the
-	TLR-2 family).  Returns True iff any release was inserted."""
+	instruction of every qualified block-local MATERIALIZED_RELEASE_FAMILY
+	temp.  Returns True iff any release was inserted."""
 	string_ty = type_table.ensure_string()
 	block_order = sorted(func.blocks.keys())
 	local_types = dict(getattr(func, "local_types", {}) or {})
