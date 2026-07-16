@@ -1,7 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""TLR-2b/3: materialize last-use releases for block-local
-MATERIALIZED_RELEASE_FAMILY temps (ConstString since TLR-2b, StringConcat
-since TLR-3) as explicit MIR, before the ledger build that feeds
+"""TLR-2b/3/4: materialize last-use releases for block-local
+family temps (`is_materialized_release_family_producer`: ConstString
+since TLR-2b, StringConcat since TLR-3, proven non-throw String-returning
+calls since TLR-4) as explicit MIR, before the ledger build that feeds
 `string_arc`.
 
 Problem (TLR measurement, 2026-07-14): 618,744 corpus releases of owned
@@ -76,8 +77,9 @@ def materialize_lastuse_releases(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> bool:
 	"""Emit `StringRelease(%t)` immediately after the draining
-	instruction of every qualified block-local MATERIALIZED_RELEASE_FAMILY
-	temp.  Returns True iff any release was inserted."""
+	instruction of every qualified block-local family temp
+	(`is_materialized_release_family_producer`).  Returns True iff any
+	release was inserted."""
 	string_ty = type_table.ensure_string()
 	block_order = sorted(func.blocks.keys())
 	local_types = dict(getattr(func, "local_types", {}) or {})

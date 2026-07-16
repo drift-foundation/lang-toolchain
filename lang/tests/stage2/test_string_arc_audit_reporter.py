@@ -998,9 +998,15 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
 	string_ty = tt.ensure_string()
+	from lang.driftc.checker import FnInfo, FnSignature
+	qfid = FunctionId(module="m", name="mk", ordinal=0)
+	fn_infos = {qfid: FnInfo(
+		fn_id=qfid, name="mk", declared_can_throw=False,
+		signature=FnSignature(name="mk", return_type_id=string_ty))}
 	func = _make_func("cf", params=[], locals_=["x"], types={"x": string_ty})
 	entry = M.BasicBlock(name="entry")
 	entry.instructions = [
+		M.Call(dest="%qc", fn_id=qfid, args=[], can_throw=False),
 		M.ConstString(dest="%q", value="q"),
 		M.ConstString(dest="%r", value="r"),
 		M.ConstString(dest="%s", value="s"),
@@ -1013,6 +1019,7 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 		M.StoreLocal(local="x", value="%s"),                     # consuming use of %s
 		M.Call(dest=None, fn_id=FunctionId(module="t", name="opaque", ordinal=0),
 			args=["%ig"], can_throw=False),                       # info-less call: IGNORE
+		M.StringEq(dest="%e3", left="%qc", right="%qc"),          # last use of %qc (TLR-4 Call family)
 	]
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
@@ -1020,27 +1027,30 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 
 	points = compute_lastuse_release_points(
 		entry, local_types=dict(func.local_types) | {
-			"%q": string_ty, "%r": string_ty, "%s": string_ty,
+			"%q": string_ty, "%r": string_ty, "%s": string_ty, "%qc": string_ty,
 			"%c3": string_ty, "%c4": string_ty, "%cc": string_ty, "%ig": string_ty,
 		},
-		fn_infos={}, type_table=tt, live_out_names=set(),
+		fn_infos=fn_infos, type_table=tt, live_out_names=set(),
 	)
-	# %q AND %cc (family since TLR-3) drain at the first StringEq (idx 7);
-	# %r at the repeated-operand StringEq (idx 8) — ONE point despite two
-	# occurrences; %c3/%c4 drain at the concat (idx 5).  %s (consumed) and
-	# %ig (IGNORE) have no points.
-	assert points == {"%q": 7, "%cc": 7, "%r": 8, "%c3": 5, "%c4": 5}, points
+	# %q AND %cc (family since TLR-3) drain at the first StringEq (idx 8);
+	# %r at the repeated-operand StringEq (idx 9) — ONE point despite two
+	# occurrences; %c3/%c4 drain at the concat (idx 6); %qc — the TLR-4
+	# Call-family column (fn_infos-proven semantic-String, nothrow) — at
+	# its repeated-operand StringEq (idx 12).  %s (consumed) and %ig
+	# (IGNORE) have no points.
+	assert points == {"%q": 8, "%cc": 8, "%r": 9, "%c3": 6, "%c4": 6, "%qc": 12}, points
 
 	# live pass agreement: seed the temp types the calculator was given.
 	for k, v in {"%q": string_ty, "%r": string_ty, "%s": string_ty,
-	             "%c3": string_ty, "%c4": string_ty, "%cc": string_ty, "%ig": string_ty}.items():
+	             "%c3": string_ty, "%c4": string_ty, "%cc": string_ty,
+	             "%ig": string_ty, "%qc": string_ty}.items():
 		func.local_types[k] = v
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
 	agg = _fn_agg(out, "test::cf")
-	# materialized = exactly the calculator's points (5, incl. %cc since
-	# TLR-3); %s and %ig produce none.
-	assert agg.get("site_class:materialized_lastuse_release") == 5, agg
+	# materialized = exactly the calculator's points (6, incl. %cc since
+	# TLR-3 and %qc since TLR-4); %s and %ig produce none.
+	assert agg.get("site_class:materialized_lastuse_release") == 6, agg
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
 	# and the emitted releases sit where the calculator said: for each
 	# point, the temp's StringRelease appears in the release run
@@ -1063,6 +1073,8 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 	assert {"%q", "%cc"} <= after_eq1, after_eq1  # cross-family same-drain group
 	after_eq2 = _releases_right_after(lambda i: type(i).__name__ == "StringEq" and i.dest == "%e2")
 	assert after_eq2 == {"%r"}, after_eq2  # ONE release for the repeated operand
+	after_eq3 = _releases_right_after(lambda i: type(i).__name__ == "StringEq" and i.dest == "%e3")
+	assert after_eq3 == {"%qc"}, after_eq3  # the Call-family release (TLR-4)
 
 
 def test_tlr2a_prescan_exclusion_contract(monkeypatch) -> None:
@@ -1666,6 +1678,215 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 	# %a, %b materialized; %cc cross-block → temp_lastuse (both configs).
 	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+
+
+def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-4 Call family A/B pin: qualified call-result temps —
+	fn_infos-proven with a NON-CANONICAL semantic-String return TypeId
+	(`new_scalar("String")`, the finding-5 carrier), a drift_string_*
+	helper-symbol call, a multi-use call result (ONE release, after the
+	LAST use), and a consumed call result (no release from either
+	author).  Pass+arc must equal arc-only byte-for-byte, and the pass
+	is idempotent with Call temps in the family."""
+	from lang.driftc.checker import FnInfo, FnSignature
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	str_alias = tt.new_scalar("String")  # semantically String, non-canonical
+	assert str_alias != string_ty
+	fid = FunctionId(module="m", name="mk", ordinal=0)
+	fn_infos = {fid: FnInfo(
+		fn_id=fid, name="mk", declared_can_throw=False,
+		signature=FnSignature(name="mk", return_type_id=str_alias))}
+	helper_fid = FunctionId(module="main", name="drift_string_concat", ordinal=0)
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=["x"], types={"x": string_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.Call(dest="%qc", fn_id=fid, args=[], can_throw=False),   # semantic-proven
+			M.Call(dest="%hc", fn_id=helper_fid, args=[], can_throw=False),  # helper-symbol-proven
+			M.Call(dest="%mu", fn_id=fid, args=[], can_throw=False),   # multi-use
+			M.Call(dest="%cs", fn_id=fid, args=[], can_throw=False),   # consumed
+			M.StringEq(dest="%e1", left="%qc", right="%hc"),   # drains %qc, %hc
+			M.StringEq(dest="%e2", left="%mu", right="%mu"),   # use 1 of %mu
+			M.StringEq(dest="%e3", left="%mu", right="%mu"),   # use 2 (LAST) of %mu
+			M.StoreLocal(local="x", value="%cs"),              # consumes %cs
+		]
+		entry.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry}
+		func.entry = "entry"
+		for t in ("%qc", "%hc", "%mu", "%cs"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("c4_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is True
+	rel = [i.value for i in fb.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel.count("%mu") == 1 and "%cs" not in rel, rel
+	assert set(rel) == {"%qc", "%hc", "%mu"}, rel
+	once = list(fb.blocks["entry"].instructions)
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is False
+	assert fb.blocks["entry"].instructions == once
+	fa = build("c4_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos=fn_infos)
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
+	agg_a = _fn_agg(out, "test::c4_a")
+	agg_b = _fn_agg(out, "test::c4_b")
+	for key in ("site_class:materialized_lastuse_release",
+			"site_class:temp_lastuse_release", "events"):
+		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
+	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
+
+
+def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-4 conservative-exclusion pins — all stay OUT of the family
+	and keep string_arc's own temp_lastuse release, A/B byte-identical:
+	- `%th` — can_throw=True Call with a (synthetically) String-typed
+	  dest: the fail-closed guard for the structurally-unreachable case
+	  (real can-throw dests are FnResult envelopes);
+	- `%ni` — info-less Call with a String-typed dest: unproven →
+	  conservatively out (pinned so a metadata regression cannot
+	  silently widen the family);
+	- `%xb` — cross-block call result (per-block producer map);
+	- `%ti` — CallIndirect with can_throw=True and semantic-String
+	  user_ret_type: throw guard wins."""
+	from lang.driftc.checker import FnInfo, FnSignature
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	fid = FunctionId(module="m", name="mk", ordinal=0)
+	fn_infos = {fid: FnInfo(
+		fn_id=fid, name="mk", declared_can_throw=False,
+		signature=FnSignature(name="mk", return_type_id=string_ty))}
+	noinfo_fid = FunctionId(module="m", name="mystery", ordinal=0)
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=[], types={})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.Call(dest="%th", fn_id=fid, args=[], can_throw=True),
+			M.Call(dest="%ni", fn_id=noinfo_fid, args=[], can_throw=False),
+			M.Call(dest="%xb", fn_id=fid, args=[], can_throw=False),
+			M.CallIndirect(dest="%ti", callee="%f", args=[],
+				param_types=[], user_ret_type=string_ty, can_throw=True),
+			M.StringEq(dest="%e1", left="%th", right="%ni"),
+			M.StringEq(dest="%e2", left="%ti", right="%ti"),
+		]
+		entry.terminator = M.Goto(target="next")
+		nxt = M.BasicBlock(name="next")
+		nxt.instructions = [M.StringEq(dest="%e3", left="%xb", right="%xb")]
+		nxt.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "next": nxt}
+		func.entry = "entry"
+		for t in ("%th", "%ni", "%xb", "%ti"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("nf_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is False
+	fa = build("nf_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos=fn_infos)
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	for bname in ("entry", "next"):
+		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
+	agg_b = _fn_agg(out, "test::nf_b")
+	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release") == 4, agg_b
+
+
+def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-4: CallIndirect/CallIface results join the family via the
+	instruction-carried semantic-String `user_ret_type` when not
+	can_throw (population 0 in the corpus — future-proofing with an
+	instruction-local proof)."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	str_alias = tt.new_scalar("String")
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=[], types={})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.CallIndirect(dest="%ci", callee="%f", args=[],
+				param_types=[], user_ret_type=str_alias, can_throw=False),
+			M.CallIface(dest="%cf", iface="%ifc", args=[],
+				param_types=[], user_ret_type=string_ty,
+				can_throw=False, slot_index=0),
+			M.StringEq(dest="%e1", left="%ci", right="%cf"),  # drains both
+		]
+		entry.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry}
+		func.entry = "entry"
+		for t in ("%ci", "%cf"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("ii_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	rel = [i.value for i in fb.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert set(rel) == {"%ci", "%cf"}, rel
+	fa = build("ii_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
+	agg_b = _fn_agg(out, "test::ii_b")
+	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
+
+
+def test_tlr4_out_of_contract_call_release_trips(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-4: misplaced/duplicated releases of a FAMILY call temp still
+	fail closed through insert_string_arc's prescan."""
+	import pytest
+	from lang.driftc.checker import FnInfo, FnSignature
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	fid = FunctionId(module="m", name="mk", ordinal=0)
+	fn_infos = {fid: FnInfo(
+		fn_id=fid, name="mk", declared_can_throw=False,
+		signature=FnSignature(name="mk", return_type_id=string_ty))}
+
+	def _run(name, instrs):
+		func = _make_func(name, params=[], locals_=[], types={})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = instrs
+		entry.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry}
+		func.entry = "entry"
+		func.local_types["%qc"] = string_ty
+		_attach_ledger(func)
+		with pytest.raises(AssertionError, match="unexpected input release"):
+			insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
+
+	_run("c4_mis", [
+		M.Call(dest="%qc", fn_id=fid, args=[], can_throw=False),
+		M.StringRelease(value="%qc"),  # BEFORE the real last use
+		M.StringEq(dest="%e", left="%qc", right="%qc"),
+	])
+	_run("c4_dup", [
+		M.Call(dest="%qc", fn_id=fid, args=[], can_throw=False),
+		M.StringEq(dest="%e", left="%qc", right="%qc"),
+		M.StringRelease(value="%qc"),
+		M.StringRelease(value="%qc"),  # duplicate
+	])
 
 
 def test_untagged_note_is_a_finding() -> None:

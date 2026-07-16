@@ -1493,3 +1493,111 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   139,797 (−192,523); materialized 286,424 → 478,947 (+192,523); sum
   conserved; events 2,772,052 unchanged; all other counters +0;
   universe identical; nine gates zero; full memcheck 98+1.
+
+- 2026-07-15 — TLR-3 ACCEPTED: build/tmp/cleanup-tlr3, exit 0.
+  EXACTLY two counters moved vs cleanup-tlr2b: temp_lastuse_release
+  332,320 → 139,797 (−192,523); materialized_lastuse_release 286,424 →
+  478,947 (+192,523) — sum conserved; every other counter +0; events
+  2,772,052 unchanged; universe identical 924/344/49; all nine hard
+  gates zero. Batteries: reporter 41/41; stage2 354/354; guardrails
+  24/24; FULL memcheck 98+1 (an initial 19-failure run was load-induced
+  flake — raced the corpus audit's 16 compile jobs; standalone rerun on
+  the identical tree clean). cleanup-tlr3 is the new phase reference.
+  Commit msg delivered. Next: TLR-4 checkpoint (in progress, report
+  only).
+
+- 2026-07-15 — TLR-4 DESIGN CHECKPOINT (report-only;
+  work/string-ownership-refactor/TLR-4-DESIGN.md). STOPPED FOR REVIEW.
+  MEASUREMENT (scratch TM run on the TLR-3 tree, build/tmp/tlr4-measure,
+  exit 0, universe identical, events +0; restoration via STORED REVERSE
+  EDITS, zero TM_ refs, battery 41/41): the 139,797 residual splits
+  LOSSLESSLY — the ENTIRE call bucket is Call·nothrow·infosem 114,780
+  (direct Call, non-throw, signature-proven semantic-String return);
+  CallIndirect/CallIface/can-throw/helper/info-less ALL ZERO; remaining
+  copyvalue 11,095 / none 7,398 / from 6,479 / exc 45.
+  STRUCTURAL: can-throw String results are IMPOSSIBLE as family temps —
+  _lower_can_throw_call_value gives the call an ENVELOPE dest, ends the
+  block at ResultIsErr/IfTerminator, and the payload reaches later code
+  as a MoveOut dest from the hidden ok-local; error edges cannot skip
+  block-local releases (throw topology IS block topology); can-throw
+  args are CONSUME or IGNORE → out of family either way.
+  DESIGN (per review direction): replace the MATERIALIZED_RELEASE_FAMILY
+  tuple with ONE shared is_materialized_release_family_producer(prod, *,
+  local_types, fn_infos, type_table) predicate — ConstString/Concat
+  unconditional; calls admitted only nothrow + semantically-String-
+  proven (fn_infos signature semantic test or drift_string_* symbols);
+  info-less conservatively OUT (population 0 today, pinned so metadata
+  regressions can't widen the family); consumed by analysis/recognition
+  AND shim (one source); owned Call-arm gains the recognized guard.
+  Open sub-decision flagged: admit CallIndirect/CallIface via
+  instruction-carried user_ret_type (recommended, population 0) or gate
+  to M.Call only. ONE family, one slice (no throw split — dissolved
+  structurally). Expected delta: temp_lastuse 139,797 → 25,017;
+  materialized 478,947 → 593,727; sum conserved; all else +0; gates
+  zero; memcheck STANDALONE (TLR-3 flake lesson). Regression plan incl.
+  REQUIRED throwing-call topology pin (driver-level, both edges
+  exercised, memcheck row) + envelope-dest-never-family unit pin +
+  info-less-stays-out pin + semantic-String carrier.
+
+- 2026-07-15 — TLR-4 IMPLEMENTED (single slice per approved design +
+  predicate directive). VERIFICATION IN FLIGHT (corpus then memcheck
+  STRICTLY SEQUENTIAL — the TLR-3 flake lesson; stage2 358/358 and
+  guardrails 24/24 already green). Code:
+  (1) `MATERIALIZED_RELEASE_FAMILY` tuple REPLACED by the shared
+  predicate `is_materialized_release_family_producer(prod, *, fn_infos,
+  type_table)` (dest String-typed-ness stays the caller's condition in
+  `_is_family_temp`): ConstString/StringConcat unconditional; direct
+  Call — NOT can_throw AND (fn_infos signature return semantically
+  String [finding-5 test] OR drift_string_* helper symbol);
+  CallIndirect/CallIface — NOT can_throw AND semantic-String
+  instruction-carried user_ret_type; info-less/unproven conservatively
+  OUT. Consumed by `_is_family_temp` (analysis+recognition) AND the
+  TLR shim — one source preserved.
+  (2) `DRIFT_STRING_HELPER_SYMBOLS` extracted to module level;
+  `_is_string_creator` now consumes it (same proof list, one source).
+  `_is_semantic_string_tid` module helper; the dispositions table's
+  `_param_is_str_semantic` delegates to it.
+  (3) Owned-registration: call dests are registered ONLY in the fn-wide
+  `owned_defs` prepass (no rewrite-loop re-add arm — verified) — the
+  per-block `owned_values -= recognized_released` subtraction fully
+  covers family suppression; documented at the prepass branch and
+  proven empirically by the A/B pins.
+  PINS (battery 45/45): conformance pin gains the qualified-Call column
+  (%qc via fn_infos, points + release-position assertions updated);
+  NEW `test_tlr4_call_family_ab_semantic_and_idempotence` (semantic
+  non-canonical return TypeId carrier + helper-symbol carrier +
+  multi-use ONE-release + consumed none; A/B byte-identity; pass
+  idempotent with Call temps); `test_tlr4_nonfamily_calls_stay_out`
+  (can-throw String-dest fail-closed guard, info-less stays out,
+  cross-block, CallIndirect throw-guard; pass no-op; A/B identical;
+  4 temp_lastuse / 0 materialized);
+  `test_tlr4_indirect_iface_user_ret_type_family` (CallIndirect via
+  non-canonical user_ret_type + CallIface via canonical; both
+  materialized); `test_tlr4_out_of_contract_call_release_trips`
+  (misplaced + duplicated family-Call releases trip).
+  NEW MEMCHECK ROW `lang/tests/memcheck/test_call_result_lastuse_release.py`
+  (heap-string carriers; row 1 = family comparison operands; row 2 =
+  REQUIRED throwing-call topology: throws callee, error edge exercised
+  every third i through the try/catch-expression fallback, family
+  release on the join; missing-release reads definitely-lost,
+  double-release reads Invalid free) — passed standalone.
+  EXPECTED ACCEPTANCE (vs cleanup-tlr3): temp_lastuse 139,797 → 25,017
+  (−114,780); materialized 478,947 → 593,727 (+114,780); sum conserved;
+  events 2,772,052 unchanged; all other counters +0; universe
+  identical; nine gates zero; memcheck 99+1 (new row included).
+
+- 2026-07-15 — TLR-4 ACCEPTED (final, supersedes the IN-FLIGHT status
+  above): build/tmp/cleanup-tlr4, exit 0. EXACTLY two counters moved vs
+  cleanup-tlr3: temp_lastuse_release 139,797 → 25,017 (−114,780);
+  materialized_lastuse_release 478,947 → 593,727 (+114,780) — sum
+  conserved (618,744 lifetime total); every other counter +0; events
+  2,772,052 unchanged; universe identical 924/344/49; all nine hard
+  gates zero. STANDALONE memcheck (run sequentially AFTER the corpus
+  job exited, per the TLR-3 flake lesson): 99 passed + 1 skipped —
+  includes the new throwing-topology row
+  (test_call_result_lastuse_release.py). Batteries: reporter 45/45;
+  stage2 358/358; guardrails 24/24. cleanup-tlr4 is the new phase
+  reference. Remaining temp_lastuse population 25,017 = copyvalue
+  11,095 (stake-precision investigation) + cross-block none 7,398
+  (lifetime analysis) + StringFrom* 6,479 + Exc* 45 (mechanical later
+  family). Commit msg delivered.

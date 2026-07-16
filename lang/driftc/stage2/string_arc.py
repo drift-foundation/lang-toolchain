@@ -309,17 +309,81 @@ DISPOSITION_CONSUME = "consume"
 DISPOSITION_USE = "use"
 DISPOSITION_IGNORE = "ignore"
 
-# The materialized-release producer family (TLR ladder): block-local
-# temps produced by these instructions, with all-USE occurrences and no
-# live-out/terminator use, get their last-use release emitted by the
-# string_releases pass instead of string_arc's in-pass bookkeeping.
-# SINGLE SOURCE: the release-point analysis's shape predicate, the
-# recognition contract, and the TLR shim classification in `_note_use`
-# all consume this constant — they cannot disagree by construction.
-# TLR-1/2: (ConstString,); TLR-3 adds StringConcat (192,523 measured).
-# Call/CopyValue/StringFrom*/cross-block tails are OUT until their own
-# design gates (TLR-3-DESIGN.md §3).
-MATERIALIZED_RELEASE_FAMILY = (M.ConstString, M.StringConcat)
+# Runtime String-helper symbols whose call results are known owned
+# Strings (+1 transfer) — the existing proof list `_is_string_creator`
+# consults for move approvals, extracted to module level so the family
+# predicate below defers to the SAME source.
+DRIFT_STRING_HELPER_SYMBOLS = frozenset({
+	"drift_string_from_cstr",
+	"drift_string_from_utf8_bytes",
+	"drift_string_from_int64",
+	"drift_string_from_uint64",
+	"drift_string_from_f64",
+	"drift_string_from_bool",
+	"drift_string_literal",
+	"drift_string_concat",
+	"drift_string_retain",
+})
+
+
+def _is_semantic_string_tid(type_table: TypeTable, tid: TypeId) -> bool:
+	"""The SEMANTIC String test (TypeKind.SCALAR + name) — raw TypeId
+	equality is unreliable across the package/type-table boundary (the
+	string_stakes / finding-5 lesson)."""
+	td = type_table.get(tid)
+	return td.kind is TypeKind.SCALAR and td.name == "String"
+
+
+def is_materialized_release_family_producer(
+	prod: "M.MInstr | None",
+	*,
+	fn_infos: Mapping[FunctionId, FnInfo],
+	type_table: TypeTable,
+) -> bool:
+	"""THE materialized-release producer family (TLR ladder): block-local
+	temps produced by these instructions, with all-USE occurrences and no
+	live-out/terminator use, get their last-use release emitted by the
+	string_releases pass instead of string_arc's in-pass bookkeeping.
+	SINGLE SOURCE (replaces the TLR-3 MATERIALIZED_RELEASE_FAMILY tuple):
+	the release-point analysis / recognition (`_analyze_lastuse_block`)
+	and the TLR shim classification in `_note_use` both consume this
+	predicate — they cannot disagree by construction.  The dest
+	String-typed-ness condition is the CALLER's (`_is_family_temp`).
+
+	- Unconditional: ConstString (TLR-1/2b), StringConcat (TLR-3).
+	- Direct Call (TLR-4): NOT can_throw AND the result proven
+	  semantically String — fn_infos signature return type (semantic
+	  test, finding-5 rule) or a known drift_string_* helper symbol.
+	  Info-less/unproven call results are conservatively OUT
+	  (population 0 measured; pinned so a metadata regression cannot
+	  silently widen the family).
+	- CallIndirect/CallIface (TLR-4): NOT can_throw AND semantic-String
+	  instruction-carried user_ret_type (population 0 measured; the
+	  proof is instruction-local and exactly as strong).
+	- can_throw admission is STRUCTURALLY impossible — a can-throw
+	  call's dest is the FnResult envelope, never a String
+	  (TLR-4-DESIGN.md §3) — and fail-closed here anyway.
+	- CopyValue / StringFrom* / Exc* / cross-block tails stay OUT until
+	  their own design gates."""
+	if isinstance(prod, (M.ConstString, M.StringConcat)):
+		return True
+	if isinstance(prod, (M.Call, M.CallIndirect, M.CallIface)):
+		if getattr(prod, "can_throw", False):
+			return False
+		if isinstance(prod, M.Call):
+			sym = function_symbol(prod.fn_id)
+			if isinstance(sym, str) and sym in DRIFT_STRING_HELPER_SYMBOLS:
+				return True
+			info = fn_infos.get(prod.fn_id)
+			return (
+				info is not None
+				and info.signature is not None
+				and info.signature.return_type_id is not None
+				and _is_semantic_string_tid(type_table, info.signature.return_type_id)
+			)
+		urt = getattr(prod, "user_ret_type", None)
+		return urt is not None and _is_semantic_string_tid(type_table, urt)
+	return False
 
 
 def string_operand_dispositions(
@@ -459,8 +523,7 @@ def string_operand_dispositions(
 	# the live arm, and future users of the predicate would decide
 	# wrongly.)
 	def _param_is_str_semantic(tid) -> bool:
-		td = type_table.get(tid)
-		return td.kind is TypeKind.SCALAR and td.name == "String"
+		return _is_semantic_string_tid(type_table, tid)
 
 	if isinstance(instr, M.Call):
 		info = fn_infos.get(instr.fn_id)
@@ -547,8 +610,10 @@ def _analyze_lastuse_block(
 	release after that instruction; a terminator-drained temp maps to
 	len(block.instructions)).
 
-	Qualified: producer is a MATERIALIZED_RELEASE_FAMILY instruction
-	(ConstString / StringConcat since TLR-3) in THIS block; String-typed;
+	Qualified: producer satisfies
+	`is_materialized_release_family_producer` (ConstString / StringConcat /
+	proven non-throw String-returning calls since TLR-4) in THIS block;
+	String-typed;
 	not in `live_out_names`; ≥1 occurrence; every occurrence has USE
 	disposition (a CONSUME disqualifies — string_arc de-owns and never
 	releases; an IGNORE disqualifies — the count never drains, so
@@ -558,8 +623,8 @@ def _analyze_lastuse_block(
 	in-contract pre-materialized `StringRelease(%t)` contributes NO
 	occurrence to any count, and `%t` itself is excluded from the points
 	(already released by the external author).  In-contract means BOTH:
-	- shape: `%t`'s producer is a block-local MATERIALIZED_RELEASE_FAMILY
-	  instruction; AND
+	- shape: `%t`'s producer is block-local and satisfies the family
+	  predicate; AND
 	- placement (review-hardened): it is the UNIQUE StringRelease of
 	  `%t` in the block, `%t`'s remaining occurrences are all USE, and
 	  the release sits after the draining instruction those occurrences
@@ -569,8 +634,8 @@ def _analyze_lastuse_block(
 	  never for a live-out or terminator-read temp).
 	ANY input StringRelease that fails either half — including the shape
 	half: the only legitimate author of pre-string_arc releases is the
-	string_releases pass, whose family is exactly
-	MATERIALIZED_RELEASE_FAMILY — is
+	string_releases pass, whose family is exactly the family
+	predicate — is
 	REJECTED fail-closed (AssertionError, `unexpected input release`
 	tag).  A mis-placed release recognized silently would suppress
 	string_arc's own release while leaving a later use reading freed
@@ -585,7 +650,9 @@ def _analyze_lastuse_block(
 
 	def _is_family_temp(v: str) -> bool:
 		return (
-			isinstance(producers.get(v), MATERIALIZED_RELEASE_FAMILY)
+			is_materialized_release_family_producer(
+				producers.get(v), fn_infos=fn_infos, type_table=type_table
+			)
 			and local_types.get(v) == string_ty
 		)
 
@@ -604,7 +671,7 @@ def _analyze_lastuse_block(
 					f"string_arc release-recognition tripwire "
 					f"[unexpected input release]: block '{block.name}'[{idx}], "
 					f"value '{ins.value}' — operand is not a block-local "
-					f"MATERIALIZED_RELEASE_FAMILY String temp "
+					f"family-producer String temp "
 					f"(producer={type(producers.get(ins.value)).__name__}). "
 					f"Only the string_releases materialization pass may "
 					f"emit StringRelease before string_arc."
@@ -1387,6 +1454,11 @@ def insert_string_arc(
 			elif isinstance(instr, (M.Call, M.CallIndirect, M.CallIface)):
 				# String-returning calls produce owned values that must be released
 				# when their last use in the block is consumed.
+				# TLR-4: this fn-wide prepass is the ONLY owned
+				# registration for call dests (no rewrite-loop re-add
+				# arm), so family suppression for recognized call temps
+				# is fully covered by the per-block
+				# `owned_values -= recognized_released` subtraction.
 				owned_defs.add(dest)
 			elif isinstance(instr, M.PtrRead):
 				if _is_string_tid(instr.elem_ty):
@@ -1546,7 +1618,9 @@ def insert_string_arc(
 					# constant as the analysis/recognition: no drift.
 					_tlr_cls = (
 						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE
-						if isinstance(producers.get(val), MATERIALIZED_RELEASE_FAMILY)
+						if is_materialized_release_family_producer(
+							producers.get(val), fn_infos=fn_infos, type_table=type_table
+						)
 						else _ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE
 					)
 					_audit.note(
@@ -1572,17 +1646,7 @@ def insert_string_arc(
 				if info is not None and info.signature is not None and not bool(getattr(info, "declared_can_throw", False)) and info.signature.return_type_id == string_ty and local_types.get(getattr(instr, "dest", "")) == string_ty:
 					return True
 				sym = function_symbol(instr.fn_id)
-				return sym in {
-					"drift_string_from_cstr",
-					"drift_string_from_utf8_bytes",
-					"drift_string_from_int64",
-					"drift_string_from_uint64",
-					"drift_string_from_f64",
-					"drift_string_from_bool",
-					"drift_string_literal",
-					"drift_string_concat",
-					"drift_string_retain",
-				}
+				return sym in DRIFT_STRING_HELPER_SYMBOLS
 			return False
 
 		def _can_move_creator_return(val: str) -> bool:
@@ -1795,7 +1859,7 @@ def insert_string_arc(
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
-				# TLR-3: StringConcat joined MATERIALIZED_RELEASE_FAMILY —
+				# TLR-3: StringConcat joined the release family —
 				# same recognized-guard as the ConstString arm (the
 				# StringFrom* members are not in the family yet; the
 				# recognized set is empty for them, so the guard is a
