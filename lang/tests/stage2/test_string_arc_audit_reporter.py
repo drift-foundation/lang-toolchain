@@ -1432,15 +1432,15 @@ def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_p
 	"""The handshake is a verified contract, not trust: insert_string_arc
 	itself (via the shared analysis in its prescan) fails closed on
 	out-of-contract input releases.  Carriers:
-	- SHAPE: a release of a CopyValue-produced temp at the correct
-	  position (CopyValue is NOT in the family — the shape carrier has
-	  migrated twice as the family grew: Concat joined in TLR-3,
-	  StringFromInt joined in TLR-5; CopyValue stays out pending the
-	  stake-precision investigation);
-	- PLACEMENT, misplaced: a Concat-temp release BEFORE a later use,
-	  and a StringFromInt-temp release BEFORE a later use (TLR-5);
-	- PLACEMENT, duplicated: two releases of one Concat temp, and of
-	  one StringFromInt temp (TLR-5)."""
+	- SHAPE: a release of a StringRetain-produced temp at the correct
+	  position (StringRetain is NOT in the family — owned, but a retain
+	  wrap, not a materialization boundary; the shape carrier has
+	  migrated three times as the family grew: Concat joined in TLR-3,
+	  StringFromInt in TLR-5, CopyValue in TLR-6);
+	- PLACEMENT, misplaced: Concat / StringFromInt (TLR-5) / CopyValue
+	  (TLR-6) temp releases BEFORE a later use;
+	- PLACEMENT, duplicated: two releases of one Concat / StringFromInt
+	  (TLR-5) / CopyValue (TLR-6) temp."""
 	import pytest
 	tt = TypeTable()
 	string_ty = tt.ensure_string()
@@ -1460,9 +1460,22 @@ def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_p
 
 	_run("oc_shape", [
 		M.ConstString(dest="%a", value="a"),
+		M.StringRetain(dest="%rt", value="%a"),
+		M.StringEq(dest="%e", left="%rt", right="%rt"),
+		M.StringRelease(value="%rt"),  # correct position, WRONG family/shape
+	], ("%a", "%rt"))
+	_run("oc_cv_misplaced", [
+		M.ConstString(dest="%a", value="a"),
+		M.CopyValue(dest="%cv", value="%a", ty=string_ty),
+		M.StringRelease(value="%cv"),  # BEFORE %cv's real last use
+		M.StringEq(dest="%e", left="%cv", right="%cv"),
+	], ("%a", "%cv"))
+	_run("oc_cv_duplicated", [
+		M.ConstString(dest="%a", value="a"),
 		M.CopyValue(dest="%cv", value="%a", ty=string_ty),
 		M.StringEq(dest="%e", left="%cv", right="%cv"),
-		M.StringRelease(value="%cv"),  # correct position, WRONG family/shape
+		M.StringRelease(value="%cv"),
+		M.StringRelease(value="%cv"),  # duplicate
 	], ("%a", "%cv"))
 	_run("oc_sf_misplaced", [
 		M.ConstInt(dest="%n", value=1),
@@ -2008,6 +2021,145 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::t5x_b")
+	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+
+
+def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-6 review-amendment TEETH pin: CopyValue's owned registration
+	has a LIVE rewrite-loop re-add arm (unlike prepass-only Call/Exc*),
+	which runs AFTER the per-block `owned_values -= recognized_released`
+	subtraction.  Predicate-only family extension (guard missing) would
+	re-own the recognized temp and `_note_use` would emit a SECOND
+	release at the drain, after the copied-through pre-materialized one.
+	This pin fails in exactly that configuration: a CopyValue temp with
+	a pre-materialized release after its last non-consuming use must
+	yield EXACTLY ONE release in the output MIR and zero
+	temp_lastuse_release."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("t6t", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.CopyValue(dest="%cv", value="%a", ty=string_ty),
+		M.StringEq(dest="%e", left="%cv", right="%cv"),  # last non-consuming use
+		M.StringRelease(value="%cv"),                    # pre-materialized (in-contract)
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%a", "%cv"):
+		func.local_types[t] = string_ty
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	rel = [i.value for i in func.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel.count("%cv") == 1, (
+		f"double release of the recognized CopyValue temp — the "
+		f"rewrite-loop owned re-add arm is missing its recognized "
+		f"guard: {rel}")
+	agg = _fn_agg(out, "test::t6t")
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+	assert agg.get("site_class:materialized_lastuse_release") >= 1, agg
+
+
+def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-6 A/B pin: CopyValue temps (the view-source copy shape — the
+	measured population is arr[i] value/field reads) are family members:
+	qualified copies materialize; a multi-use copy releases EXACTLY ONCE
+	after the LAST use; a consumed copy emits nothing from either
+	author; pass idempotent."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=["src"], locals_=["x"],
+			types={"src": string_ty, "x": string_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.LoadLocal(dest="%v", local="src"),               # borrowed view
+			M.CopyValue(dest="%q", value="%v", ty=string_ty),  # qualified copy
+			M.CopyValue(dest="%mu", value="%v", ty=string_ty), # multi-use copy
+			M.CopyValue(dest="%cs", value="%v", ty=string_ty), # consumed copy
+			M.StringEq(dest="%e1", left="%q", right="%q"),     # drains %q
+			M.StringEq(dest="%e2", left="%mu", right="%mu"),   # use 1 of %mu
+			M.StringEq(dest="%e3", left="%mu", right="%mu"),   # use 2 (LAST)
+			M.StoreLocal(local="x", value="%cs"),              # consumes %cs
+		]
+		entry.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry}
+		func.entry = "entry"
+		for t in ("%v", "%q", "%mu", "%cs"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("t6_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	rel = [i.value for i in fb.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel.count("%mu") == 1 and "%cs" not in rel, rel
+	assert set(rel) == {"%q", "%mu"}, rel
+	once = list(fb.blocks["entry"].instructions)
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	assert fb.blocks["entry"].instructions == once
+	fa = build("t6_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
+	agg_a = _fn_agg(out, "test::t6_a")
+	agg_b = _fn_agg(out, "test::t6_b")
+	for key in ("site_class:materialized_lastuse_release",
+			"site_class:temp_lastuse_release", "events"):
+		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
+	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
+
+
+def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-6: a CopyValue temp produced in one block and last-used in
+	another stays OUT of the family; the pass emits nothing for it;
+	string_arc still releases it as temp_lastuse; configs identical."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=["src"], locals_=[], types={"src": string_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.LoadLocal(dest="%v", local="src"),
+			M.CopyValue(dest="%cv", value="%v", ty=string_ty),
+		]
+		entry.terminator = M.Goto(target="next")
+		nxt = M.BasicBlock(name="next")
+		nxt.instructions = [M.StringEq(dest="%e", left="%cv", right="%cv")]
+		nxt.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "next": nxt}
+		func.entry = "entry"
+		for t in ("%v", "%cv"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("t6x_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	fa = build("t6x_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	for bname in ("entry", "next"):
+		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
+	agg_b = _fn_agg(out, "test::t6x_b")
 	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
 

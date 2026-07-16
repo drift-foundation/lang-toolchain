@@ -1664,3 +1664,106 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   (−6,524 = 6,479 StringFrom* + 45 Exc*); materialized 593,727 →
   600,251; sum conserved; events/all else +0; universe identical;
   gates zero; memcheck standalone.
+
+- 2026-07-15 — TLR-5 ACCEPTED (final): build/tmp/cleanup-tlr5, exit 0.
+  EXACTLY two counters moved vs cleanup-tlr4: temp_lastuse_release
+  25,017 → 18,493 (−6,524); materialized_lastuse_release 593,727 →
+  600,251 (+6,524) — per-family transfer matches the measurement
+  (6,479 StringFrom* + 45 Exc*); sum conserved; every other counter
+  +0; events 2,772,052 unchanged; universe identical 924/344/49; all
+  nine hard gates zero. STANDALONE memcheck 100 passed + 1 skipped
+  (incl. both new TLR-5 rows). Batteries: reporter 47/47; stage2
+  360/360; guardrails 24/24. cleanup-tlr5 is the new phase reference.
+  Remaining temp_lastuse 18,493 = CopyValue 11,095 + cross-block none
+  7,398 — the LAST two populations before the _note_use release-arm
+  tripwire. Commit msg delivered. Next: CopyValue residual checkpoint
+  (report-only, in progress).
+
+- 2026-07-16 — COPYVALUE RESIDUAL CHECKPOINT (report-only;
+  work/string-ownership-refactor/COPYVALUE-RESIDUAL-REPORT.md).
+  STOPPED FOR REVIEW.
+  MEASUREMENT (origin-tagged scratch run, build/tmp/cv-measure, exit 0,
+  universe identical, events +0, no untagged bucket; 14 reverse edits
+  restored, battery 47/47): the 11,095 CopyValue residual is EXACTLY
+  TWO hir_to_mir sites — array_elem_copy (bounds-checked arr[i] value
+  read) 9,246 + array_elem_field_copy (arr[i].field read) 1,849;
+  string_stakes and ALL other emit sites ZERO.
+  KEY FINDING: the original "CopyValue (string_stakes stakes!)"
+  annotation is DISPROVEN — every .stake is consumed at its anchor;
+  the B-arch stake passes produce zero released-unused stakes.
+  CLASSIFICATION: field-copy 1,849 = real ownership (borrowed
+  view → owned copy, semantically necessary) → migrate; elem-copy
+  9,246 = release is real ownership NOW (migrate) + the copy itself is
+  ELIMINABLE CHURN later (hidden __tmp local could MoveOut instead of
+  LoadLocal+CopyValue — deletes a retain/release pair per element read;
+  separate lowering slice, different corpus signature, events DOWN).
+  No boundary-forced-churn bucket.
+  PROPOSED: Path A = TLR-6 (M.CopyValue joins the unconditional family;
+  temp_lastuse 18,493 → 7,398 exact −11,095 with 9,246+1,849
+  sub-checks; materialized → 611,346; shape carrier migrates a third
+  time → StringRetain becomes the non-member carrier); Path B =
+  element-read churn elimination AFTER Path A (own design gate);
+  cross-block 7,398 stays out (lifetime analysis) — after Path A it is
+  the ONLY residual before the _note_use release-arm tripwire.
+
+- 2026-07-16 — COPYVALUE CHECKPOINT REVIEW AMENDMENT (blocking gap in
+  Path A as written, caught in review): CopyValue — unlike Call/Exc*
+  (prepass-only) — has a LIVE rewrite-loop owned re-add arm
+  (string_arc.py ~1898), and the per-block subtraction runs BEFORE the
+  rewrite loop; family membership without the arm guard → recognized
+  release copied through AND _note_use second release at the drain.
+  Report Path A amended (COPYVALUE-RESIDUAL-REPORT.md §4): TLR-6 MUST
+  (a) add the same `if instr.dest not in recognized_released:` guard
+  the ConstString and StringFrom*/Concat arms carry, and (b) pin the
+  teeth: CopyValue temp + pre-materialized release after last
+  non-consuming use → EXACTLY ONE release in output MIR, zero
+  temp_lastuse — fails if the predicate extends without the guard.
+  Checkpoint otherwise accepted (report-only state verified clean).
+  TLR-6 is the next implementation slice, pending go-ahead.
+
+- 2026-07-16 — TLR-6 IMPLEMENTED (as amended). VERIFICATION IN FLIGHT
+  (corpus → memcheck strictly sequential; fast batteries green:
+  reporter 50/50, stage2 363/363, guardrails 24/24, new memcheck row
+  standalone-passed). Code:
+  (1) `M.CopyValue` joins the UNCONDITIONAL family in
+  `is_materialized_release_family_producer`; docstring records TLR-6
+  membership (+ .stake-never-qualifies rationale) and narrows the
+  out-of-scope note to the cross-block tail — the LAST population
+  before the _note_use release-arm tripwire.
+  (2) REVIEW-AMENDMENT GUARD: the CopyValue rewrite-loop owned re-add
+  arm (string_arc.py ~1898) now carries
+  `instr.dest not in recognized_released` — the live-arm suppression
+  the amendment required (prepass subtraction alone is insufficient:
+  the arm runs AFTER it).
+  (3) Shape carrier migrated a THIRD time: CopyValue → StringRetain
+  (owned but not a materialization boundary); CopyValue converts to
+  new misplaced + duplicated placement cases.
+  PINS (battery 50/50): `test_tlr6_copyvalue_guard_teeth` — the
+  dedicated amendment pin (CopyValue temp + pre-materialized release
+  after last non-consuming use → EXACTLY ONE release, zero
+  temp_lastuse); TEETH PROVEN by temporary guard removal (pin FAILED on
+  the double release, guard restored, pin passes; tree grep-verified).
+  `test_tlr6_copyvalue_family` (qualified/multi-use-once/consumed-none
+  view-source copies; A/B byte-identity; idempotence);
+  `test_tlr6_cross_block_copyvalue_untouched`. NEW MEMCHECK ROW
+  `test_copyvalue_lastuse_release.py` (heap Array<String>: arr[i]
+  value-read comparisons + arr[i].name field-read comparisons — BOTH
+  measured sites live) — passed standalone.
+  EXPECTED ACCEPTANCE (vs cleanup-tlr5): temp_lastuse 18,493 → 7,398
+  (−11,095 = 9,246 elem + 1,849 field); materialized 600,251 →
+  611,346; sum conserved; events/all else +0; universe identical;
+  gates zero; memcheck standalone.
+
+- 2026-07-16 — TLR-6 ACCEPTED (final): build/tmp/cleanup-tlr6, exit 0.
+  EXACTLY two counters moved vs cleanup-tlr5: temp_lastuse_release
+  18,493 → 7,398 (−11,095, matching the measured 9,246 elem + 1,849
+  field sites); materialized_lastuse_release 600,251 → 611,346
+  (+11,095) — sum conserved (618,744 lifetime total, of which 611,346
+  now under the dedicated materialization authority); every other
+  counter +0; events 2,772,052 unchanged; universe identical
+  924/344/49; all nine hard gates zero. STANDALONE memcheck 101 passed
+  + 1 skipped (incl. the new CopyValue row). Batteries: reporter 50/50;
+  stage2 363/363; guardrails 24/24. cleanup-tlr6 is the new phase
+  reference. The ONLY remaining temp_lastuse population is the
+  cross-block tail (7,398) — its design gate is the last step before
+  the _note_use release-arm tripwire. Commit msg delivered.

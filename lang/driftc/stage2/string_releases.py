@@ -1,18 +1,19 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""TLR-2b/3/4: materialize last-use releases for block-local
-family temps (`is_materialized_release_family_producer`: ConstString
-since TLR-2b, StringConcat since TLR-3, proven non-throw String-returning
-calls since TLR-4) as explicit MIR, before the ledger build that feeds
-`string_arc`.
+"""TLR-2b..6: materialize last-use releases for block-local family
+temps (`is_materialized_release_family_producer` — the single source of
+membership: ConstString since TLR-2b, StringConcat since TLR-3, proven
+non-throw String-returning calls since TLR-4, StringFrom{Int,Bool,Uint,
+Float} + ExcGetParamsJson/ExcGetContextJson since TLR-5, CopyValue since
+TLR-6) as explicit MIR, before the ledger build that feeds `string_arc`.
 
 Problem (TLR measurement, 2026-07-14): 618,744 corpus releases of owned
 String temps whose LAST use is non-consuming existed only as
 `string_arc`'s private per-block bookkeeping (`use_counts` /
 `owned_values`) — no ledger authority models SSA temp lifetimes.  TLR-1
-split the dominant family (block-local ConstString producers, 286,424;
-TLR-3 adds StringConcat, 192,523)
-into its own audit class via an in-string_arc shim; this pass makes that
-family's releases REAL MIR with a dedicated author:
+split the dominant family into its own audit class via an in-string_arc
+shim; this pass makes the family's releases REAL MIR with a dedicated
+author (611,346 of the 618,744 after TLR-6 — everything except the
+cross-block tail, 7,398, which awaits its own lifetime-analysis gate):
 
     %t = ConstString "..."            %t = ConstString "..."
     StringEq(%e, %t, %u)        →     StringEq(%e, %t, %u)

@@ -354,7 +354,10 @@ def is_materialized_release_family_producer(
 	  StringFrom{Int,Bool,Uint,Float} and ExcGetParamsJson/
 	  ExcGetContextJson (TLR-5 — plain single-dest instructions with
 	  scalar/error operands, +1-owned results: drift_string_from_* /
-	  ABI §2.3 retained returns).
+	  ABI §2.3 retained returns), CopyValue (TLR-6 — a String CopyValue
+	  dest is an unconditional +1 owner, codegen drift_string_retain;
+	  consumed `.stake` copies never qualify, measured zero at
+	  last-use).
 	- Direct Call (TLR-4): NOT can_throw AND the result proven
 	  semantically String — fn_infos signature return type (semantic
 	  test, finding-5 rule) or a known drift_string_* helper symbol.
@@ -367,13 +370,15 @@ def is_materialized_release_family_producer(
 	- can_throw admission is STRUCTURALLY impossible — a can-throw
 	  call's dest is the FnResult envelope, never a String
 	  (TLR-4-DESIGN.md §3) — and fail-closed here anyway.
-	- CopyValue (stake-precision investigation) and cross-block tails
-	  (lifetime analysis) stay OUT until their own design gates."""
+	- The cross-block tail (lifetime analysis) is the LAST population
+	  outside the family — its design gate also unlocks the `_note_use`
+	  release-arm tripwire."""
 	if isinstance(prod, (
 		M.ConstString, M.StringConcat,                      # TLR-1..3
 		M.StringFromInt, M.StringFromBool,                  # TLR-5
 		M.StringFromUint, M.StringFromFloat,                # TLR-5
 		M.ExcGetParamsJson, M.ExcGetContextJson,            # TLR-5
+		M.CopyValue,                                        # TLR-6
 	)):
 		return True
 	if isinstance(prod, (M.Call, M.CallIndirect, M.CallIface)):
@@ -1896,7 +1901,15 @@ def insert_string_arc(
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.CopyValue):
-				if _is_string_tid(instr.ty):
+				# TLR-6 (review amendment): CopyValue joined the family,
+				# and unlike Call/Exc* (prepass-only) this arm is a LIVE
+				# rewrite-loop re-add that runs AFTER the per-block
+				# `owned_values -= recognized_released` subtraction —
+				# without the guard, a recognized pre-materialized
+				# release is copied through AND `_note_use` emits a
+				# second release at the drain (pinned:
+				# test_tlr6_copyvalue_guard_teeth).
+				if _is_string_tid(instr.ty) and instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.LoadLocal):
 				load_local_src[instr.dest] = instr.local
