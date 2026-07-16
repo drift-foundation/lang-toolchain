@@ -350,7 +350,11 @@ def is_materialized_release_family_producer(
 	predicate — they cannot disagree by construction.  The dest
 	String-typed-ness condition is the CALLER's (`_is_family_temp`).
 
-	- Unconditional: ConstString (TLR-1/2b), StringConcat (TLR-3).
+	- Unconditional: ConstString (TLR-1/2b), StringConcat (TLR-3),
+	  StringFrom{Int,Bool,Uint,Float} and ExcGetParamsJson/
+	  ExcGetContextJson (TLR-5 — plain single-dest instructions with
+	  scalar/error operands, +1-owned results: drift_string_from_* /
+	  ABI §2.3 retained returns).
 	- Direct Call (TLR-4): NOT can_throw AND the result proven
 	  semantically String — fn_infos signature return type (semantic
 	  test, finding-5 rule) or a known drift_string_* helper symbol.
@@ -363,9 +367,14 @@ def is_materialized_release_family_producer(
 	- can_throw admission is STRUCTURALLY impossible — a can-throw
 	  call's dest is the FnResult envelope, never a String
 	  (TLR-4-DESIGN.md §3) — and fail-closed here anyway.
-	- CopyValue / StringFrom* / Exc* / cross-block tails stay OUT until
-	  their own design gates."""
-	if isinstance(prod, (M.ConstString, M.StringConcat)):
+	- CopyValue (stake-precision investigation) and cross-block tails
+	  (lifetime analysis) stay OUT until their own design gates."""
+	if isinstance(prod, (
+		M.ConstString, M.StringConcat,                      # TLR-1..3
+		M.StringFromInt, M.StringFromBool,                  # TLR-5
+		M.StringFromUint, M.StringFromFloat,                # TLR-5
+		M.ExcGetParamsJson, M.ExcGetContextJson,            # TLR-5
+	)):
 		return True
 	if isinstance(prod, (M.Call, M.CallIndirect, M.CallIface)):
 		if getattr(prod, "can_throw", False):
@@ -1443,9 +1452,15 @@ def insert_string_arc(
 				# DriftString per ABI spec §2.3 — caller owns and is
 				# responsible for releasing.  Tracked as an owned
 				# string-result alongside the StringConcat / Call class.
+				# TLR-5: this prepass is the ONLY owned registration for
+				# Exc* dests (no rewrite-loop re-add arm), so family
+				# suppression for recognized Exc* temps is fully covered
+				# by the per-block `owned_values -= recognized_released`
+				# subtraction.
 				owned_defs.add(dest)
 			elif isinstance(instr, M.ExcGetContextJson):
-				# Same retained-string contract as ExcGetParamsJson.
+				# Same retained-string contract (and TLR-5 prepass-only
+				# suppression coverage) as ExcGetParamsJson above.
 				owned_defs.add(dest)
 			elif isinstance(instr, M.ErrorEventFqn):
 				# Slice 3 DV→JSON: codegen retains the extracted
@@ -1859,11 +1874,10 @@ def insert_string_arc(
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
-				# TLR-3: StringConcat joined the release family —
-				# same recognized-guard as the ConstString arm (the
-				# StringFrom* members are not in the family yet; the
-				# recognized set is empty for them, so the guard is a
-				# no-op there).
+				# TLR-3: StringConcat joined the release family; TLR-5:
+				# the StringFrom* members joined too — the recognized
+				# guard (same as the ConstString arm) is live for every
+				# member of this arm now.
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):

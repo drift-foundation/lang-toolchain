@@ -1601,3 +1601,66 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   11,095 (stake-precision investigation) + cross-block none 7,398
   (lifetime analysis) + StringFrom* 6,479 + Exc* 45 (mechanical later
   family). Commit msg delivered.
+
+- 2026-07-15 — TLR-5 DESIGN CHECKPOINT (report-only;
+  work/string-ownership-refactor/TLR-5-DESIGN.md). STOPPED FOR REVIEW.
+  MEASUREMENT (fine-grained scratch TM run on the TLR-4 tree,
+  build/tmp/tlr5-measure, exit 0, universe identical, events +0;
+  reverse-edit restoration, zero TM_ refs, battery 45/45): residual
+  25,017 splits LOSSLESSLY — copyvalue 11,095 / none 7,398 /
+  StringFromUint 1,853 / StringFromFloat 1,850 / StringFromInt 1,850 /
+  StringFromBool 926 (from-total 6,479 exact) / ExcGetParamsJson 40 /
+  ExcGetContextJson 5 (exc-total 45 exact).
+  STRUCTURAL: both families confirmed UNCONDITIONAL owned producers —
+  plain single-dest instructions, scalar/error operands (never String),
+  no can_throw, no control flow; StringFrom* = f-string hole lowering +
+  throw-envelope event-code formatting, codegen drift_string_from_* +1;
+  Exc* = error .params/.context field access, ABI §2.3 retained
+  returns. Suppression already covered: StringFrom* owned arm carries
+  the TLR-3 recognized guard (goes live, comment update only); Exc* is
+  prepass-only (verified) → subtraction covers.
+  DESIGN: ONE slice, no 5a/5b split (identical mechanics, exc
+  population 45, split = ceremony); both families join the
+  UNCONDITIONAL isinstance tuple in the shared predicate. Expected
+  delta: temp_lastuse 25,017 → 18,493 (−6,524); materialized 593,727 →
+  600,251 (+6,524); per-family sub-checks 6,479 + 45; all else +0;
+  gates zero; memcheck STANDALONE. Pin note: the standing
+  shape-rejection carrier (StringFromInt) joins the family — moves to
+  a CopyValue-produced carrier, StringFromInt converts to placement
+  cases (the TLR-3 Concat-carrier flip repeating). Two new memcheck
+  rows planned: f-string interpolation (StringFrom* live) and
+  error-inspection catch arm (.params/.context, Exc* live, error edge
+  every iteration). After TLR-5 the ONLY residuals are copyvalue +
+  cross-block (18,493) — the _note_use release-arm tripwire stays
+  parked until those resolve.
+
+- 2026-07-15 — TLR-5 IMPLEMENTED (single slice per approved design +
+  required shape). VERIFICATION IN FLIGHT (corpus → memcheck strictly
+  sequential; fast batteries green: reporter 47/47, stage2 360/360,
+  guardrails 24/24, new memcheck rows passed standalone). Code:
+  (1) `is_materialized_release_family_producer`: unconditional tuple
+  extended with StringFromInt/Bool/Uint/Float + ExcGetParamsJson/
+  ExcGetContextJson; docstring records the TLR-5 members and narrows
+  the out-of-scope note to CopyValue + cross-block.
+  (2) StringFrom*/Concat owned-arm comment updated — the recognized
+  guard is LIVE for every member of the arm now (no logic change).
+  (3) Exc* suppression documented at both prepass branches:
+  prepass-only registration (no rewrite-loop re-add arm), covered by
+  `owned_values -= recognized_released`.
+  (4) Out-of-contract SHAPE carrier moved StringFromInt → CopyValue
+  (second carrier migration — Concat in TLR-3, StringFromInt now);
+  StringFromInt converts to NEW misplaced + duplicated placement cases.
+  PINS (battery 47/47): NEW `test_tlr5_stringfrom_and_exc_family`
+  (all four StringFrom* kinds + both Exc* kinds qualified; multi-use
+  releases ONCE after LAST use; consumed emits none; A/B byte-identity;
+  pass idempotent; 7 materialized / 0 temp_lastuse);
+  `test_tlr5_cross_block_stringfrom_untouched` (pass no-op; stays
+  temp_lastuse; configs identical). NEW MEMCHECK ROWS
+  `test_stringfrom_exc_lastuse_release.py` (f-string row: all four
+  hole kinds drain into interpolation chains + compared results;
+  error-inspection row: catch arm reads e.params/e.context — Exc* on
+  the LIVE error path every other iteration) — passed standalone.
+  EXPECTED ACCEPTANCE (vs cleanup-tlr4): temp_lastuse 25,017 → 18,493
+  (−6,524 = 6,479 StringFrom* + 45 Exc*); materialized 593,727 →
+  600,251; sum conserved; events/all else +0; universe identical;
+  gates zero; memcheck standalone.
