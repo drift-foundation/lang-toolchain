@@ -5,6 +5,16 @@ String ARC insertion for MIR.
 This pass inserts explicit StringRetain/StringRelease (and CopyValue) ops so
 LLVM codegen does not need to guess ownership. It also expands MoveOut into
 LoadLocal + ZeroValue + StoreLocal once retains/releases are inserted.
+
+PIPELINE PRECONDITION (release-arm tripwire slice, 2026-07-16): in
+production, `string_releases.materialize_lastuse_releases` MUST run
+before `insert_string_arc` (the driver's cleanup_authoring loop does).
+The in-pass last-use release arm went corpus-zero when TLR-7 closed the
+family ladder and is now FAIL-CLOSED: bare `insert_string_arc` on MIR
+containing family temps that drain non-consumingly TRIPS by design.
+Direct unit use is valid only for tests that intentionally avoid the
+arm (no family temps, or all consumed / live-out / pre-materialized)
+or intentionally reach it (the tripwire pins).
 """
 
 from __future__ import annotations
@@ -347,8 +357,11 @@ def is_materialized_release_family_producer(
 	string_releases pass instead of string_arc's in-pass bookkeeping.
 	SINGLE SOURCE (replaces the TLR-3 MATERIALIZED_RELEASE_FAMILY tuple):
 	the release-point analysis / recognition (`_analyze_lastuse_block`)
-	and the TLR shim classification in `_note_use` both consume this
-	predicate — they cannot disagree by construction.  The dest
+	consumes this predicate for qualification AND shape rejection, and
+	`_release_arm_tripwire` consumes it for the payload's family flag —
+	they cannot disagree by construction.  (The TLR-1 shim classification
+	in `_note_use` was the third consumer until it retired with the
+	release-arm tripwire slice, 2026-07-16.)  The dest
 	String-typed-ness condition is the CALLER's (`_is_family_temp`).
 
 	- Unconditional: ConstString (TLR-1/2b), StringConcat (TLR-3),
@@ -969,6 +982,10 @@ def insert_string_arc(
 	type_table: TypeTable,
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
+	# PIPELINE PRECONDITION: run `materialize_lastuse_releases` first in
+	# production — the last-use release arm is fail-closed (see the
+	# module doc and `_release_arm_tripwire`).  Direct unit use only for
+	# tests that intentionally avoid or reach the arm.
 	# (`is_destructor_method` was the site-local destructor-self
 	# skip flag; retired in Phase 4 site-3 sub-step 2.  The lattice
 	# now models the destructor's runtime-owned `self` at the
@@ -1218,27 +1235,21 @@ def insert_string_arc(
 	) -> str:
 		if not _is_string_value(val):
 			return val
-		if val in use_counts:
-			use_counts[val] -= 1
-			if use_counts[val] == 0 and val in owned and val not in live_out.get(block.name, set()):
-				if _audit is not None:
-					_audit.note(
-						_ledger_reporter.STAKE_RELEASE, val,
-						_ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE,
-						pre_point=_audit_point[0],
-						post_point=(block.name, len(out)),
-					)
-				out.append(M.StringRelease(value=val))
-				owned.discard(val)
-				move_only_values.discard(val)
 		# Slice 4b: the terminal late-retain arm — reached only for a
 		# PROVEN-String value that no move/owned pre-check approved —
 		# is corpus-zero for EVERY remaining site class funneling here
 		# (call_arg_retain, value_position_retain, return_retain_site3;
 		# store_value_retain was rerouted to its own tripwires in 4a)
-		# and is now fail-closed.  The untyped pass-through above and
-		# the last-use RELEASE bookkeeping (live, temp_lastuse_release)
-		# are intentionally untouched — the 4a two-arm lesson.
+		# and is fail-closed.  Only the untyped pass-through above stays
+		# live (the 4a two-arm lesson).  The last-use RELEASE bookkeeping
+		# that used to sit between the pass-through and this tripwire was
+		# REMOVED with the release-arm tripwire slice (2026-07-16): since
+		# 4b it could only execute en route to the unconditional raise
+		# below (the TLR measurement corollary: "dead-in-effect"), and
+		# its audit note polluted the record of a doomed compile.  With
+		# it gone, the in-pass last-use release path is fully fail-closed:
+		# `_note_use`'s arm is `_release_arm_tripwire`; this proven-String
+		# funnel is `_dead_stake_tripwire`.
 		_dead_stake_tripwire(
 			val,
 			site_class=site_class,
@@ -1284,6 +1295,34 @@ def insert_string_arc(
 			f"source is a LANGUAGE_BUG: file "
 			f"issues/string-arc-dead-stake-tripwire/ with the compiling "
 			f"source and this full message."
+		)
+
+	def _release_arm_tripwire(val: str, *, block_name: str, idx: int) -> None:
+		"""Fail-closed guard on `_note_use`'s last-use release arm
+		(corpus-zero after TLR-7 — see the branch comment).  The payload
+		distinguishes the two firing classes: a STALE UNMIGRATED family
+		temp (family=True: a string_releases/recognition defect) vs a
+		NON-FAMILY owned producer reaching a non-consuming drain
+		(family=False: a new emission shape needing family review).
+		The AssertionError is converted to a clean `internal:`
+		diagnostic at the driver's string_arc boundary — operators never
+		see a Python traceback."""
+		prod = producers_fnwide.get(val)
+		raise AssertionError(
+			f"string_arc release-arm tripwire [lastuse_release_arm]: "
+			f"fn '{func.name}', block '{block_name}'[{idx}], "
+			f"value '{val}', "
+			f"producer={type(prod).__name__ if prod is not None else 'none'} "
+			f"(family={is_materialized_release_family_producer(prod, fn_infos=fn_infos, type_table=type_table)}), "
+			f"use_count=0, consume=False, "
+			f"live_out={val in live_out.get(block_name, set())}. "
+			f"The in-pass last-use release arm is corpus-zero after "
+			f"TLR-7 (every family is pass-materialized and "
+			f"recognition-suppressed); a firing means either a stale "
+			f"unmigrated family temp or a non-family owned producer "
+			f"reaching a non-consuming drain. File "
+			f"issues/string-arc-release-arm-tripwire/ with the "
+			f"compiling source and this full message."
 		)
 
 	def _param_is_string(tid: TypeId) -> bool:
@@ -1696,41 +1735,23 @@ def insert_string_arc(
 				move_only_values.discard(val)
 				return
 			if use_counts[val] == 0 and val in owned_values and val not in live_out.get(block.name, set()):
-				if _audit is not None:
-					# TLR-1 (option-B shim): classification split ONLY —
-					# the SAME StringRelease is emitted on the SAME path
-					# at the SAME position below.  Block-local
-					# MATERIALIZED_RELEASE_FAMILY temps (the per-block
-					# producers map implies co-block production; the
-					# live_out guard above implies the temp is dead after
-					# this block) are the string_releases pass's
-					# ownership boundary — in production every such temp
-					# is pre-materialized and recognized, so this branch
-					# is dead there; it still classifies arc-only unit
-					# runs, which is what the A/B pins compare.  Same
-					# constant as the analysis/recognition: no drift.
-					# TLR-7: classification resolves the producer
-					# FN-WIDE (same authority as recognition/pass), so
-					# cross-block family temps classify materialized in
-					# arc-only runs too — the A/B counter-equality pins
-					# depend on it.  The per-block `producers` map keeps
-					# serving the move-approval helpers unchanged.
-					_tlr_cls = (
-						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE
-						if is_materialized_release_family_producer(
-							producers_fnwide.get(val), fn_infos=fn_infos, type_table=type_table
-						)
-						else _ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE
-					)
-					_audit.note(
-						_ledger_reporter.STAKE_RELEASE, val,
-						_tlr_cls,
-						pre_point=_audit_point[0],
-						post_point=(block.name, len(new_instrs)),
-					)
-				new_instrs.append(M.StringRelease(value=val))
-				owned_values.discard(val)
-				move_only_values.discard(val)
+				# RELEASE-ARM TRIPWIRE (2026-07-16; cert-cycle guard
+				# before deletion).  This condition — an owned String
+				# temp drained to zero non-consumingly, dead after this
+				# block, with NO pre-materialized release recognized —
+				# is an ownership-accounting hole by definition after
+				# TLR-7: every measured population (all family
+				# producers, all CFG shapes, 618,744 lifetime releases)
+				# is authored by the string_releases pass and
+				# recognition-suppressed before this arm can fire.
+				# Releasing here (the pre-TLR behavior) would MASK the
+				# hole.  The TLR-1 option-B shim that lived in this body
+				# retired with it — its classification job ended when
+				# the last family migrated.  Deletion (with 4a'/4b')
+				# waits for a clean cert cycle with zero firings.
+				_release_arm_tripwire(
+					val, block_name=block.name, idx=_audit_point[0][1]
+				)
 
 		def _can_move_owned_once(val: str) -> bool:
 			return val in owned_values and use_counts.get(val, 0) == 1

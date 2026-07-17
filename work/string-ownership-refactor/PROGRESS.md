@@ -1883,3 +1883,126 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   CLOSED: string_arc's _note_use release arm is corpus-zero — the
   release-arm tripwire (fail-closed, then delete with 4a'/4b' after a
   clean cert cycle) is the next slice. Commit msg delivered.
+
+- 2026-07-16 — RELEASE-ARM TRIPWIRE DESIGN CHECKPOINT (report-only;
+  work/string-ownership-refactor/RELEASE-ARM-TRIPWIRE-DESIGN.md).
+  STOPPED FOR REVIEW. The cert-cycle guard before deleting the dead
+  arm; no deletion in the slice.
+  CONFIRMED: committed TLR-7 reference (a1fa8f59, cleanup-tlr7) has
+  temp_lastuse_release ABSENT from the aggregate (17 counters = exact
+  corpus 0). BRANCH: string_arc.py:1698-1733 — the whole
+  `use_counts==0 and owned and not live_out` body (shim + audit note +
+  append + discards). DECISION: tripwire the WHOLE body (the condition
+  IS the defect signal post-TLR-7; releasing would mask the accounting
+  hole; the TLR-1 shim retires with it). PAYLOAD: fn, block[idx],
+  value, fn-wide producer + family flag, use_count/consume/live_out,
+  intake path issues/string-arc-release-arm-tripwire/; AssertionError →
+  existing driver boundary wrap → clean internal diagnostic.
+  KEY COST SURFACED: arc-only insert_string_arc stops being a valid
+  configuration for family-temp MIR — nearly every reporter pin's
+  config-A leg would fire the tripwire; the slice must migrate the
+  battery to a shared _run_pipeline helper, collapse A/B pins to
+  single-config assertions (their prove-the-pass job is complete and
+  untestable once the in-pass author dies), and retire the TLR-1 shim
+  pin (subject deleted).
+  NEW PINS: stale-unmigrated-family-temp (arc-only ConstString drain →
+  trips) + truly-non-family owned temp (StringRetain dest → trips,
+  family=False in payload) + optional driver-level internal-diagnostic
+  shape pin. ACCEPTANCE: every counter +0 vs cleanup-tlr7 (materialized
+  stays 618,744; events unchanged — the shim was corpus-dead);
+  tripwire firing on ANY corpus fixture = stop trigger; memcheck
+  STANDALONE in gate. After a clean cert cycle: delete with 4a'/4b' +
+  retire SITE_CLASS_TEMP_LASTUSE_RELEASE from the enumeration.
+
+- 2026-07-16 — TRIPWIRE DESIGN REVIEW AMENDMENTS (3 items): (1)
+  BLOCKING — the driver-level internal-diagnostic pin is now MANDATORY
+  (§6): the boundary-wrap containment is a user-facing contract;
+  unit AssertionError coverage doesn't test it. (2) MEDIUM — §6a added:
+  the slice must document the pipeline precondition in string_arc.py
+  (module doc + comment at insert_string_arc: materialize first in
+  production; bare use only for tests that intentionally avoid/reach
+  the arm). (3) MEDIUM — §6b added: ALL five direct-caller test files
+  scanned and PRE-CLASSIFIED — reporter battery migrates (§5);
+  test_move_from_ref (t_str consumed by ConstructVariant → never
+  reaches the arm) and the three no-family-producer files
+  (return_swap/drop_before_overwrite_swap/recursive_type_guard) are
+  SAFE AS-IS; slice must re-verify all four under the armed tripwire
+  and add per-file exemption comments. Awaiting implementation
+  go-ahead.
+
+- 2026-07-16 — RELEASE-ARM TRIPWIRE IMPLEMENTED (per amended design;
+  cert-cycle guard, NO deletion). VERIFICATION IN FLIGHT (corpus →
+  memcheck strictly sequential; fast batteries green: reporter 56/56,
+  stage2 369/369, guardrails 24/24). Code:
+  (1) `_release_arm_tripwire(val, *, block_name, idx)` — fn-level
+  closure sibling of `_dead_stake_tripwire`; structured payload: fn,
+  block[idx], value, FN-WIDE producer + family flag (distinguishing
+  stale-unmigrated-family vs non-family-producer firing classes),
+  use_count/consume/live_out, intake path. The WHOLE `use_counts==0 &&
+  owned && !live_out` branch body replaced (shim + audit note + append
+  + discards all retired — the TLR-1 shim dies here); the branch
+  comment records the accounting-hole rationale and the deletion
+  schedule (with 4a'/4b' after a clean cert cycle).
+  (2) PIPELINE PRECONDITION documented at both surfaces: module doc +
+  comment at insert_string_arc (materialize first in production; bare
+  use only for tests that intentionally avoid/reach the arm).
+  (3) INTAKE DOC issues/string-arc-release-arm-tripwire/description.md
+  (mirrors the dead-stake intake; both firing classes + triage rule).
+  (4) BATTERY MIGRATION (the bulk): shared `_run_pipeline` helper;
+  TLR-1 shim pin RETIRED (subject deleted); four conformance pins'
+  live halves run the pipeline; twelve A/B pins collapsed to
+  single-config (config-A legs + agg_a comparisons deleted with
+  retirement notes; pass-output layout + recognition counters are the
+  surviving contract); tlr4_nonfamily REWORKED into the call-shape
+  non-family tripwire carrier (pass materializes only %xb, then arc
+  TRIPS family=False); tlr6 teeth pin adapted (guard-missing failure
+  mode is now the tripwire; pass-materialized both releases, must sail
+  through with exactly one release per temp).
+  (5) EXEMPTION COMMENTS added to all four external caller files
+  (return_swap / drop_before_overwrite_swap / recursive_type_guard:
+  no family producers; move_from_ref: t_str consumed) — all 23 tests
+  re-verified green under the armed tripwire.
+  (6) NEW PINS: stale-family (bare arc, ConstString drain →
+  family=True + producer=ConstString in payload); non-family
+  (StringRetain carrier, production-faithful pipeline → family=False);
+  MANDATORY driver-level diagnostic pin — materialization pass no-op'd
+  via monkeypatch so REAL source ("a"+"b" comparison) reaches the REAL
+  arm through the REAL boundary wrap → clean `internal:` diagnostic
+  with lastuse_release_arm payload asserted end-to-end.
+  EXPECTED ACCEPTANCE (vs cleanup-tlr7): EVERY counter +0
+  (materialized stays 618,744; temp_lastuse stays absent; events
+  unchanged); universe identical; gates zero; NO corpus fixture trips
+  the arm (any firing = stop trigger falsifying TLR-7 coverage);
+  memcheck standalone. After acceptance: tripwire held through a clean
+  FULL SUITE (user-run) before any deletion.
+
+- 2026-07-16 — TRIPWIRE SLICE REVIEW ROUND (1 blocking + 3 medium):
+  (1) BLOCKING — `_ensure_owned`'s temp_lastuse release half REMOVED:
+  since 4b it could only execute en route to the unconditional
+  dead-stake raise one statement later ("dead-in-effect", the TLR
+  measurement corollary), and its audit note polluted doomed-compile
+  records; removal is behavior-neutral and completes the fail-closed
+  claim — NO live emission site tags SITE_CLASS_TEMP_LASTUSE_RELEASE
+  (design §6c added; 4b comment at the site records the removal).
+  (2) predicate docstring: consumer list corrected (analysis/
+  recognition + tripwire family flag; shim recorded as retired third).
+  (3) reporter constants: materialized_lastuse_release rewritten to
+  the post-TLR-7 pass/recognition meaning (TLR-1 origin kept as
+  history); temp_lastuse_release gains the historical fail-closed
+  note. (4) six stale A/B-equivalence docstrings rewritten to the
+  single-config framing. Batteries green on the settled tree
+  (reporter 56/56, stage2 369/369); the mid-run-tainted corpus gate
+  was killed and RELAUNCHED on the settled tree (cleanup-tripwire).
+
+- 2026-07-17 — RELEASE-ARM TRIPWIRE SLICE ACCEPTED (final):
+  build/tmp/cleanup-tripwire, exit 0. EVERY counter +0 vs cleanup-tlr7;
+  temp_lastuse_release still ABSENT (17 counters);
+  materialized_lastuse_release unchanged at 618,744; events 2,772,052
+  unchanged; universe identical 924/344/49; all nine hard gates zero;
+  NO fixture tripped either tripwire (a firing would have failed the
+  compile and broken universe identity). STANDALONE memcheck 102
+  passed + 1 skipped. Batteries: reporter 56/56; stage2 369/369;
+  guardrails 24/24. Commit msg delivered. NEXT: the tripwire holds
+  through a clean FULL SUITE (user-run); deletion (this arm + 4a'/4b'
+  + retiring SITE_CLASS_TEMP_LASTUSE_RELEASE) only after that cert
+  cycle.

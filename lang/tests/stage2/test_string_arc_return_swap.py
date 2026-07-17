@@ -48,6 +48,11 @@ from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2.drop_flags import insert_drop_flags, is_flag_managed, flag_local_name_for
 from lang.driftc.stage2.drop_policy_compute import compute_drop_policy
 from lang.driftc.stage2.ownership_ledger import build_ledger
+# RELEASE-ARM TRIPWIRE EXEMPTION: this file's funcs construct NO
+# family producers (no ConstString/Concat/StringFrom*/CopyValue/Exc*
+# temps), so bare insert_string_arc cannot reach the fail-closed
+# last-use release arm.  Adding family temps here requires the
+# _run_pipeline pattern (see test_string_arc_audit_reporter.py).
 from lang.driftc.stage2.string_arc import insert_string_arc, variant_zero_tag_drop_safe
 
 

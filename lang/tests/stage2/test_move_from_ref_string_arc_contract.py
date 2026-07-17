@@ -48,6 +48,11 @@ from lang.driftc.checker import FnInfo  # noqa: F401  (signature requires the ty
 from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2.ledger_cache import build_and_attach_ledger
 from lang.driftc.stage2.match_cleanup_authoring import author_match_cleanup
+# RELEASE-ARM TRIPWIRE EXEMPTION: the single family temp here (t_str,
+# ConstString) is CONSUMED by a ConstructVariant String field, so it
+# never reaches the fail-closed last-use release arm.  Adding family
+# temps with non-consuming last uses requires the _run_pipeline
+# pattern (see test_string_arc_audit_reporter.py).
 from lang.driftc.stage2.string_arc import insert_string_arc
 
 

@@ -51,6 +51,19 @@ def _attach_ledger(func: M.MirFunc) -> None:
 	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
 
 
+def _run_pipeline(func: M.MirFunc, tt: TypeTable, fn_infos=None) -> None:
+	"""Production-faithful pipeline for unit pins: materialize last-use
+	releases → fresh ledger → insert_string_arc.  Bare insert_string_arc
+	is no longer a valid configuration for MIR containing family temps
+	that drain non-consumingly — the in-pass release arm is FAIL-CLOSED
+	(RELEASE-ARM-TRIPWIRE-DESIGN.md); only the tripwire pins call it
+	bare on such MIR, deliberately."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	materialize_lastuse_releases(func, type_table=tt, fn_infos=fn_infos or {})
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos=fn_infos or {})
+
+
 def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
 	"""fn f() { var x = "a"; var y = "b"; val m = move x; return; }
 
@@ -884,71 +897,6 @@ def test_destructor_self_tag_is_untagged() -> None:
 	assert audit.events[0].site_class.startswith("UNTAGGED:")
 
 
-def test_tlr1_shim_splits_and_emission_is_identical(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-1 option-B shim, both split directions + emission identity:
-	- ConstString temps last-used NON-consumingly (StringEq operands, a
-	  generic-fallthrough consumer) → `materialized_lastuse_release`;
-	- a StringConcat-result temp used the same way → ALSO
-	  `materialized_lastuse_release` (TLR-3: StringConcat joined
-	  MATERIALIZED_RELEASE_FAMILY);
-	- a ConstString produced in ANOTHER block, last-used here → ALSO
-	  `materialized_lastuse_release` (TLR-7: producer resolution is
-	  fn-wide; the cross-block tail joined the family);
-	- each StringRelease sits immediately after its temp's last-use
-	  instruction — the same positions the pre-shim code emitted."""
-	out = tmp_path / "audit.jsonl"
-	_audit_env(monkeypatch, out)
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	bool_ty = tt.ensure_bool()
-	func = _make_func("tlr", params=[], locals_=[], types={})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%x1", value="a"),   # cross-block producer
-	]
-	entry.terminator = M.Goto(target="body")
-	body = M.BasicBlock(name="body")
-	body.instructions = [
-		M.ConstString(dest="%c1", value="a"),
-		M.ConstString(dest="%c2", value="b"),
-		M.StringEq(dest="%e1", left="%c1", right="%c2"),      # last use of %c1, %c2
-		M.ConstString(dest="%c3", value="c"),
-		M.ConstString(dest="%c4", value="d"),
-		M.StringConcat(dest="%cc", left="%c3", right="%c4"),  # consumes-by-fallthrough %c3, %c4
-		M.StringEq(dest="%e2", left="%cc", right="%x1"),      # last use of %cc (Concat) and %x1 (cross-block)
-	]
-	body.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry, "body": body}
-	func.entry = "entry"
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
-	agg = _fn_agg(out, "test::tlr")
-	# Split: %c1..%c4 (ConstString), %cc (Concat, TLR-3), AND %x1
-	# (cross-block ConstString, TLR-7 fn-wide resolution) → ALL
-	# materialized; nothing remains temp_lastuse.
-	assert agg.get("site_class:materialized_lastuse_release") == 6, agg
-	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
-	# Closed/counted-only: nothing UNTAGGED, nothing UNCLASSIFIED.
-	assert "untagged" not in agg, agg
-	assert agg.get("unclassified", 0) == 0, agg
-	# Emission identity: each temp's StringRelease sits immediately after
-	# its last-use instruction in the OUTPUT MIR.
-	out_body = func.blocks["body"].instructions
-	def _release_follows(last_use_pred, subjects):
-		for i, ins in enumerate(out_body):
-			if last_use_pred(ins):
-				trailing = set()
-				j = i + 1
-				while j < len(out_body) and type(out_body[j]).__name__ == "StringRelease":
-					trailing.add(out_body[j].value)
-					j += 1
-				assert subjects <= trailing, (subjects, trailing, out_body)
-				return
-		raise AssertionError("last-use instruction not found in output MIR")
-	_release_follows(lambda ins: type(ins).__name__ == "StringEq" and getattr(ins, "dest", None) == "%e1", {"%c1", "%c2"})
-	_release_follows(lambda ins: type(ins).__name__ == "StringEq" and getattr(ins, "dest", None) == "%e2", {"%cc", "%x1"})
-
-
 def test_materialized_lastuse_is_closed_counted_only() -> None:
 	"""Reporter contract pin (review tightening): the new
 	`materialized_lastuse_release` class is a member of the closed
@@ -1046,8 +994,10 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 	             "%c3": string_ty, "%c4": string_ty, "%cc": string_ty,
 	             "%ig": string_ty, "%qc": string_ty}.items():
 		func.local_types[k] = v
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
+	# Release-arm tripwire era: the live half runs the production
+	# pipeline (pass → arc); the materialized releases now come from the
+	# pass + recognition arm — same positions, same counters.
+	_run_pipeline(func, tt, fn_infos)
 	agg = _fn_agg(out, "test::cf")
 	# materialized = exactly the calculator's points (6, incl. %cc since
 	# TLR-3 and %qc since TLR-4); %s and %ig produce none.
@@ -1189,9 +1139,9 @@ def test_tlr2a_seeder_closes_missing_metadata_gap(monkeypatch, tmp_path: Path) -
 	points = compute_lastuse_release_points(
 		entry, local_types=seeded, fn_infos={}, type_table=tt, live_out_names=set())
 	assert points == {"%c1": 2, "%c2": 2}, points
-	# Live-pass agreement on the SAME un-seeded func.
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	# Live-pass agreement on the SAME un-seeded func (pipeline-faithful:
+	# pass → arc; the release arm is fail-closed).
+	_run_pipeline(func, tt)
 	agg = _fn_agg(out, "test::sg")
 	assert agg.get("site_class:materialized_lastuse_release") == 2, agg
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
@@ -1248,8 +1198,7 @@ def test_tlr2a_ignore_axis_conformance(monkeypatch, tmp_path: Path) -> None:
 	# for the IGNORE temps.
 	for k, v in lt.items():
 		func.local_types.setdefault(k, v)
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_pipeline(func, tt)
 	agg = _fn_agg(out, "test::ig")
 	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
@@ -1327,8 +1276,7 @@ def test_tlr2a_semantic_string_param_conformance(monkeypatch, tmp_path: Path) ->
 	# Live-pass agreement: consumed args are moved, never released.
 	for k, v in lt.items():
 		func.local_types.setdefault(k, v)
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
+	_run_pipeline(func, tt, fn_infos)
 	out_instrs = func.blocks["entry"].instructions
 	released = [i.value for i in out_instrs if type(i).__name__ == "StringRelease"]
 	assert released == ["%u"], released
@@ -1338,16 +1286,14 @@ def test_tlr2a_semantic_string_param_conformance(monkeypatch, tmp_path: Path) ->
 
 
 def test_tlr2b_pass_plus_arc_equals_arc_only(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-2b A/B equivalence pin: for the migrated family the
-	materialization pass + string_arc must produce the BYTE-IDENTICAL
-	instruction stream string_arc-alone produced, with the same audit
-	counters (`materialized_lastuse_release` keeps its author-independent
-	meaning — noted at the recognition arm in B, at the TLR-1 shim in A).
-	Shapes: qualified temp; same-instruction TWO-temp group (drain-order
-	rule); repeated-operand temp (ONE release); consumed single-use
-	ConstString (no release from either author); Concat-produced temp
-	(IN the family since TLR-3 — materialized in config B, shim-classified
-	materialized in config A, same position)."""
+	"""TLR-2b family pin (single-config since the release-arm tripwire
+	retired the arc-only leg): the materialization pass + recognition
+	must produce the expected releases and audit counters —
+	`materialized_lastuse_release` is noted at the recognition arm as
+	the pre-materialized releases are copied through.  Shapes: qualified
+	temp; same-instruction TWO-temp group (drain-order rule);
+	repeated-operand temp (ONE release); consumed single-use ConstString
+	(no release); Concat-produced temp (IN the family since TLR-3)."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -1377,25 +1323,14 @@ def test_tlr2b_pass_plus_arc_equals_arc_only(monkeypatch, tmp_path: Path) -> Non
 			func.local_types[t] = string_ty
 		return func
 
-	# Config A: string_arc only (in-pass emission, TLR-1 shim).
-	fa = build("ab_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
-	# Config B: materialization pass first (driver order: pass → ledger
-	# build → string_arc), then recognition.
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	fb = build("ab_b")
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
-	agg_a = _fn_agg(out, "test::ab_a")
 	agg_b = _fn_agg(out, "test::ab_b")
-	for key in (
-		"site_class:materialized_lastuse_release",
-		"site_class:temp_lastuse_release",
-		"events",
-	):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	# The family: %q (1), %p + %r (2), %u1 + %u2 (2), %cc (Concat, TLR-3)
 	# → 6 materialized; %c consumed → nothing.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 6, agg_b
@@ -1511,8 +1446,8 @@ def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_p
 def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
 	"""TLR-7 FLIP (carrier preserved): a cross-block ConstString temp is
 	IN the family now — fn-wide producer resolution qualifies it and the
-	pass places the release in the DRAIN block; A/B byte-identity holds
-	and the release classifies materialized in both configs."""
+	pass places the release in the DRAIN block and it classifies
+	materialized at the recognition arm."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -1537,30 +1472,25 @@ def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%x"], rel_next  # release in the DRAIN block
-	fa = build("xb_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bname in ("entry", "next"):
-		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
-	agg_a = _fn_agg(out, "test::xb_a")
 	agg_b = _fn_agg(out, "test::xb_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr3_concat_chain_ab_byte_identity(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-3 chain A/B pin: `a + b + c` — two Concats — with the
+	"""TLR-3 chain pin (single-config since the release-arm tripwire
+	retired the arc-only leg): `a + b + c` — two Concats — with the
 	CROSS-FAMILY same-drain group the design called out: the second
 	Concat drains `%c1` (Concat temp) AND `%d` (ConstString temp)
 	together; releases are consecutive in drain order (`%c1` then `%d`,
 	last-occurrence positions in the draining instruction's operand
-	walk).  Pass+arc must equal arc-only byte-for-byte, with all five
-	releases materialized."""
+	walk).  All five releases materialize via the pass +
+	recognition."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -1585,9 +1515,9 @@ def test_tlr3_concat_chain_ab_byte_identity(monkeypatch, tmp_path: Path) -> None
 			func.local_types[t] = string_ty
 		return func
 
-	fa = build("ch_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	fb = build("ch_b")
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
 	# Pass output layout: cross-family group order %c1 then %d.
@@ -1601,12 +1531,7 @@ def test_tlr3_concat_chain_ab_byte_identity(monkeypatch, tmp_path: Path) -> None
 	], names
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
-	agg_a = _fn_agg(out, "test::ch_a")
 	agg_b = _fn_agg(out, "test::ch_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	assert agg_b.get("site_class:materialized_lastuse_release") == 5, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
@@ -1654,12 +1579,11 @@ def test_tlr3_multiuse_and_consumed_concat(monkeypatch, tmp_path: Path) -> None:
 		if type(ins).__name__ == "StringEq" and ins.dest == "%e2")
 	assert type(instrs[e2_idx + 1]).__name__ == "StringRelease"
 	assert instrs[e2_idx + 1].value == "%mu", instrs
-	fa = build("mc_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
 	agg_b = _fn_agg(out, "test::mc_b")
 	# %a, %b, %c, %dd, %mu materialized (5); %cs consumed → none.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 5, agg_b
@@ -1702,13 +1626,11 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%cc"], rel_next  # TLR-7: drain-block release
-	fa = build("xc_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bname in ("entry", "next"):
-		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::xc_b")
 	# %a, %b AND %cc (cross-block, TLR-7) all materialized.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
@@ -1716,13 +1638,13 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-4 Call family A/B pin: qualified call-result temps —
+	"""TLR-4 Call family pin (single-config since the release-arm
+	tripwire retired the arc-only leg): qualified call-result temps —
 	fn_infos-proven with a NON-CANONICAL semantic-String return TypeId
 	(`new_scalar("String")`, the finding-5 carrier), a drift_string_*
 	helper-symbol call, a multi-use call result (ONE release, after the
 	LAST use), and a consumed call result (no release from either
-	author).  Pass+arc must equal arc-only byte-for-byte, and the pass
-	is idempotent with Call temps in the family."""
+	author).  The pass is idempotent with Call temps in the family."""
 	from lang.driftc.checker import FnInfo, FnSignature
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
@@ -1766,24 +1688,20 @@ def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Pat
 	once = list(fb.blocks["entry"].instructions)
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is False
 	assert fb.blocks["entry"].instructions == once
-	fa = build("c4_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos=fn_infos)
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
-	agg_a = _fn_agg(out, "test::c4_a")
 	agg_b = _fn_agg(out, "test::c4_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 	"""TLR-4 conservative-exclusion pins — all stay OUT of the family
-	and keep string_arc's own temp_lastuse release, A/B byte-identical:
+	(release-arm tripwire era: their non-consuming drains now TRIP the
+	fail-closed arm — see the docstring tail):
 	- `%th` — can_throw=True Call with a (synthetically) String-typed
 	  dest: the fail-closed guard for the structurally-unreachable case
 	  (real can-throw dests are FnResult envelopes);
@@ -1794,7 +1712,12 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 	  this one IS family (proven non-throw Call) and MATERIALIZES in its
 	  drain block — kept here as the flip's record;
 	- `%ti` — CallIndirect with can_throw=True and semantic-String
-	  user_ret_type: throw guard wins."""
+	  user_ret_type: throw guard wins.
+	RELEASE-ARM TRIPWIRE ERA: these non-family owned temps draining
+	non-consumingly now TRIP the fail-closed arm (family=False in the
+	payload) — this pin doubles as the non-family tripwire carrier for
+	the call shapes; the dedicated StringRetain carrier pin covers the
+	non-call shape."""
 	from lang.driftc.checker import FnInfo, FnSignature
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
@@ -1829,21 +1752,16 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 			func.local_types[t] = string_ty
 		return func
 
+	import pytest
 	fb = build("nf_b")
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is True
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%xb"], rel_next  # only the family member
-	fa = build("nf_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos=fn_infos)
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
-	for bname in ("entry", "next"):
-		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
-	agg_b = _fn_agg(out, "test::nf_b")
-	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
-	assert agg_b.get("site_class:temp_lastuse_release") == 3, agg_b
+	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
+		insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	assert "family=False" in str(ei.value), str(ei.value)
 
 
 def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -> None:
@@ -1881,12 +1799,11 @@ def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -
 	rel = [i.value for i in fb.blocks["entry"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert set(rel) == {"%ci", "%cf"}, rel
-	fa = build("ii_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
 	agg_b = _fn_agg(out, "test::ii_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1930,7 +1847,9 @@ def test_tlr4_out_of_contract_call_release_trips(monkeypatch, tmp_path: Path) ->
 
 
 def test_tlr5_stringfrom_and_exc_family(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-5 A/B pin: all four StringFrom* kinds AND both Exc* kinds are
+	"""TLR-5 family pin (single-config since the release-arm tripwire
+	retired the arc-only leg): all four StringFrom* kinds AND both Exc*
+	kinds are
 	unconditional family members — qualified temps materialize; a
 	multi-use StringFrom* temp releases EXACTLY ONCE (after the LAST
 	use); a consumed one emits nothing from either author; pass
@@ -1980,17 +1899,12 @@ def test_tlr5_stringfrom_and_exc_family(monkeypatch, tmp_path: Path) -> None:
 	once = list(fb.blocks["entry"].instructions)
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
 	assert fb.blocks["entry"].instructions == once
-	fa = build("t5_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
-	agg_a = _fn_agg(out, "test::t5_a")
 	agg_b = _fn_agg(out, "test::t5_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	# %si/%sb/%su/%sf/%ep/%ec/%mu → 7 materialized; %cs consumed → none.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 7, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -2027,29 +1941,27 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%sf"], rel_next
-	fa = build("t5x_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bname in ("entry", "next"):
-		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::t5x_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-6 review-amendment TEETH pin: CopyValue's owned registration
-	has a LIVE rewrite-loop re-add arm (unlike prepass-only Call/Exc*),
-	which runs AFTER the per-block `owned_values -= recognized_released`
-	subtraction.  Predicate-only family extension (guard missing) would
-	re-own the recognized temp and `_note_use` would emit a SECOND
-	release at the drain, after the copied-through pre-materialized one.
-	This pin fails in exactly that configuration: a CopyValue temp with
-	a pre-materialized release after its last non-consuming use must
-	yield EXACTLY ONE release in the output MIR and zero
-	temp_lastuse_release."""
+	"""TLR-6 review-amendment TEETH pin (tripwire-era form): CopyValue's
+	owned registration has a LIVE rewrite-loop re-add arm (unlike
+	prepass-only Call/Exc*), which runs AFTER the per-block
+	`owned_values -= recognized_released` subtraction.  With the guard
+	missing, the recognized temp is re-owned and — now that the release
+	arm is FAIL-CLOSED — `_note_use` TRIPS at the drain instead of
+	double-releasing.  This pin fails in exactly that configuration: a
+	CopyValue temp with a pre-materialized release after its last
+	non-consuming use must sail through with EXACTLY ONE release and
+	zero temp_lastuse (no tripwire, no second release)."""
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -2060,15 +1972,16 @@ def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
 		M.ConstString(dest="%a", value="a"),
 		M.CopyValue(dest="%cv", value="%a", ty=string_ty),
 		M.StringEq(dest="%e", left="%cv", right="%cv"),  # last non-consuming use
-		M.StringRelease(value="%cv"),                    # pre-materialized (in-contract)
 	]
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	for t in ("%a", "%cv"):
 		func.local_types[t] = string_ty
-	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	# The pass materializes BOTH releases (%a drains at the CopyValue,
+	# %cv at the StringEq); recognition + the guarded arms must then
+	# sail through insert_string_arc without tripping.
+	_run_pipeline(func, tt)
 	rel = [i.value for i in func.blocks["entry"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel.count("%cv") == 1, (
@@ -2081,7 +1994,9 @@ def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-6 A/B pin: CopyValue temps (the view-source copy shape — the
+	"""TLR-6 family pin (single-config since the release-arm tripwire
+	retired the arc-only leg): CopyValue temps (the view-source copy
+	shape — the
 	measured population is arr[i] value/field reads) are family members:
 	qualified copies materialize; a multi-use copy releases EXACTLY ONCE
 	after the LAST use; a consumed copy emits nothing from either
@@ -2122,17 +2037,12 @@ def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
 	once = list(fb.blocks["entry"].instructions)
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
 	assert fb.blocks["entry"].instructions == once
-	fa = build("t6_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	assert fb.blocks["entry"].instructions == fa.blocks["entry"].instructions
-	agg_a = _fn_agg(out, "test::t6_a")
 	agg_b = _fn_agg(out, "test::t6_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
@@ -2169,21 +2079,20 @@ def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> No
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%cv"], rel_next
-	fa = build("t6x_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A (arc-only) retired with the release-arm tripwire: the
+	# in-pass author is gone, so pass-output + recognition-counter
+	# assertions below are the surviving contract.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bname in ("entry", "next"):
-		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::t6x_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr7_cfg_shapes_ab(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-7 CFG-shape A/B pins in one func per shape — pass+arc must
-	equal arc-only byte-for-byte and counters must match per key:
+	"""TLR-7 CFG-shape pins, one func per shape (single-config since the
+	release-arm tripwire retired the arc-only leg) — the pass output
+	layout and recognition counters are the contract:
 	- BRANCH JOIN: temp used ONLY at the join → single release there
 	  (liveness keeps it live through both arms — no per-arm releases);
 	- PATH-EXCLUSIVE DUAL DRAINS: temp used in BOTH arms, dead at the
@@ -2230,18 +2139,12 @@ def test_tlr7_cfg_shapes_ab(monkeypatch, tmp_path: Path) -> None:
 		got = {bn: [i.value for i in fb.blocks[bn].instructions
 			if type(i).__name__ == "StringRelease"] for bn in fb.blocks}
 		assert got == want, (name, got)
-		fa = _diamond(name + "_a", then_i, else_i, join_i, temps)
-		_attach_ledger(fa)
-		insert_string_arc(fa, type_table=tt, fn_infos={})
+		# Config-A retired with the release-arm tripwire; the pass-output
+		# `want` layout above plus recognition counters are the contract.
 		_attach_ledger(fb)
 		insert_string_arc(fb, type_table=tt, fn_infos={})
-		for bn in fa.blocks:
-			assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, (name, bn)
-		agg_a = _fn_agg(out, f"test::{name}_a")
 		agg_b = _fn_agg(out, f"test::{name}_b")
-		for key in ("site_class:materialized_lastuse_release",
-				"site_class:temp_lastuse_release", "events"):
-			assert agg_a.get(key) == agg_b.get(key), (name, key, agg_a, agg_b)
+		assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, (name, agg_b)
 
 	# BRANCH JOIN: %x used only at the join.
 	_ab("j7",
@@ -2320,18 +2223,10 @@ def test_tlr7_loop_backedge_ab(monkeypatch, tmp_path: Path) -> None:
 	# backedge); it drains in exit.
 	assert got == {"entry": [], "head": ["%a"], "body2": ["%it"],
 		"exit": ["%seed"]}, got
-	fa = build("lp_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A retired with the release-arm tripwire.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bn in fa.blocks:
-		assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, bn
-	agg_a = _fn_agg(out, "test::lp_a")
 	agg_b = _fn_agg(out, "test::lp_b")
-	for key in ("site_class:materialized_lastuse_release",
-			"site_class:temp_lastuse_release", "events"):
-		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
@@ -2380,13 +2275,9 @@ def test_tlr7_consumed_and_terminator_cases(monkeypatch, tmp_path: Path) -> None
 	# of mid's instructions (after the StoreLocal).
 	assert got == {"entry": [], "mid": ["%tm"], "exit": []}, got
 	assert type(fb.blocks["mid"].instructions[-1]).__name__ == "StringRelease"
-	fa = build("ct_a")
-	_attach_ledger(fa)
-	insert_string_arc(fa, type_table=tt, fn_infos={})
+	# Config-A retired with the release-arm tripwire.
 	_attach_ledger(fb)
 	insert_string_arc(fb, type_table=tt, fn_infos={})
-	for bn in fa.blocks:
-		assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, bn
 
 
 def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path: Path) -> None:
@@ -2429,6 +2320,120 @@ def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path
 	b2.instructions = [M.ConstString(dest="%d", value="b")]
 	with pytest.raises(AssertionError, match="duplicate SSA dest"):
 		build_fnwide_producers([b1, b2])
+
+
+def test_release_arm_tripwire_stale_family_temp(monkeypatch) -> None:
+	"""Release-arm tripwire, firing class 1 (family=True): a STALE
+	UNMIGRATED family temp — bare insert_string_arc on MIR with a
+	ConstString temp draining non-consumingly, i.e. the exact
+	configuration a string_releases/recognition regression would
+	produce.  The arm must fail closed with the structured payload, not
+	release."""
+	import pytest
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("st_fam", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.ConstString(dest="%b", value="b"),
+		M.StringEq(dest="%e", left="%a", right="%b"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%a", "%b"):
+		func.local_types[t] = string_ty
+	_attach_ledger(func)
+	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
+		insert_string_arc(func, type_table=tt, fn_infos={})
+	msg = str(ei.value)
+	assert "family=True" in msg and "producer=ConstString" in msg, msg
+
+
+def test_release_arm_tripwire_nonfamily_producer(monkeypatch) -> None:
+	"""Release-arm tripwire, firing class 2 (family=False): a truly
+	NON-FAMILY owned producer — a StringRetain-produced temp draining
+	non-consumingly.  The pipeline is production-faithful: the pass runs
+	first (it correctly materializes nothing for the non-family temp;
+	the retain's ConstString SOURCE is family and does materialize), and
+	the arm then fails closed on the non-family drain."""
+	import pytest
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("st_nf", params=[], locals_=[], types={})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%a", value="a"),
+		M.StringRetain(dest="%rt", value="%a"),
+		M.StringEq(dest="%e", left="%rt", right="%rt"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%a", "%rt"):
+		func.local_types[t] = string_ty
+	materialize_lastuse_releases(func, type_table=tt, fn_infos={})
+	_attach_ledger(func)
+	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
+		insert_string_arc(func, type_table=tt, fn_infos={})
+	msg = str(ei.value)
+	assert "family=False" in msg and "producer=StringRetain" in msg, msg
+
+
+def test_release_arm_tripwire_driver_diagnostic(tmp_path: Path, monkeypatch) -> None:
+	"""MANDATORY (review amendment): the release-arm tripwire's
+	containment is a user-facing contract — end-to-end through the
+	driver, the REAL arm firing on REAL Drift source must surface as
+	the clean `internal:` diagnostic, never a Python traceback.  The
+	materialization pass is no-op'd via monkeypatch so a family temp
+	reaches the fail-closed arm (no real source can otherwise — that is
+	the point of fail-closed)."""
+	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
+	from lang.driftc.module_lowered import flatten_modules
+	from lang.driftc import driftc as D
+	from lang.driftc.stage2 import string_releases as SR
+	from lang.driftc.core.function_id import function_symbol
+
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"module main;\n\npub fn main() nothrow -> Int {\n"
+		"\tif \"a\" + \"b\" == \"ab\" { return 0; }\n\treturn 1;\n}\n"
+	)
+	modules, type_table, exc, mexp, mdeps, pdiags = parse_drift_workspace_to_hir(
+		[src], stdlib_root=stdlib_root(), test_build_only=True
+	)
+	assert not pdiags, [d.message for d in pdiags]
+	func_hirs, signatures, _ = flatten_modules(modules)
+	main_id = [i for i, s in signatures.items() if i.name == "main" and not s.is_method][0]
+	origin = {}
+	for m in modules.values():
+		origin.update(m.origin_by_fn_id)
+
+	monkeypatch.setattr(SR, "materialize_lastuse_releases",
+		lambda func, **kw: False)
+
+	ir, checked = D.compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exc,
+		entry=function_symbol(main_id),
+		type_table=type_table,
+		module_exports=mexp,
+		module_deps=mdeps,
+		origin_by_fn_id=origin,
+		enforce_entrypoint=True,
+		reserved_namespace_policy=D.ReservedNamespacePolicy.ALLOW_DEV,
+	)
+	errors = [d for d in getattr(checked, "diagnostics", []) if getattr(d, "severity", None) == "error"]
+	assert errors, "the armed tripwire must surface as a diagnostic"
+	msgs = [d.message for d in errors]
+	assert any(
+		"internal: string ownership stake contract failure" in m
+		and "lastuse_release_arm" in m
+		for m in msgs
+	), msgs
 
 
 def test_untagged_note_is_a_finding() -> None:

@@ -326,13 +326,21 @@ SITE_CLASS_VALUE_POSITION_RETAIN = "value_position_retain"
 SITE_CLASS_RETURN_RETAIN_SITE3 = "return_retain_site3"
 SITE_CLASS_OVERWRITE_RELEASE = "overwrite_release"
 SITE_CLASS_SCOPE_EXIT_RELEASE = "scope_exit_release"
+# temp_lastuse_release: HISTORICAL post-TLR-7 — string_arc's in-pass
+# last-use release arm went corpus-zero when the TLR ladder closed
+# (temp_lastuse 618,744 → 0 across TLR-1..7) and is now FAIL-CLOSED
+# (release-arm tripwire, 2026-07-16); no live emission site tags this
+# class.  The constant remains for historical aggregate parsing.
 SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
-# TLR-1 (2026-07-14, option-B shim): the block-local-ConstString subset of
-# temp last-use releases, tagged at the SAME emission point with the SAME
-# instruction — only the audit classification differs.  This is the
-# counter split that precedes the TLR-2 extraction (a real pass with its
-# own design gate); the tag boundary IS the future pass's ownership
-# boundary.  Counted-only, exactly like temp_lastuse_release.
+# materialized_lastuse_release (post-TLR-7 meaning): a last-use release
+# of a family temp (`is_materialized_release_family_producer` — fn-wide
+# unique producer, all-USE occurrences, dead after the drain block)
+# AUTHORED by the string_releases materialization pass and noted at
+# string_arc's recognition arm as it copies the pre-materialized
+# StringRelease through.  Covers the ENTIRE lifetime population
+# (618,744).  Originally introduced by the TLR-1 option-B shim
+# (2026-07-14) as a classification split at the old in-pass emission
+# point; the shim retired with the release-arm tripwire.  Counted-only.
 SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE = "materialized_lastuse_release"
 SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 = "drop_before_overwrite_site4"
 SITE_CLASS_MOVEOUT_EXPANSION = "moveout_expansion"
