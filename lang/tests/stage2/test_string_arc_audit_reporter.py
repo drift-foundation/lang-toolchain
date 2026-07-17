@@ -891,9 +891,9 @@ def test_tlr1_shim_splits_and_emission_is_identical(monkeypatch, tmp_path: Path)
 	- a StringConcat-result temp used the same way → ALSO
 	  `materialized_lastuse_release` (TLR-3: StringConcat joined
 	  MATERIALIZED_RELEASE_FAMILY);
-	- a ConstString produced in ANOTHER block, last-used here → stays
-	  `temp_lastuse_release` (the per-block producers map resolves it to
-	  none — the cross-block tail is NOT claimed by the shim);
+	- a ConstString produced in ANOTHER block, last-used here → ALSO
+	  `materialized_lastuse_release` (TLR-7: producer resolution is
+	  fn-wide; the cross-block tail joined the family);
 	- each StringRelease sits immediately after its temp's last-use
 	  instruction — the same positions the pre-shim code emitted."""
 	out = tmp_path / "audit.jsonl"
@@ -923,10 +923,11 @@ def test_tlr1_shim_splits_and_emission_is_identical(monkeypatch, tmp_path: Path)
 	_attach_ledger(func)
 	insert_string_arc(func, type_table=tt, fn_infos={})
 	agg = _fn_agg(out, "test::tlr")
-	# Split: %c1..%c4 (ConstString) AND %cc (Concat, family since TLR-3)
-	# → materialized; %x1 (cross-block producer) → temp_lastuse.
-	assert agg.get("site_class:materialized_lastuse_release") == 5, agg
-	assert agg.get("site_class:temp_lastuse_release") == 1, agg
+	# Split: %c1..%c4 (ConstString), %cc (Concat, TLR-3), AND %x1
+	# (cross-block ConstString, TLR-7 fn-wide resolution) → ALL
+	# materialized; nothing remains temp_lastuse.
+	assert agg.get("site_class:materialized_lastuse_release") == 6, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
 	# Closed/counted-only: nothing UNTAGGED, nothing UNCLASSIFIED.
 	assert "untagged" not in agg, agg
 	assert agg.get("unclassified", 0) == 0, agg
@@ -1508,10 +1509,10 @@ def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_p
 
 
 def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
-	"""Cross-block ConstString temps are OUT of the TLR-2 family (the
-	producing block sees them live-out; the using block has no in-block
-	producer): the pass emits nothing, and string_arc's own bookkeeping
-	still releases them as temp_lastuse in both configs."""
+	"""TLR-7 FLIP (carrier preserved): a cross-block ConstString temp is
+	IN the family now — fn-wide producer resolution qualifies it and the
+	pass places the release in the DRAIN block; A/B byte-identity holds
+	and the release classifies materialized in both configs."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -1532,7 +1533,10 @@ def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
 		return func
 
 	fb = build("xb_b")
-	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	rel_next = [i.value for i in fb.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_next == ["%x"], rel_next  # release in the DRAIN block
 	fa = build("xb_a")
 	_attach_ledger(fa)
 	insert_string_arc(fa, type_table=tt, fn_infos={})
@@ -1541,7 +1545,12 @@ def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_a = _fn_agg(out, "test::xb_a")
-	assert agg_a.get("site_class:materialized_lastuse_release", 0) == 0, agg_a
+	agg_b = _fn_agg(out, "test::xb_b")
+	for key in ("site_class:materialized_lastuse_release",
+			"site_class:temp_lastuse_release", "events"):
+		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
+	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr3_concat_chain_ab_byte_identity(monkeypatch, tmp_path: Path) -> None:
@@ -1658,10 +1667,9 @@ def test_tlr3_multiuse_and_consumed_concat(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-3: a Concat temp produced in one block and last-used in
-	another stays OUT of the family (per-block producer map): the pass
-	emits nothing for it, and string_arc's own bookkeeping still releases
-	it as temp_lastuse in both configs."""
+	"""TLR-7 FLIP (carrier preserved): the cross-block Concat temp is IN
+	the family — fn-wide producer resolution; release in the drain
+	block; all three temps materialize."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -1687,14 +1695,13 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 		return func
 
 	fb = build("xc_b")
-	# The pass DOES touch the block: %a/%b (ConstString) drain at the
-	# in-block Concat and materialize; %cc itself must not.
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
 	rel = [i.value for i in fb.blocks["entry"].instructions
 		if type(i).__name__ == "StringRelease"]
-	assert "%cc" not in rel and set(rel) == {"%a", "%b"}, rel
-	assert not any(type(i).__name__ == "StringRelease"
-		for i in fb.blocks["next"].instructions)
+	assert set(rel) == {"%a", "%b"}, rel
+	rel_next = [i.value for i in fb.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_next == ["%cc"], rel_next  # TLR-7: drain-block release
 	fa = build("xc_a")
 	_attach_ledger(fa)
 	insert_string_arc(fa, type_table=tt, fn_infos={})
@@ -1703,9 +1710,9 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::xc_b")
-	# %a, %b materialized; %cc cross-block → temp_lastuse (both configs).
-	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
-	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+	# %a, %b AND %cc (cross-block, TLR-7) all materialized.
+	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Path) -> None:
@@ -1783,7 +1790,9 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 	- `%ni` — info-less Call with a String-typed dest: unproven →
 	  conservatively out (pinned so a metadata regression cannot
 	  silently widen the family);
-	- `%xb` — cross-block call result (per-block producer map);
+	- `%xb` — cross-block call result: since TLR-7 fn-wide resolution
+	  this one IS family (proven non-throw Call) and MATERIALIZES in its
+	  drain block — kept here as the flip's record;
 	- `%ti` — CallIndirect with can_throw=True and semantic-String
 	  user_ret_type: throw guard wins."""
 	from lang.driftc.checker import FnInfo, FnSignature
@@ -1821,7 +1830,10 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 		return func
 
 	fb = build("nf_b")
-	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is False
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is True
+	rel_next = [i.value for i in fb.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_next == ["%xb"], rel_next  # only the family member
 	fa = build("nf_a")
 	_attach_ledger(fa)
 	insert_string_arc(fa, type_table=tt, fn_infos=fn_infos)
@@ -1830,8 +1842,8 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::nf_b")
-	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
-	assert agg_b.get("site_class:temp_lastuse_release") == 4, agg_b
+	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release") == 3, agg_b
 
 
 def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -> None:
@@ -1985,10 +1997,9 @@ def test_tlr5_stringfrom_and_exc_family(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-5: a StringFrom* temp produced in one block and last-used in
-	another stays OUT of the family (per-block producer map): the pass
-	emits nothing for it; string_arc still releases it as temp_lastuse;
-	configs byte-identical."""
+	"""TLR-7 FLIP (carrier preserved): the cross-block StringFrom* temp
+	is IN the family — fn-wide producer resolution; drain-block release;
+	materialized in both configs."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -2012,7 +2023,10 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 		return func
 
 	fb = build("t5x_b")
-	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	rel_next = [i.value for i in fb.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_next == ["%sf"], rel_next
 	fa = build("t5x_a")
 	_attach_ledger(fa)
 	insert_string_arc(fa, type_table=tt, fn_infos={})
@@ -2021,8 +2035,8 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::t5x_b")
-	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
-	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
 def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
@@ -2124,9 +2138,9 @@ def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-6: a CopyValue temp produced in one block and last-used in
-	another stays OUT of the family; the pass emits nothing for it;
-	string_arc still releases it as temp_lastuse; configs identical."""
+	"""TLR-7 FLIP (carrier preserved): the cross-block CopyValue temp is
+	IN the family — fn-wide producer resolution; drain-block release;
+	materialized in both configs."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
@@ -2151,7 +2165,10 @@ def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> No
 		return func
 
 	fb = build("t6x_b")
-	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is False
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	rel_next = [i.value for i in fb.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_next == ["%cv"], rel_next
 	fa = build("t6x_a")
 	_attach_ledger(fa)
 	insert_string_arc(fa, type_table=tt, fn_infos={})
@@ -2160,8 +2177,258 @@ def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> No
 	for bname in ("entry", "next"):
 		assert fb.blocks[bname].instructions == fa.blocks[bname].instructions
 	agg_b = _fn_agg(out, "test::t6x_b")
-	assert agg_b.get("site_class:materialized_lastuse_release", 0) == 0, agg_b
-	assert agg_b.get("site_class:temp_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
+
+
+def test_tlr7_cfg_shapes_ab(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-7 CFG-shape A/B pins in one func per shape — pass+arc must
+	equal arc-only byte-for-byte and counters must match per key:
+	- BRANCH JOIN: temp used ONLY at the join → single release there
+	  (liveness keeps it live through both arms — no per-arm releases);
+	- PATH-EXCLUSIVE DUAL DRAINS: temp used in BOTH arms, dead at the
+	  join → one release point PER ARM; no execution path passes two
+	  (the §3a path-exclusivity proof's teeth);
+	- BYPASS PATH (blocking review addition — the §3c contract's teeth):
+	  temp used/drained in ONE arm only, the other arm bypasses all
+	  uses, dead at join → release ONLY in the use arm, NONE in the
+	  bypass arm or at the join; TLR-7 mirrors today's drain points and
+	  does not "fix" bypasses."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	bool_ty = tt.ensure_bool()
+
+	def _diamond(name, then_instrs, else_instrs, join_instrs, temps):
+		func = _make_func(name, params=["c"], locals_=[], types={"c": bool_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.ConstString(dest="%x", value="x"),
+			M.LoadLocal(dest="%cv", local="c"),
+		]
+		entry.terminator = M.IfTerminator(cond="%cv", then_target="then", else_target="els")
+		then_b = M.BasicBlock(name="then")
+		then_b.instructions = list(then_instrs)
+		then_b.terminator = M.Goto(target="join")
+		els_b = M.BasicBlock(name="els")
+		els_b.instructions = list(else_instrs)
+		els_b.terminator = M.Goto(target="join")
+		join_b = M.BasicBlock(name="join")
+		join_b.instructions = list(join_instrs)
+		join_b.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "then": then_b, "els": els_b, "join": join_b}
+		func.entry = "entry"
+		for t in temps:
+			func.local_types[t] = string_ty
+		return func
+
+	def _ab(name, then_i, else_i, join_i, temps, want):
+		fb = _diamond(name + "_b", then_i, else_i, join_i, temps)
+		assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+		got = {bn: [i.value for i in fb.blocks[bn].instructions
+			if type(i).__name__ == "StringRelease"] for bn in fb.blocks}
+		assert got == want, (name, got)
+		fa = _diamond(name + "_a", then_i, else_i, join_i, temps)
+		_attach_ledger(fa)
+		insert_string_arc(fa, type_table=tt, fn_infos={})
+		_attach_ledger(fb)
+		insert_string_arc(fb, type_table=tt, fn_infos={})
+		for bn in fa.blocks:
+			assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, (name, bn)
+		agg_a = _fn_agg(out, f"test::{name}_a")
+		agg_b = _fn_agg(out, f"test::{name}_b")
+		for key in ("site_class:materialized_lastuse_release",
+				"site_class:temp_lastuse_release", "events"):
+			assert agg_a.get(key) == agg_b.get(key), (name, key, agg_a, agg_b)
+
+	# BRANCH JOIN: %x used only at the join.
+	_ab("j7",
+		[], [],
+		[M.StringEq(dest="%e", left="%x", right="%x")],
+		("%x",),
+		{"entry": [], "then": [], "els": [], "join": ["%x"]})
+	# PATH-EXCLUSIVE DUAL DRAINS: %x used in both arms, dead at join.
+	_ab("d7",
+		[M.StringEq(dest="%e1", left="%x", right="%x")],
+		[M.StringEq(dest="%e2", left="%x", right="%x")],
+		[],
+		("%x",),
+		{"entry": [], "then": ["%x"], "els": ["%x"], "join": []})
+	# BYPASS: %x used in then only; els bypasses; dead at join.
+	_ab("b7",
+		[M.StringEq(dest="%e1", left="%x", right="%x")],
+		[],
+		[],
+		("%x",),
+		{"entry": [], "then": ["%x"], "els": [], "join": []})
+
+
+def test_tlr7_loop_backedge_ab(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-7 loop/backedge pins (review requirement):
+	- POSITIVE (the measured 7,392 shape): a Concat temp produced in one
+	  loop-body block and drained in a LATER body block, fresh each
+	  iteration → release inside the iteration, in the drain block;
+	- NEGATIVE control: a temp used again NEXT iteration (live through
+	  the backedge) → NO release anywhere inside the loop from either
+	  author (the §3a proof relies on live_out seeing backedge uses)."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	bool_ty = tt.ensure_bool()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=["c"], locals_=[], types={"c": bool_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.ConstString(dest="%seed", value="s"),  # NEGATIVE: crosses the backedge
+		]
+		entry.terminator = M.Goto(target="head")
+		head = M.BasicBlock(name="head")
+		head.instructions = [
+			M.ConstString(dest="%a", value="a"),
+			M.StringConcat(dest="%it", left="%a", right="%seed"),  # per-iteration Concat
+			M.LoadLocal(dest="%cv", local="c"),
+		]
+		head.terminator = M.IfTerminator(cond="%cv", then_target="body2", else_target="exit")
+		body2 = M.BasicBlock(name="body2")
+		body2.instructions = [
+			M.StringEq(dest="%e", left="%it", right="%it"),  # drain of %it (cross-block, intra-loop)
+		]
+		body2.terminator = M.Goto(target="head")  # backedge: %seed stays live
+		exit_b = M.BasicBlock(name="exit")
+		exit_b.instructions = [
+			M.StringEq(dest="%e2", left="%seed", right="%seed"),  # %seed drains after the loop
+		]
+		exit_b.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "head": head, "body2": body2, "exit": exit_b}
+		func.entry = "entry"
+		for t in ("%seed", "%a", "%it"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("lp_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	got = {bn: [i.value for i in fb.blocks[bn].instructions
+		if type(i).__name__ == "StringRelease"] for bn in fb.blocks}
+	# POSITIVE: %it released in body2 (its drain block, inside the
+	# iteration); %a released in head (drains at the Concat).
+	# NEGATIVE: NO release of %seed inside the loop (live through the
+	# backedge); it drains in exit.
+	assert got == {"entry": [], "head": ["%a"], "body2": ["%it"],
+		"exit": ["%seed"]}, got
+	fa = build("lp_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	for bn in fa.blocks:
+		assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, bn
+	agg_a = _fn_agg(out, "test::lp_a")
+	agg_b = _fn_agg(out, "test::lp_b")
+	for key in ("site_class:materialized_lastuse_release",
+			"site_class:temp_lastuse_release", "events"):
+		assert agg_a.get(key) == agg_b.get(key), (key, agg_a, agg_b)
+	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
+	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
+
+
+def test_tlr7_consumed_and_terminator_cases(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-7: consumed-before-exit — a cross-block temp CONSUMED (stored)
+	in a later block gets NO release from either author; and
+	live-out-to-terminator — a cross-block temp last-used by a later
+	block's NON-Return terminator gets its release at the END of that
+	block's instruction list."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def build(name: str) -> M.MirFunc:
+		func = _make_func(name, params=[], locals_=["x"], types={"x": string_ty})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [
+			M.ConstString(dest="%cs", value="c"),   # consumed-before-exit carrier
+			M.ConstString(dest="%tm", value="t"),   # terminator-use carrier
+		]
+		entry.terminator = M.Goto(target="mid")
+		mid = M.BasicBlock(name="mid")
+		mid.instructions = [
+			M.StoreLocal(local="x", value="%cs"),   # consumes %cs cross-block
+		]
+		# NON-Return terminator using %tm (synthetic: exercises the
+		# term_used → len(instructions) path).
+		mid.terminator = M.IfTerminator(cond="%tm", then_target="exit", else_target="exit")
+		exit_b = M.BasicBlock(name="exit")
+		exit_b.instructions = []
+		exit_b.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "mid": mid, "exit": exit_b}
+		func.entry = "entry"
+		for t in ("%cs", "%tm"):
+			func.local_types[t] = string_ty
+		return func
+
+	fb = build("ct_b")
+	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
+	got = {bn: [i.value for i in fb.blocks[bn].instructions
+		if type(i).__name__ == "StringRelease"] for bn in fb.blocks}
+	# %cs consumed → none; %tm terminator-drained → release at the END
+	# of mid's instructions (after the StoreLocal).
+	assert got == {"entry": [], "mid": ["%tm"], "exit": []}, got
+	assert type(fb.blocks["mid"].instructions[-1]).__name__ == "StringRelease"
+	fa = build("ct_a")
+	_attach_ledger(fa)
+	insert_string_arc(fa, type_table=tt, fn_infos={})
+	_attach_ledger(fb)
+	insert_string_arc(fb, type_table=tt, fn_infos={})
+	for bn in fa.blocks:
+		assert fb.blocks[bn].instructions == fa.blocks[bn].instructions, bn
+
+
+def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-7 fail-closed pins: a misplaced/duplicated CROSS-BLOCK release
+	trips the recognition contract in the drain block; and a duplicate
+	SSA dest trips the fn-wide producer builder."""
+	import pytest
+	from lang.driftc.stage2.string_arc import build_fnwide_producers
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+
+	def _run(name, mid_instrs):
+		func = _make_func(name, params=[], locals_=[], types={})
+		entry = M.BasicBlock(name="entry")
+		entry.instructions = [M.ConstString(dest="%x", value="x")]
+		entry.terminator = M.Goto(target="mid")
+		mid = M.BasicBlock(name="mid")
+		mid.instructions = mid_instrs
+		mid.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "mid": mid}
+		func.entry = "entry"
+		func.local_types["%x"] = string_ty
+		_attach_ledger(func)
+		with pytest.raises(AssertionError, match="unexpected input release"):
+			insert_string_arc(func, type_table=tt, fn_infos={})
+
+	_run("x7_mis", [
+		M.StringRelease(value="%x"),  # BEFORE the cross-block last use
+		M.StringEq(dest="%e", left="%x", right="%x"),
+	])
+	_run("x7_dup", [
+		M.StringEq(dest="%e", left="%x", right="%x"),
+		M.StringRelease(value="%x"),
+		M.StringRelease(value="%x"),  # duplicate
+	])
+	# Duplicate SSA dest → the producer builder fails closed.
+	b1 = M.BasicBlock(name="b1")
+	b1.instructions = [M.ConstString(dest="%d", value="a")]
+	b2 = M.BasicBlock(name="b2")
+	b2.instructions = [M.ConstString(dest="%d", value="b")]
+	with pytest.raises(AssertionError, match="duplicate SSA dest"):
+		build_fnwide_producers([b1, b2])
 
 
 def test_untagged_note_is_a_finding() -> None:

@@ -1,10 +1,15 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""TLR-2b..6: materialize last-use releases for block-local family
-temps (`is_materialized_release_family_producer` — the single source of
+"""TLR-2b..7: materialize last-use releases for family temps
+(`is_materialized_release_family_producer` — the single source of
 membership: ConstString since TLR-2b, StringConcat since TLR-3, proven
 non-throw String-returning calls since TLR-4, StringFrom{Int,Bool,Uint,
 Float} + ExcGetParamsJson/ExcGetContextJson since TLR-5, CopyValue since
 TLR-6) as explicit MIR, before the ledger build that feeds `string_arc`.
+Since TLR-7 producer resolution is FN-WIDE (`build_fnwide_producers` —
+the same authority string_arc's recognition consumes): a family temp
+produced in one block and drained in another qualifies, with the
+release placed in the DRAIN block at exactly the point string_arc's
+in-pass bookkeeping used.
 
 Problem (TLR measurement, 2026-07-14): 618,744 corpus releases of owned
 String temps whose LAST use is non-consuming existed only as
@@ -12,8 +17,8 @@ String temps whose LAST use is non-consuming existed only as
 `owned_values`) — no ledger authority models SSA temp lifetimes.  TLR-1
 split the dominant family into its own audit class via an in-string_arc
 shim; this pass makes the family's releases REAL MIR with a dedicated
-author (611,346 of the 618,744 after TLR-6 — everything except the
-cross-block tail, 7,398, which awaits its own lifetime-analysis gate):
+author (ALL 618,744 after TLR-7 — the cross-block tail was the last
+population, closed by fn-wide producer resolution):
 
     %t = ConstString "..."            %t = ConstString "..."
     StringEq(%e, %t, %u)        →     StringEq(%e, %t, %u)
@@ -37,8 +42,10 @@ classification):
   mutate func metadata);
 - `compute_string_temp_liveness` — the per-block live-out fixpoint
   extracted from `insert_string_arc` (identical result on pre- and
-  post-materialization MIR: in-contract releases never reach
-  `block_use` because their temps are defined earlier in the block);
+  post-materialization MIR: every in-contract release site is dominated
+  by a use of the same temp within the drain block, so `block_use`
+  already contains the temp — see the helper's docstring for the TLR-7
+  form of the argument);
 - `compute_lastuse_release_points` — contract 2, the occurrence-level
   release-point calculator (three-way CONSUME/USE/IGNORE dispositions,
   multiplicity rule, recognition of already-materialized releases —
@@ -64,6 +71,7 @@ from . import cfg as _cfg
 from . import mir_nodes as M
 from .ledger_cache import mark_ledger_dirty
 from .string_arc import (
+	build_fnwide_producers,
 	compute_lastuse_release_points,
 	compute_string_temp_liveness,
 	iter_used_values,
@@ -78,9 +86,10 @@ def materialize_lastuse_releases(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> bool:
 	"""Emit `StringRelease(%t)` immediately after the draining
-	instruction of every qualified block-local family temp
-	(`is_materialized_release_family_producer`).  Returns True iff any
-	release was inserted."""
+	instruction of every qualified family temp
+	(`is_materialized_release_family_producer`; producer resolution
+	fn-wide since TLR-7 — the release lands in the DRAIN block).
+	Returns True iff any release was inserted."""
 	string_ty = type_table.ensure_string()
 	block_order = sorted(func.blocks.keys())
 	local_types = dict(getattr(func, "local_types", {}) or {})
@@ -96,6 +105,12 @@ def materialize_lastuse_releases(
 		local_types=local_types,
 		string_ty=string_ty,
 	)
+	# TLR-7: fn-wide producer resolution — the same shared authority
+	# string_arc's recognition consumes; cross-block family temps
+	# qualify, with the release placed in the DRAIN block.
+	producers_fnwide = build_fnwide_producers(
+		[func.blocks[name] for name in block_order]
+	)
 	changed = False
 	for name in block_order:
 		block = func.blocks[name]
@@ -105,6 +120,7 @@ def materialize_lastuse_releases(
 			fn_infos=fn_infos,
 			type_table=type_table,
 			live_out_names=live_out.get(name, set()),
+			producers_fnwide=producers_fnwide,
 		)
 		if not points:
 			continue

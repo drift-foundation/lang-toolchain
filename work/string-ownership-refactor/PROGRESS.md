@@ -1767,3 +1767,119 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   reference. The ONLY remaining temp_lastuse population is the
   cross-block tail (7,398) — its design gate is the last step before
   the _note_use release-arm tripwire. Commit msg delivered.
+
+- 2026-07-16 — TLR-7 DESIGN CHECKPOINT (report-only;
+  work/string-ownership-refactor/TLR-7-DESIGN.md). STOPPED FOR REVIEW.
+  The LAST population before the _note_use release-arm tripwire.
+  MEASUREMENT (fn-wide producer + CFG-shape scratch run,
+  build/tmp/xb-measure, exit 0, universe identical, events +0; 3
+  reverse edits restored, zero TM_/_tm_ refs, battery 50/50): ALL 7,398
+  resolve to FAMILY producers — StringConcat×loop 7,392 (per-iteration
+  intra-loop block crossings in multi-block string-building loops) +
+  StringConcat×linear 6; ZERO joins, ZERO non-family/no-producer.
+  → acceptance target IS temp_lastuse → 0 exactly (no residuals; the
+  review's itemization branch is moot).
+  DESIGN (five review requirements folded in): §0 precise framing —
+  reuses the EXISTING fn-wide liveness authority, adds fn-wide producer
+  resolution (no new lifetime analysis BEYOND it); §3c bypass-path
+  caveat — behavior EQUIVALENCE claim, not a leak proof (TLR-7 mirrors
+  today's drain points; zero join-shaped drains measured, but the
+  record claim is equivalence); §4 fn-wide producer contract
+  ("block-local family temp" → "fn-wide unique producer, release in
+  the drain block"; duplicate-dest fails closed; shared lookup
+  authority pass+recognition; recognition message/tests drop
+  "block-local"; four legacy cross-block-untouched pins FLIP to
+  materialized expectations); §5 pin ladder incl. the REQUIRED
+  loop/backedge pins (per-iteration positive + loop-carried NEGATIVE
+  control), path-exclusive dual drains, branch join, straight-line,
+  consumed-before-exit, live-out-to-terminator, cross-block
+  misplaced/duplicated trips, multi-block loop memcheck row.
+  Proofs: §3a path-exclusivity via the liveness fixpoint (backedges
+  covered); §3b cross-block suppression already structural (per-block
+  owned re-seed + drain-block subtraction; arm guards unchanged).
+  Expected: temp_lastuse 7,398 → 0; materialized 611,346 → 618,744 —
+  the ENTIRE lifetime population under the dedicated authority; all
+  else +0. After TLR-7: release-arm tripwire → cert cycle → delete
+  with 4a'/4b'.
+
+- 2026-07-16 — TLR-7 DESIGN REVIEW AMENDMENTS (2 items): (1) BLOCKING —
+  §5 gains the BYPASS-PATH A/B pin (producer before a diamond, one arm
+  drains, other arm bypasses, dead at join → release ONLY in the use
+  arm, none in bypass/join, byte-identical to arc-only) — the §3c
+  behavior-equivalence contract now has teeth; (2) MEDIUM — §4
+  contract-update list expanded with three more stale block-local
+  surfaces: compute_string_temp_liveness docstring (~847; the
+  liveness-invariance ARGUMENT must be rewritten — refined form:
+  every in-contract release site is dominated by a use of the same
+  temp within the drain block, incl. the terminator-drained case, so
+  block_use already contains the temp; the invariance CONCLUSION
+  survives), is_materialized_release_family_producer docstring, and
+  materialize_lastuse_releases FUNCTION doc. Awaiting implementation
+  go-ahead.
+
+- 2026-07-16 — TLR-7 IMPLEMENTED (as amended). VERIFICATION IN FLIGHT
+  (corpus → memcheck strictly sequential; fast batteries green:
+  reporter 54/54, stage2 367/367, guardrails 24/24, new memcheck row
+  standalone-passed). Code:
+  (1) NEW shared `build_fnwide_producers(blocks_in_order)` — the ONE
+  producer-lookup authority (duplicate SSA dest fails closed);
+  `_analyze_lastuse_block` + both public contracts gain
+  `producers_fnwide=` (None → single-block fallback for unit callers,
+  documented); insert_string_arc builds the map once post-seeding and
+  threads it to per-block recognition AND the shim classification
+  (fn-wide — A/B counter equality depends on it; the per-block
+  `producers` map keeps serving the move-approval helpers unchanged);
+  the pass builds + threads the same map.
+  (2) FULL WORDING SWEEP (six surfaces per the amended design):
+  predicate docstring, analysis qualification/shape docstrings,
+  phase-1 comment, fail-closed message ("fn-wide producer resolution"),
+  compute_string_temp_liveness invariance argument REWRITTEN to the
+  dominated-by-use form, string_releases module + function docs
+  (TLR-2b..7; cross-block-excluded sentences retired; coverage note →
+  ALL 618,744), predicate out-of-scope note → ladder closed.
+  (3) CONTRACT GAP CAUGHT BY THE TERMINATOR PIN: terminator-drained
+  temps (point = len(instructions)) were rejected by the placement
+  validation (`temp not in term_used`). Arc-only probe CONFIRMED the
+  in-pass emission releases at end-of-instructions before the
+  terminator read — the pass placement was faithful; validation gained
+  a terminator-drained arm (release sits IN the trailing release run,
+  after every instruction occurrence; Return-consumed still rejects;
+  first attempt anchored the run at the last occurrence — wrong for
+  terminator-ONLY-used temps — corrected to anchor at the release).
+  PINS (battery 54/54): SIX legacy pins FLIPPED to materialized
+  expectations, carriers preserved (tlr1 shim %x1 → 6/0; tlr2b/3/5/6
+  cross-block pins → drain-block release asserted + A/B counter
+  equality; tlr4 %xb → family, stay-out set now can-throw/info-less/
+  throw-indirect only, 1/3). NEW: `test_tlr7_cfg_shapes_ab` (branch
+  join → single release at join; path-exclusive dual drains → one per
+  arm; BYPASS PATH → release ONLY in the use arm, none in bypass/join
+  — the §3c contract's teeth); `test_tlr7_loop_backedge_ab` (positive:
+  per-iteration Concat produced in head, drained in body2 across the
+  intra-loop boundary; NEGATIVE control: %seed live through the
+  backedge → no release inside the loop, drains after exit);
+  `test_tlr7_consumed_and_terminator_cases` (cross-block consumed →
+  none; non-Return terminator-drained → trailing release, position
+  asserted); `test_tlr7_cross_block_out_of_contract_and_dup_producer`
+  (cross-block misplaced/duplicated trip; duplicate-SSA-dest builder
+  tripwire). NEW MEMCHECK ROW `test_crossblock_lastuse_release.py`
+  (the measured 7,392 shape: concat chains interleaving bounds-checked
+  array reads inside multi-block loop bodies + a conditional variant)
+  — passed standalone.
+  EXPECTED ACCEPTANCE (vs cleanup-tlr6): temp_lastuse 7,398 → 0
+  (sub-check 7,392 loop + 6 linear); materialized 611,346 → 618,744 —
+  the ENTIRE lifetime population; all else +0; universe identical;
+  gates zero; memcheck standalone.
+
+- 2026-07-16 — TLR-7 ACCEPTED (final): build/tmp/cleanup-tlr7, exit 0.
+  EXACTLY two counters moved vs cleanup-tlr6: temp_lastuse_release
+  7,398 → 0; materialized_lastuse_release 611,346 → 618,744 — THE
+  ENTIRE LIFETIME POPULATION under the dedicated materialization
+  authority (the aggregate no longer contains a temp_lastuse_release
+  key: counters 18 → 17); every other counter +0; events 2,772,052
+  unchanged; universe identical 924/344/49; all nine hard gates zero.
+  STANDALONE memcheck 102 passed + 1 skipped (incl. the new cross-block
+  loop row). Batteries: reporter 54/54; stage2 367/367; guardrails
+  24/24. cleanup-tlr7 is the new phase reference. THE TLR LADDER IS
+  CLOSED: string_arc's _note_use release arm is corpus-zero — the
+  release-arm tripwire (fail-closed, then delete with 4a'/4b' after a
+  clean cert cycle) is the next slice. Commit msg delivered.

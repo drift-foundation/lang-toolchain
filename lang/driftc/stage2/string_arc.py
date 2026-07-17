@@ -340,8 +340,9 @@ def is_materialized_release_family_producer(
 	fn_infos: Mapping[FunctionId, FnInfo],
 	type_table: TypeTable,
 ) -> bool:
-	"""THE materialized-release producer family (TLR ladder): block-local
-	temps produced by these instructions, with all-USE occurrences and no
+	"""THE materialized-release producer family (TLR ladder): temps
+	produced by these instructions (in ANY block since TLR-7 — producer
+	resolution is fn-wide via `build_fnwide_producers`), with all-USE occurrences and no
 	live-out/terminator use, get their last-use release emitted by the
 	string_releases pass instead of string_arc's in-pass bookkeeping.
 	SINGLE SOURCE (replaces the TLR-3 MATERIALIZED_RELEASE_FAMILY tuple):
@@ -370,9 +371,10 @@ def is_materialized_release_family_producer(
 	- can_throw admission is STRUCTURALLY impossible — a can-throw
 	  call's dest is the FnResult envelope, never a String
 	  (TLR-4-DESIGN.md §3) — and fail-closed here anyway.
-	- The cross-block tail (lifetime analysis) is the LAST population
-	  outside the family — its design gate also unlocks the `_note_use`
-	  release-arm tripwire."""
+	- TLR-7 closed the ladder: with fn-wide producer resolution, every
+	  measured temp_lastuse population is family-covered — the
+	  `_note_use` release arm is corpus-zero and next in the tripwire
+	  ladder."""
 	if isinstance(prod, (
 		M.ConstString, M.StringConcat,                      # TLR-1..3
 		M.StringFromInt, M.StringFromBool,                  # TLR-5
@@ -604,6 +606,32 @@ def consumes_string_operand(
 	)
 
 
+def build_fnwide_producers(
+	blocks_in_order: "Sequence[M.BasicBlock]",
+) -> Dict[str, M.MInstr]:
+	"""TLR-7: the ONE producer-lookup authority shared by the
+	materialization pass and string_arc's recognition — fn-wide, so
+	family temps produced in one block and drained in another qualify.
+	SSA single-assignment makes the map unique by construction; a
+	duplicate dest fails closed (an upstream SSA-contract violation this
+	late in the pipeline is never recoverable)."""
+	producers: Dict[str, M.MInstr] = {}
+	for block in blocks_in_order:
+		for ins in block.instructions:
+			dest = getattr(ins, "dest", None)
+			if isinstance(dest, str):
+				if dest in producers:
+					raise AssertionError(
+						f"string_arc fn-wide producer tripwire "
+						f"[duplicate SSA dest]: value '{dest}' defined by "
+						f"{type(producers[dest]).__name__} and "
+						f"{type(ins).__name__} — SSA single-assignment "
+						f"violated upstream (TLR-7 producer contract)."
+					)
+				producers[dest] = ins
+	return producers
+
+
 def _analyze_lastuse_block(
 	block: M.BasicBlock,
 	*,
@@ -611,22 +639,23 @@ def _analyze_lastuse_block(
 	fn_infos: Mapping[FunctionId, FnInfo],
 	type_table: TypeTable,
 	live_out_names: Set[str],
+	producers_fnwide: "Mapping[str, M.MInstr] | None" = None,
 ) -> tuple[dict[str, int], Set[str]]:
 	"""Shared core of contract 2 (`compute_lastuse_release_points`) and
 	the TLR-2b recognition handshake (`recognize_materialized_releases`).
 	Returns `(points, recognized_released)` — one analysis, two public
 	projections, so the calculator and the recognizer cannot drift.
 
-	Points: for each qualified block-local family temp, the
+	Points: for each qualified family temp, the
 	instruction index at which its occurrence count drains to zero — the
 	position AFTER which exactly ONE release belongs (multiplicity rule:
 	repeated operands in one instruction drain together and yield one
 	release after that instruction; a terminator-drained temp maps to
 	len(block.instructions)).
 
-	Qualified: producer satisfies
-	`is_materialized_release_family_producer` (ConstString / StringConcat /
-	proven non-throw String-returning calls since TLR-4) in THIS block;
+	Qualified: the temp's FN-WIDE UNIQUE producer satisfies
+	`is_materialized_release_family_producer` (TLR-7: the producer may
+	sit in ANY block; the release is placed in the DRAIN block);
 	String-typed;
 	not in `live_out_names`; ≥1 occurrence; every occurrence has USE
 	disposition (a CONSUME disqualifies — string_arc de-owns and never
@@ -637,7 +666,7 @@ def _analyze_lastuse_block(
 	in-contract pre-materialized `StringRelease(%t)` contributes NO
 	occurrence to any count, and `%t` itself is excluded from the points
 	(already released by the external author).  In-contract means BOTH:
-	- shape: `%t`'s producer is block-local and satisfies the family
+	- shape: `%t`'s fn-wide unique producer satisfies the family
 	  predicate; AND
 	- placement (review-hardened): it is the UNIQUE StringRelease of
 	  `%t` in the block, `%t`'s remaining occurrences are all USE, and
@@ -645,7 +674,9 @@ def _analyze_lastuse_block(
 	  compute, separated only by in-contract releases of temps draining
 	  at the SAME instruction (same-group temps release consecutively;
 	  never before a later use, never past a non-release instruction,
-	  never for a live-out or terminator-read temp).
+	  never for a live-out or Return-consumed temp; a NON-Return
+	  terminator-drained temp is in contract when its release sits in
+	  the trailing release run — the len(instructions) point).
 	ANY input StringRelease that fails either half — including the shape
 	half: the only legitimate author of pre-string_arc releases is the
 	string_releases pass, whose family is exactly the family
@@ -656,11 +687,14 @@ def _analyze_lastuse_block(
 	memory; an unknown-author release trusted silently would corrupt the
 	occurrence counts."""
 	string_ty = type_table.ensure_string()
-	producers: dict[str, M.MInstr] = {}
-	for ins in block.instructions:
-		dest = getattr(ins, "dest", None)
-		if isinstance(dest, str):
-			producers[dest] = ins
+	# TLR-7: producer resolution is FN-WIDE (the shared map built by
+	# `build_fnwide_producers`).  The single-block fallback exists for
+	# unit callers exercising one block — identical semantics there.
+	producers: Mapping[str, M.MInstr]
+	if producers_fnwide is not None:
+		producers = producers_fnwide
+	else:
+		producers = build_fnwide_producers([block])
 
 	def _is_family_temp(v: str) -> bool:
 		return (
@@ -672,11 +706,10 @@ def _analyze_lastuse_block(
 
 	# Phase 1 — SHAPE recognition (needed before occurrence counting so
 	# the exclusion below is possible); placement is validated in phase 3.
-	# A shape-MISMATCHED input release (operand not a block-local
-	# MATERIALIZED_RELEASE_FAMILY temp) is rejected here: no pass other
-	# than the string_releases materializer legitimately emits
-	# StringRelease before string_arc, and its family is exactly this
-	# constant.
+	# A shape-MISMATCHED input release (operand's fn-wide producer not
+	# a family member) is rejected here: no pass other than the
+	# string_releases materializer legitimately emits StringRelease
+	# before string_arc, and its family is exactly the shared predicate.
 	release_sites: dict[str, list[int]] = {}
 	for idx, ins in enumerate(block.instructions):
 		if isinstance(ins, M.StringRelease):
@@ -684,8 +717,8 @@ def _analyze_lastuse_block(
 				raise AssertionError(
 					f"string_arc release-recognition tripwire "
 					f"[unexpected input release]: block '{block.name}'[{idx}], "
-					f"value '{ins.value}' — operand is not a block-local "
-					f"family-producer String temp "
+					f"value '{ins.value}' — operand is not a family-producer "
+					f"String temp (fn-wide producer resolution) "
 					f"(producer={type(producers.get(ins.value)).__name__}). "
 					f"Only the string_releases materialization pass may "
 					f"emit StringRelease before string_arc."
@@ -723,28 +756,51 @@ def _analyze_lastuse_block(
 	# as the dead-stake tripwires).
 	for temp, rel_idxs in release_sites.items():
 		occs = occurrences.get(temp, [])
-		drain = max((i for i, _d in occs), default=None)
+		drain = max((i for i, _d in occs), default=-1)
 		# Placement: the release sits after the draining instruction,
 		# separated ONLY by in-contract releases of temps draining at the
 		# same instruction (same-group temps release CONSECUTIVELY — the
 		# multiplicity/grouping reality string_arc's own emission
 		# produces; a gap containing ANY non-release instruction, e.g. a
 		# later use or a later drain point, still rejects).
-		placement_ok = (
-			bool(occs)
-			and drain is not None
-			and len(rel_idxs) == 1
-			and rel_idxs[0] > drain
-			and all(
-				isinstance(block.instructions[j], M.StringRelease)
-				and block.instructions[j].value in recognized_released
-				for j in range(drain + 1, rel_idxs[0])
+		# TERMINATOR-DRAINED temps (TLR-7, caught by the terminator-case
+		# pin): a temp whose LAST use is a non-Return terminator operand
+		# maps to point len(instructions) — its release sits in the
+		# TRAILING release run (after every instruction occurrence, with
+		# only in-contract releases from there to the end of the list),
+		# exactly where string_arc's own terminator-note emission puts
+		# it.  A Return-consumed temp (term_consumed) still rejects.
+		if temp in term_used:
+			# The drain point is len(instructions), so the constraint is
+			# that the release SITS IN the trailing release run (from the
+			# release to the end of the list, only in-contract releases)
+			# and after every instruction occurrence — instructions
+			# between the last occurrence and the trailing run are fine
+			# (they are unrelated to this temp; the terminator read is
+			# the drain).
+			placement_ok = (
+				len(rel_idxs) == 1
+				and rel_idxs[0] > drain
+				and all(
+					isinstance(block.instructions[j], M.StringRelease)
+					and block.instructions[j].value in recognized_released
+					for j in range(rel_idxs[0], len(block.instructions))
+				)
 			)
-		)
+		else:
+			placement_ok = (
+				bool(occs)
+				and len(rel_idxs) == 1
+				and rel_idxs[0] > drain
+				and all(
+					isinstance(block.instructions[j], M.StringRelease)
+					and block.instructions[j].value in recognized_released
+					for j in range(drain + 1, rel_idxs[0])
+				)
+			)
 		in_contract = (
 			placement_ok
 			and temp not in live_out_names
-			and temp not in term_used
 			and temp not in term_consumed
 			and all(d == DISPOSITION_USE for _i, d in occs)
 		)
@@ -793,6 +849,7 @@ def compute_lastuse_release_points(
 	fn_infos: Mapping[FunctionId, FnInfo],
 	type_table: TypeTable,
 	live_out_names: Set[str],
+	producers_fnwide: "Mapping[str, M.MInstr] | None" = None,
 ) -> dict[str, int]:
 	"""Contract 2: the occurrence-level release-point calculator — see
 	`_analyze_lastuse_block` for the full contract (points semantics,
@@ -804,6 +861,7 @@ def compute_lastuse_release_points(
 		fn_infos=fn_infos,
 		type_table=type_table,
 		live_out_names=live_out_names,
+		producers_fnwide=producers_fnwide,
 	)
 	return points
 
@@ -815,6 +873,7 @@ def recognize_materialized_releases(
 	fn_infos: Mapping[FunctionId, FnInfo],
 	type_table: TypeTable,
 	live_out_names: Set[str],
+	producers_fnwide: "Mapping[str, M.MInstr] | None" = None,
 ) -> Set[str]:
 	"""TLR-2b handshake: the set of temps whose pre-materialized
 	StringRelease is IN-CONTRACT (shape AND placement — see
@@ -833,6 +892,7 @@ def recognize_materialized_releases(
 		fn_infos=fn_infos,
 		type_table=type_table,
 		live_out_names=live_out_names,
+		producers_fnwide=producers_fnwide,
 	)
 	return recognized
 
@@ -848,11 +908,15 @@ def compute_string_temp_liveness(
 	extracted verbatim from insert_string_arc's inline fixpoint (TLR-2b)
 	so the materialization pass and string_arc compute liveness with ONE
 	author.  In-contract pre-materialized releases cannot change the
-	result: their temps are defined earlier in the same block (block-local
-	family producer), so the release occurrence never reaches
-	`block_use`, and defs are untouched — the pass (running on MIR without
-	releases) and string_arc (running on MIR with them) see identical
-	live-out sets by construction."""
+	result (TLR-7 refinement of the argument — the conclusion is
+	unchanged): every in-contract release site is DOMINATED BY A USE of
+	the same temp within the drain block — the release sits after the
+	drain, i.e. after the temp's last instruction occurrence there, or at
+	end-of-instructions for a terminator-drained temp whose terminator
+	use this walk also sees — so `block_use` already contains the temp
+	before the release occurrence is reached, and defs are untouched.
+	The pass (running on MIR without releases) and string_arc (running on
+	MIR with them) see identical live-out sets by construction."""
 
 	def _is_str_temp(v: object) -> bool:
 		return isinstance(v, str) and local_types.get(v) == string_ty
@@ -1357,6 +1421,14 @@ def insert_string_arc(
 	# intermediate string temps (including conversion/call-produced values).
 	_seed_dest_types()
 
+	# TLR-7: the fn-wide producer map — ONE lookup authority shared with
+	# the materialization pass (via `build_fnwide_producers`), consumed
+	# by per-block recognition and the TLR shim classification so
+	# cross-block family temps resolve identically everywhere.
+	producers_fnwide = build_fnwide_producers(
+		[func.blocks[bname] for bname in block_order]
+	)
+
 	# Per-block live-out for string temps — delegates to the shared
 	# module-level fixpoint (TLR-2b): single liveness author with the
 	# materialization pass.  (`_is_local_name` is always False — see its
@@ -1566,6 +1638,7 @@ def insert_string_arc(
 				fn_infos=fn_infos,
 				type_table=type_table,
 				live_out_names=live_out.get(block.name, set()),
+				producers_fnwide=producers_fnwide,
 			)
 			if any(isinstance(_i, M.StringRelease) for _i in block.instructions)
 			else set()
@@ -1636,10 +1709,16 @@ def insert_string_arc(
 					# is dead there; it still classifies arc-only unit
 					# runs, which is what the A/B pins compare.  Same
 					# constant as the analysis/recognition: no drift.
+					# TLR-7: classification resolves the producer
+					# FN-WIDE (same authority as recognition/pass), so
+					# cross-block family temps classify materialized in
+					# arc-only runs too — the A/B counter-equality pins
+					# depend on it.  The per-block `producers` map keeps
+					# serving the move-approval helpers unchanged.
 					_tlr_cls = (
 						_ledger_reporter.SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE
 						if is_materialized_release_family_producer(
-							producers.get(val), fn_infos=fn_infos, type_table=type_table
+							producers_fnwide.get(val), fn_infos=fn_infos, type_table=type_table
 						)
 						else _ledger_reporter.SITE_CLASS_TEMP_LASTUSE_RELEASE
 					)
