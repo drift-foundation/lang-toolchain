@@ -254,6 +254,13 @@ def seed_string_dest_types(
 			if isinstance(instr, (M.ConstString, M.StringConcat, M.StringRetain, M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat)):
 				local_types[dest] = string_ty
 				continue
+			if isinstance(instr, M.MoveOut):
+				# TLR-8: MoveOut carries its type on the instruction; the
+				# family analysis must see the dest as String even when
+				# upstream metadata omitted the temp (same completeness
+				# contract as the ZeroValue/ArrayIndexLoad prescan seeds).
+				local_types[dest] = instr.ty
+				continue
 			if isinstance(instr, M.AssignSSA):
 				src_ty = local_types.get(instr.src)
 				if src_ty is not None:
@@ -372,6 +379,16 @@ def is_materialized_release_family_producer(
 	  dest is an unconditional +1 owner, codegen drift_string_retain;
 	  consumed `.stake` copies never qualify, measured zero at
 	  last-use).
+	- MoveOut (TLR-8): the dest inherits the storage local's +1 stake
+	  verbatim — the expansion zero-stores the local, so the dest is the
+	  SOLE holder and an unconditional owner.  First wild population
+	  found by the release-arm tripwire (drift-workflows, 2026-07-17:
+	  `"lit" + move s` — a moved String operand draining at a
+	  non-consuming concat; issues/string-arc-release-arm-tripwire/).
+	  The toolchain corpus had zero such sites, so the TLR measurement
+	  never saw the class.  Consumed move dests (`return move x`,
+	  by-value call args, stores) never qualify — a CONSUME disposition
+	  disqualifies at the calculator, same as every other member.
 	- Direct Call (TLR-4): NOT can_throw AND the result proven
 	  semantically String — fn_infos signature return type (semantic
 	  test, finding-5 rule) or a known drift_string_* helper symbol.
@@ -384,16 +401,19 @@ def is_materialized_release_family_producer(
 	- can_throw admission is STRUCTURALLY impossible — a can-throw
 	  call's dest is the FnResult envelope, never a String
 	  (TLR-4-DESIGN.md §3) — and fail-closed here anyway.
-	- TLR-7 closed the ladder: with fn-wide producer resolution, every
-	  measured temp_lastuse population is family-covered — the
-	  `_note_use` release arm is corpus-zero and next in the tripwire
-	  ladder."""
+	- TLR-7 closed the ladder for every MEASURED population: with
+	  fn-wide producer resolution, all corpus temp_lastuse temps are
+	  family-covered — the `_note_use` release arm went corpus-zero and
+	  was fail-closed.  TLR-8 (MoveOut) is the first post-closure
+	  member, admitted from a production tripwire firing rather than a
+	  corpus measurement."""
 	if isinstance(prod, (
 		M.ConstString, M.StringConcat,                      # TLR-1..3
 		M.StringFromInt, M.StringFromBool,                  # TLR-5
 		M.StringFromUint, M.StringFromFloat,                # TLR-5
 		M.ExcGetParamsJson, M.ExcGetContextJson,            # TLR-5
 		M.CopyValue,                                        # TLR-6
+		M.MoveOut,                                          # TLR-8
 	)):
 		return True
 	if isinstance(prod, (M.Call, M.CallIndirect, M.CallIface)):
@@ -1954,7 +1974,17 @@ def insert_string_arc(
 					)
 				new_instrs.append(M.LoadLocal(dest=instr.dest, local=instr.local))
 				local_types[instr.dest] = instr.ty
-				if _is_string_tid(instr.ty):
+				if _is_string_tid(instr.ty) and instr.dest not in recognized_released:
+					# TLR-8: MoveOut joined the family, and like CopyValue
+					# (TLR-6) this is a LIVE rewrite-loop re-add that runs
+					# AFTER the per-block `owned_values -=
+					# recognized_released` subtraction — without the guard,
+					# a recognized externally-released move temp is
+					# re-owned and `_note_use` TRIPS at the non-consuming
+					# drain (fail-closed release arm).  A recognized temp
+					# has all-USE occurrences by the calculator contract,
+					# so skipping the move_only mark is equally safe: no
+					# consume-approval site can ever ask about it.
 					owned_values.add(instr.dest)
 					move_only_values.add(instr.dest)
 				zero = _new_temp()

@@ -1,0 +1,20 @@
+// Minimal repro: string_arc release-arm tripwire [lastuse_release_arm], family=False.
+// Trigger: a `move`d String operand in a string concatenation — the MoveOut temp is an
+// owned producer reaching the concat's NON-CONSUMING drain (use_count=0, consume=False).
+// No match statement is required; any `"lit" + move s` fires it.
+//
+// Compile (fires the tripwire):
+//   drift-0.33.83+abi21/bin/driftc --target-word-bits 64 --sanitize none \
+//       --entry repro::main repro-move-operand-string-concat.drift -o /tmp/repro
+// Accepted by drift-0.33.68+abi19 (same command) — 0.33.83 regression.
+// Dropping `move` ("x: " + s) compiles AND runs correctly on 0.33.83 (prints len 8).
+module repro;
+
+fn tag(s: String) nothrow -> String {
+	return "x: " + move s;
+}
+
+pub fn main() nothrow -> Int {
+	val t = tag("hello");
+	return t.len;
+}

@@ -1,10 +1,13 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""TLR-2b..7: materialize last-use releases for family temps
+"""TLR-2b..8: materialize last-use releases for family temps
 (`is_materialized_release_family_producer` — the single source of
 membership: ConstString since TLR-2b, StringConcat since TLR-3, proven
 non-throw String-returning calls since TLR-4, StringFrom{Int,Bool,Uint,
 Float} + ExcGetParamsJson/ExcGetContextJson since TLR-5, CopyValue since
-TLR-6) as explicit MIR, before the ledger build that feeds `string_arc`.
+TLR-6, MoveOut since TLR-8 — the first post-closure member, admitted
+from the release-arm tripwire's production firing on `"lit" + move s`
+rather than a corpus measurement) as explicit MIR, before the ledger
+build that feeds `string_arc`.
 Since TLR-7 producer resolution is FN-WIDE (`build_fnwide_producers` —
 the same authority string_arc's recognition consumes): a family temp
 produced in one block and drained in another qualifies, with the

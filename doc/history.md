@@ -1,5 +1,31 @@
 # Drift development history
 
+## 2026-07-17 (0.33.84: TLR-8 — moved String operand in concatenation ICE'd; MoveOut joins the materialized-release family; ABI stays 21)
+
+Fixes a 0.33.83 regression: any String concatenation with a `move`d
+operand (`"lit" + move s`) aborted with the string_arc release-arm
+tripwire internal error (`family=False, producer=MoveOut`) — first
+reported by drift-workflows (15 sites; evidence and pinned minimal
+repro in `issues/string-arc-release-arm-tripwire/`). The code was
+valid; 0.33.68 accepted it.
+
+Root cause: the last-use-release family migration (TLR ladder) was
+corpus-measured, and the toolchain corpus has zero `+ move` concat
+sites, so `MoveOut` never joined the family. When the in-pass release
+arm was fail-closed (the tripwire slice), the unmigrated class went
+from "silently handled by in-pass bookkeeping" to a clean ICE — the
+tripwire's intended behavior for exactly this case.
+
+Fix (TLR-8): `MoveOut` joins `is_materialized_release_family_producer`
+— its String dest inherits the storage local's +1 stake verbatim (the
+expansion zero-stores the local), so it is an unconditional owner and
+the string_releases pass now materializes its last-use release, with
+string_arc recognition suppressing the in-pass bookkeeping (the
+expansion arm's owned/move-only re-add is guarded on recognition, the
+TLR-6 pattern). Consumed move dests (`return move x`, by-value call
+args, stores) are unaffected. Compiler-internal ownership-pass change
+only; no runtime or boundary contract change — ABI stays 21.
+
 ## 2026-07-13 (0.33.83: match ownership enforcement — three silent zero-read LANGUAGE_BUGs fixed; SOURCE-COMPAT BREAK in match arms; ABI stays 21)
 
 Fixes three value-corruption bugs sharing one observable: storage

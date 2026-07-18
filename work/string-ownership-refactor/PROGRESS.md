@@ -2006,3 +2006,39 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   through a clean FULL SUITE (user-run); deletion (this arm + 4a'/4b'
   + retiring SITE_CLASS_TEMP_LASTUSE_RELEASE) only after that cert
   cycle.
+
+- 2026-07-17 — TLR-8: MoveOut JOINS THE FAMILY (first production
+  tripwire catch, same day as slice acceptance).  drift-workflows'
+  staged-0.33.83 alignment hit the release-arm tripwire on 15 sites,
+  all one class: `"lit" + move s` — a moved String operand draining at
+  a non-consuming concat (family=False, producer=MoveOut, use_count=0;
+  issues/string-arc-release-arm-tripwire/, pinned minimal repro +
+  three production firings).  The toolchain corpus has ZERO `+ move`
+  concat sites, so the TLR measurement never saw the class — the
+  tripwire surfaced it as a clean ICE exactly as designed.  Fix is the
+  TLR-6 shape: (1) `M.MoveOut` added to
+  `is_materialized_release_family_producer` (dest inherits the storage
+  local's +1 verbatim — unconditional owner); (2) `seed_string_dest_types`
+  MoveOut arm (instruction-carried ty); (3) the expansion arm's
+  owned/move-only re-add guarded on `recognized_released` (live
+  rewrite-loop re-add after the per-block subtraction — the TLR-6
+  teeth lesson).  Consumed move dests disqualify at the calculator as
+  before.  Pins: tlr8 family / guard-teeth / cross-block / driver-level
+  end-to-end (real source) + memcheck row
+  test_move_operand_concat_release.py covering all three production
+  shapes (plain, match-binder arm, chained) — throw-path shape
+  verified manually (compile+run+valgrind clean).  Repro compiles,
+  runs (len 8), valgrind 13/13 clean.  Batteries: stage2 373/373
+  (incl. reporter 60/60); standalone memcheck run.  RESOLUTION.md
+  written in the issue folder.  NEXT: user-run full suite → stage a
+  fixed 0.33.83 for drift-workflows (their alignment is blocked on
+  this; they will NOT work around in app code per intake triage).
+
+- 2026-07-17 — TLR-8 REVIEW ROUND (2 findings, both addressed):
+  (1) version/history: DRIFTC_VERSION bumped 0.33.83 → 0.33.84
+  (behavior-changing ownership fix; ABI stays 21 — no boundary shape
+  changed), doc/history.md 2026-07-17 entry written; (2) throw-path
+  shape (production firing 3) promoted from manual verification to a
+  PINNED memcheck row (row 4 `reject`: moved concat into an
+  error-constructor field, error edge exercised every third i through
+  the try/catch fallback) — fixture green under valgrind.

@@ -2322,6 +2322,179 @@ def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path
 		build_fnwide_producers([b1, b2])
 
 
+def test_tlr8_moveout_family(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-8 family pin: MoveOut temps are family members — the dest
+	inherits the storage local's +1 stake verbatim (the expansion
+	zero-stores the local), so a move dest draining non-consumingly gets
+	its release materialized by the pass.  The motivating population is
+	the drift-workflows release-arm tripwire firing (`"lit" + move s` —
+	a moved String operand at a non-consuming concat;
+	issues/string-arc-release-arm-tripwire/).  Qualified move
+	materializes ONCE after the last use; a consumed move dest emits
+	nothing from either author; pass idempotent."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("t8", params=["s", "t", "u"], locals_=["x", "y"],
+		types={n: string_ty for n in ("s", "t", "u", "x", "y")})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.MoveOut(dest="%m", local="s", ty=string_ty),      # qualified: drains at the concat (USE)
+		M.ConstString(dest="%lit", value="x: "),
+		M.StringConcat(dest="%c", left="%lit", right="%m"), # the repro shape
+		M.StoreLocal(local="x", value="%c"),                # consumes %c
+		M.MoveOut(dest="%mu", local="t", ty=string_ty),     # multi-use move
+		M.StringEq(dest="%e1", left="%mu", right="%mu"),
+		M.StringEq(dest="%e2", left="%mu", right="%mu"),    # LAST use
+		M.MoveOut(dest="%cs", local="u", ty=string_ty),     # consumed move
+		M.StoreLocal(local="y", value="%cs"),               # consumes %cs
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%m", "%lit", "%c", "%mu", "%cs"):
+		func.local_types[t] = string_ty
+	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is True
+	rel = [i.value for i in func.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel.count("%m") == 1 and rel.count("%mu") == 1, rel
+	assert "%cs" not in rel and "%c" not in rel, rel
+	assert set(rel) == {"%lit", "%m", "%mu"}, rel
+	once = list(func.blocks["entry"].instructions)
+	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is False
+	assert func.blocks["entry"].instructions == once
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::t8")
+	assert agg.get("site_class:materialized_lastuse_release") == 3, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+
+
+def test_tlr8_moveout_guard_teeth(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-8 TEETH pin (the TLR-6 lesson applied to MoveOut): the MoveOut
+	expansion arm's owned/move-only registration is a LIVE rewrite-loop
+	re-add that runs AFTER the per-block
+	`owned_values -= recognized_released` subtraction.  With the
+	recognized guard missing, the externally-released move temp is
+	re-owned and — the release arm being FAIL-CLOSED — `_note_use` TRIPS
+	at the non-consuming drain.  This pin fails in exactly that
+	configuration: the repro shape must sail through the full pipeline
+	with EXACTLY ONE release of the move temp and zero temp_lastuse."""
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("t8t", params=["s"], locals_=["x"],
+		types={"s": string_ty, "x": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.MoveOut(dest="%m", local="s", ty=string_ty),
+		M.ConstString(dest="%lit", value="x: "),
+		M.StringConcat(dest="%c", left="%lit", right="%m"),  # last non-consuming use of %m
+		M.StoreLocal(local="x", value="%c"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	for t in ("%m", "%lit", "%c"):
+		func.local_types[t] = string_ty
+	_run_pipeline(func, tt)
+	rel = [i.value for i in func.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel.count("%m") == 1, (
+		f"double release of the recognized MoveOut temp — the expansion "
+		f"arm is missing its recognized guard: {rel}")
+	agg = _fn_agg(out, "test::t8t")
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+	assert agg.get("site_class:materialized_lastuse_release") >= 1, agg
+
+
+def test_tlr8_cross_block_moveout(monkeypatch, tmp_path: Path) -> None:
+	"""TLR-8 × TLR-7: a cross-block MoveOut temp qualifies via fn-wide
+	producer resolution; the release lands in the DRAIN block.  The
+	producer-block expansion arm re-adds the dest to owned/move-only
+	there (its per-block recognized set is empty) — harmless by
+	construction: the temp has no producer-block uses, so `_note_use`
+	never consults it before the drain block's subtraction suppresses
+	it."""
+	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
+	out = tmp_path / "audit.jsonl"
+	_audit_env(monkeypatch, out)
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	func = _make_func("t8x", params=["s"], locals_=[], types={"s": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.MoveOut(dest="%m", local="s", ty=string_ty)]
+	entry.terminator = M.Goto(target="next")
+	nxt = M.BasicBlock(name="next")
+	nxt.instructions = [M.StringEq(dest="%e", left="%m", right="%m")]
+	nxt.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "next": nxt}
+	func.entry = "entry"
+	func.local_types["%m"] = string_ty
+	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is True
+	rel_entry = [i.value for i in func.blocks["entry"].instructions
+		if type(i).__name__ == "StringRelease"]
+	rel_next = [i.value for i in func.blocks["next"].instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_entry == [] and rel_next == ["%m"], (rel_entry, rel_next)
+	_attach_ledger(func)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	agg = _fn_agg(out, "test::t8x")
+	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
+
+
+def test_tlr8_move_operand_concat_end_to_end(tmp_path: Path) -> None:
+	"""TLR-8 end-to-end pin on the PRODUCTION shape (drift-workflows
+	regression, issues/string-arc-release-arm-tripwire/): real source
+	with a `move`d String operand in a concatenation must compile clean
+	through the real driver pipeline — before TLR-8 the release-arm
+	tripwire aborted the compile (family=False, producer=MoveOut)."""
+	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
+	from lang.driftc.module_lowered import flatten_modules
+	from lang.driftc import driftc as D
+	from lang.driftc.core.function_id import function_symbol
+
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"module main;\n\n"
+		"fn tag(s: String) nothrow -> String {\n"
+		"\treturn \"x: \" + move s;\n"
+		"}\n\n"
+		"pub fn main() nothrow -> Int {\n"
+		"\tval t = tag(\"hello\");\n"
+		"\tif t.len == 8 { return 0; }\n"
+		"\treturn 1;\n}\n"
+	)
+	modules, type_table, exc, mexp, mdeps, pdiags = parse_drift_workspace_to_hir(
+		[src], stdlib_root=stdlib_root(), test_build_only=True
+	)
+	assert not pdiags, [d.message for d in pdiags]
+	func_hirs, signatures, _ = flatten_modules(modules)
+	main_id = [i for i, s in signatures.items() if i.name == "main" and not s.is_method][0]
+	origin = {}
+	for m in modules.values():
+		origin.update(m.origin_by_fn_id)
+	ir, checked = D.compile_to_llvm_ir_for_tests(
+		func_hirs=func_hirs,
+		signatures=signatures,
+		exc_env=exc,
+		entry=function_symbol(main_id),
+		type_table=type_table,
+		module_exports=mexp,
+		module_deps=mdeps,
+		origin_by_fn_id=origin,
+		enforce_entrypoint=True,
+		reserved_namespace_policy=D.ReservedNamespacePolicy.ALLOW_DEV,
+	)
+	errors = [d for d in getattr(checked, "diagnostics", []) if getattr(d, "severity", None) == "error"]
+	assert not errors, [d.message for d in errors]
+	assert ir
+
+
 def test_release_arm_tripwire_stale_family_temp(monkeypatch) -> None:
 	"""Release-arm tripwire, firing class 1 (family=True): a STALE
 	UNMIGRATED family temp — bare insert_string_arc on MIR with a
