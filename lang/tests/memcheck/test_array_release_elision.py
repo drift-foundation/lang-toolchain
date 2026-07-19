@@ -1,23 +1,30 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Heap-backed carriers for the Array release-elision emission slice
-(SLICE3-ARRAY-MEASUREMENT.md → GO; return-boundary Array drops elided at
-MUST_NOT_DROP ledger verdicts, PATH_DEPENDENT kept unconditional).
+"""Heap-backed carriers for Array scope-exit drop correctness.
+
+HISTORY: written for the Array release-elision emission slice
+(SLICE3-ARRAY-MEASUREMENT.md).  Since B-U
+(string-arc-endgame-array-sweep, 2026-07-19) the Return-boundary
+sweep and its elision fold are DELETED — cleanup_authoring is the
+sole scope-exit array authority — and these rows pin that authority's
+runtime behavior across the same three ownership shapes.
 
 Every row uses `Array<String>` with RUNTIME-BUILT heap strings so both
 failure directions are observable at the valgrind level:
-- OVER-ELISION (a drop that was load-bearing got skipped) → the array
-  buffer and its element strings become definitely-lost blocks;
-- the double-free direction (a drop kept where ownership already
-  transferred) → Invalid read/free.
+- a MISSING load-bearing drop → the array buffer and its element
+  strings become definitely-lost blocks;
+- a drop over transferred ownership → Invalid read/free.
 
 Rows:
-1. live-at-scope-exit — arrays never moved; their drops (authored
-   cleanup and/or a MUST_DROP sweep) must still run.
+1. live-at-scope-exit — arrays never moved; the authored cleanup
+   drops must run.
 2. moved-to-caller — `return move arr;` transfers ownership; the
-   producer's boundary verdict is MOVED_OUT and its sweep drop is
-   ELIDED; the caller consumes and drops.  No leak, no double-free.
-3. conditionally-moved (PATH_DEPENDENT) — moved on one branch only; the
-   unconditional null-safe sweep drop is KEPT; both branch shapes run
+   producer authors no drop (Return-as-move); the caller consumes
+   and drops.  No leak, no double-free.
+3. conditionally-moved (PATH_DEPENDENT) — moved on one branch only;
+   the drop is authored by the cleanup machinery (flag-guarded or
+   unguarded zero-storage authoring; the Return-boundary sweep that
+   originally carried it was deleted in B-U,
+   string-arc-endgame-array-sweep 2026-07-19); both branch shapes run
    clean.
 """
 from __future__ import annotations
@@ -47,8 +54,9 @@ fn build(n: Int) nothrow -> Array<String> {
 	return move xs;
 }
 
-// Row 2: producer returns by move — its boundary verdict for `xs` is
-// MOVED_OUT (Return-as-move) and the sweep drop is elided.
+// Row 2: producer returns by move — Return-as-move transfers the +1
+// to the caller; the producer authors no scope-exit drop for `xs`
+// (cleanup_authoring's MOVED_OUT verdict; the sweep is gone).
 fn consume_moved(n: Int) nothrow -> Int {
 	val xs = build(n);
 	var total = 0;
@@ -67,9 +75,10 @@ fn live_at_exit(n: Int) nothrow -> Int {
 	return keep.len();
 }
 
-// Row 3: conditionally moved — PATH_DEPENDENT at the exit; the
-// unconditional null-safe sweep drop is KEPT and must be clean on both
-// the moved and unmoved paths.
+// Row 3: conditionally moved — PATH_DEPENDENT at the exit; the drop
+// is authored by the cleanup machinery (the Return-boundary sweep was
+// deleted in B-U) and must be clean on both the moved and unmoved
+// paths.
 fn conditional_move(n: Int, take: Bool) nothrow -> Int {
 	var xs = build(n);
 	var sink: Array<String> = [];

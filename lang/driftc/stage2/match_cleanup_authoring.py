@@ -34,11 +34,12 @@ subsequent `CleanupHook` sees state `UNINIT` →
 emission for `drop_tmp`.  This is the property the design leans on;
 pinned by a focused test in `test_match_cleanup_authoring.py`.
 
-Variant zero-tag widening (parity with `cleanup_authoring.py`):
+Zero-storage widening (parity with `cleanup_authoring.py`):
 `field_verdict_at` returning `PathDependent` does NOT widen at this
 site.  Field types here are arbitrary destructibles; the widening
-predicate (`variant_zero_tag_drop_safe`) is variant-specific and
-almost never applies.  Default for `PathDependent` = SKIP chain
+predicate (`zero_storage_drop_safe` — variants + arrays since the
+string-arc-endgame-array-sweep slice) almost never applies to
+them.  Default for `PathDependent` = SKIP chain
 emission (matches legacy trim-pass behavior — `PathDependent` never
 appeared in the trim path because legacy site 2 only emitted on
 statically-known-live fields).

@@ -1,26 +1,27 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-Site 3 strings/arrays return-source — regression carrier for the
-alias-walk skip in `string_arc.py::Return-terminator branch`.
+Site 3 STRING return-source — regression carrier for the alias-walk
+skip in `string_arc.py::Return-terminator branch`.
 
 **The shape under test.**  When a function returns a value derived
-from a heap-`String` (or `Array<…>`) local, site 3's alias-walk
-recognises the LoadLocal that feeds the Return and adds the source
-local to `skip_cleanup_locals`.  Without this skip, the function's
-exit cleanup would release the local's stake while the caller is
-holding the same bytes — refcount → 0, buffer freed, caller does
-UAF or double-free on subsequent use / drop.
+from a heap-`String` local, site 3's alias-walk recognises the
+LoadLocal that feeds the Return and adds the source local to
+`skip_cleanup_locals`.  Without this skip, the function's exit
+cleanup would release the local's stake while the caller is holding
+the same bytes — refcount → 0, buffer freed, caller does UAF or
+double-free on subsequent use / drop.
 
-Lives at `lang/driftc/stage2/string_arc.py:1466-1491` (the inline
+Lives in `string_arc.py`'s Return-terminator branch (the inline
 `for prev in reversed(new_instrs)` loop that walks `Return.value`
 back through `AssignSSA` chains to a single `LoadLocal` and adds
-`prev.local` to `skip_cleanup_locals` if it's in `string_locals`
-or `array_locals`).
+`prev.local` to `skip_cleanup_locals` if it's in `string_locals` —
+String-ONLY since the review-closure round of
+string-arc-endgame-array-sweep, 2026-07-19).
 
 **Why this carrier exists.**  The Phase 4 sub-step 1 ledger
 consultation for return-source suppression was intentionally
-narrowed to `destructible_locals`; the strings/arrays alias-walk
-remains as a named residual (see `feature/site3-strings-arrays-tier1`
+narrowed to `destructible_locals`; the String alias-walk remains as
+a named residual (see `feature/site3-strings-arrays-tier1`
 kickoff).  Broader consultation (folding strings/arrays into the
 ledger consultation loop) previously broke
 `test_pkg_map_literal_string_leak` and `test_scope_drop_conditional_move`
@@ -32,10 +33,10 @@ gate:
 
   - PASS today (alias-walk active).
   - FAIL if the alias-walk is removed without a ledger-equivalent
-    that transitions String / Array return-source locals to
-    MOVED_OUT at the LoadLocal index — symptom is double-release
-    UAF caught by valgrind ("Invalid read" / "definitely lost"
-    / aborted exit code).
+    that transitions String return-source locals to MOVED_OUT at
+    the LoadLocal index — symptom is double-release UAF caught by
+    valgrind ("Invalid read" / "definitely lost" / aborted exit
+    code).
 
 The carrier exercises two String shapes:
 
@@ -51,14 +52,13 @@ one requires explicit `return move arr;`, which lowers to
 `MoveOut(t, arr) + Return(t)`.  The lattice's Phase 4 Return-as-move
 recognises this shape and transitions `arr` to MOVED_OUT at the
 MoveOut index — without consulting the alias-walk.  The
-`array_locals` branch in the alias-walk
-(`if prev.local in array_locals: skip_cleanup_locals.add(...)`) is
-therefore not exercised by the natural array-return pattern;
-constructing a shape that demonstrably depends on it requires a
-non-trivial generic / borrow path that the next site-3 patch can
-add as a focused pin if/when the migration touches the
-`array_locals` branch.  For Patch 1 we pin the load-bearing
-String shapes only.
+`array_locals` branch this note used to defer as future work was
+concluded structurally dead by the Array audit and REMOVED in the
+review-closure round of string-arc-endgame-array-sweep (2026-07-19)
+— the alias-walk is String-only; scope-exit array drops are
+cleanup_authoring's, with `test_array_return_source.py` holding the
+valgrind evidence for the returned-Array shapes.  This carrier pins
+the load-bearing String shapes.
 """
 from __future__ import annotations
 

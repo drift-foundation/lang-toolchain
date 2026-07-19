@@ -20,10 +20,12 @@ What this pass does:
     Trigger fires when EITHER (a) the local is potentially live at
     a function exit (the original bucket-6 carrier — `return move
     L` on one path, fall-through on another), OR (b) the ledger
-    reports non-variant `PathDependent` at any reachable
+    reports zero-storage-UNSAFE `PathDependent` at any reachable
     `CleanupHook` for the local (Bug 2: conditional move inside a
     loop body where the cleanup hook is mid-function, not at
-    Return).
+    Return; zero-storage-SAFE types — variants, arrays — emit
+    unguarded in cleanup_authoring and never need a flag via this
+    criterion).
   - Allocate a Bool flag local for each tracked local.
   - Init flag at function entry: `true` for params (live at entry),
     `false` for declared locals (uninitialized at entry).
@@ -136,8 +138,10 @@ def insert_drop_flags(
 		#       — the trailing return sees PathDependent for L.
 		#
 		#   (2b) CLEANUP-HOOK carrier (Bug 2, 2026-05-15).  The
-		#       ledger reports non-variant `PathDependent` at some
-		#       reachable `CleanupHook` for the local.  This covers
+		#       ledger reports zero-storage-UNSAFE `PathDependent` at
+		#       some reachable `CleanupHook` for the local
+		#       (zero-storage-safe types take unguarded authoring
+		#       instead — `zero_storage_drop_safe`).  This covers
 		#       the loop-iteration shape: `while ... { var w =
 		#       arr.remove(0); if w.raw > 0 { out.push(move w); } }`
 		#       — the end-of-iteration CleanupHook sees PathDependent
@@ -159,7 +163,7 @@ def insert_drop_flags(
 			continue
 		if not (
 			_is_potentially_live_at_some_exit(ledger, func, name)
-			or _has_non_variant_path_dependent_at_cleanup_hook(
+			or _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
 				ledger=ledger,
 				func=func,
 				type_table=type_table,
@@ -263,7 +267,7 @@ def insert_drop_flags(
 	return func, True
 
 
-def _has_non_variant_path_dependent_at_cleanup_hook(
+def _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
 	*,
 	ledger,
 	func: M.MirFunc,
@@ -271,18 +275,23 @@ def _has_non_variant_path_dependent_at_cleanup_hook(
 	drop_policy: Callable[[TypeId], "DropPolicy"],
 	local_name: str,
 ) -> bool:
-	# Lazy import to break the drop_flags ↔ string_arc cycle
-	# (string_arc imports `is_flag_managed` from drop_flags).
-	from .string_arc import variant_zero_tag_drop_safe
+	from .drop_policy_compute import zero_storage_drop_safe
 	"""Bug 2 trigger criterion (2b).  True iff the ledger reports a
-	non-variant `PathDependent` verdict for `local_name` at some
-	reachable `M.CleanupHook` for which the local is a candidate.
+	`PathDependent` verdict for `local_name` at some reachable
+	`M.CleanupHook` for which the local is a candidate, for a type
+	whose zeroed-storage drop is NOT a no-op.
 
-	The variant zero-tag widening case is excluded: those PathDependent
-	hooks already emit unguarded in cleanup_authoring (tag=0 destructor
-	is a no-op on uninit paths).  Only non-variant PathDependent needs
-	a runtime flag, because the struct destructor would crash on PHI-
-	zero data if invoked unconditionally.
+	The zero-storage-safe case is excluded via the extracted
+	`zero_storage_drop_safe` predicate (string-arc-endgame-array-sweep,
+	2026-07-19; formerly the variant-only `variant_zero_tag_drop_safe`
+	— production decisions no longer flow through that name): those
+	PathDependent hooks emit unguarded in cleanup_authoring (variant
+	tag=0 destructor / zeroed array header are no-ops on uninit
+	paths).  Only zero-UNSAFE PathDependent needs a runtime flag,
+	because e.g. a struct destructor would crash on PHI-zero data if
+	invoked unconditionally.  Arrays are therefore never admitted via
+	2b — matching Arm M's contract (unguarded null-safe authoring, no
+	flags); 2a admission (potentially-live-at-exit) is untouched.
 	"""
 	for blk in func.blocks.values():
 		for idx, ins in enumerate(blk.instructions):
@@ -305,7 +314,7 @@ def _has_non_variant_path_dependent_at_cleanup_hook(
 				except Exception:
 					continue
 				if verdict is DropVerdict.PATH_DEPENDENT:
-					if not variant_zero_tag_drop_safe(cand_ty, type_table):
+					if not zero_storage_drop_safe(cand_ty, type_table):
 						return True
 	return False
 

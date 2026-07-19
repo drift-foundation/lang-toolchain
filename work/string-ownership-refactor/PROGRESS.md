@@ -2092,10 +2092,16 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   arm deleted, the TLR-6 CopyValue and TLR-8 MoveOut
   `recognized_released` re-add guards are THEMSELVES dead — removing
   them cannot produce a second release (recognition copies the
-  materialized release through independently of `owned_values`; a
-  re-owned recognized temp dies in block-local bookkeeping; the
-  all-USE calculator contract keeps recognized temps away from every
-  consume-approval site — verified against the code before encoding).
+  materialized release through without consulting `owned_values`; the
+  re-owned state MAY propagate — AssignSSA copies owned membership —
+  and affect branch selection via `_can_move_owned_once`, but every
+  affected branch is output-equivalent: `_ensure_owned` is identity,
+  the store paths are unconditional, `_note_use` only changes
+  bookkeeping — so no branch can author another instruction or
+  release.  Proof correction applied 2026-07-18 in two rounds,
+  superseding both the "only consumer"/all-USE phrasing AND the
+  "never acted on" phrasing here, in the plan, and at the string_arc
+  MoveOut arm).
   → both guards DELETE this slice; `test_tlr6_copyvalue_guard_teeth`
   + `test_tlr8_moveout_guard_teeth` RETIRE; TLR-6/8 family,
   cross-block, end-to-end, and memcheck regressions all preserved.
@@ -2121,10 +2127,13 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   DELETED; the three 4a store fallbacks COLLAPSED to the unconditional
   retain-free consume (T1 — arms were identical modulo the tripwire);
   `_ensure_owned` now an identity pass-through with the retirement
-  rationale (14 call sites untouched — funnel shape kept greppable per
-  plan); T4-corrected: CopyValue + MoveOut `recognized_released` re-add
-  guards DELETED (recognition is owned_values-independent; all-USE
-  contract keeps recognized temps off consume-approval sites);
+  rationale (13 call sites untouched — funnel shape kept greppable per
+  plan; count corrected 2026-07-18, an earlier "14" was a miscount);
+  T4-corrected: CopyValue + MoveOut `recognized_released` re-add
+  guards DELETED (recognition copies the materialized release through
+  without consulting `owned_values`; the re-owned state may propagate
+  and steer branches, but every affected branch is output-equivalent
+  — no branch can author another instruction or release);
   ConstString/StringFrom*/Concat guards KEPT per the correction's
   letter, comments now say consistency-only; module doc +
   insert_string_arc precondition reworded (bare use = silent
@@ -2174,8 +2183,322 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   the new phase reference. THE TRIPWIRE ERA IS CLOSED: string_arc
   authors no last-use releases and carries no fail-closed stake arms;
   surviving guards are the four retain site-class hard gates +
-  UNTAGGED + the memcheck rows. Commit msg delivered. NEXT: user-run
-  full suite; remaining B-arch ladder = same-argument
-  ConstString/StringFrom*/Concat guard disposition (flagged, kept),
-  Array release-elision (Slice 3 GO), then string_arc endgame →
-  B-repr(B5) entry criteria.
+  UNTAGGED + the memcheck rows. Commit msg delivered. NEXT (roadmap
+  corrected 2026-07-18 — the earlier line here listed Array
+  release-elision, which LANDED 2026-07-14/cleanup-arrelide and
+  shipped in certified 0.33.84):
+  (1) Branch `string-arc-endgame-array-sweep` (approved bundling of
+  the sweep retirement + the guard cleanup; report-only checkpoint
+  first — must compare flag-modeling vs migration into
+  cleanup_authoring, account BIJECTIVELY for all 4,620 residual
+  drops, and prove `_drop_all_arrays` deletable safely):
+    - Sub-slice A: delete the same-argument
+      ConstString/StringFrom*/Concat re-add guards (consistency-only
+      since the release arm's deletion); acceptance = every counter
+      +0.
+    - Sub-slice B: migrate the 4,620 PATH_DEPENDENT Array drops,
+      delete `_drop_all_arrays`; then compiler 0.33.85 / ABI 21
+      certification and release.
+  (2) Recorded small follow-ups: projected-place scrutinee audit,
+  ConstShare synthesis visibility, spec wording for the
+  match-consume exception.
+  (3) string_arc endgame inventory → B-repr(B5) entry criteria.
+
+- 2026-07-18 — **Documentation-closure round (4 items, maintainer
+  list; no code-behavior change).** (1) T4 proof correction applied
+  at the string_arc MoveOut arm, in TRIPWIRE-DELETION-PLAN.md §3, and
+  in both PROGRESS proof passages: the "release arm was the ONLY
+  consumer"/all-USE phrasing replaced.  [Round 2, same day: the
+  first replacement's "never acted on" was ALSO inaccurate — AssignSSA
+  propagates owned membership and `_can_move_owned_once` reads it.
+  Final proof form everywhere: the re-owned state may propagate and
+  affect branch selection, but every affected branch is
+  output-equivalent (`_ensure_owned` identity, unconditional store
+  paths, `_note_use` bookkeeping-only), so no branch can author
+  another instruction or release.  Same correction extended to the
+  two adjacent "inert" comments (prepass-subtraction + ConstString
+  arm → "output-neutral", both pointing at the MoveOut arm proof).]
+  (2) `_ensure_owned` call-site count corrected 14 → 13 (miscount;
+  actual sites verified by grep). (3) The stale NEXT roadmap in the
+  acceptance entry (listed already-landed Array release-elision)
+  replaced with the corrected ladder — array-sweep retirement
+  checkpoint first (flag-model vs cleanup_authoring migration,
+  bijective 4,620 accounting, `_drop_all_arrays` deletion proof;
+  implementation = 0.33.85/ABI 21 + cert). (4) doc/history.md
+  0.33.84 entry now records the Array release-elision it shipped
+  (landed 2026-07-14, bump deferred into 0.33.84): heading extended +
+  dedicated paragraph (ledger-consulting sweep, 156,308 → 4,620,
+  memcheck carrier). Announce copy of the plan refreshed. AWAITING
+  final static closure; array-sweep-retirement checkpoint opens only
+  after it, per direction.
+
+- 2026-07-18 — **string-arc-endgame-array-sweep CHECKPOINT COMPLETE
+  (report-only, cleared by maintainer) — STOPPED for review; no
+  implementation GO.** ARRAY-SWEEP-RETIREMENT-CHECKPOINT.md (copy:
+  /tmp/drift-announce/2026-07-19T060000Z-array-sweep-retirement-
+  checkpoint.md). HEADLINE — the bijection measurement (scratch
+  instrument, build/tmp/bij-measure, exit 0, universe identical
+  924/344/49; instrumentation REVERTED byte-identically:
+  cmp-verified against pristine copies, zero SCRATCH refs in tree,
+  reporter battery 51/51 on the restored tree) shows the 4,620
+  residual Array drops are THREE STDLIB FNS × 924 fixtures, in TWO
+  classes, and Arm M's original "flip the skip" covers NEITHER
+  as-framed:
+  - 3,696 UNMATCHED (std.json::_parse_array `items` ×2 +
+    _parse_object_throwing `occurrences` ×2 per fixture):
+    cleanup_authoring ALREADY authored complete flag-guarded cleanup
+    (_KIND_GUARDED — co-located c3_moveout_flag_guarded counts, so
+    no _KIND_SKIP record exists to flip); the sweeps sit in the
+    guarded emission's own {blk}_cleanup_post_{local} continuation
+    blocks (cleanup_authoring.py:563). Under the flag≡owns
+    invariant + entry zero-init + zero-drop-no-op, the residual
+    drop is a PROVEN NO-OP on every path → retire by deletion
+    (B-U): no new emission, no observable order change.
+  - 924 FN/LOCAL-FALLBACK (std.fs::read_to_bytes
+    `__match_binder_4_bytes`): genuine _KIND_SKIP at the match_join2
+    hook, sweep at match_join. RESOLVED STATICALLY by maintainer
+    review (fs.drift:285): close-success moves bytes into Ok;
+    close-FAILURE returns Err(ce) WITHOUT consuming bytes — the
+    array is genuinely LIVE on the close-error arm, today freed
+    only by the sweep. B-M = author exactly 924 unguarded drops at
+    the EXISTING match_join2 CleanupHook (NOT the swept exit); the
+    authored MoveOut zero-backs all paths and the sweep note dies.
+    A REAL drop migration and a REAL RAII-order change (sweep
+    sorted-order at match_join → reverse-decl hook order at
+    match_join2; fs instance has Byte elements so no observable
+    destructor reordering there; general contract pinned by the
+    ordering carrier).
+  - matched_exact 0, skiprec_orphan 0 — all 4,620 accounted; both
+    non-exact classes explained per the review rule.
+  Zero-safety proof on the ACTUAL chain: string_arc's entry-block
+  array zero-init (~1578 loop; array allocas NOT auto-zeroed) +
+  MoveOut zero-backs + len-0 element helper /
+  drift_free_array(NULL) no-op (array_runtime.c:75); entry-init
+  recorded as a SURVIVING string_arc responsibility → endgame
+  inventory. Predicate extraction carries the maintainer's
+  migration rule verbatim: zero_storage_drop_safe in
+  drop_policy_compute.py replaces EVERY production consumer —
+  cleanup_authoring.py:121, drop_flags.py:276/308 (which today
+  imports the variant-only name FROM string_arc), the reporter's
+  zero_safe_ty wiring (string_arc.py:2832); match_cleanup_authoring
+  is NOT a consumer (line 40 = docstring mention only, per
+  maintainer correction); wrapper compat/tests-only. Arm F reframed
+  honestly per maintainer: it would flag ONLY the 924 remaining
+  sites (the 3,696 are already flag-managed — nothing left for F to
+  guard there); rejected for runtime flag state + MIR growth
+  against zero benefit vs the unconditional authored drop
+  (success-arm storage already zero-backed by the move into Ok).
+  Destruction order: B-U removes only no-ops (nothing observable);
+  B-M is a REAL RAII-order change for the 924 live drops (recorded
+  for the 0.33.85 history entry); ordering carrier pin specced per
+  maintainer (both condition outcomes, PD array among live arrays +
+  interleaved destructible). Pins: maintainer's five verbatim +
+  B-U retirement pin + B-M authored-drop pin (hook-position drop,
+  no sweep drop, both close arms valgrind — error arm is the
+  leak-direction guard) + json-parser and read_to_bytes memcheck
+  rows; test_array_release_elision.py rows stay. PREDICTED
+  ACCEPTANCE (DEFINITIVE per maintainer — optional all-no-op
+  outcome removed): events +924, moveout_expansion +924,
+  c3_moveout_zero_safe +924 (predicate leg required — without it
+  +924 c3_moveout_not_owned = hard-gate failure); the three
+  arraydrop keys vanish (4,620 → 0 each); every other counter +0.
+  Sub-slice A1 APPROVED (both guards + the asymmetric subtraction)
+  under the T4 output-equivalence proof; INDEPENDENT
+  every-counter-+0 acceptance, no bump. Sequencing: A then B; B =
+  compiler 0.33.85 / ABI 21 → certification + release. Stop
+  conditions §9 (incl. authored-drop-fails-to-kill-sweep-note).
+  Scratch restoration + report-copy identity verified statically by
+  maintainer. NO code changed in this checkpoint; tree state = the
+  reviewed tripwire-deletion slice, untouched. Awaiting
+  implementation GO.
+
+- 2026-07-19 — **GO granted (maintainer) after two doc-only
+  corrections (both applied):** (1) string_arc's direct site-3
+  predicate call (~2691, the initialized_at_return variant widening
+  — arrays can't reach it via destructible_locals, but the
+  no-variant-only-name rule stands) added to the consumer inventory;
+  (2) §8's "(null) ordering impact" replaced with the real 924-site
+  RAII-order change. Implementation order pinned: A1 → B-M → step-3
+  corpus verification (+924 triple; arraydrop 4,620 → 3,696) → B-U →
+  final 0.33.85/ABI 21 acceptance + certification.
+
+- 2026-07-19 — **Sub-slice A1 ACCEPTED (independent gate):**
+  ConstString + StringFrom*/Concat re-add guards AND the prepass
+  `owned_values -= recognized_released` subtraction deleted under
+  the T4 output-equivalence proof (recognition machinery — prescan
+  exclusion + copy-through arm — untouched; stale prepass comments
+  at the Exc*/Call arms rewritten). Gate: stage2 364/364; standalone
+  memcheck 103+1skip; corpus build/tmp/sweep-a1 vs cleanup-tripdel
+  EXIT 0, EVERY counter +0 (17 keys), universe identical 924/344/49,
+  gates zero.
+
+- 2026-07-19 — **B-M IMPLEMENTED (verification corpus in flight).**
+  Code: (1) `zero_storage_drop_safe(ty, tt)` NEW in
+  drop_policy_compute.py (VARIANT tag-0 + ARRAY zeroed-header; else
+  fail closed; docstring carries the entry-init dependency note).
+  (2) MIGRATION RULE executed — every production consumer switched:
+  cleanup_authoring PD ladder; drop_flags 2b criterion (~276/308 —
+  arrays now never admitted via 2b, matching Arm M; 2a untouched);
+  string_arc site-3 widening call + the reporter zero_safe_ty lambda
+  (2832). `variant_zero_tag_drop_safe` reduced to a VARIANT-ONLY
+  compat shim (tests only; widened-wrapper form rejected — a variant
+  name admitting arrays would lie). Stale docs fixed in
+  match_cleanup_authoring/mir_nodes/reporter/cleanup_authoring
+  module docs. (3) LADDER SHAPE (counter-neutrality decision,
+  flagged in checkpoint §2.4/§2.3): PD arrays take UNGUARDED
+  authoring ONLY when not flag-managed; flag-managed arrays (the
+  2a-admitted json accumulators) keep the guarded family so the
+  slice stays exactly ±924; variants keep today's predicate-first
+  decision verbatim. PINS ALL GREEN: predicate contract 3/3 (incl.
+  fail-closed SOURCE-SCAN pin enforcing the migration rule — any new
+  production call of the variant-only name fails with a STOP
+  message, and a compat-shim-stays-variant-only pin);
+  cleanup_authoring 14/14 (+ unguarded-PD-array pin: emitted, drop
+  chain, no block split, not flag-managed; + flag-managed-array
+  keeps-guarded-family pin: flag-clear present, no unconditional
+  hook drop); reporter c3 array ladder pin (paired MAYBE_UNINIT
+  array MoveOut → zero_safe via the REAL predicate; unpaired →
+  divergent/hard-gated); RAII ordering carrier
+  test_array_sweep_raii_order.py GREEN (real source, both condition
+  outcomes, exact destroy order pd→mid→live1 — PD array normalized
+  onto reverse-decl RAII); NEW memcheck rows
+  test_array_sweep_retirement.py (read_to_bytes shape both arms +
+  json-parser shape both exits, heap strings, valgrind 0/0) — passed
+  standalone. stage2 FULL 370/370 (364 + 6 new). Step-3 corpus
+  (build/tmp/sweep-bm vs sweep-a1) RUNNING; K's predicted deltas:
+  events/moveout_expansion/c3_moveout_zero_safe each +924,
+  scope_exit_arraydrop 4,620 → 3,696.
+
+- 2026-07-19 — **Step-3 verification EXACT (build/tmp/sweep-bm vs
+  sweep-a1, exit 0):** events +924; site_class:moveout_expansion
+  +924; c3_moveout_zero_safe +924; scope_exit_arraydrop 4,620 →
+  3,696 with arraydrop_state:maybe_uninit / verdict:path_dependent
+  tracking −924 exactly; c3_moveout_flag_guarded +0 (the json
+  accumulators provably untouched — the counter-neutral ladder
+  held); every other counter +0; universe identical; gates zero.
+  The read_to_bytes sweep note died via the authored MoveOut — the
+  hook→Return dataflow stop condition did NOT fire. B-M VERIFIED;
+  cleared to B-U per the implementation order.
+
+- 2026-07-19 — **B-U IMPLEMENTED — the Return-boundary array sweep
+  is GONE.** Deleted: `_drop_all_arrays` (def + sole call), the
+  MUST_NOT_DROP array elision fold, and the Slice-3 note_array_drop
+  loop — replaced by a single no-sweep comment recording the
+  bijection provenance and the two surviving dependencies
+  (`_drop_array_local` for the overwrite path; the entry-block
+  array zero-init, endgame-inventory item). Reporter's array_drops
+  API kept for direct contract tests (comment marks the production
+  note site historical); four stale `_drop_all_arrays` doc mentions
+  rewritten. PIN REWORKS: the two sweep-pinning tests flipped into
+  B-U retirement pins — test_arraydrop_note_site_covers_return_
+  sweep now asserts ZERO arraydrop keys and ZERO Return-boundary
+  ArrayDrops (LIVE sink included: cleanup_authoring hooks are the
+  sole scope-exit authority; bare carriers deliberately hook-less)
+  with overwrite drops intact; test_array_elision_keeps_path_
+  dependent_drop asserts the PD local gets NOTHING from arc (the
+  authoring covered by the cleanup_authoring unguarded-array pin);
+  the direct-API reporter pin stays. Stale row-3 wording in
+  test_array_release_elision.py updated (sweep → authored cleanup).
+  Batteries: stage2 FULL 370/370; array runtime carriers 3/3
+  (elision rows + retirement rows + RAII ordering carrier) — all
+  green post-deletion. Version bumped 0.33.85 (ABI stays 21);
+  doc/history.md entry written (sweep retirement, predicate
+  extraction + migration rule, RAII-order note, flag-managed-array
+  follow-up, A1 rider). FINAL acceptance corpus
+  (build/tmp/sweep-final vs cleanup-tripdel) RUNNING; standalone
+  memcheck follows strictly after.
+
+- 2026-07-19 — **string-arc-endgame-array-sweep ACCEPTED (final):**
+  build/tmp/sweep-final vs cleanup-tripdel, tool v1.6.0, exit 0 —
+  EXACTLY the checkpoint §7 definitive table: events +924,
+  site_class:moveout_expansion +924, c3_moveout_zero_safe +924
+  (9,330 → 10,254); scope_exit_arraydrop / arraydrop_state:
+  maybe_uninit / arraydrop_verdict:path_dependent all 4,620 → 0
+  (aggregate 17 → 14 keys); EVERY other counter +0 incl.
+  c3_moveout_flag_guarded 8,316 (json accumulators byte-identical);
+  universe identical 924/344/49; all hard gates zero. STANDALONE
+  memcheck **104 passed + 1 skipped** (103+1 prior + the new
+  test_array_sweep_retirement row — reconciles exactly). Batteries:
+  stage2 370/370 (364 + zero_storage 3 + cleanup_authoring 2 +
+  c3-array ladder 1); RAII ordering carrier + array memcheck
+  carriers green. Sub-slice gates on record: A1 +0
+  (build/tmp/sweep-a1); step-3 ±924 (build/tmp/sweep-bm).
+  sweep-final is the new phase reference. Version 0.33.85, ABI 21;
+  history.md entry written. THE RETURN-BOUNDARY ARRAY SWEEP IS
+  RETIRED: cleanup_authoring is the sole scope-exit array authority;
+  string_arc's remaining array responsibilities = entry-block
+  zero-init (endgame inventory) + the overwrite-path
+  `_drop_array_local`. Commit msg delivered. NEXT: user-run full
+  suite → 0.33.85 certification + release; then the recorded
+  follow-ups (flag-managed-array unguarded unification with its own
+  predicted-delta acceptance; small follow-ups; string_arc endgame
+  inventory → B-repr(B5) entry criteria).
+
+- 2026-07-19 — **Static review round (CHANGES REQUIRED → all four
+  code items CLOSED; item 5 git materialization is the
+  maintainer's, per direction).** Review at /tmp/drift-announce/
+  2026-07-19T123424Z-drift-lang-release-notes.md.
+  (1) Reporter arraydrop note surface DELETED —
+  SITE_CLASS_SCOPE_EXIT_ARRAYDROP constant, StringArcAudit.
+  array_drops, note_array_drop, and the finalize aggregation loop
+  (no compatibility consumer identified; banner comment records
+  that a resurrected tag counts UNTAGGED = hard gate); the
+  direct-only test_arraydrop_measurement_mix_and_inertness RETIRED
+  with a note; unused `classify` import dropped.
+  (2) Dead ARRAY half of the Return alias-walk skip REMOVED
+  (String-only now; no downstream consumer existed post-B-U —
+  arrays excluded from destructible_locals, _release_all_locals and
+  the boundary audit intersect strings); comment rewritten;
+  test_array_return_source.py audit narrative updated to record the
+  removal. string_arc's remaining array responsibilities are now
+  EXACTLY the claimed two: entry-block zero-init +
+  overwrite-path _drop_array_local.
+  (3) Stale-authority wording swept: test_array_release_elision
+  header + row comments; both memcheck failure-message touch-point
+  lists (cleanup_authoring named as the scope-exit authority);
+  drop_flags module doc + 2b criteria and cleanup_authoring's four
+  docstring surfaces rewritten to the zero-storage-unsafe vs
+  zero-storage-safe rule (historical `path_dependent_non_variant_
+  skip` tag NAME kept for triage-tooling stability, noted at each
+  surface); reporter C3 comments "zero-tag" → the generic
+  predicate.
+  (4) Migration pin HARDENED to an AST scan (ImportFrom incl.
+  aliases, Attribute refs, bare Names, shadow defs — anywhere in
+  lang/driftc outside the shim's own def; docstrings/comments
+  invisible by construction). TEETH PROVEN live: a function-level
+  aliased import probe was caught at its exact line
+  (drop_flags.py:454 "import as _p"); probe reverted, cmp-verified,
+  battery green. (The first probe attempt — module-level import —
+  failed via circular-import collection error instead: loud but not
+  the pin; the function-level probe is the honest demonstration.)
+  GATES: stage2 369/369 (370 − 1 retired test, exactly the review's
+  predicted decrease); closure corpus build/tmp/sweep-closure vs
+  sweep-final EXIT 0, EVERY counter +0 (14 keys both sides —
+  production deltas unchanged per the review requirement);
+  standalone memcheck 104 passed + 1 skipped (unchanged — the
+  memcheck-file edits were docstrings and failure-message text
+  only). Item 5 (materialize the
+  candidate on branch string-arc-endgame-array-sweep; mixed index +
+  three untracked test files) EXPLICITLY left to the maintainer
+  ("you can ignore staged/unstaged... I take care of it").
+  Awaiting the static delta review.
+
+- 2026-07-19 — **Delta-review quick edits (4 items, maintainer list;
+  parse-checked only, NO test runs per direction).** (1) The two
+  remaining string_arc passages (~2475 scope note + authority
+  boundary) no longer claim arrays share alias-walk/legacy
+  authority — strings-only, with the array half's retirement and
+  cleanup_authoring's authority stated in both. (2)
+  test_site3_return_source_alias_walk.py docstring rewritten
+  String-only end to end (title, shape, location note, gate wording,
+  and the Array-note paragraph now records the branch's REMOVAL and
+  points at test_array_return_source.py instead of deferring future
+  work). (3) drop_flags private helper RENAMED
+  _has_non_variant_path_dependent_at_cleanup_hook →
+  _has_zero_storage_unsafe_path_dependent_at_cleanup_hook (def +
+  sole call; the historical path_dependent_non_variant_skip TAG
+  string is unchanged). (4) AST pin hardened: the exception is now
+  EXACTLY ONE sync-def shim in string_arc.py (duplicate defs there
+  are offenders; shim_defs == 1 asserted), and AsyncFunctionDef /
+  ClassDef shadows are offenders everywhere including string_arc.
+  Commit msg delivered.

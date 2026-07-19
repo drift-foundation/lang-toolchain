@@ -504,3 +504,112 @@ def test_authoring_noop_when_ledger_unset() -> None:
 		"presence will surface as an error in downstream passes, "
 		"which is the intended fail-loud signal."
 	)
+
+
+# -- B-M carriers (string-arc-endgame-array-sweep, 2026-07-19) ----------
+
+
+def test_authoring_emits_unguarded_drop_for_path_dependent_array() -> None:
+	"""B-M pin (maintainer spec pin 2): a PATH_DEPENDENT Array
+	candidate that is NOT flag-managed takes Arm M's UNGUARDED
+	authoring via `zero_storage_drop_safe` — the read_to_bytes shape
+	(conditionally-consumed array live on one arm).  Unguarded means
+	no block split and no flag branch: the drop chain sits inline at
+	the hook position."""
+	type_table = TypeTable()
+	string_ty = type_table.ensure_string()
+	arr_ty = type_table.new_array(string_ty)
+	bool_ty = type_table.ensure_bool()
+	func = _make_func(
+		"cond_array",
+		params=["b"],
+		locals_=["b", "a"],
+		types={"b": bool_ty, "a": arr_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="b", then_target="if_then", else_target="if_join")
+	then_blk = M.BasicBlock(name="if_then")
+	then_blk.instructions.append(M.ArrayLit(dest="t_a", elem_ty=string_ty, elements=[]))
+	then_blk.instructions.append(M.StoreLocal(local="a", value="t_a"))
+	then_blk.terminator = M.Goto(target="if_join")
+	join_blk = M.BasicBlock(name="if_join")
+	join_blk.instructions.append(M.CleanupHook(scope_id=0, candidates=[("a", arr_ty)]))
+	join_blk.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "if_then": then_blk, "if_join": join_blk}
+	from lang.driftc.stage2.drop_flags import is_flag_managed
+	assert not is_flag_managed(func, "a"), "test setup: 'a' must not be flag-managed"
+	_attach_ledger(func)
+	emitted = author_cleanup(func, type_table=type_table)
+	assert emitted == 1, (
+		"Arm M regressed: PATH_DEPENDENT non-flag-managed Array at the "
+		"hook must take unguarded authoring (the close-error arm holds "
+		"a live array — skipping leaks it once the sweep is deleted)."
+	)
+	assert _has_drop_chain_for(func, "a")
+	assert set(func.blocks) == {"entry", "if_then", "if_join"}, (
+		"unguarded authoring must not split blocks (no flag guard): "
+		f"{sorted(func.blocks)}"
+	)
+
+
+def test_authoring_keeps_guarded_branch_for_flag_managed_array() -> None:
+	"""Counter-neutrality pin (checkpoint §2.3 implementation
+	decision): a FLAG-MANAGED Array candidate keeps the existing
+	flag-GUARDED authority — the std.json parse-accumulator class
+	(2a-admitted) must stay byte-identical through this slice;
+	unifying it under unguarded is a recorded follow-up with its own
+	acceptance.  In this edge-resolvable diamond the GUARDED decision
+	lands as per-arm edge elaboration: the drop + flag-clear sit on
+	the LIVE predecessor edge, and the hook position emits NOTHING —
+	the load-bearing assertion is that the flag machinery engaged
+	(flag-clear present) and no unconditional hook-position drop was
+	authored."""
+	type_table = TypeTable()
+	string_ty = type_table.ensure_string()
+	arr_ty = type_table.new_array(string_ty)
+	bool_ty = type_table.ensure_bool()
+	func = _make_func(
+		"flagged_array",
+		params=["b"],
+		locals_=["b", "a", "__drop_flag_a"],
+		types={"b": bool_ty, "a": arr_ty, "__drop_flag_a": bool_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="b", then_target="if_then", else_target="if_join")
+	then_blk = M.BasicBlock(name="if_then")
+	then_blk.instructions.append(M.ArrayLit(dest="t_a", elem_ty=string_ty, elements=[]))
+	then_blk.instructions.append(M.StoreLocal(local="a", value="t_a"))
+	then_blk.terminator = M.Goto(target="if_join")
+	join_blk = M.BasicBlock(name="if_join")
+	join_blk.instructions.append(M.CleanupHook(scope_id=0, candidates=[("a", arr_ty)]))
+	join_blk.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "if_then": then_blk, "if_join": join_blk}
+	setattr(func, "_drop_flag_managed_locals", {"a"})
+	setattr(func, "_drop_flag_for_local", {"a": "__drop_flag_a"})
+	_attach_ledger(func)
+	emitted = author_cleanup(func, type_table=type_table)
+	assert emitted == 1, "flag-managed PD array must still emit (guarded family)"
+	assert _has_drop_chain_for(func, "a")
+	# Flag machinery engaged: a flag-clear store exists somewhere.
+	flag_clears = [
+		ins
+		for blk in func.blocks.values()
+		for ins in blk.instructions
+		if isinstance(ins, M.StoreLocal) and ins.local == "__drop_flag_a"
+	]
+	assert flag_clears, (
+		"flag-managed Array lost its flag machinery — it must NOT take "
+		"Arm M's unguarded branch (counter-neutrality with the "
+		"2a-admitted json accumulators)"
+	)
+	# And the hook position authored no unconditional drop: if_join
+	# carries no DropValue (the guarded family emitted on the edge or
+	# behind a flag guard, never unconditionally at the hook).
+	join_drops = [
+		ins for ins in func.blocks["if_join"].instructions
+		if isinstance(ins, M.DropValue)
+	]
+	assert not join_drops, (
+		f"unconditional hook-position drop for a flag-managed Array: "
+		f"{join_drops}"
+	)

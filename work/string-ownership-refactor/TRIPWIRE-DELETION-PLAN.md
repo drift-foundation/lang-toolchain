@@ -133,10 +133,12 @@ Intake folders (§6): both updated, neither deleted.
   arm is gone, and both DELETE in this slice.** The rev-1 reasoning
   was wrong: removing the guards cannot produce a second release —
   the recognition arm copies the pass-materialized release through
-  independently of `owned_values`, and a re-owned recognized temp
-  simply dies in block-local bookkeeping (the all-USE calculator
-  contract keeps recognized temps away from every consume-approval
-  site; the release arm was the ONLY consumer of that state).
+  without consulting `owned_values`, and while the re-owned state MAY
+  propagate (AssignSSA copies owned membership) and affect branch
+  selection (`_can_move_owned_once` reads it), every affected branch
+  is output-equivalent — `_ensure_owned` is identity, the store paths
+  are unconditional, and `_note_use` only changes bookkeeping — so no
+  branch can author another instruction or release.
   Therefore: delete the guard condition from the CopyValue (~2042)
   and MoveOut (~1977) rewrite-loop re-add arms (String-typed re-add
   becomes unconditional; MoveOut keeps its move_only mark), rewrite

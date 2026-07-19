@@ -49,7 +49,7 @@ from typing import Callable, Iterable, Optional, Tuple
 
 from . import cfg as _cfg
 from . import mir_nodes as _M
-from .ownership_ledger import DropVerdict, LiveState, LiveStateMap, classify
+from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .ownership_ledger_events import (
 	DropDecisionEvent,
 	VERDICT_MUST_DROP,
@@ -394,8 +394,10 @@ DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
 #    TOMBSTONED (the lattice's own definition — zero/tombstone bytes
 #    written in place), or raw MAYBE_UNINIT where the MoveOut feeds an
 #    immediately-following DropValue (the unguarded authored cleanup
-#    shape) AND the subject's type is zero-tag-drop-safe — the same
-#    predicate cleanup_authoring used to choose the unguarded arm.
+#    shape) AND the subject's type is zero-storage-drop-safe
+#    (`drop_policy_compute.zero_storage_drop_safe`: variants,
+#    arrays) — the same predicate cleanup_authoring uses to choose
+#    the unguarded arm.
 #  - OBS_C3_UNREACHABLE_BLOCK: the event's block is unreachable in the
 #    ledger's CFG walk (population C: dead catch machinery from
 #    `try <nothrow-expr> catch`).  state_pre's UNINIT there is a
@@ -411,18 +413,15 @@ AGREE_C3_FLAG_GUARDED = "c3_moveout_flag_guarded"
 AGREE_C3_ZERO_SAFE = "c3_moveout_zero_safe"
 OBS_C3_UNREACHABLE_BLOCK = "c3_moveout_unreachable_block"
 
-# Slice 3 (Array release-elision MEASUREMENT, report-only): Array
-# return-boundary sweep drops are recorded via `note_array_drop` into a
-# SEPARATE ledger-compared inventory — deliberately NOT StringStakeEvents,
-# so the string `events` counter and every string comparison stay
-# byte-identical by construction (the slice's inertness contract).
-# Counters produced per swept drop:
-#   site_class:scope_exit_arraydrop           (event count)
-#   arraydrop_state:<uninit|live|moved_out|tombstoned|maybe_uninit>
-#   arraydrop_verdict:<must_drop|must_not_drop|path_dependent>
-# The verdict uses the DropPolicy needs_drop axis captured at the note
-# site.  Observational only — never divergent, never a gate.
-SITE_CLASS_SCOPE_EXIT_ARRAYDROP = "scope_exit_arraydrop"
+# The Slice-3 Array sweep-measurement note surface
+# (`SITE_CLASS_SCOPE_EXIT_ARRAYDROP` / `StringArcAudit.array_drops` /
+# `note_array_drop` / the finalize aggregation) was DELETED with B-U
+# (string-arc-endgame-array-sweep, 2026-07-19): the Return-boundary
+# sweep it measured is gone and no compatibility consumer of the
+# counters exists (the corpus tool sums whatever keys appear; the
+# historical aggregates in build/tmp remain parseable as data).  A
+# resurrected `scope_exit_arraydrop` tag would count UNTAGGED — a
+# hard corpus gate.
 # RETIRED (2026-07-11, post release-elision acceptance): the C4
 # allowlist is closed. Release-elision drove both faces to zero
 # corpus-wide (the site-3 return retain was structurally extinct since
@@ -534,10 +533,6 @@ class StringArcAudit:
 		self.events: list[StringStakeEvent] = []
 		self.return_boundaries: list[_ReturnBoundary] = []
 		self.untagged = 0
-		# Slice 3: (subject, boundary point, needs_drop) per Array local
-		# swept by the return-boundary `_drop_all_arrays`.  Separate from
-		# `events` on purpose — see SITE_CLASS_SCOPE_EXIT_ARRAYDROP.
-		self.array_drops: list[Tuple[str, Tuple[str, int], bool]] = []
 
 	def note(
 		self,
@@ -561,15 +556,6 @@ class StringArcAudit:
 			post_point=post_point,
 			moveout_feeds_drop=moveout_feeds_drop,
 		))
-
-	def note_array_drop(
-		self,
-		subject: str,
-		*,
-		point: Tuple[str, int],
-		needs_drop: bool,
-	) -> None:
-		self.array_drops.append((subject, point, bool(needs_drop)))
 
 	def note_return_boundary(
 		self,
@@ -643,7 +629,9 @@ class StringArcAudit:
 
 		`func` (the MirFunc, terminators un-rewritten by string_arc) and
 		`zero_safe_ty` (TypeId -> bool: zeroed bytes of this type are
-		drop-safe; production passes `variant_zero_tag_drop_safe`) power
+		drop-safe; production passes
+		`drop_policy_compute.zero_storage_drop_safe` — variants +
+		arrays since string-arc-endgame-array-sweep) power
 		the C3 agree-class ladder.  Both optional: without them every
 		non-LIVE MoveOut classifies as it did pre-slice-2 (divergent),
 		never silently as an agree class."""
@@ -815,7 +803,8 @@ class StringArcAudit:
 				and zero_safe_ty(func.local_types[ev.subject])
 			):
 				# Population B: the unguarded authored cleanup shape for
-				# a zero-tag-drop-safe type — every non-LIVE component
+				# a zero-storage-drop-safe type (variants, arrays via
+				# `zero_storage_drop_safe`) — every non-LIVE component
 				# of the join holds zeroed storage; the paired drop is a
 				# no-op there.
 				_bump(agg, AGREE_C3_ZERO_SAFE)
@@ -824,15 +813,6 @@ class StringArcAudit:
 				# deliberately NOT normalized pending triage).
 				_detail(DIV_C3_MOVEOUT_NOT_OWNED, subject=ev.subject,
 					point=list(ev.pre_point), raw_state=raw.value)
-
-		# Slice 3 (report-only measurement): Array return-boundary sweep
-		# drops vs the ledger — the raw-state / verdict mix that sizes
-		# the Array release-elision win.  Counted-only; never divergent.
-		for _adl, _adp, _adnd in self.array_drops:
-			_bump(agg, "site_class:" + SITE_CLASS_SCOPE_EXIT_ARRAYDROP)
-			_ad_raw = l_pre.state_pre(_adp, _adl)
-			_bump(agg, "arraydrop_state:" + _ad_raw.value)
-			_bump(agg, "arraydrop_verdict:" + classify(_ad_raw, needs_drop=_adnd).value)
 
 		# UNCLASSIFIED: any event whose (kind, site_class) pair no
 		# comparison above consumed and that is not a counted-only

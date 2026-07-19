@@ -93,3 +93,37 @@ def compute_drop_policy(type_table: TypeTable, ty: TypeId) -> DropPolicy:
 		is_destructible=is_destructible,
 		has_structural_drop=has_structural_drop,
 	)
+
+
+def zero_storage_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
+	"""Generic zero-storage/drop-safe policy axis
+	(string-arc-endgame-array-sweep, 2026-07-19).
+
+	True iff dropping ZEROED storage of `local_ty` is a runtime no-op:
+
+	- VARIANT — tag=0 is the default (PHI-zero) state and the runtime's
+	  variant destructor dispatches on tag, so a tag=0 drop is a no-op.
+	  (Absorbs the `variant_zero_tag_drop_safe` semantics; if variant
+	  layout ever changes — non-zero default tag, per-variant
+	  destructor protocols — this arm tightens here in one place.)
+	- ARRAY — the zeroed `DriftArrayHeader` has len=0 and data=NULL:
+	  the element-drop helper iterates zero times and
+	  `drift_free_array(NULL)` returns without effect
+	  (`array_runtime.c`).  NOTE: zeroed STORAGE is guaranteed by
+	  string_arc's entry-block array zero-init and the MoveOut
+	  expansion's zero-back — array allocas are not intrinsically
+	  zeroed.  That entry-init is a surviving string_arc
+	  responsibility (endgame-inventory item).
+
+	Everything else FAILS CLOSED — in particular structs with user
+	`core.Destructible` impls have no universally drop-safe zero
+	pattern (the destructor would read null-bearing receivers).
+
+	This predicate replaces `variant_zero_tag_drop_safe` for EVERY
+	production decision (cleanup_authoring PD resolution, drop_flags
+	candidate admission, the ownership-ledger reporter's zero-safe C3
+	leg, string_arc's site-3 widening); the variant-named wrapper in
+	string_arc remains for compatibility/tests only.
+	"""
+	td = type_table.get(local_ty)
+	return td.kind is TypeKind.VARIANT or td.kind is TypeKind.ARRAY

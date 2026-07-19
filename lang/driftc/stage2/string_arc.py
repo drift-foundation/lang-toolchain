@@ -38,27 +38,23 @@ from . import ownership_ledger_reporter as _ledger_reporter
 from .ledger_cache import mark_ledger_dirty, maybe_fresh_ledger
 from .ownership_ledger import DropVerdict as _DropVerdict
 from .drop_policy_compute import compute_drop_policy as _compute_drop_policy
+from .drop_policy_compute import zero_storage_drop_safe as _zero_storage_drop_safe
 from .drop_flags import is_flag_managed as _is_flag_managed
 
 
 def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
-	"""Phase 4 site-3 sub-step 3 — explicit policy axis.
+	"""COMPATIBILITY SHIM (string-arc-endgame-array-sweep,
+	2026-07-19) — tests/back-compat only; NO production caller may
+	remain (maintainer migration rule: no production decision through
+	the misleading variant-only name).
 
-	True iff `local_ty` is a variant type whose tag-0 destructor is a
-	no-op.  Today: all variants — variant codegen lays out tag=0 as
-	the default (PHI-zero) state, and the runtime's variant
-	destructor dispatches on tag, so a tag=0 storage is a no-op
-	drop.  Future: if variant layout changes (e.g. non-zero default
-	tag, or per-variant destructor protocols), this predicate
-	tightens here in one place.
-
-	Used by site 3 to drive the conditionally-initialized variant
-	widening: when the ledger reports `PathDependent` for such a
-	local at a Return terminator, site 3 includes it in
-	`initialized_at_return` so the drop fires.  The drop is safe
-	(no-op on the uninit path) and necessary (live paths leak
-	otherwise).  Replaces the dataflow-based widening that lived
-	inline at the Return-terminator branch in 0.27.145–0.31.9.
+	The production policy axis is
+	`drop_policy_compute.zero_storage_drop_safe`, which additionally
+	admits ARRAY (zeroed-header drop is a no-op).  This shim keeps
+	the ORIGINAL variant-only semantics so existing test expectations
+	stay meaningful; it dies with string_arc.  Historical rationale
+	(Phase 4 site-3 sub-step 3) lives on the new predicate's
+	docstring.
 	"""
 	td = type_table.get(local_ty)
 	return td.kind is TypeKind.VARIANT
@@ -1329,12 +1325,10 @@ def insert_string_arc(
 		out.append(M.ArrayDrop(elem_ty=elem_ty, array=tmp))
 		local_types[tmp] = arr_ty
 
-	def _drop_all_arrays(out: list[M.MInstr], *, skip_locals: Set[str] | None = None) -> None:
-		skip = skip_locals or set()
-		for local in sorted(array_locals):
-			if local in skip:
-				continue
-			_drop_array_local(local, out)
+	# `_drop_all_arrays` (the Return-boundary array sweep) was deleted
+	# in B-U (string-arc-endgame-array-sweep, 2026-07-19).
+	# `_drop_array_local` above survives for the drop-before-overwrite
+	# StoreLocal path only.
 
 	def _drop_destructible_local(local: str, out: list[M.MInstr]) -> None:
 		if local not in destructible_locals:
@@ -1519,10 +1513,10 @@ def insert_string_arc(
 				# responsible for releasing.  Tracked as an owned
 				# string-result alongside the StringConcat / Call class.
 				# TLR-5: this prepass is the ONLY owned registration for
-				# Exc* dests (no rewrite-loop re-add arm), so family
-				# suppression for recognized Exc* temps is fully covered
-				# by the per-block `owned_values -= recognized_released`
-				# subtraction.
+				# Exc* dests (no rewrite-loop re-add arm).  Recognized
+				# temps stay owned here since Sub-slice A1 deleted the
+				# per-block subtraction — output-neutral under the T4
+				# proof (see the MoveOut arm).
 				owned_defs.add(dest)
 			elif isinstance(instr, M.ExcGetContextJson):
 				# Same retained-string contract (and TLR-5 prepass-only
@@ -1537,9 +1531,10 @@ def insert_string_arc(
 				# when their last use in the block is consumed.
 				# TLR-4: this fn-wide prepass is the ONLY owned
 				# registration for call dests (no rewrite-loop re-add
-				# arm), so family suppression for recognized call temps
-				# is fully covered by the per-block
-				# `owned_values -= recognized_released` subtraction.
+				# arm).  Recognized temps stay owned here since
+				# Sub-slice A1 deleted the per-block subtraction —
+				# output-neutral under the T4 proof (see the MoveOut
+				# arm).
 				owned_defs.add(dest)
 			elif isinstance(instr, M.PtrRead):
 				if _is_string_tid(instr.elem_ty):
@@ -1632,17 +1627,16 @@ def insert_string_arc(
 			if any(isinstance(_i, M.StringRelease) for _i in block.instructions)
 			else set()
 		)
-		# TLR-2b suppression, fn-wide-prepass half: `owned_values` was
-		# seeded above from the fn-wide `owned_defs` prepass, which
-		# registers EVERY ConstString dest — an externally-released
-		# temp's release is authored by the pass and copied through by
-		# the recognition arm, so it must not look in-pass-owned.
-		# (Since the release arm's deletion, 2026-07-18, owned state of
-		# a recognized temp is inert bookkeeping — this subtraction and
-		# the ConstString/StringFrom*/Concat re-add guards below are
-		# kept for state consistency, not correctness; the
-		# CopyValue/MoveOut guards were deleted with the arm.)
-		owned_values -= recognized_released
+		# Sub-slice A1 (string-arc-endgame-array-sweep, 2026-07-18):
+		# the TLR-2b `owned_values -= recognized_released` prepass
+		# subtraction and the ConstString/StringFrom*/Concat re-add
+		# guards were DELETED together with their consistency-only
+		# role.  Owned state of a recognized temp is output-neutral
+		# under the T4 proof (see the MoveOut arm): it may propagate
+		# and steer branches, but every affected branch is
+		# output-equivalent, so no branch can author another
+		# instruction or release.  The recognition machinery itself
+		# (prescan exclusion + copy-through arm) is untouched.
 		# Count uses in this block for temp string values.
 		use_counts: Dict[str, int] = {}
 		producers: Dict[str, M.MInstr] = {}
@@ -1693,7 +1687,8 @@ def insert_string_arc(
 			# firings): every last-use release of a family temp is
 			# authored by the string_releases pass and copied through by
 			# the recognition arm above.  An owned temp draining to zero
-			# non-consumingly is inert block-local bookkeeping.
+			# non-consumingly leaves only bookkeeping state, which is
+			# output-neutral (see the MoveOut arm proof).
 
 		def _can_move_owned_once(val: str) -> bool:
 			return val in owned_values and use_counts.get(val, 0) == 1
@@ -1901,14 +1896,18 @@ def insert_string_arc(
 					# storage local's +1 verbatim).  The
 					# `recognized_released` re-add guard that lived here
 					# (TLR-6/8 teeth) was deleted 2026-07-18 together
-					# with the release arm it protected: recognition
-					# copies the pass-materialized release through
-					# independently of `owned_values`, so a re-owned
-					# recognized temp is inert block-local bookkeeping —
-					# the release arm was the ONLY consumer of that
-					# state, and the all-USE calculator contract keeps
-					# recognized temps away from every consume-approval
-					# site.
+					# with the release arm it protected: a re-added
+					# recognized temp cannot cause a second release.
+					# The re-owned state MAY propagate (AssignSSA copies
+					# owned membership) and affect branch selection
+					# (`_can_move_owned_once` reads it), but every
+					# affected branch is output-equivalent —
+					# `_ensure_owned` is identity, the store paths are
+					# unconditional, and `_note_use` only changes
+					# bookkeeping — so no branch can author another
+					# instruction or release; recognition copies the
+					# pass-materialized release through without
+					# consulting `owned_values`.
 					owned_values.add(instr.dest)
 					move_only_values.add(instr.dest)
 				zero = _new_temp()
@@ -1927,18 +1926,15 @@ def insert_string_arc(
 				continue
 
 			if isinstance(instr, M.ConstString):
-				# TLR-2b suppression: an externally-released temp stays
-				# out of `owned_values`.  Kept for state consistency
-				# with the per-block subtraction (see its comment) —
-				# inert since the release arm's deletion, 2026-07-18.
-				if instr.dest not in recognized_released:
-					owned_values.add(instr.dest)
+				# Re-add unconditional since Sub-slice A1 (guard
+				# deleted with the prepass subtraction — see its
+				# comment above): recognized-temp owned state is
+				# output-neutral.
+				owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
-				# TLR-3: StringConcat joined the release family; TLR-5:
-				# the StringFrom* members joined too.  Same
-				# consistency-only guard as the ConstString arm.
-				if instr.dest not in recognized_released:
-					owned_values.add(instr.dest)
+				# TLR-3/5 family members; unconditional re-add since
+				# Sub-slice A1 (same as the ConstString arm).
+				owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):
 				owned_values.add(instr.dest)
 			elif isinstance(instr, M.ZeroValue):
@@ -1957,8 +1953,10 @@ def insert_string_arc(
 			elif isinstance(instr, M.CopyValue):
 				# TLR-6: CopyValue is family.  Its `recognized_released`
 				# re-add guard was deleted 2026-07-18 with the release
-				# arm (see the MoveOut arm for the full argument): a
-				# re-owned recognized temp is inert bookkeeping.
+				# arm (see the MoveOut arm for the full argument): the
+				# re-owned state cannot author another instruction or
+				# release — every branch it can reach is
+				# output-equivalent.
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.LoadLocal):
@@ -2436,23 +2434,31 @@ def insert_string_arc(
 							break
 					if not moved:
 						break
-				# For STRING / ARRAY return-source locals, the legacy
-				# alias-walk skip is preserved here.  The Phase 4
-				# sub-step 1 ledger consultation below is limited to
-				# `destructible_locals`; strings and arrays have
-				# their own parallel ownership-tracking machinery
-				# (`_release_all_locals` / `_drop_all_arrays`) and
-				# folding them into `skip_cleanup_locals` via the
-				# generic consultation breaks that machinery in
-				# subtle ways (caught by the package-consumer
-				# memcheck regression `test_pkg_map_literal_string_leak`).
-				# Once strings/arrays move to ledger authority on a
-				# future track, this can collapse into the
-				# consultation.
+				# For STRING return-source locals, the legacy alias-walk
+				# skip is preserved here.  The Phase 4 sub-step 1
+				# ledger consultation below is limited to
+				# `destructible_locals`; strings have their own
+				# parallel ownership-tracking machinery
+				# (`_release_all_locals`), and folding them into
+				# `skip_cleanup_locals` via the generic consultation
+				# breaks that machinery in subtle ways (caught by the
+				# package-consumer memcheck regression
+				# `test_pkg_map_literal_string_leak`).  The ARRAY half
+				# of this skip was removed in the review-closure round
+				# of string-arc-endgame-array-sweep (2026-07-19): with
+				# the Return-boundary sweep gone, array membership in
+				# `skip_cleanup_locals` had no downstream consumer
+				# (arrays are excluded from `destructible_locals`;
+				# `_release_all_locals` and the boundary audit
+				# intersect strings) — scope-exit array drops are
+				# cleanup_authoring's, and a returned array is
+				# Return-as-move at the ledger there.  Once strings
+				# move to ledger authority on a future track, this can
+				# collapse into the consultation.
 				for prev in reversed(new_instrs):
 					if isinstance(prev, M.LoadLocal) and prev.dest == alias:
 						can_move_from_skipped_local = True
-						if prev.local in string_locals or prev.local in array_locals:
+						if prev.local in string_locals:
 							skip_cleanup_locals.add(prev.local)
 						break
 			# Phase 4 sub-step 1 — ledger consultation for returned-
@@ -2467,32 +2473,37 @@ def insert_string_arc(
 			# site-local alias walk.
 			#
 			# Scope note (2026-04-23, post-sub-step-3 memcheck
-			# diagnosis): the consultation is intentionally
-			# restricted to `destructible_locals`.  Strings and
-			# arrays have their own parallel ownership-tracking
-			# machinery (`_release_all_locals` /
-			# `_drop_all_arrays`, plus `moved_out_locals` /
+			# diagnosis; array half retired 2026-07-19): the
+			# consultation is intentionally restricted to
+			# `destructible_locals`.  STRINGS have their own
+			# parallel ownership-tracking machinery
+			# (`_release_all_locals` plus `moved_out_locals` /
 			# `owned_values`) that pre-dates the ledger; folding
-			# string/array MUST_NOT_DROP verdicts into
+			# string MUST_NOT_DROP verdicts into
 			# `skip_cleanup_locals` interferes with that machinery
 			# in subtle ways (caught by the 0.27.145 memcheck
-			# regression).  Strings/arrays remain on legacy
-			# authority on this track; their swap to ledger
-			# authority is separate work.
+			# regression).  Strings remain on legacy authority on
+			# this track; their swap to ledger authority is
+			# separate work.  ARRAYS are no longer anyone's here:
+			# scope-exit array drops are cleanup_authoring's
+			# (string-arc-endgame-array-sweep), and returned arrays
+			# are Return-as-move at its ledger.
 			# Destructor `self` and variant zero-tag widening
 			# remain site-local (sub-steps 2 and 3).
 			if _ledger is not None:
 				_ledger_point = (block.name, len(block.instructions))
 				# **Authority boundary** (post-2026-04-25 site-3 String
-				# migration ATTEMPT + revert).  This consultation
-				# covers DESTRUCTIBLES only.  Strings and Arrays remain
-				# under `string_arc.py`'s post-rewrite alias-walk
-				# authority (lines 1486-1491 above).
+				# migration ATTEMPT + revert; array half retired
+				# 2026-07-19).  This consultation covers DESTRUCTIBLES
+				# only.  STRINGS remain under `string_arc.py`'s
+				# post-rewrite alias-walk authority (the String-only
+				# LoadLocal walk above); scope-exit ARRAY drops are
+				# cleanup_authoring's.
 				#
 				# **Why strings/arrays are NOT here**: `string_arc` is a
 				# late-rewrite pass that synthesises `StringRetain` /
-				# `StringRelease` (and the `_drop_all_arrays`
-				# equivalent) AFTER the ledger is built.  For Strings
+				# `StringRelease` AFTER the ledger is built (the
+				# Return-boundary array sweep is gone since B-U).  For Strings
 				# specifically, the return-value handler retains-wraps
 				# the returned value (caller gets a fresh +1 via
 				# StringRetain; function still owns the local's
@@ -2591,67 +2602,23 @@ def insert_string_arc(
 					)
 					if _sv is _DropVerdict.MUST_NOT_DROP:
 						skip_cleanup_locals.add(_sl)
-			# ARRAY RELEASE ELISION (2026-07-13 slice; Slice 3
-			# measurement GO — SLICE3-ARRAY-MEASUREMENT.md): Array
-			# locals whose return-boundary ledger verdict is
-			# MUST_NOT_DROP are elided from the sweep.  The measurement
-			# proved the sweep is a legacy backstop over dead storage:
-			# 156,308 swept drops corpus-wide with ZERO live and ZERO
-			# must_drop — 141,391 uninit + 10,297 moved_out (both
-			# provably nothing-owned; MOVED_OUT storage is zero-backed
-			# by the MoveOut expansion) + 4,620 maybe_uninit.
-			# PATH_DEPENDENT keeps today's unconditional null-safe drop
-			# (first-slice discipline, exactly mirroring the String
-			# elision above).  Live arrays never reach the sweep
-			# (cleanup_authoring owns their drops; return sources are
-			# alias-walk skipped) — and if one ever did, MUST_DROP is
-			# not elided.  The 0.27.145-class hazard does not apply to
-			# arrays: there is no late retain-wrap at the array return
-			# boundary (return-by-move only), so the lattice's
-			# MOVED_OUT verdict is not invalidated post-rewrite (pinned
-			# by the heap-Array<String> memcheck rows in
-			# lang/tests/memcheck/test_array_release_elision.py).
-			# Strings untouched — the separate fold above.
-			if _ledger is not None:
-				_ledger_point_arr = (block.name, len(block.instructions))
-				for _al in sorted(array_locals):
-					if _al in skip_cleanup_locals:
-						continue
-					_al_ty = local_types.get(_al)
-					if _al_ty is None:
-						continue
-					try:
-						_al_nd = bool(_compute_drop_policy(type_table, _al_ty).needs_drop)
-					except Exception:
-						# Unknown policy → conservative: keep the drop.
-						continue
-					_av = _ledger.verdict_at(
-						_ledger_point_arr,
-						_al,
-						needs_drop=_al_nd,
-					)
-					if _av is _DropVerdict.MUST_NOT_DROP:
-						skip_cleanup_locals.add(_al)
-			if _audit is not None:
-				# Slice 3 measurement (report-only): record each Array
-				# local the return-boundary sweep is about to drop, with
-				# its DropPolicy needs_drop axis — the reporter derives
-				# the raw-state/verdict mix that sizes the Array
-				# release-elision win.  Same boundary-point convention
-				# as note_return_boundary.  The drop-before-overwrite
-				# array drop (StoreLocal path) is deliberately OUT of
-				# this measurement's scope.
-				_ad_point = (block.name, len(block.instructions))
-				for _adl in sorted(array_locals):
-					if _adl in skip_cleanup_locals:
-						continue
-					_ad_ty = local_types.get(_adl)
-					try:
-						_ad_nd = bool(_compute_drop_policy(type_table, _ad_ty).needs_drop) if _ad_ty is not None else False
-					except Exception:
-						_ad_nd = False
-					_audit.note_array_drop(_adl, point=_ad_point, needs_drop=_ad_nd)
-			_drop_all_arrays(new_instrs, skip_locals=skip_cleanup_locals)
+			# NO Return-boundary array sweep here (B-U,
+			# string-arc-endgame-array-sweep, 2026-07-19): the sweep,
+			# its MUST_NOT_DROP elision fold, and the Slice-3
+			# measurement notes were DELETED after the bijection
+			# measurement proved the residual population was exactly
+			# two classes — 3,696 proven no-ops over storage already
+			# zeroed by complete flag-guarded cleanup (the
+			# `{blk}_cleanup_post_{local}` shapes), and 924 live
+			# close-error-arm drops now AUTHORED by cleanup_authoring's
+			# unguarded zero-storage branch at their CleanupHook
+			# (verified corpus-exact: +924 events/moveout/zero-safe,
+			# sweep counters 4,620 → 3,696 → 0).  cleanup_authoring is
+			# the SOLE authority for scope-exit array drops; the
+			# overwrite-path `_drop_array_local` caller is untouched,
+			# and the entry-block array zero-init above SURVIVES (the
+			# zero-safety proof depends on it — endgame-inventory
+			# item).
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
 			if _audit is not None:
 				_audit.note_return_boundary(
@@ -2666,10 +2633,14 @@ def insert_string_arc(
 			# to detect "assigned on some predecessor paths but not
 			# all"; the lattice answers the same question via
 			# `MAYBE_UNINIT → PathDependent`.  Site 3 keeps one
-			# explicit policy axis: `variant_zero_tag_drop_safe(ty,
-			# table)` — variant types whose tag-0 destructor is a
-			# no-op.  Live paths get their drop; uninit paths drop
-			# the PHI-zero storage harmlessly.
+			# explicit policy axis: `zero_storage_drop_safe(ty,
+			# table)` — types whose zeroed-storage drop is a no-op
+			# (variants via tag-0 dispatch; arrays via the zeroed
+			# header — though arrays are excluded from
+			# `destructible_locals` and cannot reach this loop; the
+			# widened call satisfies the no-variant-only-name
+			# migration rule).  Live paths get their drop; uninit
+			# paths drop the PHI-zero storage harmlessly.
 			# Carrier (0.27.145 fix): pinned by
 			# `lang/tests/codegen/e2e/scope_drop_conditional_move/`
 			# + `lang/tests/memcheck/test_scope_drop_conditional_move.py`.
@@ -2678,7 +2649,7 @@ def insert_string_arc(
 					if _local in initialized_at_return or _local in skip_cleanup_locals:
 						continue
 					_local_ty = local_types.get(_local)
-					if _local_ty is None or not variant_zero_tag_drop_safe(_local_ty, type_table):
+					if _local_ty is None or not _zero_storage_drop_safe(_local_ty, type_table):
 						continue
 					_verdict = _ledger.verdict_at(
 						_ledger_point,
@@ -2800,7 +2771,7 @@ def insert_string_arc(
 			# zero-safety predicate cleanup_authoring used to author the
 			# unguarded cleanup arm.
 			func=func,
-			zero_safe_ty=lambda _tid: variant_zero_tag_drop_safe(_tid, type_table),
+			zero_safe_ty=lambda _tid: _zero_storage_drop_safe(_tid, type_table),
 		)
 
 	return func

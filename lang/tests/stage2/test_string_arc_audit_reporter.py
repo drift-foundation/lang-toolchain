@@ -368,69 +368,30 @@ def test_c3_zero_safe_ladder_requires_drop_pairing_and_predicate() -> None:
 	assert unpaired_moved_out.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, unpaired_moved_out
 
 
-def test_arraydrop_measurement_mix_and_inertness() -> None:
-	"""Slice 3 (report-only): `note_array_drop` records the return-
-	boundary Array sweep into a SEPARATE inventory — the reporter derives
-	the raw-state and verdict mix, and the string-side counters stay
-	byte-identical by construction (`events` counts string stake events
-	only; array drops must not touch it)."""
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func(
-		"ad", params=[],
-		locals_=["x", "y", "m", "u"],
-		types={"x": string_ty, "y": string_ty, "m": string_ty, "u": string_ty},
-	)
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%c", value="a"),
-		M.StoreLocal(local="x", value="%c"),
-		M.StoreLocal(local="y", value="%c"),
-		M.MoveOut(dest="%m0", local="x", ty=string_ty),
-		M.StoreLocal(local="m", value="%m0"),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	_attach_ledger(func)
-	l_pre = getattr(func, "_ownership_ledger")
-	boundary = ("entry", len(entry.instructions))
-	audit = R.StringArcAudit("test::ad")
-	audit.note_array_drop("y", point=boundary, needs_drop=True)   # LIVE -> must_drop
-	audit.note_array_drop("x", point=boundary, needs_drop=True)   # MOVED_OUT -> must_not_drop
-	audit.note_array_drop("u", point=boundary, needs_drop=True)   # UNINIT -> must_not_drop
-	audit.note_array_drop("m", point=boundary, needs_drop=False)  # LIVE but drop-free type -> must_not_drop
-	agg = audit.finalize(l_pre=l_pre, l_post=None, needs_drop=lambda _l: True)
-	# The mix.
-	assert agg.get("site_class:scope_exit_arraydrop") == 4, agg
-	assert agg.get("arraydrop_state:live") == 2, agg
-	assert agg.get("arraydrop_state:moved_out") == 1, agg
-	assert agg.get("arraydrop_state:uninit") == 1, agg
-	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
-	assert agg.get("arraydrop_verdict:must_not_drop") == 3, agg
-	# Inertness: no string stake events were involved — the string-side
-	# event counter and divergence classes are untouched.
-	assert agg.get("events") == 0, agg
-	assert agg.get(R.DIV_UNCLASSIFIED, 0) == 0, agg
+# test_arraydrop_measurement_mix_and_inertness RETIRED with the
+# review-closure round of string-arc-endgame-array-sweep (2026-07-19):
+# its subject — the `note_array_drop` direct API and the arraydrop
+# counter aggregation — was deleted with the reporter note surface
+# (the sweep it measured died in B-U; no compatibility consumer of
+# the counters exists).  A resurrected `scope_exit_arraydrop` tag now
+# counts UNTAGGED, which is a hard corpus gate.
 
 
 def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) -> None:
-	"""End-to-end coverage of the string_arc NOTE SITE (the direct-API pin
-	above does not exercise it) AND of the Array release-elision fold:
-	insert_string_arc over a func with real Array locals reaching the
-	return-boundary sweep, audit env on.
+	"""B-U RETIREMENT pin (string-arc-endgame-array-sweep, 2026-07-19;
+	checkpoint §6 pin 6, unit half — formerly the Array
+	release-elision pin, reworked when the sweep it pinned was
+	DELETED): insert_string_arc over real Array locals at a Return
+	boundary AUTHORS NOTHING for them —
 
-	- `a_uninit` (never written → UNINIT) and `a_live` (zero-init-stored
-	  → TOMBSTONED) have MUST_NOT_DROP boundary verdicts → their sweep
-	  drops are ELIDED and nothing is recorded for them;
-	- `sink` (holds a moved-in array → LIVE, MUST_DROP) keeps its sweep
-	  drop and is the recorded row — the live-direction guard;
-	- `a_moved` is moved out IN the return block, so string_arc's own
-	  `moved_out_locals` fold puts it in skip_cleanup_locals → the sweep
-	  skips it and it must NOT be recorded;
-	- the OUTPUT-MIR ArrayDrop counts prove the elision in emission, not
-	  just the audit view (drop-before-overwrite drops are out of the
-	  elision's scope and remain)."""
+	- ZERO scope_exit_arraydrop notes (the note site died with the
+	  sweep; the class would be a regression);
+	- ZERO Return-boundary ArrayDrop emissions for ANY local, LIVE
+	  `sink` included — scope-exit array drops are cleanup_authoring's
+	  sole authority (hook-authored; this bare carrier has no hooks,
+	  which is exactly why arc must not backstop it);
+	- the drop-before-overwrite StoreLocal drops (a_live/a_moved/sink
+	  overwrite path) are OUT of scope and remain."""
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -455,27 +416,19 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 	_attach_ledger(func)
 	insert_string_arc(func, type_table=tt, fn_infos={})
 	agg = _fn_agg(out, "test::asw")
-	# ARRAY RELEASE ELISION (emission slice): MUST_NOT_DROP boundary
-	# verdicts are now ELIDED from the sweep — a_uninit (UNINIT) and
-	# a_live (zero-init-stored → TOMBSTONED) no longer emit or record a
-	# drop.  Only `sink` (holds the moved-in array — LIVE, MUST_DROP)
-	# is swept; a_moved stays skipped via the moved_out_locals fold.
-	# This doubles as the LIVE-direction pin: a live array's sweep drop
-	# must never be elided.
-	assert agg.get("site_class:scope_exit_arraydrop") == 1, agg
-	assert agg.get("arraydrop_state:live") == 1, agg
-	assert agg.get("arraydrop_verdict:must_drop") == 1, agg
-	assert agg.get("arraydrop_state:uninit") is None, agg
-	assert agg.get("arraydrop_state:tombstoned") is None, agg
-	assert agg.get("arraydrop_state:moved_out") is None, agg
-	assert agg.get("arraydrop_verdict:must_not_drop") is None, agg
-	# The elision is real in the OUTPUT MIR, not just the audit view.
-	# Count ArrayDrops per SOURCE local (via the LoadLocal feeding each
-	# drop).  a_live/a_moved keep exactly ONE drop each — the
-	# drop-before-overwrite emitted at their StoreLocal, which is OUT of
-	# this slice's scope — but their RETURN-SWEEP drop is gone (pre-
-	# elision a_live had 2).  sink keeps its sweep drop (LIVE);
-	# a_uninit has none at all.
+	# The sweep and its note site are GONE: no scope_exit_arraydrop
+	# key may appear — for any state, any verdict.
+	assert not any(
+		k.startswith(("site_class:scope_exit_arraydrop", "arraydrop_"))
+		for k in agg
+	), agg
+	# And the OUTPUT MIR carries only the drop-before-overwrite drops
+	# (StoreLocal path — out of scope): a_live/a_moved/sink each keep
+	# exactly the ONE overwrite drop their StoreLocal produced;
+	# a_uninit has none; NO local gains a Return-boundary drop (LIVE
+	# `sink` included — cleanup_authoring's hooks are the sole
+	# scope-exit authority, and this bare carrier deliberately has
+	# none).
 	loaded_by = {}
 	drop_counts: dict = {}
 	for blk in func.blocks.values():
@@ -485,18 +438,21 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 			elif type(ins).__name__ == "ArrayDrop":
 				src = loaded_by.get(getattr(ins, "array", None))
 				drop_counts[src] = drop_counts.get(src, 0) + 1
-	# sink = 2: its own StoreLocal's drop-before-overwrite + the KEPT
-	# sweep drop (LIVE at the boundary).
-	assert drop_counts.get("sink", 0) == 2, drop_counts
+	assert drop_counts.get("sink", 0) == 1, drop_counts
 	assert drop_counts.get("a_uninit", 0) == 0, drop_counts
 	assert drop_counts.get("a_live", 0) == 1, drop_counts
 	assert drop_counts.get("a_moved", 0) == 1, drop_counts
 
 
 def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) -> None:
-	"""First-slice discipline: a PATH_DEPENDENT array boundary verdict
-	keeps today's unconditional null-safe drop — only MUST_NOT_DROP is
-	elided."""
+	"""B-U rework (formerly: PATH_DEPENDENT sweep drop KEPT — the
+	first-slice elision discipline; that sweep is DELETED): a
+	PATH_DEPENDENT array at the Return boundary now gets NO drop from
+	string_arc at all — its drop is authored upstream by
+	cleanup_authoring's unguarded zero-storage branch at the
+	CleanupHook (pinned in test_cleanup_authoring.py::
+	test_authoring_emits_unguarded_drop_for_path_dependent_array; this
+	bare carrier has no hook, so the correct arc output is NOTHING)."""
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -521,10 +477,17 @@ def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) ->
 	insert_string_arc(func, type_table=tt, fn_infos={})
 	agg = _fn_agg(out, "test::apd")
 	# arr at the join boundary: LIVE on the init path, UNINIT on the
-	# else path → MAYBE_UNINIT → PATH_DEPENDENT → drop KEPT.
-	assert agg.get("site_class:scope_exit_arraydrop") == 1, agg
-	assert agg.get("arraydrop_state:maybe_uninit") == 1, agg
-	assert agg.get("arraydrop_verdict:path_dependent") == 1, agg
+	# else path → MAYBE_UNINIT → PATH_DEPENDENT.  Post-B-U the sweep
+	# is gone: no arraydrop key, and no ArrayDrop in the join block.
+	assert not any(
+		k.startswith(("site_class:scope_exit_arraydrop", "arraydrop_"))
+		for k in agg
+	), agg
+	join_drops = [
+		ins for ins in func.blocks["join"].instructions
+		if type(ins).__name__ == "ArrayDrop"
+	]
+	assert not join_drops, join_drops
 
 
 def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
@@ -2420,3 +2383,55 @@ def test_retired_c4_moved_out_release_fails_loudly(monkeypatch, tmp_path: Path) 
 	assert fn_recs, "per-fn record expected (unclassified forces emission via details)"
 	kinds = [d.get("kind") for d in fn_recs[0].get("details", [])]
 	assert "moved_out_release_regression_retired_c4" in kinds, fn_recs[0]
+
+
+def test_c3_paired_maybe_uninit_array_moveout_is_zero_safe() -> None:
+	"""B-M pin (maintainer spec pin 3): a PAIRED (moveout_feeds_drop)
+	MAYBE_UNINIT ARRAY MoveOut classifies `c3_moveout_zero_safe`
+	through the PRODUCTION predicate (`zero_storage_drop_safe` — the
+	Arm M authored-cleanup shape once arrays take unguarded
+	authoring)."""
+	from lang.driftc.stage2.drop_policy_compute import zero_storage_drop_safe
+	tt = TypeTable()
+	string_ty = tt.ensure_string()
+	arr_ty = tt.new_array(string_ty)
+	bool_ty = tt.ensure_bool()
+	func = _make_func("zarr", params=["b"], locals_=["b", "a"],
+		types={"b": bool_ty, "a": arr_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.terminator = M.IfTerminator(cond="b", then_target="thn", else_target="join")
+	thn = M.BasicBlock(name="thn")
+	thn.instructions = [
+		M.ArrayLit(dest="%t", elem_ty=string_ty, elements=[]),
+		M.StoreLocal(local="a", value="%t"),
+	]
+	thn.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	join.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "thn": thn, "join": join}
+	func.entry = "entry"
+	_attach_ledger(func)
+	l_pre = getattr(func, "_ownership_ledger")
+
+	def run(feeds_drop: bool) -> dict:
+		audit = R.StringArcAudit("test::zarr")
+		audit.note(
+			R.STAKE_MOVEOUT_EXPANSION, "a", R.SITE_CLASS_MOVEOUT_EXPANSION,
+			pre_point=("join", 0), post_point=("join", 0),
+			moveout_feeds_drop=feeds_drop,
+		)
+		return audit.finalize(
+			l_pre=l_pre, l_post=None, needs_drop=lambda _l: True,
+			func=func, zero_safe_ty=lambda t: zero_storage_drop_safe(t, tt),
+		)
+
+	paired = run(True)
+	assert paired.get(R.AGREE_C3_ZERO_SAFE, 0) == 1, paired
+	assert paired.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, paired
+	# Pin 4 (maintainer spec): the UNPAIRED Array MoveOut — a
+	# store/call consumer of maybe-uninit array storage, the
+	# value-corruption class — remains DIVERGENT and hard-gated; the
+	# predicate cannot substitute for the drop pairing.
+	unpaired = run(False)
+	assert unpaired.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, unpaired
+	assert unpaired.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, unpaired

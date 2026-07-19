@@ -1,6 +1,46 @@
 # Drift development history
 
-## 2026-07-17 (0.33.84: TLR-8 — moved String operand in concatenation ICE'd; MoveOut joins the materialized-release family; ABI stays 21)
+## 2026-07-19 (0.33.85: Return-boundary Array sweep retired — cleanup_authoring is the sole scope-exit array authority; generic zero-storage drop predicate; ABI stays 21)
+
+string_arc's Return-boundary array sweep (`_drop_all_arrays`) is
+deleted. A corpus bijection measurement proved its residual emissions
+were exactly two classes: 3,696 no-op drops over storage already
+zeroed by complete flag-guarded cleanup, and 924 live drops on
+`std.fs::read_to_bytes`'s close-error arm — the latter now AUTHORED
+by cleanup_authoring's unguarded zero-storage branch at the existing
+CleanupHook (verified corpus-exact before deletion: +924
+events/moveout-expansion/zero-safe, sweep counters 4,620 → 3,696 → 0;
+all other counters byte-identical).
+
+- **New policy axis** `drop_policy_compute.zero_storage_drop_safe`
+  (variants via tag-0 dispatch; arrays via the zeroed header) replaces
+  the variant-only `variant_zero_tag_drop_safe` for EVERY production
+  decision — cleanup_authoring's PathDependent resolution, drop_flags
+  candidate admission (arrays are never flag-admitted via the
+  hook criterion), the ownership-ledger reporter's zero-safe C3 leg,
+  and string_arc's site-3 widening. The variant-named shim survives
+  for tests only, enforced by a fail-closed source-scan pin.
+- **RAII-order note**: the 924 migrated live drops move from the
+  sweep's sorted-name position at Return to their CleanupHook's
+  reverse-declaration RAII position, normalizing path-dependent
+  arrays onto the order contract live arrays already follow (pinned
+  by a runtime destroy-order carrier; the fs.drift site itself has
+  Byte elements — no observable destructor reordering there).
+- Flag-managed path-dependent arrays (e.g. std.json's parse
+  accumulators) deliberately keep their existing flag-guarded
+  cleanup in this release; unifying them under unguarded authoring
+  is a recorded follow-up.
+- Also in this release: string_arc's recognition consistency guards
+  (ConstString/StringFrom*/Concat re-adds + the prepass subtraction)
+  deleted under the output-equivalence proof — corpus-verified
+  every-counter-+0 on its own gate.
+
+Compiler-internal ownership/cleanup change only; no runtime or
+boundary contract change — ABI stays 21. The entry-block array
+zero-init remains in string_arc (the zero-safety proof depends on
+it) and is tracked on the string_arc endgame inventory.
+
+## 2026-07-17 (0.33.84: TLR-8 — moved String operand in concatenation ICE'd; MoveOut joins the materialized-release family; also ships Array release-elision; ABI stays 21)
 
 Fixes a 0.33.83 regression: any String concatenation with a `move`d
 operand (`"lit" + move s`) aborted with the string_arc release-arm
@@ -25,6 +65,21 @@ expansion arm's owned/move-only re-add is guarded on recognition, the
 TLR-6 pattern). Consumed move dests (`return move x`, by-value call
 args, stores) are unaffected. Compiler-internal ownership-pass change
 only; no runtime or boundary contract change — ABI stays 21.
+
+**Also in this release: Array release-elision** (landed 2026-07-14;
+its version bump was deferred to the next release, which is this
+one). string_arc's Return-boundary array sweep now consults the
+ownership ledger exactly like the String release-elision: Array
+locals whose boundary verdict is MUST_NOT_DROP skip the sweep;
+PATH_DEPENDENT locals keep the unconditional null-safe drop; unknown
+DropPolicy or no ledger falls back to legacy behavior. Corpus-wide
+the sweep's emissions dropped 156,308 → 4,620 (the residual is
+exactly the path-dependent population); String counters were
+byte-identical. Regression coverage: elision + PATH_DEPENDENT-kept
+pins and the heap-backed Valgrind carrier
+`lang/tests/memcheck/test_array_release_elision.py`
+(live-at-exit / moved-to-caller / conditionally-moved rows).
+Emission reduction only; no runtime or boundary contract change.
 
 ## 2026-07-13 (0.33.83: match ownership enforcement — three silent zero-read LANGUAGE_BUGs fixed; SOURCE-COMPAT BREAK in match arms; ABI stays 21)
 

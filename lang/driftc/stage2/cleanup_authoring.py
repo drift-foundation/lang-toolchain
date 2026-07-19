@@ -34,13 +34,18 @@ in MIR.
 
 Emission shapes per candidate:
 
-  * **Unguarded** — `MUST_DROP` or variant zero-tag `PathDependent`.
-    Inline `MoveOut + DropValue` at the hook position.  If the local
-    is flag-managed by `drop_flags`, a flag-clear `StoreLocal(flag,
-    false)` follows.  Uniform invariant: "flag bit ≡ currently owns
-    destructible storage."
+  * **Unguarded** — `MUST_DROP`, or zero-storage-drop-safe
+    `PathDependent` (`drop_policy_compute.zero_storage_drop_safe`:
+    variants via tag-0 dispatch, and — since
+    string-arc-endgame-array-sweep, 2026-07-19 — NON-flag-managed
+    arrays via the zeroed header; flag-managed arrays keep the
+    guarded branch for slice counter-neutrality, unification
+    recorded as a follow-up).  Inline `MoveOut + DropValue` at the
+    hook position.  If the local is flag-managed by `drop_flags`, a
+    flag-clear `StoreLocal(flag, false)` follows.  Uniform
+    invariant: "flag bit ≡ currently owns destructible storage."
 
-  * **Per-arm edge-elaborated** — `PathDependent` non-variant +
+  * **Per-arm edge-elaborated** — `PathDependent` flag-managed +
     every hook candidate is flag-managed AND every predecessor edge
     of the hook block has a determinable LIVE/MOVED/UNINIT state
     (no `MAYBE_UNINIT`).  For each LIVE predecessor edge, emit
@@ -52,17 +57,18 @@ Emission shapes per candidate:
     primary path for the Bug 2 carrier (conditional move inside a
     loop body).
 
-  * **Flag-guarded fallback** — `PathDependent` non-variant +
-    flag-managed, when per-arm aborts (any predecessor edge is
+  * **Flag-guarded fallback** — `PathDependent` flag-managed,
+    when per-arm aborts (any predecessor edge is
     `MAYBE_UNINIT` — upstream merge unresolvable without
     recursion, which Phase 1 declines).  At the hook position:
     split the block, emit `LoadLocal(flag) → IfTerminator(flag,
     drop_blk, post_blk)`; `drop_blk` runs the canonical
     `MoveOut + DropValue + flag-clear` and goes to `post_blk`.
 
-  * **Skip / tripwire** — `PathDependent` non-variant + NOT
-    flag-managed.  Emits a `path_dependent_non_variant_skip`
-    telemetry record and skips.  Post Bug 2 this fires only for
+  * **Skip / tripwire** — `PathDependent` zero-storage-UNSAFE +
+    NOT flag-managed.  Emits a `path_dependent_non_variant_skip`
+    telemetry record (tag name kept for triage-tooling stability)
+    and skips.  Post Bug 2 this fires only for
     shapes `drop_flags` planning did not select; useful as a
     regression detector if any real Drift code hits it.
 
@@ -106,7 +112,7 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
-from lang.driftc.core.types_core import TypeId, TypeTable
+from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import cfg as _cfg
@@ -117,23 +123,24 @@ from .ledger_cache import (
 	maybe_fresh_ledger,
 )
 from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
-from .drop_policy_compute import compute_drop_policy
-from .string_arc import variant_zero_tag_drop_safe
+from .drop_policy_compute import compute_drop_policy, zero_storage_drop_safe
 
 
-# Patch-2 reason tag for the non-variant + PathDependent skip case.
-# Site 1's legacy `_moved_locals` would have skipped here too; this
-# tag makes the case visible in observe so we can detect any real
-# Drift code that hits it.  Post Bug 2 architecture flip: this tag
-# fires ONLY when the local is NOT flag-managed; flag-managed
-# non-variant PathDependent now takes the guarded-emit branch.
+# Patch-2 reason tag for the zero-storage-UNSAFE + PathDependent
+# skip case (tag name kept for triage-tooling stability).  Site 1's
+# legacy `_moved_locals` would have skipped here too; this tag makes
+# the case visible in observe so we can detect any real Drift code
+# that hits it.  Post Bug 2 architecture flip: fires ONLY when the
+# local is NOT flag-managed; flag-managed PathDependent takes the
+# guarded-emit branch, and zero-storage-SAFE PathDependent
+# (variants; unflagged arrays) takes unguarded authoring.
 _REASON_PATH_DEPENDENT_NON_VARIANT_SKIP = "path_dependent_non_variant_skip"
 
 # Bug 2 architecture flip telemetry tags (2026-05-15).
 _REASON_PATH_DEPENDENT_FLAG_GUARDED_EMIT = "path_dependent_flag_guarded_emit"
 _REASON_MUST_DROP_FLAG_CLEAR = "must_drop_flag_clear"
 # Per-arm edge elaboration (2026-05-15) — Bug 2 architecture: a
-# non-variant PathDependent candidate at a CleanupHook is resolved
+# flag-managed PathDependent candidate at a CleanupHook is resolved
 # by emitting MoveOut + DropValue + flag-clear on each predecessor
 # edge where the local is LIVE.  No emission at the hook itself
 # (the merge becomes uniformly MOVED_OUT, which the ledger handles
@@ -218,14 +225,16 @@ def author_cleanup(
 	Bug 2 architecture flip (2026-05-15): this pass is the SOLE
 	emitter of cleanup drops.  Three emit shapes:
 
-	  - **Unguarded MUST_DROP** (or variant zero-tag PathDependent):
+	  - **Unguarded MUST_DROP** (or zero-storage-drop-safe
+	    PathDependent — variants, and non-flag-managed arrays since
+	    string-arc-endgame-array-sweep):
 	    inline `MoveOut + DropValue` at the hook position.  If the
 	    local is flag-managed (`_drop_flag_managed_locals`), the
 	    sequence is followed by a flag clear `StoreLocal(flag,
 	    false)` — uniform invariant: "flag bit ≡ currently owns
 	    destructible storage."
 
-	  - **Guarded non-variant PathDependent + flag-managed**: split
+	  - **Guarded PathDependent + flag-managed**: split
 	    the block at the hook position; emit
 	    `LoadLocal(flag) → IfTerminator(flag, drop_blk, post_blk)`;
 	    drop_blk contains `MoveOut + DropValue + flag clear` and
@@ -234,10 +243,10 @@ def author_cleanup(
 	    original CleanupHook position, NOT at next-overwrite or
 	    function exit.
 
-	  - **Skip** (non-variant PathDependent + not flag-managed):
-	    `path_dependent_non_variant_skip` tripwire (unchanged
-	    behaviour; signals any shape that drop_flags planning did
-	    not select).
+	  - **Skip** (zero-storage-UNSAFE PathDependent + not
+	    flag-managed): `path_dependent_non_variant_skip` tripwire
+	    (tag name kept for triage-tooling stability; signals any
+	    shape that drop_flags planning did not select).
 	"""
 	# Pass-entry consumer site.  Use `maybe_fresh_ledger` (soft form)
 	# because cleanup_authoring legitimately no-ops when no ledger is
@@ -363,9 +372,27 @@ def author_cleanup(
 			if verdict is DropVerdict.MUST_DROP:
 				kind = _KIND_UNGUARDED
 			elif verdict is DropVerdict.PATH_DEPENDENT:
-				if variant_zero_tag_drop_safe(ty, type_table):
+				# B-M (string-arc-endgame-array-sweep, 2026-07-19): the
+				# zero-storage axis is the extracted
+				# `zero_storage_drop_safe` (variants + arrays; the
+				# variant-only name is retired from production).
+				# VARIANTS keep today's decision exactly: predicate
+				# wins even when flag-managed (unguarded + flag-clear).
+				# ARRAYS take unguarded authoring ONLY when NOT
+				# flag-managed — flag-managed arrays (e.g. the
+				# std.json parse accumulators, 2a-admitted) keep their
+				# existing guarded authority so this slice's
+				# acceptance stays exactly ±924; unifying them under
+				# unguarded is a recorded follow-up with its own
+				# predicted-delta acceptance.
+				_zs = zero_storage_drop_safe(ty, type_table)
+				_flagged = local in flag_managed and local in flag_for
+				if _zs and (
+					type_table.get(ty).kind is not TypeKind.ARRAY
+					or not _flagged
+				):
 					kind = _KIND_UNGUARDED
-				elif local in flag_managed and local in flag_for:
+				elif _flagged:
 					kind = _KIND_GUARDED
 				else:
 					kind = _KIND_SKIP
@@ -790,15 +817,15 @@ def _emit_decision_record(
 	  - emit + MUST_DROP, not flag-managed → `needs_drop`
 	  - emit + MUST_DROP, flag-managed → `must_drop_flag_clear`
 	    (Carrier 7 — uniform flag-clear invariant)
-	  - emit + PathDependent variant-widening → `needs_drop`
-	  - emit + PathDependent non-variant, flag-managed, edge-
-	    elaborated (per-arm Phase 1) →
-	    `path_dependent_edge_elaborated_emit`
-	  - emit + PathDependent non-variant, flag-managed (guarded
-	    fallback) → `path_dependent_flag_guarded_emit`
-	  - skip + PathDependent non-variant, not flag-managed →
-	    `path_dependent_non_variant_skip` (tripwire — signals any
-	    shape drop_flags planning did not select)
+	  - emit + PathDependent zero-storage-safe widening (variants;
+	    unflagged arrays) → `needs_drop`
+	  - emit + PathDependent flag-managed, edge-elaborated (per-arm
+	    Phase 1) → `path_dependent_edge_elaborated_emit`
+	  - emit + PathDependent flag-managed (guarded fallback) →
+	    `path_dependent_flag_guarded_emit`
+	  - skip + PathDependent zero-storage-UNSAFE, not flag-managed →
+	    `path_dependent_non_variant_skip` (tripwire, historical tag
+	    name — signals any shape drop_flags planning did not select)
 	  - skip + state=MOVED_OUT → `moved_unconditional`
 	  - skip + other → `not_drop_needing`
 	"""

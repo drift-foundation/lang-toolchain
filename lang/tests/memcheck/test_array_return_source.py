@@ -23,9 +23,13 @@ that `test_site3_return_source_alias_walk.py` deliberately pins
 only the String shapes and explicitly leaves Array as a future
 focus pin (lines 49-61 of that file).  The String alias-walk
 branch is load-bearing because of the late-rewrite `StringRetain`
-synthesis; the Array branch has no analogous synthesis and the
-audit concluded it is structurally dead under current semantics.
-This carrier closes that gap with valgrind-level evidence.
+synthesis; the Array half of that alias-walk skip had no analogous
+synthesis, was concluded structurally dead by the audit, and was
+REMOVED in the review-closure round of string-arc-endgame-array-
+sweep (2026-07-19) — the alias walk is String-only now, and
+scope-exit array drops are cleanup_authoring's (Return-as-move at
+the ledger for returned sources).  This carrier keeps the
+valgrind-level evidence for the returned-Array shapes.
 
 The carrier exercises three element-type shapes:
 
@@ -231,7 +235,8 @@ def _assert_valgrind_clean(lost: int, vg_log: str, *, label: str, broken_state_h
 		f"Return-as-move regresses for Arrays: {broken_state_hint}\n"
 		f"Touch points: HIR→MIR explicit-move lowering, "
 		f"`MoveOut + Return` shape recognition in the lattice, "
-		f"function-exit cleanup in `string_arc.py::_drop_all_arrays`.\n\n"
+		f"scope-exit cleanup in `cleanup_authoring.py` (the sole "
+		f"array authority since the sweep's B-U deletion).\n\n"
 		f"Valgrind log tail:\n{vg_log[-1500:]}"
 	)
 	if "Invalid read" in vg_log or "Invalid write" in vg_log or "Invalid free" in vg_log:
