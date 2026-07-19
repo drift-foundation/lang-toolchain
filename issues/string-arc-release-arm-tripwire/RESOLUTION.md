@@ -56,3 +56,27 @@ instead of letting the fail-closed arm mask or leak it.
 Consumed-move dests (`return move x`, by-value call args, stores) are
 unaffected: a CONSUME disposition disqualifies at the calculator, same
 as every other family member.
+
+## Closure (tripwire-deletion slice, 2026-07-18)
+
+- 0.33.84 / ABI 21 CERTIFIED 2026-07-18 with the release-arm tripwire
+  (and the 4a/4b dead-stake tripwires) armed: zero firings through the
+  full suite.  Certified run `20260719-001008-drift-lang-99a68ee`
+  additionally exercised drift-workflows `0251b24` — the corpus that
+  produced this issue's 15 firings — through staging plus normal/debug
+  test, stress, and perf lanes with ZERO tripwire log matches.
+- The deletion condition of RELEASE-ARM-TRIPWIRE-DESIGN.md §8 ("one
+  clean cert cycle with zero firings") is therefore MET, and the arm,
+  its tripwire, and the 4a/4b dead-stake branches were DELETED
+  (work/string-ownership-refactor/TRIPWIRE-DELETION-PLAN.md).
+  `SITE_CLASS_TEMP_LASTUSE_RELEASE` retired from the closed reporter
+  enumeration (future notes count UNTAGGED — hard corpus gate).
+- The TLR-8 semantic regressions this issue produced remain pinned:
+  `test_tlr8_moveout_family` / `test_tlr8_cross_block_moveout` /
+  `test_tlr8_move_operand_concat_end_to_end` and memcheck
+  `test_move_operand_concat_release.py` (all four production shapes).
+  `test_tlr8_moveout_guard_teeth` retired WITH the guard it pinned
+  (the rewrite-loop `recognized_released` re-add guard is dead once no
+  release arm consumes re-owned state — maintainer-confirmed).
+- Folder retained as the historical record of the tripwire's one
+  production catch.

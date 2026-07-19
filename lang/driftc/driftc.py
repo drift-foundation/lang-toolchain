@@ -8207,11 +8207,16 @@ def compile_stubbed_funcs(
 						fn_infos=checked.fn_infos_by_id,
 					)
 				except AssertionError as err:
-					# Slice 4a boundary: string_arc contract failures
-					# (the dead-stake tripwires foremost) surface as a
-					# clean `internal:` diagnostic with a best-effort
-					# span — never a Python traceback.  Same containment
+					# string_arc boundary containment (introduced with
+					# slice 4a): any contract failure in the phase —
+					# e.g. the fn-wide producer or release-recognition
+					# fail-closed checks — surfaces as a clean
+					# `internal:` diagnostic with a best-effort span,
+					# never a Python traceback.  Same containment
 					# pattern as the HIR→MIR lowering wraps above.
+					# (The 4a/4b dead-stake and release-arm tripwires
+					# this wrap originally fronted were deleted
+					# 2026-07-18 after the clean 0.33.84 cert cycle.)
 					_append_boundary_contract_diag(
 						checked,
 						phase="string_arc",

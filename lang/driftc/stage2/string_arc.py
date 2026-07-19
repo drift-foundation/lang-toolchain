@@ -6,15 +6,20 @@ This pass inserts explicit StringRetain/StringRelease (and CopyValue) ops so
 LLVM codegen does not need to guess ownership. It also expands MoveOut into
 LoadLocal + ZeroValue + StoreLocal once retains/releases are inserted.
 
-PIPELINE PRECONDITION (release-arm tripwire slice, 2026-07-16): in
+PIPELINE PRECONDITION (tripwire-deletion slice, 2026-07-18): in
 production, `string_releases.materialize_lastuse_releases` MUST run
 before `insert_string_arc` (the driver's cleanup_authoring loop does).
-The in-pass last-use release arm went corpus-zero when TLR-7 closed the
-family ladder and is now FAIL-CLOSED: bare `insert_string_arc` on MIR
-containing family temps that drain non-consumingly TRIPS by design.
-Direct unit use is valid only for tests that intentionally avoid the
-arm (no family temps, or all consumed / live-out / pre-materialized)
-or intentionally reach it (the tripwire pins).
+string_arc authors NO last-use releases of its own: the in-pass release
+arm went corpus-zero when TLR-7 closed the family ladder, was
+fail-closed through the 0.33.84 cert cycle (release-arm tripwire,
+2026-07-16 — one production catch, TLR-8, fixed in-tree; zero firings
+at cert), and was DELETED together with the 4a/4b dead-stake tripwires
+after that clean cycle.  Bare `insert_string_arc` on MIR containing
+family temps that drain non-consumingly silently UNDER-RELEASES (those
+releases are the materialization pass's job).  Direct unit use is
+valid only for tests that document why their MIR carries no such
+temps (no family producers, or all consumed / live-out /
+pre-materialized).
 """
 
 from __future__ import annotations
@@ -364,11 +369,11 @@ def is_materialized_release_family_producer(
 	string_releases pass instead of string_arc's in-pass bookkeeping.
 	SINGLE SOURCE (replaces the TLR-3 MATERIALIZED_RELEASE_FAMILY tuple):
 	the release-point analysis / recognition (`_analyze_lastuse_block`)
-	consumes this predicate for qualification AND shape rejection, and
-	`_release_arm_tripwire` consumes it for the payload's family flag —
-	they cannot disagree by construction.  (The TLR-1 shim classification
-	in `_note_use` was the third consumer until it retired with the
-	release-arm tripwire slice, 2026-07-16.)  The dest
+	consumes this predicate for qualification AND shape rejection — the
+	single production consumer.  (Historical consumers, both retired:
+	the TLR-1 shim classification in `_note_use`, with the release-arm
+	tripwire slice 2026-07-16; the tripwire's payload family flag, with
+	the tripwire-deletion slice 2026-07-18.)  The dest
 	String-typed-ness condition is the CALLER's (`_is_family_temp`).
 
 	- Unconditional: ConstString (TLR-1/2b), StringConcat (TLR-3),
@@ -785,8 +790,8 @@ def _analyze_lastuse_block(
 	# recognized release must be the unique release of its temp, the
 	# temp's remaining occurrences must all be USE, and the release must
 	# sit immediately after the draining instruction.  Anything else is
-	# fail-closed (same AssertionError → driver-boundary diagnostic path
-	# as the dead-stake tripwires).
+	# fail-closed (AssertionError → the driver's string_arc boundary
+	# wrap → clean `internal:` diagnostic).
 	for temp, rel_idxs in release_sites.items():
 		occs = occurrences.get(temp, [])
 		drain = max((i for i, _d in occs), default=-1)
@@ -1003,9 +1008,11 @@ def insert_string_arc(
 	fn_infos: Mapping[FunctionId, FnInfo],
 ) -> M.MirFunc:
 	# PIPELINE PRECONDITION: run `materialize_lastuse_releases` first in
-	# production — the last-use release arm is fail-closed (see the
-	# module doc and `_release_arm_tripwire`).  Direct unit use only for
-	# tests that intentionally avoid or reach the arm.
+	# production — string_arc authors no last-use releases of its own
+	# (the in-pass arm was deleted with the tripwire-deletion slice,
+	# 2026-07-18; see the module doc).  Direct unit use only for tests
+	# that document why their MIR carries no unmaterialized family
+	# temps.
 	# (`is_destructor_method` was the site-local destructor-self
 	# skip flag; retired in Phase 4 site-3 sub-step 2.  The lattice
 	# now models the destructor's runtime-owned `self` at the
@@ -1253,97 +1260,20 @@ def insert_string_arc(
 		out: list[M.MInstr],
 		site_class: str = _ledger_reporter.SITE_CLASS_VALUE_POSITION_RETAIN,
 	) -> str:
-		if not _is_string_value(val):
-			return val
-		# Slice 4b: the terminal late-retain arm — reached only for a
-		# PROVEN-String value that no move/owned pre-check approved —
-		# is corpus-zero for EVERY remaining site class funneling here
-		# (call_arg_retain, value_position_retain, return_retain_site3;
-		# store_value_retain was rerouted to its own tripwires in 4a)
-		# and is fail-closed.  Only the untyped pass-through above stays
-		# live (the 4a two-arm lesson).  The last-use RELEASE bookkeeping
-		# that used to sit between the pass-through and this tripwire was
-		# REMOVED with the release-arm tripwire slice (2026-07-16): since
-		# 4b it could only execute en route to the unconditional raise
-		# below (the TLR measurement corollary: "dead-in-effect"), and
-		# its audit note polluted the record of a doomed compile.  With
-		# it gone, the in-pass last-use release path is fully fail-closed:
-		# `_note_use`'s arm is `_release_arm_tripwire`; this proven-String
-		# funnel is `_dead_stake_tripwire`.
-		_dead_stake_tripwire(
-			val,
-			site_class=site_class,
-			target=f"late-retain consume ({site_class})",
-			block_name=block.name,
-			idx=_audit_point[0][1],
-		)
-		return val  # unreachable — _dead_stake_tripwire always raises
-
-	def _dead_stake_tripwire(
-		val: str,
-		*,
-		site_class: str,
-		target: str,
-		block_name: str,
-		idx: int,
-	) -> None:
-		"""Shared dead-stake tripwire (string-cleanup slices 4a/4b):
-		every LATE-RETAIN stake class string_arc could still emit —
-		store_value_retain (4a: rerouted store arms), call_arg_retain,
-		value_position_retain, return_retain_site3 (4b: the central
-		`_ensure_owned` retain arm) — is corpus-zero (B-arch drove the
-		inventory 114,107 → 0; the C2 ZeroValue fix removed the last
-		wild carrier) and fail-closed pending deletion after a clean
-		cert cycle.  Only the PROVEN-String retain arm trips; untyped
-		pass-through and move/owned pre-checks are untouched.  The
-		AssertionError is converted to a clean `internal:` diagnostic
-		at the driver's string_arc boundary — operators never see a
-		Python traceback."""
-		producer = "unknown"
-		_blk = func.blocks.get(block_name)
-		if _blk is not None:
-			for _p_ins in _blk.instructions:
-				if getattr(_p_ins, "dest", None) == val:
-					producer = type(_p_ins).__name__
-					break
-		raise AssertionError(
-			f"string_arc dead-stake tripwire [{site_class}]: "
-			f"fn '{func.name}', block '{block_name}'[{idx}], "
-			f"value '{val}' -> {target}, producer={producer}. "
-			f"This stake class is corpus-zero and fail-closed pending "
-			f"deletion (string-cleanup slices 4a/4b). A firing on real "
-			f"source is a LANGUAGE_BUG: file "
-			f"issues/string-arc-dead-stake-tripwire/ with the compiling "
-			f"source and this full message."
-		)
-
-	def _release_arm_tripwire(val: str, *, block_name: str, idx: int) -> None:
-		"""Fail-closed guard on `_note_use`'s last-use release arm
-		(corpus-zero after TLR-7 — see the branch comment).  The payload
-		distinguishes the two firing classes: a STALE UNMIGRATED family
-		temp (family=True: a string_releases/recognition defect) vs a
-		NON-FAMILY owned producer reaching a non-consuming drain
-		(family=False: a new emission shape needing family review).
-		The AssertionError is converted to a clean `internal:`
-		diagnostic at the driver's string_arc boundary — operators never
-		see a Python traceback."""
-		prod = producers_fnwide.get(val)
-		raise AssertionError(
-			f"string_arc release-arm tripwire [lastuse_release_arm]: "
-			f"fn '{func.name}', block '{block_name}'[{idx}], "
-			f"value '{val}', "
-			f"producer={type(prod).__name__ if prod is not None else 'none'} "
-			f"(family={is_materialized_release_family_producer(prod, fn_infos=fn_infos, type_table=type_table)}), "
-			f"use_count=0, consume=False, "
-			f"live_out={val in live_out.get(block_name, set())}. "
-			f"The in-pass last-use release arm is corpus-zero after "
-			f"TLR-7 (every family is pass-materialized and "
-			f"recognition-suppressed); a firing means either a stale "
-			f"unmigrated family temp or a non-family owned producer "
-			f"reaching a non-consuming drain. File "
-			f"issues/string-arc-release-arm-tripwire/ with the "
-			f"compiling source and this full message."
-		)
+		# Tripwire-deletion slice (2026-07-18): identity pass-through.
+		# The terminal late-retain arm that lived here — the single
+		# funnel for call_arg_retain, value_position_retain and
+		# return_retain_site3 stakes — went corpus-zero when B-arch
+		# migrated stake authoring into string_stakes (114,107 → 0),
+		# was fail-closed by the shared dead-stake tripwire (slices
+		# 4a/4b), and was DELETED after the clean 0.33.84 cert cycle
+		# (zero firings; the certified run also exercised the
+		# drift-workflows corpus).  Untyped values keep their
+		# historical pass-through; proven-String values now join it —
+		# staking is owned UPSTREAM by string_stakes, never here.  The
+		# call sites keep the funnel shape so the site_class taxonomy
+		# stays greppable until string_arc itself is deleted.
+		return val
 
 	def _param_is_string(tid: TypeId) -> bool:
 		td = type_table.get(tid)
@@ -1704,10 +1634,14 @@ def insert_string_arc(
 		)
 		# TLR-2b suppression, fn-wide-prepass half: `owned_values` was
 		# seeded above from the fn-wide `owned_defs` prepass, which
-		# registers EVERY ConstString dest — an externally-released temp
-		# must not be owned or `_note_use` emits a second release at the
-		# drain.  (The ConstString rewrite arm below skips its re-add
-		# symmetrically.)
+		# registers EVERY ConstString dest — an externally-released
+		# temp's release is authored by the pass and copied through by
+		# the recognition arm, so it must not look in-pass-owned.
+		# (Since the release arm's deletion, 2026-07-18, owned state of
+		# a recognized temp is inert bookkeeping — this subtraction and
+		# the ConstString/StringFrom*/Concat re-add guards below are
+		# kept for state consistency, not correctness; the
+		# CopyValue/MoveOut guards were deleted with the arm.)
 		owned_values -= recognized_released
 		# Count uses in this block for temp string values.
 		use_counts: Dict[str, int] = {}
@@ -1722,14 +1656,14 @@ def insert_string_arc(
 			if isinstance(dest, str):
 				producers[dest] = instr
 			# String ZeroValue and element-extraction dests carry their
-			# type on the INSTRUCTION; register it before use counting so
-			# the owned/single-use store path sees them even when
-			# upstream metadata omitted the temp from func.local_types.
-			# Without this, a metadata gap makes the slice-4a
-			# store_value tripwire FIRE on an owned value (false
-			# positive: `use_counts` skips untyped values, so
-			# `_can_move_owned_once` can never approve the move) instead
-			# of taking the no-stake/move route.
+			# type on the INSTRUCTION; register it before use counting
+			# so these temps participate in ownership tracking at all
+			# (`use_counts` skips untyped values) even when upstream
+			# metadata omitted them from func.local_types.  Originally
+			# added to keep a metadata gap from false-firing the
+			# slice-4a store_value tripwire; the tripwire is deleted
+			# (2026-07-18) but the visibility this pre-scan provides is
+			# still what keeps these dests owned/moved correctly.
 			if isinstance(instr, M.ZeroValue) and _is_string_tid(instr.ty) and instr.dest not in local_types:
 				local_types[instr.dest] = instr.ty
 			elif (
@@ -1754,24 +1688,12 @@ def insert_string_arc(
 				owned_values.discard(val)
 				move_only_values.discard(val)
 				return
-			if use_counts[val] == 0 and val in owned_values and val not in live_out.get(block.name, set()):
-				# RELEASE-ARM TRIPWIRE (2026-07-16; cert-cycle guard
-				# before deletion).  This condition — an owned String
-				# temp drained to zero non-consumingly, dead after this
-				# block, with NO pre-materialized release recognized —
-				# is an ownership-accounting hole by definition after
-				# TLR-7: every measured population (all family
-				# producers, all CFG shapes, 618,744 lifetime releases)
-				# is authored by the string_releases pass and
-				# recognition-suppressed before this arm can fire.
-				# Releasing here (the pre-TLR behavior) would MASK the
-				# hole.  The TLR-1 option-B shim that lived in this body
-				# retired with it — its classification job ended when
-				# the last family migrated.  Deletion (with 4a'/4b')
-				# waits for a clean cert cycle with zero firings.
-				_release_arm_tripwire(
-					val, block_name=block.name, idx=_audit_point[0][1]
-				)
+			# No last-use release arm here (deleted 2026-07-18 after the
+			# clean 0.33.84 cert cycle held its tripwire at zero
+			# firings): every last-use release of a family temp is
+			# authored by the string_releases pass and copied through by
+			# the recognition arm above.  An owned temp draining to zero
+			# non-consumingly is inert block-local bookkeeping.
 
 		def _can_move_owned_once(val: str) -> bool:
 			return val in owned_values and use_counts.get(val, 0) == 1
@@ -1974,17 +1896,19 @@ def insert_string_arc(
 					)
 				new_instrs.append(M.LoadLocal(dest=instr.dest, local=instr.local))
 				local_types[instr.dest] = instr.ty
-				if _is_string_tid(instr.ty) and instr.dest not in recognized_released:
-					# TLR-8: MoveOut joined the family, and like CopyValue
-					# (TLR-6) this is a LIVE rewrite-loop re-add that runs
-					# AFTER the per-block `owned_values -=
-					# recognized_released` subtraction — without the guard,
-					# a recognized externally-released move temp is
-					# re-owned and `_note_use` TRIPS at the non-consuming
-					# drain (fail-closed release arm).  A recognized temp
-					# has all-USE occurrences by the calculator contract,
-					# so skipping the move_only mark is equally safe: no
-					# consume-approval site can ever ask about it.
+				if _is_string_tid(instr.ty):
+					# TLR-8: MoveOut is family (the dest inherits the
+					# storage local's +1 verbatim).  The
+					# `recognized_released` re-add guard that lived here
+					# (TLR-6/8 teeth) was deleted 2026-07-18 together
+					# with the release arm it protected: recognition
+					# copies the pass-materialized release through
+					# independently of `owned_values`, so a re-owned
+					# recognized temp is inert block-local bookkeeping —
+					# the release arm was the ONLY consumer of that
+					# state, and the all-USE calculator contract keeps
+					# recognized temps away from every consume-approval
+					# site.
 					owned_values.add(instr.dest)
 					move_only_values.add(instr.dest)
 				zero = _new_temp()
@@ -2003,16 +1927,16 @@ def insert_string_arc(
 				continue
 
 			if isinstance(instr, M.ConstString):
-				# TLR-2b suppression: an externally-released temp never
-				# enters `owned_values`, so `_note_use`'s release arm
-				# structurally CANNOT emit a second release for it.
+				# TLR-2b suppression: an externally-released temp stays
+				# out of `owned_values`.  Kept for state consistency
+				# with the per-block subtraction (see its comment) —
+				# inert since the release arm's deletion, 2026-07-18.
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, (M.StringFromInt, M.StringFromBool, M.StringFromUint, M.StringFromFloat, M.StringConcat)):
 				# TLR-3: StringConcat joined the release family; TLR-5:
-				# the StringFrom* members joined too — the recognized
-				# guard (same as the ConstString arm) is live for every
-				# member of this arm now.
+				# the StringFrom* members joined too.  Same
+				# consistency-only guard as the ConstString arm.
 				if instr.dest not in recognized_released:
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.StringRetain):
@@ -2031,15 +1955,11 @@ def insert_string_arc(
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.CopyValue):
-				# TLR-6 (review amendment): CopyValue joined the family,
-				# and unlike Call/Exc* (prepass-only) this arm is a LIVE
-				# rewrite-loop re-add that runs AFTER the per-block
-				# `owned_values -= recognized_released` subtraction —
-				# without the guard, a recognized pre-materialized
-				# release is copied through AND `_note_use` emits a
-				# second release at the drain (pinned:
-				# test_tlr6_copyvalue_guard_teeth).
-				if _is_string_tid(instr.ty) and instr.dest not in recognized_released:
+				# TLR-6: CopyValue is family.  Its `recognized_released`
+				# re-add guard was deleted 2026-07-18 with the release
+				# arm (see the MoveOut arm for the full argument): a
+				# re-owned recognized temp is inert bookkeeping.
+				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.LoadLocal):
 				load_local_src[instr.dest] = instr.local
@@ -2079,9 +1999,9 @@ def insert_string_arc(
 					# `val in owned AND use_counts == 1`, so a single-
 					# consumer VariantGetField temp is moved without
 					# retain.  Multi-consumer shapes (if any arise)
-					# then go through the normal `_ensure_owned`
-					# retain-for-additional-consumers path, releasing
-					# the original +1 at the final use.  Adding to
+					# have their additional-consumer retains staked
+					# upstream by string_stakes, with the original +1
+					# released at the final use.  Adding to
 					# `move_only_values` would bypass the single-use
 					# guard and let the first consumer move the ref
 					# while later consumers observed a consumed value.
@@ -2093,8 +2013,9 @@ def insert_string_arc(
 				# test_extraction_retain_contract.py): codegen lowers a
 				# String element load as load + drift_string_retain, so
 				# the dest arrives with its own +1 — string_arc must MOVE
-				# it (single use) or retain-for-additional-consumers via
-				# the fallback, exactly like VariantGetField above.  The
+				# it (single use); additional-consumer retains are staked
+				# upstream by string_stakes, exactly like VariantGetField
+				# above.  The
 				# pre-contract `discard` view classification orphaned the
 				# codegen +1 whenever a consumer re-staked (the 1d leak
 				# shape); it was corpus-latent on the CLI path and
@@ -2137,28 +2058,15 @@ def insert_string_arc(
 			if isinstance(instr, M.StoreLocal) and _is_string_tid(local_types.get(instr.local)):
 				_release_local(instr.local, new_instrs, site_class=_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE)
 				val = instr.value
-				if val in move_only_values or _can_move_owned_once(val):
-					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
-					_note_use(val, consume=True)
-				else:
-					# Slice 4a: the fallback's RETAIN arm — reached only
-					# for a PROVEN-String value (`_is_string_value`) —
-					# is corpus-zero (string_stakes owns store staking)
-					# and fail-closed.  Values WITHOUT String type
-					# metadata keep the fallback's other historical
-					# behavior: `_ensure_owned` early-returned and the
-					# value passed through unchanged (live, exercised by
-					# e.g. can-throw call Ok-payload holders).
-					if _is_string_value(val):
-						_dead_stake_tripwire(
-							val,
-							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
-							target=f"StoreLocal '{instr.local}'",
-							block_name=block.name,
-							idx=_instr_idx,
-						)
-					new_instrs.append(M.StoreLocal(local=instr.local, value=val))
-					_note_use(val, consume=True)
+				# Store staking is owned UPSTREAM by string_stakes; the
+				# 4a proven-String tripwire branch was deleted
+				# 2026-07-18 after the clean 0.33.84 cert cycle, which
+				# left the move arm and the historical pass-through
+				# IDENTICAL — the store consumes its source exactly
+				# once, retain-free, for moved, owned-single-use and
+				# untyped values alike.
+				new_instrs.append(M.StoreLocal(local=instr.local, value=val))
+				_note_use(val, consume=True)
 				continue
 
 			if isinstance(instr, M.MoveFromRef) and _is_string_tid(instr.inner_ty):
@@ -2193,23 +2101,11 @@ def insert_string_arc(
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
-				if val in move_only_values or _can_move_owned_once(val):
-					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
-					_note_use(val, consume=True)
-				else:
-					# Slice 4a: fail-closed on the PROVEN-String retain
-					# arm only (see the StoreLocal arm); untyped values
-					# keep the historical pass-through.
-					if _is_string_value(val):
-						_dead_stake_tripwire(
-							val,
-							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
-							target=f"StoreRef via '{instr.ptr}'",
-							block_name=block.name,
-							idx=_instr_idx,
-						)
-					new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
-					_note_use(val, consume=True)
+				# Retain-free single consume for every value class (see
+				# the StoreLocal arm — 4a tripwire branch deleted
+				# 2026-07-18, arms were identical without it).
+				new_instrs.append(M.StoreRef(ptr=instr.ptr, value=val, inner_ty=instr.inner_ty))
+				_note_use(val, consume=True)
 				continue
 
 			if isinstance(instr, M.ArrayIndexStore) and _is_string_tid(instr.elem_ty):
@@ -2227,27 +2123,13 @@ def insert_string_arc(
 				new_instrs.append(M.StringRelease(value=old))
 				local_types[old] = string_ty
 				val = instr.value
-				if val in move_only_values or _can_move_owned_once(val):
-					new_instrs.append(
-						M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
-					)
-					_note_use(val, consume=True)
-				else:
-					# Slice 4a: fail-closed on the PROVEN-String retain
-					# arm only (see the StoreLocal arm); untyped values
-					# keep the historical pass-through.
-					if _is_string_value(val):
-						_dead_stake_tripwire(
-							val,
-							site_class=_ledger_reporter.SITE_CLASS_STORE_VALUE_RETAIN,
-							target=f"ArrayIndexStore into '{instr.array}'",
-							block_name=block.name,
-							idx=_instr_idx,
-						)
-					new_instrs.append(
-						M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
-					)
-					_note_use(val, consume=True)
+				# Retain-free single consume for every value class (see
+				# the StoreLocal arm — 4a tripwire branch deleted
+				# 2026-07-18, arms were identical without it).
+				new_instrs.append(
+					M.ArrayIndexStore(elem_ty=instr.elem_ty, array=instr.array, index=instr.index, value=val)
+				)
+				_note_use(val, consume=True)
 				continue
 
 			if isinstance(instr, (M.ArrayElemInit, M.ArrayElemInitUnchecked, M.ArrayElemAssign)) and _is_string_tid(instr.elem_ty):

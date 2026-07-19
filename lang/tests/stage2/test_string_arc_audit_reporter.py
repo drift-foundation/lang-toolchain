@@ -54,10 +54,11 @@ def _attach_ledger(func: M.MirFunc) -> None:
 def _run_pipeline(func: M.MirFunc, tt: TypeTable, fn_infos=None) -> None:
 	"""Production-faithful pipeline for unit pins: materialize last-use
 	releases → fresh ledger → insert_string_arc.  Bare insert_string_arc
-	is no longer a valid configuration for MIR containing family temps
-	that drain non-consumingly — the in-pass release arm is FAIL-CLOSED
-	(RELEASE-ARM-TRIPWIRE-DESIGN.md); only the tripwire pins call it
-	bare on such MIR, deliberately."""
+	is not a valid configuration for MIR containing family temps that
+	drain non-consumingly — string_arc authors no last-use releases of
+	its own (the in-pass arm was deleted with the tripwire-deletion
+	slice, 2026-07-18), so bare use silently under-releases such
+	temps."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	materialize_lastuse_releases(func, type_table=tt, fn_infos=fn_infos or {})
 	_attach_ledger(func)
@@ -69,10 +70,11 @@ def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
 
 	Shapes exercised: overwrite_release + scope_exit_release (string
 	locals), moveout_expansion.  Each store consumes its OWN owned
-	producer — since slice 4a the store_value_retain fallback is a
-	fail-closed tripwire, so a store of a non-owned/multi-use value
-	aborts the pass (pinned separately in
-	test_dead_store_value_stake_tripwire_fires)."""
+	producer — store staking is owned upstream by string_stakes, and
+	the store paths consume their source exactly once, retain-free
+	(the slice-4a fail-closed fallback that guarded this contract was
+	deleted with the tripwire-deletion slice, 2026-07-18; the
+	store_value_retain class stays a hard corpus gate)."""
 	string_ty = type_table.ensure_string()
 	func = _make_func(
 		"f",
@@ -130,8 +132,9 @@ def test_audit_collects_tags_and_classifies(monkeypatch, tmp_path: Path) -> None
 	# The shapes we constructed appear under their tags.
 	assert agg.get("site_class:moveout_expansion", 0) >= 1, agg
 	assert agg.get("site_class:scope_exit_release", 0) >= 1, agg
-	# Slice 4a: the store_value_retain fallback is a fail-closed
-	# tripwire — the class must NEVER appear in a successful pass run.
+	# store_value_retain is a retired stake class (4a fail-closed, arm
+	# deleted 2026-07-18) and a hard corpus gate — it must NEVER appear
+	# in a pass run.
 	assert agg.get("site_class:store_value_retain", 0) == 0, agg
 	assert agg.get("c2_invisible_stake", 0) == 0, agg
 	# C3: the MoveOut source was Owned (stored just above) — counted as
@@ -570,51 +573,15 @@ def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
 	assert agg.get("site_class:overwrite_release", 0) == 2, agg
 
 
-def test_dead_store_value_stake_tripwire_fires(monkeypatch) -> None:
-	"""Slice 4a: the store_value_retain fallback is FAIL-CLOSED.  A store
-	of a non-owned multi-use String value (the pre-B-arch double-store
-	shape, unreachable from real HIR since string_stakes owns store
-	staking) must abort the pass with the STRUCTURED tripwire message —
-	site-class, fn, block/index, value, target, producer, report path —
-	so the failure mode and wording stay stable."""
-	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("tw", params=[], locals_=["x", "y"], types={"x": string_ty, "y": string_ty})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%c", value="a"),
-		M.StoreLocal(local="x", value="%c"),
-		M.StoreLocal(local="y", value="%c"),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	_attach_ledger(func)
-	try:
-		insert_string_arc(func, type_table=tt, fn_infos={})
-	except AssertionError as err:
-		msg = str(err)
-		assert "string_arc dead-stake tripwire [store_value_retain]" in msg, msg
-		assert "fn 'test::tw'" in msg, msg
-		# %c is consumed twice, so `_can_move_owned_once` already fails
-		# at the FIRST store — the fallback (and thus the wire) trips at
-		# entry[1], not at the second store.
-		assert "block 'entry'[1]" in msg, msg
-		assert "value '%c'" in msg, msg
-		assert "StoreLocal 'x'" in msg, msg
-		assert "producer=ConstString" in msg, msg
-		assert "issues/string-arc-dead-stake-tripwire/" in msg, msg
-	else:
-		raise AssertionError("dead store_value stake fallback did not trip")
-
-
-def test_tripwire_surfaces_as_clean_internal_diagnostic(tmp_path: Path, monkeypatch) -> None:
+def test_string_arc_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatch) -> None:
 	"""The driver's string_arc boundary converts pass AssertionErrors
 	into a clean `internal:` diagnostic (best-effort span, phased) — an
-	operator never sees a Python traceback.  Injected via monkeypatch
-	because no real source can reach the tripwire (that is the point of
-	fail-closed)."""
+	operator never sees a Python traceback.  Generalized from the
+	tripwire-era pin (tripwire-deletion slice, 2026-07-18): the wrap is
+	a user-facing containment contract independent of any particular
+	in-tree assertion source, so this pin survives the tripwires it was
+	born fronting.  Injected via monkeypatch because the pass's
+	remaining fail-closed checks are unreachable from real source."""
 	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 	from lang.driftc.module_lowered import flatten_modules
 	from lang.driftc import driftc as D
@@ -636,7 +603,7 @@ def test_tripwire_surfaces_as_clean_internal_diagnostic(tmp_path: Path, monkeypa
 	def _boom(func, **kw):
 		if getattr(func, "name", "") == "main":
 			raise AssertionError(
-				"string_arc dead-stake tripwire [store_value_retain]: injected-for-pin"
+				"string_arc contract failure: injected-for-pin"
 			)
 		return _orig(func, **kw)
 	monkeypatch.setattr(D, "insert_string_arc", _boom)
@@ -654,22 +621,28 @@ def test_tripwire_surfaces_as_clean_internal_diagnostic(tmp_path: Path, monkeypa
 		reserved_namespace_policy=D.ReservedNamespacePolicy.ALLOW_DEV,
 	)
 	errors = [d for d in getattr(checked, "diagnostics", []) if getattr(d, "severity", None) == "error"]
-	assert errors, "injected tripwire must surface as a diagnostic"
+	assert errors, "injected contract failure must surface as a diagnostic"
 	msgs = [d.message for d in errors]
+	# Phase/internal diagnostic: the wrap's stable prefix carries the
+	# string_arc phase identity and the injected payload verbatim.
 	assert any(
 		"internal: string ownership stake contract failure" in m
-		and "dead-stake tripwire" in m
+		and "injected-for-pin" in m
 		for m in msgs
 	), msgs
-	# Clean surface: a diagnostic, not a propagated exception — and the
-	# compile returned instead of raising (we got here), with no IR.
-	assert ir == "", "compile must not produce IR after the tripwire"
+	assert any(getattr(d, "phase", None) == "string_arc" for d in errors), [
+		(d.message, getattr(d, "phase", None)) for d in errors
+	]
+	# No traceback: the compile RETURNED with a diagnostic instead of
+	# propagating the AssertionError (reaching this line is the proof).
+	# Empty IR: containment aborts emission for the unit.
+	assert ir == "", "compile must not produce IR after a contract failure"
 
 
 def test_c2_invisible_stake_classifier_still_covered() -> None:
-	"""C2 coverage moved off the (now fail-closed) store fallback: a
-	RETAIN of an untracked SSA temp in a non-extinct site class is an
-	invisible stake."""
+	"""C2 coverage moved off the store fallback (fail-closed in 4a,
+	deleted 2026-07-18): a RETAIN of an untracked SSA temp in a
+	non-extinct site class is an invisible stake."""
 	tt = TypeTable()
 	func = _string_shuffle_func(tt)
 	_attach_ledger(func)
@@ -799,102 +772,30 @@ def test_c3_catch_binder_dead_cleanup_drop_is_zero_safe(monkeypatch, tmp_path: P
 	assert agg.get(R.AGREE_C3_ZERO_SAFE, 0) >= 2, agg
 
 
-def _view_prelude(tt: TypeTable):
-	"""[ConstString %c, StoreLocal x %c, LoadLocal %v x] — `%v` is a
-	proven-String VIEW (LoadLocal dests are discarded from owned_values),
-	so any late-retain consumer of it reaches `_ensure_owned`'s
-	fail-closed retain arm."""
-	string_ty = tt.ensure_string()
-	instrs = [
-		M.ConstString(dest="%c", value="a"),
-		M.StoreLocal(local="x", value="%c"),
-		M.LoadLocal(dest="%v", local="x"),
-	]
-	return string_ty, instrs
+# The slice-4a/4b dead-stake trigger pins (`_view_prelude` /
+# `_expect_tripwire` / test_dead_{store_value,call_arg,value_position,
+# return_site3}_stake_tripwire_fires) retired with the tripwire-deletion
+# slice (2026-07-18): their subject — the fail-closed late-retain arms —
+# was deleted after the clean 0.33.84 cert cycle.  The classes stay
+# guarded by the corpus tool's four site-class HARD gates and the
+# retired-tag → UNTAGGED pin below.
 
 
-def _expect_tripwire(func, tt, site_class: str) -> str:
-	_attach_ledger(func)
-	try:
-		insert_string_arc(func, type_table=tt, fn_infos={})
-	except AssertionError as err:
-		msg = str(err)
-		assert f"string_arc dead-stake tripwire [{site_class}]" in msg, msg
-		assert "issues/string-arc-dead-stake-tripwire/" in msg, msg
-		return msg
-	raise AssertionError(f"{site_class} late-retain arm did not trip")
-
-
-def test_dead_call_arg_stake_tripwire_fires(monkeypatch) -> None:
-	"""Slice 4b: a proven-String VIEW at a by-value String call arg —
-	the call_arg_retain fallback — is fail-closed."""
-	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
-	tt = TypeTable()
-	string_ty, instrs = _view_prelude(tt)
-	func = _make_func("twc", params=[], locals_=["x"], types={"x": string_ty})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = instrs + [
-		M.CallIndirect(dest=None, callee="%f", args=["%v"],
-			param_types=[string_ty], user_ret_type=tt.ensure_void(),
-			can_throw=False),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	_expect_tripwire(func, tt, "call_arg_retain")
-
-
-def test_dead_value_position_stake_tripwire_fires(monkeypatch) -> None:
-	"""Slice 4b: a proven-String VIEW as an array-literal element — a
-	value_position_retain (default-class) fallback — is fail-closed."""
-	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
-	tt = TypeTable()
-	string_ty, instrs = _view_prelude(tt)
-	arr_ty = tt.new_array(string_ty)
-	func = _make_func("twv", params=[], locals_=["x"], types={"x": string_ty})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = instrs + [
-		M.ArrayLit(dest="%a", elem_ty=string_ty, elements=["%v"]),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	_expect_tripwire(func, tt, "value_position_retain")
-
-
-def test_dead_return_site3_stake_tripwire_fires(monkeypatch) -> None:
-	"""Slice 4b: a proven-String VIEW as the returned value that no
-	move rule approves — the structurally-extinct return_retain_site3
-	fallback — is fail-closed."""
-	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("twr", params=[], locals_=["x"], types={"x": string_ty})
-	entry = M.BasicBlock(name="entry")
-	# A LoadRef view: the site-3 alias walk only approves plain
-	# LoadLocal chain endpoints (can_move_from_skipped_local), so a
-	# ref-loaded String value falls through to the retain arm.
-	entry.instructions = [
-		M.ConstString(dest="%c", value="a"),
-		M.StoreLocal(local="x", value="%c"),
-		M.AddrOfLocal(dest="%p", local="x", is_mut=False),
-		M.LoadRef(dest="%v", ptr="%p", inner_ty=string_ty),
-	]
-	entry.terminator = M.Return(value="%v")
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	_expect_tripwire(func, tt, "return_retain_site3")
-
-
-def test_destructor_self_tag_is_untagged() -> None:
-	"""Slice 4b enumeration retirement: `destructor_self` has no
-	emission site anywhere; a note() carrying it now lands in UNTAGGED —
-	already a hard corpus gate — instead of a dead accepted tag."""
+def test_retired_site_classes_are_untagged() -> None:
+	"""Enumeration-retirement pin: `destructor_self` (slice 4b — no
+	emission site anywhere) and `temp_lastuse_release` (tripwire-deletion
+	slice, 2026-07-18 — emission arm deleted) are out of the closed set;
+	a note() carrying either lands in UNTAGGED — already a hard corpus
+	gate — instead of a dead accepted (or counted-only) tag."""
 	audit = R.StringArcAudit("test::ds")
 	audit.note(R.STAKE_RETAIN, "%v", R.SITE_CLASS_DESTRUCTOR_SELF,
 		pre_point=("b", 0), post_point=("b", 0))
 	assert audit.untagged == 1
 	assert audit.events[0].site_class.startswith("UNTAGGED:")
+	audit.note(R.STAKE_RELEASE, "%w", R.SITE_CLASS_TEMP_LASTUSE_RELEASE,
+		pre_point=("b", 1), post_point=("b", 1))
+	assert audit.untagged == 2
+	assert audit.events[1].site_class.startswith("UNTAGGED:")
 
 
 def test_materialized_lastuse_is_closed_counted_only() -> None:
@@ -994,9 +895,9 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 	             "%c3": string_ty, "%c4": string_ty, "%cc": string_ty,
 	             "%ig": string_ty, "%qc": string_ty}.items():
 		func.local_types[k] = v
-	# Release-arm tripwire era: the live half runs the production
-	# pipeline (pass → arc); the materialized releases now come from the
-	# pass + recognition arm — same positions, same counters.
+	# The live half runs the production pipeline (pass → arc): the
+	# materialized releases come from the pass + recognition arm — same
+	# positions, same counters (arc authors no last-use releases).
 	_run_pipeline(func, tt, fn_infos)
 	agg = _fn_agg(out, "test::cf")
 	# materialized = exactly the calculator's points (6, incl. %cc since
@@ -1140,7 +1041,7 @@ def test_tlr2a_seeder_closes_missing_metadata_gap(monkeypatch, tmp_path: Path) -
 		entry, local_types=seeded, fn_infos={}, type_table=tt, live_out_names=set())
 	assert points == {"%c1": 2, "%c2": 2}, points
 	# Live-pass agreement on the SAME un-seeded func (pipeline-faithful:
-	# pass → arc; the release arm is fail-closed).
+	# pass → arc — arc authors no last-use releases of its own).
 	_run_pipeline(func, tt)
 	agg = _fn_agg(out, "test::sg")
 	assert agg.get("site_class:materialized_lastuse_release") == 2, agg
@@ -1699,9 +1600,7 @@ def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Pat
 
 
 def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-4 conservative-exclusion pins — all stay OUT of the family
-	(release-arm tripwire era: their non-consuming drains now TRIP the
-	fail-closed arm — see the docstring tail):
+	"""TLR-4 conservative-exclusion pins — all stay OUT of the family:
 	- `%th` — can_throw=True Call with a (synthetically) String-typed
 	  dest: the fail-closed guard for the structurally-unreachable case
 	  (real can-throw dests are FnResult envelopes);
@@ -1713,11 +1612,12 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 	  drain block — kept here as the flip's record;
 	- `%ti` — CallIndirect with can_throw=True and semantic-String
 	  user_ret_type: throw guard wins.
-	RELEASE-ARM TRIPWIRE ERA: these non-family owned temps draining
-	non-consumingly now TRIP the fail-closed arm (family=False in the
-	payload) — this pin doubles as the non-family tripwire carrier for
-	the call shapes; the dedicated StringRetain carrier pin covers the
-	non-call shape."""
+	Since the tripwire-deletion slice (2026-07-18) string_arc authors
+	no last-use releases: the stay-out temps drain with NO release at
+	all — the pass's exclusion (only %xb materialized) IS the surviving
+	contract, and arc must copy exactly that through, adding nothing.
+	(This pin was the non-family tripwire carrier while the arm was
+	fail-closed, 2026-07-16..18.)"""
 	from lang.driftc.checker import FnInfo, FnSignature
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	out = tmp_path / "audit.jsonl"
@@ -1752,16 +1652,23 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 			func.local_types[t] = string_ty
 		return func
 
-	import pytest
 	fb = build("nf_b")
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos=fn_infos) is True
 	rel_next = [i.value for i in fb.blocks["next"].instructions
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%xb"], rel_next  # only the family member
 	_attach_ledger(fb)
-	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
-		insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
-	assert "family=False" in str(ei.value), str(ei.value)
+	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	# Arc adds NOTHING: the family member's pass-authored release is
+	# copied through; the stay-out temps get no release from anywhere
+	# (string_arc authors no last-use releases since 2026-07-18).
+	rel_all = [i.value for b in fb.blocks.values() for i in b.instructions
+		if type(i).__name__ == "StringRelease"]
+	assert rel_all.count("%xb") == 1, rel_all
+	assert not any(v in rel_all for v in ("%th", "%ni", "%ti")), rel_all
+	agg = _fn_agg(out, "test::nf_b")
+	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
+	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
 
 
 def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -> None:
@@ -1951,46 +1858,13 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
 
 
-def test_tlr6_copyvalue_guard_teeth(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-6 review-amendment TEETH pin (tripwire-era form): CopyValue's
-	owned registration has a LIVE rewrite-loop re-add arm (unlike
-	prepass-only Call/Exc*), which runs AFTER the per-block
-	`owned_values -= recognized_released` subtraction.  With the guard
-	missing, the recognized temp is re-owned and — now that the release
-	arm is FAIL-CLOSED — `_note_use` TRIPS at the drain instead of
-	double-releasing.  This pin fails in exactly that configuration: a
-	CopyValue temp with a pre-materialized release after its last
-	non-consuming use must sail through with EXACTLY ONE release and
-	zero temp_lastuse (no tripwire, no second release)."""
-	out = tmp_path / "audit.jsonl"
-	_audit_env(monkeypatch, out)
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("t6t", params=[], locals_=[], types={})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%a", value="a"),
-		M.CopyValue(dest="%cv", value="%a", ty=string_ty),
-		M.StringEq(dest="%e", left="%cv", right="%cv"),  # last non-consuming use
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	for t in ("%a", "%cv"):
-		func.local_types[t] = string_ty
-	# The pass materializes BOTH releases (%a drains at the CopyValue,
-	# %cv at the StringEq); recognition + the guarded arms must then
-	# sail through insert_string_arc without tripping.
-	_run_pipeline(func, tt)
-	rel = [i.value for i in func.blocks["entry"].instructions
-		if type(i).__name__ == "StringRelease"]
-	assert rel.count("%cv") == 1, (
-		f"double release of the recognized CopyValue temp — the "
-		f"rewrite-loop owned re-add arm is missing its recognized "
-		f"guard: {rel}")
-	agg = _fn_agg(out, "test::t6t")
-	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
-	assert agg.get("site_class:materialized_lastuse_release") >= 1, agg
+# test_tlr6_copyvalue_guard_teeth retired with the tripwire-deletion
+# slice (2026-07-18): its subject — the CopyValue rewrite-loop
+# `recognized_released` re-add guard — was deleted together with the
+# release arm it protected (a re-owned recognized temp is inert
+# block-local bookkeeping once no arm consumes that state).  The
+# exactly-one-release output contract stays covered by
+# test_tlr6_copyvalue_family and the CopyValue memcheck row.
 
 
 def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
@@ -2372,43 +2246,12 @@ def test_tlr8_moveout_family(monkeypatch, tmp_path: Path) -> None:
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
 
 
-def test_tlr8_moveout_guard_teeth(monkeypatch, tmp_path: Path) -> None:
-	"""TLR-8 TEETH pin (the TLR-6 lesson applied to MoveOut): the MoveOut
-	expansion arm's owned/move-only registration is a LIVE rewrite-loop
-	re-add that runs AFTER the per-block
-	`owned_values -= recognized_released` subtraction.  With the
-	recognized guard missing, the externally-released move temp is
-	re-owned and — the release arm being FAIL-CLOSED — `_note_use` TRIPS
-	at the non-consuming drain.  This pin fails in exactly that
-	configuration: the repro shape must sail through the full pipeline
-	with EXACTLY ONE release of the move temp and zero temp_lastuse."""
-	out = tmp_path / "audit.jsonl"
-	_audit_env(monkeypatch, out)
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("t8t", params=["s"], locals_=["x"],
-		types={"s": string_ty, "x": string_ty})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.MoveOut(dest="%m", local="s", ty=string_ty),
-		M.ConstString(dest="%lit", value="x: "),
-		M.StringConcat(dest="%c", left="%lit", right="%m"),  # last non-consuming use of %m
-		M.StoreLocal(local="x", value="%c"),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	for t in ("%m", "%lit", "%c"):
-		func.local_types[t] = string_ty
-	_run_pipeline(func, tt)
-	rel = [i.value for i in func.blocks["entry"].instructions
-		if type(i).__name__ == "StringRelease"]
-	assert rel.count("%m") == 1, (
-		f"double release of the recognized MoveOut temp — the expansion "
-		f"arm is missing its recognized guard: {rel}")
-	agg = _fn_agg(out, "test::t8t")
-	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
-	assert agg.get("site_class:materialized_lastuse_release") >= 1, agg
+# test_tlr8_moveout_guard_teeth retired with the tripwire-deletion
+# slice (2026-07-18) — same rationale as the TLR-6 teeth retirement
+# above (the MoveOut expansion arm's guard deleted with the release
+# arm).  The production shape stays covered by test_tlr8_moveout_family,
+# the end-to-end pin below, and memcheck
+# test_move_operand_concat_release.py.
 
 
 def test_tlr8_cross_block_moveout(monkeypatch, tmp_path: Path) -> None:
@@ -2495,118 +2338,16 @@ def test_tlr8_move_operand_concat_end_to_end(tmp_path: Path) -> None:
 	assert ir
 
 
-def test_release_arm_tripwire_stale_family_temp(monkeypatch) -> None:
-	"""Release-arm tripwire, firing class 1 (family=True): a STALE
-	UNMIGRATED family temp — bare insert_string_arc on MIR with a
-	ConstString temp draining non-consumingly, i.e. the exact
-	configuration a string_releases/recognition regression would
-	produce.  The arm must fail closed with the structured payload, not
-	release."""
-	import pytest
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("st_fam", params=[], locals_=[], types={})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%a", value="a"),
-		M.ConstString(dest="%b", value="b"),
-		M.StringEq(dest="%e", left="%a", right="%b"),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	for t in ("%a", "%b"):
-		func.local_types[t] = string_ty
-	_attach_ledger(func)
-	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
-		insert_string_arc(func, type_table=tt, fn_infos={})
-	msg = str(ei.value)
-	assert "family=True" in msg and "producer=ConstString" in msg, msg
-
-
-def test_release_arm_tripwire_nonfamily_producer(monkeypatch) -> None:
-	"""Release-arm tripwire, firing class 2 (family=False): a truly
-	NON-FAMILY owned producer — a StringRetain-produced temp draining
-	non-consumingly.  The pipeline is production-faithful: the pass runs
-	first (it correctly materializes nothing for the non-family temp;
-	the retain's ConstString SOURCE is family and does materialize), and
-	the arm then fails closed on the non-family drain."""
-	import pytest
-	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
-	tt = TypeTable()
-	string_ty = tt.ensure_string()
-	func = _make_func("st_nf", params=[], locals_=[], types={})
-	entry = M.BasicBlock(name="entry")
-	entry.instructions = [
-		M.ConstString(dest="%a", value="a"),
-		M.StringRetain(dest="%rt", value="%a"),
-		M.StringEq(dest="%e", left="%rt", right="%rt"),
-	]
-	entry.terminator = M.Return(value=None)
-	func.blocks = {"entry": entry}
-	func.entry = "entry"
-	for t in ("%a", "%rt"):
-		func.local_types[t] = string_ty
-	materialize_lastuse_releases(func, type_table=tt, fn_infos={})
-	_attach_ledger(func)
-	with pytest.raises(AssertionError, match="lastuse_release_arm") as ei:
-		insert_string_arc(func, type_table=tt, fn_infos={})
-	msg = str(ei.value)
-	assert "family=False" in msg and "producer=StringRetain" in msg, msg
-
-
-def test_release_arm_tripwire_driver_diagnostic(tmp_path: Path, monkeypatch) -> None:
-	"""MANDATORY (review amendment): the release-arm tripwire's
-	containment is a user-facing contract — end-to-end through the
-	driver, the REAL arm firing on REAL Drift source must surface as
-	the clean `internal:` diagnostic, never a Python traceback.  The
-	materialization pass is no-op'd via monkeypatch so a family temp
-	reaches the fail-closed arm (no real source can otherwise — that is
-	the point of fail-closed)."""
-	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
-	from lang.driftc.module_lowered import flatten_modules
-	from lang.driftc import driftc as D
-	from lang.driftc.stage2 import string_releases as SR
-	from lang.driftc.core.function_id import function_symbol
-
-	src = tmp_path / "main.drift"
-	src.write_text(
-		"module main;\n\npub fn main() nothrow -> Int {\n"
-		"\tif \"a\" + \"b\" == \"ab\" { return 0; }\n\treturn 1;\n}\n"
-	)
-	modules, type_table, exc, mexp, mdeps, pdiags = parse_drift_workspace_to_hir(
-		[src], stdlib_root=stdlib_root(), test_build_only=True
-	)
-	assert not pdiags, [d.message for d in pdiags]
-	func_hirs, signatures, _ = flatten_modules(modules)
-	main_id = [i for i, s in signatures.items() if i.name == "main" and not s.is_method][0]
-	origin = {}
-	for m in modules.values():
-		origin.update(m.origin_by_fn_id)
-
-	monkeypatch.setattr(SR, "materialize_lastuse_releases",
-		lambda func, **kw: False)
-
-	ir, checked = D.compile_to_llvm_ir_for_tests(
-		func_hirs=func_hirs,
-		signatures=signatures,
-		exc_env=exc,
-		entry=function_symbol(main_id),
-		type_table=type_table,
-		module_exports=mexp,
-		module_deps=mdeps,
-		origin_by_fn_id=origin,
-		enforce_entrypoint=True,
-		reserved_namespace_policy=D.ReservedNamespacePolicy.ALLOW_DEV,
-	)
-	errors = [d for d in getattr(checked, "diagnostics", []) if getattr(d, "severity", None) == "error"]
-	assert errors, "the armed tripwire must surface as a diagnostic"
-	msgs = [d.message for d in errors]
-	assert any(
-		"internal: string ownership stake contract failure" in m
-		and "lastuse_release_arm" in m
-		for m in msgs
-	), msgs
+# The three release-arm tripwire pins (stale_family_temp /
+# nonfamily_producer / driver_diagnostic) retired with the
+# tripwire-deletion slice (2026-07-18): the arm and its tripwire were
+# deleted after the clean 0.33.84 cert cycle (zero firings; the
+# certified run also exercised the drift-workflows corpus that
+# produced TLR-8).  Bare insert_string_arc on unmaterialized family
+# MIR now silently under-releases instead of raising — the pipeline
+# precondition lives in the string_arc module doc, and the driver
+# wrap's containment contract stays pinned by
+# test_string_arc_boundary_wrap_contains_assertions above.
 
 
 def test_untagged_note_is_a_finding() -> None:

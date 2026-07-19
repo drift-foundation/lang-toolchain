@@ -2042,3 +2042,140 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   PINNED memcheck row (row 4 `reject`: moved concat into an
   error-constructor field, error edge exercised every third i through
   the try/catch fallback) — fixture green under valgrind.
+
+- 2026-07-18 — **0.33.84 / ABI 21 CERTIFIED** (maintainer). The
+  tripwire slice's deletion condition ("one clean cert cycle with
+  zero firings", RELEASE-ARM-TRIPWIRE-DESIGN.md §8) is MET: full
+  suite + cert ran with all three tripwire families armed, zero
+  firings (TLR-8's production catch was fixed in-tree pre-cert).
+
+- 2026-07-18 — **TRIPWIRE-DELETION PLAN CHECKPOINT (report-only) —
+  STOPPED for approval.** work/string-ownership-refactor/
+  TRIPWIRE-DELETION-PLAN.md (copy:
+  /tmp/drift-announce/2026-07-19T011159Z-tripwire-deletion-plan.md).
+  Maintainer's approved skeleton folded in verbatim (delete release
+  arm + `_release_arm_tripwire`; delete the three 4a store branches
+  + 4b `_ensure_owned` funnel + `_dead_stake_tripwire` once unused,
+  preserving move paths and untyped pass-through; retire
+  SITE_CLASS_TEMP_LASTUSE_RELEASE per the destructor_self/retired-C4
+  discipline — constant kept, out of the closed set AND out of
+  finalize's _counted_only; retire only tripwire-specific tests,
+  keep TLR-8 + all memcheck rows; update both intake folders).
+  Code-forced tweaks flagged for confirmation (§3): T1 store-arm
+  if/else COLLAPSE (move and fallback arms are identical
+  post-deletion — the tripwire was the only difference); T2 driver
+  boundary wrap KEPT + tripwire-diagnostic pin GENERALIZED into the
+  wrap-containment pin (the 2026-07-13 review made wrap containment
+  a mandatory user-facing contract — it outlives its in-tree
+  assertion sources); T3 tlr4_nonfamily REWORK not retire (stay-out
+  half is live pass contract); T4 tlr6/tlr8 guard-teeth keep teeth
+  via the exactly-one-release output-MIR assertion; T5 four
+  bare-caller exemption comments reworded not removed; T6 historical
+  "config-A retired" docstrings untouched. NO corpus-tool change
+  (v1.6.0 stays; resurrected tag → UNTAGGED, already hard-gated —
+  destructor_self precedent). Failure-mode conversion recorded
+  honestly (§4): out-of-corpus defects go from clean ICE to leak
+  (release side) / over-release (stake side); surviving guards are
+  the four retain site-class hard gates + UNTAGGED + memcheck.
+  Acceptance (§7): every counter +0 vs build/tmp/cleanup-tripwire
+  (doubles as the missing post-TLR-8 corpus reference — TLR-8 is
+  corpus-invisible, zero `+ move` sites), standalone memcheck
+  102+1skip, reporter/stage2/guardrails, identical universe, gates
+  zero. OPEN ITEMS (§8): drift-workflows clean rebuild on certified
+  0.33.84 on record; version recommendation = NO bump (no observable
+  behavior change on valid source, ABI stays 21); confirm T1-T6.
+  No code changed; nothing staged.
+
+- 2026-07-18 — **DELETION SLICE APPROVED (maintainer) with one
+  BLOCKING correction; implementation started.** T4 rev-1 reasoning
+  was WRONG and is corrected in the plan (rev 2): with the release
+  arm deleted, the TLR-6 CopyValue and TLR-8 MoveOut
+  `recognized_released` re-add guards are THEMSELVES dead — removing
+  them cannot produce a second release (recognition copies the
+  materialized release through independently of `owned_values`; a
+  re-owned recognized temp dies in block-local bookkeeping; the
+  all-USE calculator contract keeps recognized temps away from every
+  consume-approval site — verified against the code before encoding).
+  → both guards DELETE this slice; `test_tlr6_copyvalue_guard_teeth`
+  + `test_tlr8_moveout_guard_teeth` RETIRE; TLR-6/8 family,
+  cross-block, end-to-end, and memcheck regressions all preserved.
+  FLAGGED not acted on: the same-argument ConstString +
+  StringFrom*/Concat re-add guards stay per the correction's letter.
+  Decisions on record: external precondition MET (certified run
+  20260719-001008-drift-lang-99a68ee exercised drift-workflows
+  0251b24; staging + normal/debug test + stress + perf, ZERO tripwire
+  log matches); NO version bump, NO ABI bump (ABI 21); T1/T2/T3/T5/T6
+  approved — T2's generalized containment pin must explicitly assert
+  phase/`internal:` diagnostic, EMPTY IR, and no traceback; count
+  corrected: 7+2 retires, reporter collection 60 → 51.
+
+- 2026-07-18 — **TRIPWIRE-DELETION SLICE IMPLEMENTED (per approved
+  plan rev 2). VERIFICATION IN FLIGHT** (corpus vs cleanup-tripwire
+  running; memcheck strictly sequential after it; fast batteries
+  GREEN: reporter 51/51 — exactly the corrected count, stage2 364/364
+  (= 373 − 9 retirements), guardrails 27 (corpus-tool 7 +
+  mutation-audit 6 + dirty-bit 10 + extraction contract 4)). Code:
+  (1) string_arc.py — `_note_use` release-arm branch DELETED (replaced
+  by a six-line no-arm comment; owned temps draining to zero are inert
+  bookkeeping); `_release_arm_tripwire` + `_dead_stake_tripwire` defs
+  DELETED; the three 4a store fallbacks COLLAPSED to the unconditional
+  retain-free consume (T1 — arms were identical modulo the tripwire);
+  `_ensure_owned` now an identity pass-through with the retirement
+  rationale (14 call sites untouched — funnel shape kept greppable per
+  plan); T4-corrected: CopyValue + MoveOut `recognized_released` re-add
+  guards DELETED (recognition is owned_values-independent; all-USE
+  contract keeps recognized temps off consume-approval sites);
+  ConstString/StringFrom*/Concat guards KEPT per the correction's
+  letter, comments now say consistency-only; module doc +
+  insert_string_arc precondition reworded (bare use = silent
+  under-release, not a trip); stale surfaces fixed (predicate
+  docstring consumers, subtraction comment, metadata pre-scan
+  rationale, two retain-for-additional-consumers phrases →
+  string_stakes, recognition fail-closed comparison referent).
+  (2) reporter — SITE_CLASS_TEMP_LASTUSE_RELEASE retired from
+  STRING_ARC_SITE_CLASSES AND finalize's `_counted_only` (constant
+  kept, destructor_self-style comment: future notes → UNTAGGED, hard
+  gate); materialized comment records the arm deletion.
+  (3) driftc.py — boundary wrap KEPT (generic phase containment),
+  comment updated. (4) corpus tool — NO change, v1.6.0, four retain
+  hard gates stay. (5) tests — 9 RETIRED (4 dead-stake fires +
+  `_expect_tripwire`, 3 release-arm pins, 2 T4 teeth) each with a
+  retirement note; containment pin GENERALIZED to
+  `test_string_arc_boundary_wrap_contains_assertions` (injected
+  generic AssertionError → asserts `internal:` prefix + payload,
+  diagnostic phase == "string_arc", EMPTY IR, compile-returned =
+  no-traceback — per maintainer spec); destructor_self pin extended to
+  `test_retired_site_classes_are_untagged` (both retired tags, count
+  stays 51); tlr4_nonfamily REWORKED (T3): clean run, arc adds NOTHING
+  — exactly one %xb release, none for %th/%ni/%ti, materialized == 1;
+  `_run_pipeline`/`_string_shuffle_func`/c2-pin docstrings updated;
+  four bare-caller exemption comments → BARE-USE SAFETY wording (T5);
+  historical Config-A notes untouched (T6). (6) intakes — release-arm
+  RESOLUTION.md closure entry (cert run + drift-workflows evidence +
+  deletion outcome + TLR-8 pins preserved); dead-stake folder gains
+  RESOLUTION.md (never fired, branches deleted, hard gates survive).
+  Leftover-reference sweep clean (one intentional retirement-note
+  mention). No version bump, no ABI bump (ABI 21) per decision.
+  EXPECTED ACCEPTANCE: every counter +0 vs cleanup-tripwire (17 keys;
+  doubles as the post-TLR-8 corpus reference), universe 924/344/49,
+  nine hard gates zero, exit 0; then standalone memcheck 102+1skip.
+
+- 2026-07-18 — **TRIPWIRE-DELETION SLICE ACCEPTED (final):**
+  build/tmp/cleanup-tripdel vs cleanup-tripwire, tool v1.6.0, exit 0.
+  EVERY counter +0 (all 17 aggregate keys byte-identical:
+  materialized_lastuse_release 618,744; events 2,772,052;
+  temp_lastuse_release ABSENT; c3 ladder, arraydrop mix, drift —
+  everything); universe identical 924/344/49; all hard gates zero.
+  This run is also the post-TLR-8 corpus reference (TLR-8 confirmed
+  corpus-invisible: +0 across the board). STANDALONE memcheck
+  **103 passed + 1 skipped** (102+1 prior + the TLR-8 review's
+  throw-path row — count reconciles exactly), exit 0. Batteries:
+  reporter 51/51; stage2 364/364; guardrails 27. cleanup-tripdel is
+  the new phase reference. THE TRIPWIRE ERA IS CLOSED: string_arc
+  authors no last-use releases and carries no fail-closed stake arms;
+  surviving guards are the four retain site-class hard gates +
+  UNTAGGED + the memcheck rows. Commit msg delivered. NEXT: user-run
+  full suite; remaining B-arch ladder = same-argument
+  ConstString/StringFrom*/Concat guard disposition (flagged, kept),
+  Array release-elision (Slice 3 GO), then string_arc endgame →
+  B-repr(B5) entry criteria.

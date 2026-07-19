@@ -326,11 +326,15 @@ SITE_CLASS_VALUE_POSITION_RETAIN = "value_position_retain"
 SITE_CLASS_RETURN_RETAIN_SITE3 = "return_retain_site3"
 SITE_CLASS_OVERWRITE_RELEASE = "overwrite_release"
 SITE_CLASS_SCOPE_EXIT_RELEASE = "scope_exit_release"
-# temp_lastuse_release: HISTORICAL post-TLR-7 — string_arc's in-pass
-# last-use release arm went corpus-zero when the TLR ladder closed
-# (temp_lastuse 618,744 → 0 across TLR-1..7) and is now FAIL-CLOSED
-# (release-arm tripwire, 2026-07-16); no live emission site tags this
-# class.  The constant remains for historical aggregate parsing.
+# temp_lastuse_release: RETIRED from the closed set (tripwire-deletion
+# slice, 2026-07-18) — string_arc's in-pass last-use release arm went
+# corpus-zero when the TLR ladder closed (temp_lastuse 618,744 → 0
+# across TLR-1..7), was fail-closed (release-arm tripwire, 2026-07-16;
+# one production catch, TLR-8), and was DELETED after the clean
+# 0.33.84 cert cycle.  The constant remains defined for historical
+# aggregate parsing; any future note() with it — like any tag outside
+# the closed set — is counted UNTAGGED, which is a hard corpus gate
+# (same retirement discipline as destructor_self / retired-C4).
 SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
 # materialized_lastuse_release (post-TLR-7 meaning): a last-use release
 # of a family temp (`is_materialized_release_family_producer` — fn-wide
@@ -340,7 +344,9 @@ SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
 # StringRelease through.  Covers the ENTIRE lifetime population
 # (618,744).  Originally introduced by the TLR-1 option-B shim
 # (2026-07-14) as a classification split at the old in-pass emission
-# point; the shim retired with the release-arm tripwire.  Counted-only.
+# point; the shim retired with the release-arm tripwire, and the arm
+# itself was deleted with the tripwire-deletion slice (2026-07-18).
+# Counted-only.
 SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE = "materialized_lastuse_release"
 SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 = "drop_before_overwrite_site4"
 SITE_CLASS_MOVEOUT_EXPANSION = "moveout_expansion"
@@ -353,12 +359,12 @@ STRING_ARC_SITE_CLASSES = frozenset({
 	SITE_CLASS_RETURN_RETAIN_SITE3,
 	SITE_CLASS_OVERWRITE_RELEASE,
 	SITE_CLASS_SCOPE_EXIT_RELEASE,
-	SITE_CLASS_TEMP_LASTUSE_RELEASE,
 	SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
 	SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
 	SITE_CLASS_MOVEOUT_EXPANSION,
-	# SITE_CLASS_DESTRUCTOR_SELF retired (slice 4b) — see the
-	# enumeration comment above.
+	# SITE_CLASS_DESTRUCTOR_SELF retired (slice 4b) and
+	# SITE_CLASS_TEMP_LASTUSE_RELEASE retired (tripwire-deletion slice,
+	# 2026-07-18) — see the enumeration comments above.
 })
 
 # Divergence classes (closed set, plan §11.2).
@@ -831,12 +837,14 @@ class StringArcAudit:
 		# UNCLASSIFIED: any event whose (kind, site_class) pair no
 		# comparison above consumed and that is not a counted-only
 		# class.  Counted-only (observational, no divergence defined in
-		# the plan): temp_lastuse_release, overwrite_release,
+		# the plan): materialized_lastuse_release, overwrite_release,
 		# drop_before_overwrite_site4 (site 4 has its own Tier-1
 		# reporter), scope_exit_release (consumed by C1 via
-		# boundaries).
+		# boundaries).  temp_lastuse_release retired from this set with
+		# the tripwire-deletion slice (2026-07-18): its emission arm is
+		# deleted, so a note carrying the tag is a regression and must
+		# count UNTAGGED, not counted-only.
 		_counted_only = {
-			SITE_CLASS_TEMP_LASTUSE_RELEASE,
 			SITE_CLASS_MATERIALIZED_LASTUSE_RELEASE,
 			SITE_CLASS_OVERWRITE_RELEASE,
 			SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
