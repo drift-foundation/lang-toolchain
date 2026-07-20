@@ -806,7 +806,7 @@ def test_tlr2a_calculator_conforms_to_string_arc(monkeypatch, tmp_path: Path) ->
 	  contract-level record of the family extension);
 	- `%ig` — ConstString passed to an info-less Call (IGNORE
 	  disposition: counted but never drained → NO release by either)."""
-	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	from lang.driftc.stage2.string_ownership_analysis import compute_lastuse_release_points
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -898,7 +898,7 @@ def test_tlr2a_prescan_exclusion_contract(monkeypatch) -> None:
 	occurrence to any count — every OTHER temp's release point is
 	unchanged versus the same block without it, and the released temp is
 	excluded from the result."""
-	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	from lang.driftc.stage2.string_ownership_analysis import compute_lastuse_release_points
 	tt = TypeTable()
 	string_ty = tt.ensure_string()
 	lt = {"%a": string_ty, "%b": string_ty}
@@ -932,7 +932,7 @@ def test_tlr2a_misplaced_input_release_is_rejected(monkeypatch) -> None:
 	validated against the computed release point; a mis-placed release
 	is REJECTED fail-closed, never silently recognized."""
 	import pytest
-	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	from lang.driftc.stage2.string_ownership_analysis import compute_lastuse_release_points
 	tt = TypeTable()
 	string_ty = tt.ensure_string()
 	lt = {"%a": string_ty, "%b": string_ty}
@@ -971,7 +971,7 @@ def test_tlr2a_seeder_closes_missing_metadata_gap(monkeypatch, tmp_path: Path) -
 	then the calculator — with NO manual temp seeding, and asserts
 	agreement with the live pass.  Without the seeder the calculator
 	sees no String temps at all (the gap the review flagged)."""
-	from lang.driftc.stage2.string_arc import (
+	from lang.driftc.stage2.string_ownership_analysis import (
 		compute_lastuse_release_points,
 		seed_string_dest_types,
 	)
@@ -1026,7 +1026,7 @@ def test_tlr2a_ignore_axis_conformance(monkeypatch, tmp_path: Path) -> None:
 	the disposition table for totality but are unreachable for String
 	operands in well-typed MIR — a String value cannot occupy a
 	non-String field/slot — so they are not constructible here.)"""
-	from lang.driftc.stage2.string_arc import compute_lastuse_release_points
+	from lang.driftc.stage2.string_ownership_analysis import compute_lastuse_release_points
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -1081,13 +1081,13 @@ def test_tlr2a_semantic_string_param_conformance(monkeypatch, tmp_path: Path) ->
 	classification these by-value args would be IGNORE while the live
 	arms CONSUME them.  IGNORE still disqualifies the temp from
 	release-point output (no phantom release today) — the real risk is
-	CONTRACT DRIFT: `consumes_string_operand` would lie relative to the
-	live arm and future users of the predicate would decide wrongly.
+	CONTRACT DRIFT: `string_operand_dispositions` would lie relative to
+	the live arm and future users of the predicate would decide wrongly.
 	Covers direct Call (fn_infos
 	signature), CallIndirect, and CallIface (instruction-carried
 	param_types); `%u` is the control proving real points still emit."""
 	from lang.driftc.checker import FnInfo, FnSignature
-	from lang.driftc.stage2.string_arc import (
+	from lang.driftc.stage2.string_ownership_analysis import (
 		DISPOSITION_CONSUME,
 		compute_lastuse_release_points,
 		string_operand_dispositions,
@@ -2122,7 +2122,7 @@ def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path
 	trips the recognition contract in the drain block; and a duplicate
 	SSA dest trips the fn-wide producer builder."""
 	import pytest
-	from lang.driftc.stage2.string_arc import build_fnwide_producers
+	from lang.driftc.stage2.string_ownership_analysis import build_fnwide_producers
 	tt = TypeTable()
 	string_ty = tt.ensure_string()
 

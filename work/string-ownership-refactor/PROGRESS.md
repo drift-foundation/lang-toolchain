@@ -2748,3 +2748,128 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   Checkpoint is STATICALLY CLEAR per the review and remains at STOP
   pending certification state; the R10 extraction gets its own
   separate checkpoint.
+
+- 2026-07-20 — **R10-ANALYSIS-EXTRACTION-CHECKPOINT delivered
+  (report-only) — STOPPED; §1 CERTIFICATION GATE NOT SATISFIED.**
+  work/string-ownership-refactor/R10-ANALYSIS-EXTRACTION-
+  CHECKPOINT.md (copy: /tmp/drift-announce/2026-07-20T062447Z-...);
+  recorded branch string-arc-endgame-r10-extraction.
+  CERTIFICATION STATE RECORDED (the checkpoint's first duty): latest
+  certified deployment = run 20260719-153613-drift-lang-79bbad3,
+  verdict certified, drift-lang commit 79bbad34... = **0.33.85**
+  (array sweep retirement); the **0.33.86 Arm B candidate
+  (4c7767d6) is NOT certified** — no run for it in
+  ~/opt/drift/certified/snapshots/ at checkpoint time (maintainer's
+  full suite in flight). Per direction, IMPLEMENTATION DOES NOT
+  OPEN until a certified 0.33.86 run ID + source commit is recorded;
+  cert failure voids the checkpoint.
+  CHECKPOINT CONTENT: scope = mechanical extraction of the eight
+  R10 members into string_ownership_analysis.py. (1) AST-computed
+  closure: 14 module-level members move (8 public + private
+  _analyze_lastuse_block/_is_semantic_string_tid + DISPOSITION_
+  CONSUME/USE/IGNORE + DRIFT_STRING_HELPER_SYMBOLS) with exactly six
+  import groups (typing, checker.FnInfo, function_id, types_core,
+  mir_nodes, cfg). (2) Acyclicity shown: none of those imports
+  string_arc; string_releases retargets its FIVE direct imports and
+  ends with ZERO string_arc dependency; string_arc back-imports the
+  8 names its remaining code references (AST-verified). (3) Moving
+  imports enumerated: string_releases:76 + string_arc back-imports +
+  4 test files (reporter battery + three lastuse memcheck rows);
+  the other 11 importing test files unchanged; NO-SHIM policy
+  pinned. (4) Mechanical preservation: verbatim bodies; no
+  emission/classification/placement/liveness/MoveOut change.
+  (5) consumes_string_operand STAYS in string_arc under R9 (not
+  folded into R10); the dispositions-contract prose migrates as
+  library documentation. (6) TLR-8 + materialized-release behavior
+  exact (family predicate, fn-wide producers, placement/recognition
+  fail-closed checks, 618,744 counter). (7) Acceptance: every
+  counter +0 vs build/tmp/flagret, spot MIR byte-identity probe,
+  unchanged batteries + memcheck 105+1, two new fail-closed static
+  pins (no string_arc import in the neutral module; no residual
+  moved-name imports from string_arc), compiler 0.33.86 / ABI 21
+  unchanged. (8) Stop conditions: cycles, non-mechanical edits,
+  compat-import deviations, any counter/MIR delta, and the §1 gate.
+  Ends at STOP; no implementation until static review GO + the
+  certification record.
+
+- 2026-07-20 — **R10 EXTRACTION IMPLEMENTED (Slice A of the
+  compressed sequence; branch string-arc-endgame-r10-extraction) —
+  STOPPED for static delta review.** Process-compression direction:
+  the 0.33.86 cert gate now blocks MERGE/RELEASE, not development;
+  built against mainline 03a9702a; if baseline cert fails, HOLD +
+  triage baseline first. Report: /tmp/drift-announce/
+  2026-07-20T074443Z-r10-extraction-implementation.md.
+  DONE: (1) NEW lang/driftc/stage2/string_ownership_analysis.py —
+  14 members moved VERBATIM (8 R10 fns + _analyze_lastuse_block/
+  _is_semantic_string_tid + DISPOSITION_CONSUME/USE/IGNORE +
+  DRIFT_STRING_HELPER_SYMBOLS); exact 6-group import set, zero
+  unused. (2) Retargets: string_releases (→ ZERO string_arc dep),
+  string_arc back-imports its 6 referenced names, reporter test 5
+  sites. (3) consumes_string_operand DELETED (compression override
+  folded R9's deletion here; dead API zero call sites); contract
+  prose migrated to the library. (4) Stale "retains-wraps returned
+  value" site-3 authority block rewritten to the current
+  upstream-stake model (comment-only, no R3/R4 behavior change);
+  unused Sequence import dropped. (5) _ensure_owned /
+  variant_zero_tag_drop_safe / emission untouched. (6) NEW
+  test_string_ownership_analysis_extraction.py — two fail-closed
+  AST pins (neutral module never imports string_arc; no moved-name
+  ImportFrom of string_arc, relative/absolute/aliased/multiline);
+  teeth proven (aliased probe caught + reverted cmp-clean).
+  ACCEPTANCE: corpus build/tmp/r10 vs flagret EXIT 0, EVERY counter
+  +0 (materialized_lastuse_release 618,744; events 2,772,976;
+  universe 924/344/49; gates zero). IR spot probe (2 fixtures,
+  seeded) BYTE-IDENTICAL except the @__drift_compiler_build /
+  @.str1693 build_utc timestamp (8 lines, wall-clock only).
+  Batteries at -n1 (host busy): stage2 374/374 (372+2 pins);
+  lastuse memcheck carriers 5/5. Acyclic import graph. Compiler
+  0.33.86 / ABI 21 unchanged; no version bump. NO cert cycle (per
+  direction). Resume checkpoint roadmap updated to the compressed
+  A-D sequence (cert at behavior-changing boundaries only). Awaiting
+  static delta review GO.
+
+- 2026-07-20 — **R10 review-closure round (Slice A commit-clear
+  without another design round).** (1) AST-PIN ESCAPES CLOSED: the
+  second pin (renamed test_no_moved_member_REACHABLE_from_string_arc)
+  now also catches module-import + attribute access — `import
+  ...string_arc as sa; sa.<MOVED>` and `from ...stage2 import
+  string_arc as sa` — by binding every local name that resolves to
+  the string_arc module and flagging `alias.<MOVED>` Attribute
+  nodes; teeth proven on the module-alias-attribute escape (caught
+  at exact line, reverted cmp-clean). (2) R10 CHECKPOINT updated:
+  status IMPLEMENTED; §1 gate reworded to MERGE/RELEASE-only (dev
+  unblocked; baseline-cert-fail → HOLD branch + triage baseline).
+  (3) RESUME LEDGER refreshed: R10 row DISCHARGED (Slice A);
+  consumes_string_operand RETIRED out of R9; certified base recorded
+  as 0.33.85/79bbad3 (0.33.86 not yet certified, gates merge/release
+  only); consumer graph rewritten to current post-extraction state
+  (string_releases fully decoupled; neutral library both-consumed);
+  criterion-1 scoreboard notes R10 discharged. (4) STALE PROSE
+  corrected: "side-effect-free"→"non-emitting"; dispositions Contract
+  1 renamed to string_operand_dispositions (module + reporter-test
+  docstring); "five direct imports"→"one import statement of five
+  unique names" (seven statements total across the slice); "MIR"→
+  "LLVM IR" in the byte-identity acceptance. Reran ONLY the two
+  extraction pins (2/2) + the touched reporter docstring test (1/1)
+  per direction — no corpus/memcheck repeat.
+
+- 2026-07-20 — **R10 review-closure round 2 (three residual gaps
+  closed; Slice A commit-clear).** (1) Neutral-module pin missed
+  `from . import string_arc` (bare-package ImportFrom, module empty,
+  string_arc as an imported NAME) — the pin now also flags an
+  imported-name `string_arc` when the module string is empty; teeth
+  proven (caught at exact line, reverted cmp-clean). The reachable
+  pin already bound that form via its else-branch (module alias +
+  attribute access); re-proven with an `import ...string_arc as sa;
+  sa.<MOVED>` probe. (2) R10 CHECKPOINT residuals fixed: the "8
+  names" back-import list corrected to the actual SIX
+  (string_operand_dispositions + DISPOSITION_CONSUME were the
+  deleted wrapper's deps, NOT back-imported); the "R9 resident
+  consumes_string_operand" wording, the "no implementation before
+  cert" stop condition, and the "Nothing has been implemented" §9
+  all replaced with the implemented / merge-release-gate state.
+  (3) Last stale deleted-wrapper comment (the contract-drift note
+  inside string_operand_dispositions) renamed; the announce "five
+  import sites" wording corrected to the verified counts
+  (string_releases 1 + reporter 7 + string_arc back-import 1 = 9
+  statements touched). Extraction pins 2/2. Slice A COMMIT-CLEAR.

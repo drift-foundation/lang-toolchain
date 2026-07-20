@@ -73,7 +73,7 @@ from lang.driftc.core.types_core import TypeTable
 from . import cfg as _cfg
 from . import mir_nodes as M
 from .ledger_cache import mark_ledger_dirty
-from .string_arc import (
+from .string_ownership_analysis import (
 	build_fnwide_producers,
 	compute_lastuse_release_points,
 	compute_string_temp_liveness,

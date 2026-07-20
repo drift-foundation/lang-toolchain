@@ -17,7 +17,11 @@ section plus the slice log in PROGRESS.md.
 
 ## 1. Compiler / ABI / certification assumptions (refreshed 2026-07-20)
 
-- CERTIFIED toolchain: **0.33.84 / ABI 21** (2026-07-18).
+- CERTIFIED toolchain: **0.33.85 / ABI 21** — deployment run
+  20260719-153613-drift-lang-79bbad3 (commit 79bbad34, array-sweep
+  retirement). 0.33.86/ABI 21 (Arm B, 4c7767d6) is NOT yet
+  certified; it gates MERGE/RELEASE of downstream branches, not
+  development (process compression, 2026-07-20).
 - In-tree candidate: **0.33.86 / ABI 21**, containing two
   commit-cleared, statically reviewed slices stacked on 0.33.84:
   0.33.85 (Return-boundary array sweep retirement +
@@ -99,32 +103,24 @@ authority before `string_arc.py` can be deleted (B5 entry criterion 1).
 | R6 | Destructible Return-boundary drops (site 3, `_drop_all_destructibles`) + zero-storage widening + site-4 drop_before_overwrite + `_drop_destructible_local` | site4 14; **site-3 UNMEASURED** — the Return-boundary destructible drops have NO aggregate counter today | Already pure ledger authority (Tier 1). Natural fold into cleanup_authoring (it owns hooks + the ledger). CORRECTED (rev 2): "smallest emission family" is NOT established — only site 4 is measured. The FIRST GATE of the R6 checkpoint is an exact site-3 baseline (counter + per-(fn, local, block) itemization, bijection-grade, the arraydrop-measurement pattern) before any migration claim. |
 | R7 | Array overwrite drop (`_drop_array_local`, StoreLocal path) | per overwrite | Sibling of R2; last array responsibility besides R1. Folds with R2 or into cleanup/ledger authority. |
 | R8 | Materialized-release recognition/copy-through + fn-wide producers + temp liveness | materialized_lastuse_release 618,744 | Pairs with string_releases (the pass authors; string_arc recognizes). When R3 migrates, recognition moves to the new String authority; the shared analyses go to R10's library. |
-| R9 | Dead-but-greppable surfaces: `_ensure_owned` identity funnel (13 call sites, site-class taxonomy), `variant_zero_tag_drop_safe` compat shim (tests-only, AST-pinned), `consumes_string_operand` (dead API — zero call sites, definition + prose only; rev 3) | none | Delete WITH the file; the AST pin and the four retain hard gates outlive them in the reporter/tool; `consumes_string_operand`'s CONTRACT prose (the dispositions model documentation) migrates with the R10 library docs. |
-| R10 | Module-level shared analysis exports consumed by string_releases: `iter_used_values`, `seed_string_dest_types`, `is_materialized_release_family_producer`, `build_fnwide_producers`, `compute_lastuse_release_points`, `recognize_materialized_releases`, `compute_string_temp_liveness`, `string_operand_dispositions` | n/a | The de-facto ownership-analysis library living in the wrong file. Extract to a neutral module (e.g. `string_ownership_analysis.py`) — mechanical, high-value, can go FIRST without touching emission. |
+| R9 | Dead-but-greppable surfaces: `_ensure_owned` identity funnel (13 call sites, site-class taxonomy), `variant_zero_tag_drop_safe` compat shim (tests-only, AST-pinned). (`consumes_string_operand` RETIRED in Slice A — deleted; its dispositions-contract prose migrated to the R10 library.) | none | Delete WITH the file; the AST pins + the four retain hard gates outlive them in the reporter/tool. |
+| R10 | **DISCHARGED (Slice A, 2026-07-20)** — the eight shared analyses (+ `_analyze_lastuse_block`, `_is_semantic_string_tid`, `DISPOSITION_*`, `DRIFT_STRING_HELPER_SYMBOLS`) EXTRACTED verbatim to `string_ownership_analysis.py` | n/a | Neutral library; string_arc + string_releases both consume it, neither imports the other. Corpus +0, IR byte-identical, two fail-closed AST pins (module-import + attribute-access escapes closed). |
 
 CONSUMERS (import graph, current — reproducible; rev 2 corrects
 direction and counts):
-- Production importers OF string_arc: `driftc.py:166`
-  (`insert_string_arc` + the boundary-wrap containment, pinned) and
-  `string_releases.py:76`, whose FIVE direct imports are
-  `build_fnwide_producers`, `compute_lastuse_release_points`,
-  `compute_string_temp_liveness`, `iter_used_values`,
-  `seed_string_dest_types`. The remaining R10 CLOSURE members —
-  `is_materialized_release_family_producer`,
-  `recognize_materialized_releases`, `string_operand_dispositions` —
-  have no production consumer outside string_arc itself (tests
-  import several directly): eight R10 members total.
-  `consumes_string_operand` is NOT an R10 member (rev-3 correction):
-  static search finds NO call site anywhere — definition
-  (string_arc.py:625) and prose/docstring references only (its
-  contract text is load-bearing as documentation of the
-  dispositions model, but the function itself is dead API). It is
-  reclassified under **R9** (dead-but-greppable; dies with the
-  file), proof = the zero-call-site search; if a future consumer
-  wants the per-operand contract, it imports from the R10 library
-  after extraction.
-- string_arc's own DEPENDENCIES (not reverse deps — rev 2
-  correction): `drop_flags.is_flag_managed`,
+CURRENT (post-Slice-A) import graph:
+- `string_ownership_analysis.py` (NEW neutral library) — imported by
+  BOTH `string_arc.py` (back-imports the six names its remaining
+  emission code references) and `string_releases.py:76` (one import
+  statement, five unique names); the module imports only
+  {mir_nodes, cfg, types_core, checker, function_id, typing} and
+  MUST NOT import string_arc (AST-pinned).
+- `string_arc.py` — imported by `driftc.py:166` (`insert_string_arc`
+  + the boundary-wrap containment, pinned) and the six test files.
+  `string_releases` NO LONGER imports string_arc (fully decoupled by
+  Slice A). `consumes_string_operand` deleted.
+- string_arc's own DEPENDENCIES: `string_ownership_analysis` (R10
+  library), `drop_flags.is_flag_managed`,
   `drop_policy_compute.{compute_drop_policy, zero_storage_drop_safe}`,
   ledger_cache/ownership_ledger/reporter modules.
 - Tests, with the queries: files importing string_arc or naming its
@@ -143,8 +139,10 @@ no string drop-flags, standing decision).
 ## 4. B-repr(B5) entry criteria — scoreboard
 
 1. **string_arc deleted / responsibilities explicitly modeled** — IN
-   PROGRESS: §3 is the explicit model; R1-R10 define the remaining
-   ladder.
+   PROGRESS: §3 is the explicit model; **R10 DISCHARGED** (Slice A,
+   2026-07-20 — analysis library extracted, string_releases
+   decoupled, consumes_string_operand retired); R1-R9 remain, driven
+   by the compressed B/C/D sequence in §5.
 2. **C3/E closed; `c3_moveout_not_owned` true zero + HARD GATE** —
    **DISCHARGED** (2026-07-13; shapes 1-2 source-fixed in 0.33.83 +
    shape-3 reporter rule; gate promoted in tool v1.5.0; zero through
@@ -165,16 +163,23 @@ no string drop-flags, standing decision).
 1. Follow-up 2c (spec prose) rides the next doc touch; 2a/2b
    scheduled as an independent checker batch at maintainer priority.
 2. 0.33.86 full suite → certification (in flight).
-3. R10 library extraction (mechanical, emission-neutral, corpus +0)
-   → R6 site-3/4 fold into cleanup_authoring (FIRST GATE: the site-3
-   baseline measurement — its "smallest family" status is
-   unverified until then) → R2+R7 overwrite authority → R3+R4+R8
-   String scope-exit/return authority (the 0.27.145 re-proof against
-   the CURRENT upstream-stake/ledger model, incl. the stale
-   retain-wrap comment cleanup) → R5 expansion migration (LATE by
-   the rev-2 order resolution, with its pipeline-shape gates) → R1
-   zero-init re-home → R9 dies with the file → `string_arc.py`
-   DELETED.
+3. COMPRESSED SEQUENCE (maintainer, 2026-07-20 — supersedes the
+   original per-R ladder; certification happens at
+   BEHAVIOR-CHANGING release boundaries, not after every mechanical
+   refactor):
+   - **A**: R10 extraction + dead-analysis/comment cleanup
+     (consumes_string_operand deletion, stale late-retain authority
+     wording) — THIS slice (mechanical; no cert cycle).
+   - **B**: R6 + R2/R7 cleanup-authority migration (FIRST GATE
+     unchanged: the site-3 baseline measurement; behavior-changing →
+     release boundary).
+   - **C**: R3/R4/R8 String return/scope authority (the 0.27.145
+     re-proof against the CURRENT upstream-stake/ledger model;
+     behavior-changing → release boundary).
+   - **D**: R5 + R1 + final `string_arc.py` deletion — ONLY if D's
+     own checkpoint proves that bundle safe (R5 keeps its
+     pipeline-shape gates; R1 re-home keeps the zero-safety chain
+     intact through the transition).
 4. B-repr(B5) DESIGN-FIRST entry per the pinned §10.2.1 decisions
    (ABI 21 → 22, pool recert, DriftQuery coordination), with
    `pre_post_verdict_drift` as the clean modeling input.
