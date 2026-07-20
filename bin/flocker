@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-FLOCKER_VERSION="0.2.0"
+FLOCKER_VERSION="0.2.1"
 
 usage() {
 	cat <<'EOF'
@@ -134,6 +134,31 @@ mkdir -p "${base}"
 # provisioning did not complete (fresh, or prior initializer crashed) —
 # we clear any half-created tokens and recreate from scratch. Once .size
 # exists, no one mutates the pool.
+#
+# COMPLETED pools are VALIDATED under the same lock (v0.2.1): .size must
+# be a positive integer and every token 1..N must exist as a regular
+# file. A completed pool that fails validation is CORRUPT and we fail
+# closed — silently recreating a missing token is unsafe, because a
+# running caller may still hold the unlinked token's inode via its
+# inherited fd; a fresh file at the same path would be a SECOND,
+# independently lockable slot, oversubscribing the pool.
+
+# Corrupt completed pool → refuse to run, refuse to repair, explain
+# recovery. Exits 2 while still holding the init lock (the kernel
+# releases it on exit); nothing in the pool is mutated.
+corrupt_pool() {
+	cat >&2 <<EOF
+flocker: pool '${key}' at ${slot_dir} is corrupt: $*
+flocker: automatic repair is refused: a running caller may still hold the
+flocker: unlinked token's inode via its inherited fd, and recreating the
+flocker: token would create a second, independently lockable slot pool for
+flocker: this key (oversubscription).
+flocker: recovery: when no callers for key '${key}' are active, remove the
+flocker: pool directory shown above, or point FLOCKER_DIR at a fresh
+flocker: location.
+EOF
+	exit 2
+}
 
 exec {lock_fd}>"${lock_file}"
 flock "${lock_fd}"
@@ -148,10 +173,16 @@ if [[ ! -f "${slot_dir}/.size" ]]; then
 fi
 persisted_slots=$(< "${slot_dir}/.size")
 
+[[ "${persisted_slots}" =~ ^[1-9][0-9]*$ ]] || corrupt_pool "invalid .size: ${persisted_slots}"
+for (( i=1; i<=persisted_slots; i++ )); do
+	pool_token="${slot_dir}/${i}"
+	if [[ ! -f "${pool_token}" || -L "${pool_token}" ]]; then
+		corrupt_pool "token ${pool_token} is missing or not a regular file (expected tokens 1..${persisted_slots})"
+	fi
+done
+
 flock -u "${lock_fd}"
 exec {lock_fd}<&-
-
-[[ "${persisted_slots}" =~ ^[1-9][0-9]*$ ]] || die "pool '${key}' has invalid .size: ${persisted_slots}"
 
 if [[ "${persisted_slots}" != "${slots}" ]]; then
 	echo "flocker: warning: key '${key}' pool sized at ${persisted_slots} (requested ${slots})" >&2

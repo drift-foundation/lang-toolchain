@@ -121,6 +121,36 @@ re-provisions. No timeouts, no PID heuristics, no stale-lock detection.
 This recovery path is exercised by the test suite (`bin/flocker_test.sh`
 case 8).
 
+## Corrupt completed pool (fail closed)
+
+A **completed** pool (`.size` present) is validated under the init lock
+on every invocation: `.size` must be a positive integer, and every
+token `1..N` must exist as a regular file. If validation fails — for
+example, a token file was deleted while the pool was live — flocker
+**fails closed**: it exits `2` with a diagnostic naming the key, the
+pool directory, and the offending token, and it does **not** run
+`COMMAND`.
+
+flocker deliberately refuses to repair such a pool. Recreating a
+missing token would be unsafe: a running caller may still hold the
+unlinked token's inode via its inherited file descriptor, so a fresh
+file at the same path would be a *second*, independently lockable
+slot — the pool would silently oversubscribe.
+
+Safe recovery, once **no callers for that key are active**:
+
+```bash
+rm -rf "$FLOCKER_DIR/<key>"     # next caller re-provisions from scratch
+# — or —
+export FLOCKER_DIR=/some/fresh/path
+```
+
+This behavior is exercised by `bin/flocker_test.sh` case 14. It is
+distinct from dead-initializer recovery above: an *incomplete* pool
+(no `.size`) is safely re-provisioned because no token can be legally
+held before provisioning completes; a *completed* pool's tokens may be
+held at any moment, so nothing may be mutated.
+
 ## Multi-process correctness example
 
 ```bash
@@ -178,7 +208,8 @@ installed on top.
 - The exit code of `COMMAND` is propagated unchanged on successful
   acquisition.
 - `2` — usage error (missing or invalid `--key` / `-j`, bad option,
-  no `COMMAND`).
+  no `COMMAND`), or a corrupt completed pool (invalid `.size`, or a
+  token missing / not a regular file — see "Corrupt completed pool").
 
 ## License
 

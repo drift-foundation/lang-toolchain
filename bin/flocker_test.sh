@@ -209,5 +209,35 @@ echo "test 13: --heartbeat validation"
 "${FLOCKER}" -k t13 -j 1 --heartbeat -- true 2>/dev/null && fail "13" "--heartbeat consuming '--' accepted"
 pass "--heartbeat validation"
 
+# ── 14: corrupt completed pool fails closed (no silent repair) ──────────
+# TEST_INFRA_BUG regression (certification runner, 2026-07-20): a pool
+# with .size present but a token missing must FAIL CLOSED — exit 2, the
+# wrapped command NOT executed, the token NOT recreated (a running
+# caller may still hold the unlinked token's inode; recreating would
+# open a second independent slot pool), and the diagnostic must name
+# the key, the pool path, and the missing token.
+echo "test 14: corrupt completed pool fails closed"
+"${FLOCKER}" -k t14 -j 2 -- true
+rm "${FLOCKER_DIR}/t14/1"
+marker="${WORK}/t14.ran"
+out=$("${FLOCKER}" -k t14 -j 2 -- touch "${marker}" 2>&1) && rc=0 || rc=$?
+[[ "${rc}" == "2" ]] || fail "14" "expected exit 2 on corrupt pool, got ${rc}: '${out}'"
+[[ ! -e "${marker}" ]] || fail "14" "wrapped command executed on corrupt pool"
+[[ ! -e "${FLOCKER_DIR}/t14/1" ]] || fail "14" "missing token was silently recreated"
+[[ "${out}" == *"'t14'"* ]] || fail "14" "diagnostic missing key: '${out}'"
+[[ "${out}" == *"${FLOCKER_DIR}/t14"* ]] || fail "14" "diagnostic missing pool path: '${out}'"
+[[ "${out}" == *"${FLOCKER_DIR}/t14/1"* ]] || fail "14" "diagnostic missing token path: '${out}'"
+[[ "${out}" == *"corrupt"* ]] || fail "14" "diagnostic missing corruption statement: '${out}'"
+[[ "${out}" == *"refused"* ]] || fail "14" "diagnostic missing repair refusal: '${out}'"
+[[ "${out}" == *"FLOCKER_DIR"* ]] || fail "14" "diagnostic missing recovery guidance: '${out}'"
+# A token that is not a regular file is equally corrupt — and must not
+# be mutated.
+"${FLOCKER}" -k t14b -j 1 -- true
+rm "${FLOCKER_DIR}/t14b/1"
+mkdir "${FLOCKER_DIR}/t14b/1"
+"${FLOCKER}" -k t14b -j 1 -- true 2>/dev/null && fail "14" "non-regular-file token accepted"
+[[ -d "${FLOCKER_DIR}/t14b/1" ]] || fail "14" "non-regular token was mutated"
+pass "corrupt completed pool fails closed (no repair, no execution)"
+
 echo
 echo "all tests passed"
