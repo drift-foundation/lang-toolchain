@@ -2660,3 +2660,36 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   corpus/runtime rerun (comment/docstring only, per reviewer). The
   0.33.86/ABI 21 candidate is COMMIT-CLEARED; maintainer's full
   serial suite + certification follow.
+
+- 2026-07-20 — **STRING-ARC-ENDGAME-RESUME-CHECKPOINT delivered
+  (report-only, per direction; full suite running) — STOPPED.**
+  work/string-ownership-refactor/STRING-ARC-ENDGAME-RESUME-
+  CHECKPOINT.md (copy: /tmp/drift-announce/2026-07-20T060043Z-...).
+  Explicitly NOT built on NEXT-PHASE-PLAN.md (completed Scope-A
+  plan; historical only). Contents: (1) the three small follow-ups
+  DISPOSED individually — 2a projected-place scrutinee audit (own
+  report-only checkpoint, checker surface, not endgame-coupled),
+  2b ConstShare synthesis visibility (independent repro-first
+  checker slice, maintainer priority), 2c match-consume spec prose
+  (doc-only, no version stamps per convention, RECOMMENDED FIRST);
+  (2) string_arc responsibility+consumer AUDIT R1-R10, quantified
+  from build/tmp/flagret (R1 entry zero-init cornerstone; R2
+  overwrite releases 233,519; R3 scope-exit strings 68,562 + elision
+  fold; R4 return retain-wrap/alias walk — the 0.27.145 re-proof
+  surface; R5 MoveOut expansion 1,852,137; R6 site-3/4 destructibles
+  — recommended FIRST fold into cleanup_authoring; R7 array
+  overwrite drop; R8 recognition 618,744; R9 dead-but-greppable
+  surfaces die with the file; R10 shared-analysis library extraction
+  — mechanical, corpus +0, can go first) + consumer graph (driftc,
+  string_releases, 27 test files; reporter has no import);
+  pre_post_verdict_drift 48,178 + c1_path_dependent 20,384 carried
+  as B-repr inputs; (3) B5 entry criteria SCOREBOARD — criterion 2
+  (C3 hard gate) DISCHARGED 2026-07-13, criterion 3 (Array elision)
+  DISCHARGED AND SUPERSEDED (landed 0.33.84 → sweep retired 0.33.85
+  → flags 0.33.86), criterion 1 in progress via the audit, criterion
+  4 standing green; (4) compiler/ABI/cert assumptions refreshed
+  (certified 0.33.84; 0.33.86 candidate in full suite; ABI 21
+  through the endgame; first ABI movement is B-repr 21→22 + recert;
+  flocker 0.2.1 infra fix in-tree); (5) proposed resume order —
+  every step its own checkpoint→review→implement cycle, NOTHING
+  authorized by the document. Ends at STOP.
