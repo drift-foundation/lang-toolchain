@@ -2693,3 +2693,58 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   flocker 0.2.1 infra fix in-tree); (5) proposed resume order —
   every step its own checkpoint→review→implement cycle, NOTHING
   authorized by the document. Ends at STOP.
+
+- 2026-07-20 — **Resume checkpoint REV 2 — all six static-review
+  corrections folded (review 2026-07-20T060714Z, HOLD → satisfied;
+  copy: 2026-07-20T061026Z-...-rev2.md).**
+  (1) R4 RESTATED on the live surface: the "return-value
+  retain-wrap" premise is RETIRED (_ensure_owned identity;
+  return_retain_site3 extinct + fail-closed) — R4 = the String
+  alias-walk SKIP + move-approval bookkeeping; the 0.27.145
+  re-proof restated against the CURRENT upstream-stake/
+  ledger-visible model; the stale retain-wrap comments in
+  string_arc recorded as R3/R4-slice-owned cleanup.
+  (2) R5 ORDER RESOLVED: migrates LATE (after R3/R8), "early" claim
+  dropped; hard gates pinned (string_releases keeps seeing the
+  pre-expansion MoveOut producer / TLR-8 semantics; recognition
+  placement, moveout_feeds_drop, C3 audit shape byte-identical;
+  "promote into HIR→MIR" not pre-approved without a pipeline-shape
+  proof).
+  (3) R6: site-3 destructible drops marked UNMEASURED (site4=14
+  measures site 4 only); the R6 checkpoint's FIRST GATE is an exact
+  bijection-grade site-3 baseline; "smallest family" claim
+  withdrawn until measured.
+  (4) CONSUMER GRAPH corrected + reproducible: drop_flags/
+  drop_policy_compute are string_arc's DEPENDENCIES (direction
+  fixed); string_releases' FIVE direct imports enumerated vs
+  closure members (is_materialized_release_family_producer /
+  recognize_materialized_releases / string_operand_dispositions /
+  consumes_string_operand have NO production consumer outside
+  string_arc); test counts with the exact queries — 15 files
+  import/name the module path, 44 mention the string; the
+  unreproducible "27" retired.
+  (5) 2b upgraded to LANGUAGE_BUG process (regression-first +
+  refactor_triggers scan + intake); 2a gains the STOP-AND-CLASSIFY
+  rule on any semantic defect found.
+  (6) flocker premise refreshed: 0.2.1 COMMITTED on mainline
+  (648749ed), test infrastructure outside compiler versioning.
+  Still report-only, still STOP; per the review no new arm-selection
+  review needed — first implementation candidate is a separate
+  checkpoint once certification state is recorded.
+
+- 2026-07-20 — **Resume checkpoint REV 3 — the two remaining factual
+  amendments closed (review 2026-07-20T061401Z, near-clear; copy:
+  2026-07-20T061609Z-...-rev3.md).** (1) The R10 8-vs-9 inventory
+  contradiction resolved: `consumes_string_operand` has ZERO call
+  sites anywhere (verified — definition string_arc.py:625 + prose/
+  docstring references only), so it is NOT an R10 closure member;
+  RECLASSIFIED under R9 as dead API that dies with the file, with
+  the zero-call-site search as proof and its contract PROSE (the
+  dispositions-model documentation) migrating with the R10 library
+  docs. R10 = exactly eight members (five direct string_releases
+  imports + three closure members). (2) flocker citation corrected:
+  implementation commit is 0b5a483b (bin/flocker + test + doc);
+  648749ed is the PROGRESS-only log commit — both cited with roles.
+  Checkpoint is STATICALLY CLEAR per the review and remains at STOP
+  pending certification state; the R10 extraction gets its own
+  separate checkpoint.
