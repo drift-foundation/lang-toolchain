@@ -2641,3 +2641,22 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   delta → user-run full suite → 0.33.86 certification + release;
   then small recorded follow-ups → string_arc endgame/re-homing
   inventory → B-repr(B5) entry audit.
+
+- 2026-07-20 — **Final wording hold CLEARED (review
+  2026-07-20T053236Z: "implementation and acceptance approved";
+  commit-cleared without another review loop).** Two exact
+  comment-only corrections applied: (1) cleanup_authoring per-arm
+  paragraph replaced with the actual classification contract
+  (activates only when EVERY candidate is zero-storage-unsafe PD +
+  flag-managed; UNGUARDED or SKIP anywhere disables per-arm;
+  remaining hook emissions keep reverse-decl order; SKIP candidates
+  emit NOTHING; mixed hooks keep the guarded fallback) — the old
+  text wrongly said SKIP candidates "must emit"/"everything emits";
+  (2) the 2b pin docstring no longer claims Unreachable is the only
+  terminator — corrected to "no Return block anywhere; terminal
+  block ends in Unreachable" (the diamond's IfTerminator/Goto
+  acknowledged). Verified: parse OK, git diff --check clean, zero
+  scratch markers (all families), touched batteries 26/26. No
+  corpus/runtime rerun (comment/docstring only, per reviewer). The
+  0.33.86/ABI 21 candidate is COMMIT-CLEARED; maintainer's full
+  serial suite + certification follow.
