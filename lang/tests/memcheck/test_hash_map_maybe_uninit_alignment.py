@@ -221,7 +221,7 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 			f"Touch points:\n"
 			f"  - `stdlib/std/containers/array.drift::HashMapCore` (insert/remove/destroy)\n"
 			f"  - `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.MAYBE_*`\n"
-			f"  - `lang/driftc/stage2/string_arc.py` (StoreRef drop-before-overwrite)\n"
+			f"  - `lang/driftc/stage2/overwrite_cleanup.py` (StoreRef overwrite release)\n"
 			f"Valgrind error count: {errors}\n\n"
 			f"Valgrind log tail:\n{vg_log[-2000:]}"
 		)

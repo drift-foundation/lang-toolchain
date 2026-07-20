@@ -520,6 +520,43 @@ def _bump(agg: dict, key: str, n: int = 1) -> None:
 	agg[key] = agg.get(key, 0) + n
 
 
+# ── Slice B1 (2026-07-20): strict counted-only supplemental recorder ──
+#
+# The overwrite-cleanup pass runs AFTER string_arc has finalized its
+# per-fn audit, so it cannot fold its notes through StringArcAudit
+# (that would re-run C1/C2/C3, emit `skipped_no_ledger`, and double
+# `fns`).  This recorder folds ONLY explicitly-allow-listed
+# counted-only site classes into the process-global aggregate: it adds
+# `events` + `site_class:<class>` and NOTHING else — no `fns`, no
+# ledger classification.  A class outside the allow-list is a
+# fail-closed error (the population cannot silently drift to a
+# mis-tagged bucket).  Env-gated identically to StringArcAudit: when
+# the audit env is off, callers construct nothing and record nothing.
+_SUPPLEMENTAL_ALLOWED = frozenset({SITE_CLASS_OVERWRITE_RELEASE})
+
+
+def record_counted_only(site_class: str, n: int = 1) -> None:
+	"""Fold `n` events of a counted-only `site_class` into the global
+	aggregate (see the banner).  Fail-closed on any non-allow-listed
+	class."""
+	global _GLOBAL_FLUSH_REGISTERED
+	if site_class not in _SUPPLEMENTAL_ALLOWED:
+		raise AssertionError(
+			f"record_counted_only: '{site_class}' is not an allow-listed "
+			f"counted-only supplemental class {sorted(_SUPPLEMENTAL_ALLOWED)}"
+		)
+	if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+		raise AssertionError(
+			f"record_counted_only: n must be a positive int, got {n!r} "
+			f"(the recorder must never subtract or inject a malformed count)"
+		)
+	_bump(_GLOBAL_AGGREGATE, "events", n)
+	_bump(_GLOBAL_AGGREGATE, "site_class:" + site_class, n)
+	if not _GLOBAL_FLUSH_REGISTERED:
+		_GLOBAL_FLUSH_REGISTERED = True
+		_atexit.register(_flush_global_aggregate)
+
+
 class StringArcAudit:
 	"""Per-function collector + differential classifier.
 

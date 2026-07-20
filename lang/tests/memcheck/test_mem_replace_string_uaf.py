@@ -28,7 +28,7 @@ lowering at `lang/driftc/stage2/hir_to_mir.py` emitted
 \t\tStoreRef(ptr=…, value=new_val)
 \t\treturn old_val
 
-`string_arc`'s late-rewrite at `string_arc.py:1106-1119`
+`overwrite_cleanup`'s StoreRef rewrite (moved out of string_arc in Slice B1)
 intercepts every `StoreRef` to a String place and synthesizes
 `LoadRef + StringRelease` of the prior slot value
 (drop-before-overwrite).  For non-Copy refcount types this released
@@ -55,7 +55,7 @@ the place tombstoned.
 ownership-transfer primitive (see `mir_nodes.py::MoveFromRef`).
 String-arc's `StoreRef` rewrite still runs but now reads the
 tombstoned (zero) bytes and does `drift_string_release(null)` — a
-documented runtime no-op (see `string_arc.py:1097-1099`).
+documented runtime no-op (see the MoveFromRef contract in mir_nodes.py).
 
 **Carriers in this file.**  One per shape, exercising the same
 fix path through different place-expression and element-type
@@ -270,7 +270,7 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 			f"{broken_state_hint}\n"
 			f"Touch points:\n"
 			f"  - `lang/driftc/stage2/hir_to_mir.py` (REPLACE intrinsic lowering)\n"
-			f"  - `lang/driftc/stage2/string_arc.py:1106-1119` (StoreRef drop-before-overwrite)\n"
+			f"  - `lang/driftc/stage2/overwrite_cleanup.py` (StoreRef overwrite release)\n"
 			f"  - `lang/driftc/stage2/mir_nodes.py::MoveFromRef` (tombstone contract)\n"
 			f"Valgrind error count: {errors}\n\n"
 			f"Valgrind log tail:\n{vg_log[-2000:]}"
@@ -284,7 +284,7 @@ def test_mem_replace_string_var_no_uaf(tmp_path: Path) -> None:
 
 	If this test fails, the lowering has regressed: either the
 	`MoveFromRef + StoreRef + MoveOut` chain no longer tombstones
-	the slot before `string_arc`'s StoreRef rewrite, or one of the
+	the slot before `overwrite_cleanup`'s StoreRef rewrite, or one of the
 	three instructions has been reordered to mutate the destination
 	before the replacement value is fully lowered.
 	"""
@@ -297,7 +297,7 @@ def test_mem_replace_string_var_no_uaf(tmp_path: Path) -> None:
 		broken_state_hint=(
 			"`old_s` returned by mem.replace dangles because the "
 			"synthesized drop-before-overwrite at "
-			"`string_arc.py:1106-1119` released the original String "
+			"`overwrite_cleanup` released the original String "
 			"before the caller could use the returned value."
 		),
 	)

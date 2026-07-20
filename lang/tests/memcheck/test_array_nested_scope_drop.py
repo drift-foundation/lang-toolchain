@@ -213,7 +213,8 @@ def _assert_valgrind_clean(lost: int, vg_log: str, *, label: str, broken_state_h
 		f"Touch points: `_ensure_array_drop_helper` (LLVM), "
 		f"`ArrayDrop` lowering, scope-exit authoring in "
 		f"`cleanup_authoring.py`, the overwrite-path "
-		f"`_drop_array_local` (string_arc.py).\n\n"
+		f"array overwrite drop in `overwrite_cleanup.py` (moved out of "
+		f"string_arc in Slice B1, 2026-07-20).\n\n"
 		f"Valgrind log tail:\n{vg_log[-1500:]}"
 	)
 	if "Invalid read" in vg_log or "Invalid write" in vg_log or "Invalid free" in vg_log:

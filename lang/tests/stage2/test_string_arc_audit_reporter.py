@@ -390,8 +390,10 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 	  `sink` included — scope-exit array drops are cleanup_authoring's
 	  sole authority (hook-authored; this bare carrier has no hooks,
 	  which is exactly why arc must not backstop it);
-	- the drop-before-overwrite StoreLocal drops (a_live/a_moved/sink
-	  overwrite path) are OUT of scope and remain."""
+	- R7 array overwrite drops (a_live/a_moved/sink StoreLocal path)
+	  MOVED to overwrite_cleanup (Slice B1, 2026-07-20) — string_arc
+	  emits ZERO ArrayDrops now (pinned here); the overwrite drops are
+	  pinned in test_overwrite_cleanup.py."""
 	out = tmp_path / "audit.jsonl"
 	_audit_env(monkeypatch, out)
 	tt = TypeTable()
@@ -422,26 +424,13 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 		k.startswith(("site_class:scope_exit_arraydrop", "arraydrop_"))
 		for k in agg
 	), agg
-	# And the OUTPUT MIR carries only the drop-before-overwrite drops
-	# (StoreLocal path — out of scope): a_live/a_moved/sink each keep
-	# exactly the ONE overwrite drop their StoreLocal produced;
-	# a_uninit has none; NO local gains a Return-boundary drop (LIVE
-	# `sink` included — cleanup_authoring's hooks are the sole
-	# scope-exit authority, and this bare carrier deliberately has
-	# none).
-	loaded_by = {}
-	drop_counts: dict = {}
-	for blk in func.blocks.values():
-		for ins in blk.instructions:
-			if type(ins).__name__ == "LoadLocal":
-				loaded_by[ins.dest] = ins.local
-			elif type(ins).__name__ == "ArrayDrop":
-				src = loaded_by.get(getattr(ins, "array", None))
-				drop_counts[src] = drop_counts.get(src, 0) + 1
-	assert drop_counts.get("sink", 0) == 1, drop_counts
-	assert drop_counts.get("a_uninit", 0) == 0, drop_counts
-	assert drop_counts.get("a_live", 0) == 1, drop_counts
-	assert drop_counts.get("a_moved", 0) == 1, drop_counts
+	# string_arc emits ZERO ArrayDrops — the R7 overwrite drop authority
+	# moved to overwrite_cleanup (which runs after string_arc).
+	arraydrops = [
+		ins for blk in func.blocks.values() for ins in blk.instructions
+		if type(ins).__name__ == "ArrayDrop"
+	]
+	assert not arraydrops, f"string_arc must emit no ArrayDrop post-B1: {arraydrops}"
 
 
 def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) -> None:
@@ -529,11 +518,11 @@ def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
 	# The zero-back must not stake — no store_value_retain, no C2.
 	assert agg.get("site_class:store_value_retain", 0) == 0, agg
 	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
-	# Overwrite releases are still emitted (one for the initial
-	# StoreLocal over x's uninit slot, one for the StoreRef over the
-	# slot's old value) — the fix touches ONLY the stored-value
-	# classification, never the release side.
-	assert agg.get("site_class:overwrite_release", 0) == 2, agg
+	# Overwrite releases MOVED to overwrite_cleanup (Slice B1,
+	# 2026-07-20) — string_arc no longer emits them; this test now
+	# pins only the C2/store-value classification.  The release side
+	# is pinned in test_overwrite_cleanup.py.
+	assert agg.get("site_class:overwrite_release", 0) == 0, agg
 
 
 def test_string_arc_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatch) -> None:

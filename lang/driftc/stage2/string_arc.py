@@ -73,6 +73,7 @@ def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
 # emission code references are imported back here.  The dead
 # `consumes_string_operand` wrapper (zero call sites) was deleted
 # with the move; its contract prose lives with the library.
+from .string_ownership_analysis import classify_string_array_locals
 from .string_ownership_analysis import (
 	DRIFT_STRING_HELPER_SYMBOLS,
 	build_fnwide_producers,
@@ -135,11 +136,13 @@ def insert_string_arc(
 			return bool(type_table.has_drop(ty))
 		except Exception:
 			return False
-	string_ty = type_table.ensure_string()
 	local_types: Dict[str, TypeId] = func.local_types
-	string_locals: Set[str] = {
-		name for name in (list(func.params) + list(func.locals)) if local_types.get(name) == string_ty
-	}
+	# Slice B1: shared single-source classifier (string_ownership_analysis)
+	# so string_arc and overwrite_cleanup classify String/Array locals
+	# identically (a mismatch would leak or double-free).
+	string_ty, string_locals, array_locals = classify_string_array_locals(
+		func, type_table
+	)
 	storage_locals: Set[str] = set(func.params)
 	for _blk in func.blocks.values():
 		for _ins in _blk.instructions:
@@ -235,14 +238,6 @@ def insert_string_arc(
 	# __borrow_tmp: Stage 1 (borrow_materialize.py) normally materialises rvalue
 	# borrows into __tmp_borrow* locals that get scope-based drops.  This Stage 2
 	# inclusion is a defensive fallback in case that assumption breaks.
-	array_locals: Set[str] = {
-		name
-		for name in (list(func.params) + list(func.locals))
-		if (not name.startswith("__")) or name.startswith("__match_binder_") or name.startswith("__borrow_tmp")
-		if (tid := local_types.get(name)) is not None
-		and type_table.get(tid).kind is TypeKind.ARRAY
-	}
-
 	def _is_destructible_tid(tid: TypeId | None) -> bool:
 		if tid is None:
 			return False
@@ -374,7 +369,9 @@ def insert_string_arc(
 		zero = _new_temp()
 		out.append(M.ZeroValue(dest=zero, ty=string_ty))
 		local_types[zero] = string_ty
-		out.append(M.StoreLocal(local=local, value=zero))
+		_zb = M.StoreLocal(local=local, value=zero)
+		setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+		out.append(_zb)
 		if _audit is not None:
 			# Subject is the STORAGE LOCAL (what C1 quantifies over),
 			# not the loaded temp.
@@ -393,29 +390,10 @@ def insert_string_arc(
 				continue
 			_release_local(local, out, site_class=_ledger_reporter.SITE_CLASS_SCOPE_EXIT_RELEASE)
 
-	def _drop_array_local(local: str, out: list[M.MInstr]) -> None:
-		if local not in array_locals:
-			return
-		arr_ty = local_types.get(local)
-		if arr_ty is None:
-			return
-		td = type_table.get(arr_ty)
-		if td.kind is not TypeKind.ARRAY or not td.param_types:
-			return
-		elem_ty = td.param_types[0]
-		tmp = _new_temp()
-		out.append(M.LoadLocal(dest=tmp, local=local))
-		zero = _new_temp()
-		out.append(M.ZeroValue(dest=zero, ty=arr_ty))
-		local_types[zero] = arr_ty
-		out.append(M.StoreLocal(local=local, value=zero))
-		out.append(M.ArrayDrop(elem_ty=elem_ty, array=tmp))
-		local_types[tmp] = arr_ty
-
-	# `_drop_all_arrays` (the Return-boundary array sweep) was deleted
-	# in B-U (string-arc-endgame-array-sweep, 2026-07-19).
-	# `_drop_array_local` above survives for the drop-before-overwrite
-	# StoreLocal path only.
+	# `_drop_all_arrays` (Return-boundary array sweep) was deleted in B-U
+	# (2026-07-19); `_drop_array_local` (R7 array overwrite drop) was
+	# deleted in Slice B1 (2026-07-20) — that authority moved to
+	# `overwrite_cleanup`.
 
 	def _drop_destructible_local(local: str, out: list[M.MInstr]) -> None:
 		if local not in destructible_locals:
@@ -428,7 +406,9 @@ def insert_string_arc(
 		zero = _new_temp()
 		out.append(M.ZeroValue(dest=zero, ty=ty))
 		local_types[zero] = ty
-		out.append(M.StoreLocal(local=local, value=zero))
+		_zb = M.StoreLocal(local=local, value=zero)
+		setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+		out.append(_zb)
 		out.append(M.DropValue(value=tmp, ty=ty))
 		local_types[tmp] = ty
 
@@ -666,7 +646,9 @@ def insert_string_arc(
 					continue
 				zero = _new_temp()
 				new_instrs.append(M.ZeroValue(dest=zero, ty=string_ty))
-				new_instrs.append(M.StoreLocal(local=local, value=zero))
+				_zb = M.StoreLocal(local=local, value=zero)
+				setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+				new_instrs.append(_zb)
 				local_types[zero] = string_ty
 			for local in func.locals:
 				if local in func.params:
@@ -678,7 +660,9 @@ def insert_string_arc(
 					continue
 				zero = _new_temp()
 				new_instrs.append(M.ZeroValue(dest=zero, ty=arr_ty))
-				new_instrs.append(M.StoreLocal(local=local, value=zero))
+				_zb = M.StoreLocal(local=local, value=zero)
+				setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+				new_instrs.append(_zb)
 				local_types[zero] = arr_ty
 			for local in func.locals:
 				if local in func.params:
@@ -690,7 +674,9 @@ def insert_string_arc(
 					continue
 				zero = _new_temp()
 				new_instrs.append(M.ZeroValue(dest=zero, ty=dest_ty))
-				new_instrs.append(M.StoreLocal(local=local, value=zero))
+				_zb = M.StoreLocal(local=local, value=zero)
+				setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+				new_instrs.append(_zb)
 				local_types[zero] = dest_ty
 		# TLR-2b recognition — BEFORE use counting (the load-bearing
 		# ordering: StringRelease is a use per `_iter_used_values`, so an
@@ -853,7 +839,9 @@ def insert_string_arc(
 				moved_out_locals.discard(instr.local)
 				explicitly_dropped_locals.discard(instr.local)
 			if isinstance(instr, M.StoreLocal) and instr.local in array_locals:
-				_drop_array_local(instr.local, new_instrs)
+				# R7 array overwrite drop MOVED to overwrite_cleanup
+				# (Slice B1, 2026-07-20). string_arc keeps no per-array
+				# bookkeeping here — just pass the store through.
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in nullsafe_destructible_locals:
@@ -999,7 +987,9 @@ def insert_string_arc(
 					move_only_values.add(instr.dest)
 				zero = _new_temp()
 				new_instrs.append(M.ZeroValue(dest=zero, ty=instr.ty))
-				new_instrs.append(M.StoreLocal(local=instr.local, value=zero))
+				_zb = M.StoreLocal(local=instr.local, value=zero)
+				setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
+				new_instrs.append(_zb)
 				local_types[zero] = instr.ty
 				moved_out_locals.add(instr.local)
 				# Post-MoveOut the storage is zeroed.  A subsequent
@@ -1141,7 +1131,9 @@ def insert_string_arc(
 						owned_values.discard(instr.dest)
 
 			if isinstance(instr, M.StoreLocal) and _is_string_tid(local_types.get(instr.local)):
-				_release_local(instr.local, new_instrs, site_class=_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE)
+				# R2 overwrite release MOVED to overwrite_cleanup
+				# (Slice B1); string_arc keeps only its consume
+				# bookkeeping for the stored value.
 				val = instr.value
 				# Store staking is owned UPSTREAM by string_stakes; the
 				# 4a proven-String tripwire branch was deleted
@@ -1168,23 +1160,13 @@ def insert_string_arc(
 				# loaded from the slot — `drift_string_release(null)`
 				# is a runtime no-op, so this is safe regardless of
 				# whether the local was previously written.
-				_release_local(instr.local, new_instrs, site_class=_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE)
+				# R2 overwrite release MOVED to overwrite_cleanup (B1).
 				new_instrs.append(instr)
 				_note_use(instr.ptr, consume=True)
 				continue
 
 			if isinstance(instr, M.StoreRef) and _is_string_tid(instr.inner_ty):
-				old = _new_temp()
-				new_instrs.append(M.LoadRef(dest=old, ptr=instr.ptr, inner_ty=instr.inner_ty))
-				if _audit is not None:
-					_audit.note(
-						_ledger_reporter.STAKE_RELEASE, old,
-						_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
-						pre_point=(block.name, _instr_idx),
-						post_point=(block.name, len(new_instrs)),
-					)
-				new_instrs.append(M.StringRelease(value=old))
-				local_types[old] = string_ty
+				# R2 overwrite release MOVED to overwrite_cleanup (B1).
 				val = instr.value
 				# Retain-free single consume for every value class (see
 				# the StoreLocal arm — 4a tripwire branch deleted
@@ -1194,19 +1176,7 @@ def insert_string_arc(
 				continue
 
 			if isinstance(instr, M.ArrayIndexStore) and _is_string_tid(instr.elem_ty):
-				old = _new_temp()
-				new_instrs.append(
-					M.ArrayIndexLoad(dest=old, elem_ty=instr.elem_ty, array=instr.array, index=instr.index)
-				)
-				if _audit is not None:
-					_audit.note(
-						_ledger_reporter.STAKE_RELEASE, old,
-						_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
-						pre_point=(block.name, _instr_idx),
-						post_point=(block.name, len(new_instrs)),
-					)
-				new_instrs.append(M.StringRelease(value=old))
-				local_types[old] = string_ty
+				# R2 overwrite release MOVED to overwrite_cleanup (B1).
 				val = instr.value
 				# Retain-free single consume for every value class (see
 				# the StoreLocal arm — 4a tripwire branch deleted
@@ -1703,8 +1673,9 @@ def insert_string_arc(
 			# (verified corpus-exact: +924 events/moveout/zero-safe,
 			# sweep counters 4,620 → 3,696 → 0).  cleanup_authoring is
 			# the SOLE authority for scope-exit array drops; the
-			# overwrite-path `_drop_array_local` caller is untouched,
-			# and the entry-block array zero-init above SURVIVES (the
+			# array OVERWRITE drop moved to `overwrite_cleanup` in
+			# Slice B1 (`_drop_array_local` deleted, 2026-07-20);
+			# the entry-block array zero-init above SURVIVES (the
 			# zero-safety proof depends on it — endgame-inventory
 			# item).
 			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)

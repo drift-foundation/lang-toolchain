@@ -2,8 +2,9 @@
 """Static audit of direct MIR mutation discipline in the stage2
 ownership/cleanup passes.
 
-Scans the four scoped files (`drop_flags.py`, `cleanup_authoring.py`,
-`match_cleanup_authoring.py`, `string_arc.py`) for the mutation
+Scans the scoped ownership/cleanup passes (`drop_flags.py`,
+`cleanup_authoring.py`, `match_cleanup_authoring.py`, `string_arc.py`,
+`string_stakes.py`, `overwrite_cleanup.py`) for the mutation
 patterns enumerated in `work/ledger-cache-safety/plan.md` and
 requires each match to be paired with EITHER:
 
@@ -48,6 +49,10 @@ SCOPED_FILES = (
 	# B-arch-1a: the call-arg stake materialization pass mutates
 	# block.instructions and must follow the same dirty-bit discipline.
 	"lang/driftc/stage2/string_stakes.py",
+	# Slice B1: the instruction-local overwrite-cleanup pass rewrites
+	# block.instructions (R2/R7 old-value releases) and marks the
+	# ledger dirty under the same discipline.
+	"lang/driftc/stage2/overwrite_cleanup.py",
 )
 
 # Each pattern matches a direct MIR mutation shape.  Kept narrow
@@ -112,7 +117,7 @@ def _audit_file(rel_path: str) -> list[tuple[int, str]]:
 
 
 def test_ledger_cache_safety_mutation_audit() -> None:
-	"""Every direct MIR mutation in the four scoped files must be
+	"""Every direct MIR mutation in the scoped files must be
 	paired with a nearby `mark_ledger_dirty(...)` call OR an inline
 	allow marker with a free-text reason.  If you see this test
 	fail, see `work/ledger-cache-safety/plan.md` for the contract

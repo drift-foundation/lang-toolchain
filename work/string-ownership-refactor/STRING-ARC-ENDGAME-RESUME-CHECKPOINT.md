@@ -163,32 +163,70 @@ no string drop-flags, standing decision).
 1. Follow-up 2c (spec prose) rides the next doc touch; 2a/2b
    scheduled as an independent checker batch at maintainer priority.
 2. 0.33.86 full suite → certification (in flight).
-3. COMPRESSED SEQUENCE (maintainer, 2026-07-20 — supersedes the
-   original per-R ladder; certification happens at
-   BEHAVIOR-CHANGING release boundaries, not after every mechanical
-   refactor):
-   - **A**: R10 extraction + dead-analysis/comment cleanup
-     (consumes_string_operand deletion, stale late-retain authority
-     wording) — THIS slice (mechanical; no cert cycle).
-   - **B**: R6 + R2/R7 cleanup-authority migration (FIRST GATE
-     unchanged: the site-3 baseline measurement; behavior-changing →
-     release boundary).
-   - **C**: R3/R4/R8 String return/scope authority (the 0.27.145
-     re-proof against the CURRENT upstream-stake/ledger model;
-     behavior-changing → release boundary).
-   - **D**: R5 + R1 + final `string_arc.py` deletion — ONLY if D's
-     own checkpoint proves that bundle safe (R5 keeps its
-     pipeline-shape gates; R1 re-home keeps the zero-safety chain
-     intact through the transition).
-4. B-repr(B5) DESIGN-FIRST entry per the pinned §10.2.1 decisions
-   (ABI 21 → 22, pool recert, DriftQuery coordination), with
-   `pre_post_verdict_drift` as the clean modeling input.
+3. CONSOLIDATED ENDGAME (maintainer, 2026-07-20T195625Z — SUPERSEDES
+   the compressed A-D "certify per behavior-changing slice" framing):
+   **0.33.87 / ABI 21 is ONE candidate = the complete endgame, one
+   version bump, ONE final certification when `string_arc.py` is
+   DELETED.** Intermediate commits encouraged; NO intermediate
+   compiler releases or certifications. Development gates (focused
+   tests, memcheck carriers, corpus deltas, structural gates) after
+   each coherent chunk. Report-only checkpoints ONLY for a genuine
+   architectural choice, a measured premise mismatch, a
+   LANGUAGE_BUG, an ABI/runtime implication, or a failed invariant —
+   mechanical relocation proceeds without micro-checkpoints. Static
+   review covers coherent responsibility GROUPS; small in-review
+   corrections close in the same round.
+   Integration line (all on branch string-arc-endgame-cleanup-
+   authority, one 0.33.87 candidate):
+   - **A — DONE**: R10 analysis-library extraction (landed).
+   - **B1 — DONE (review-closing)**: R2/R7 instruction-local
+     overwrite authority → overwrite_cleanup.
+   - **B2**: all remaining R6 — site-3 (1,088 synthetic
+     Return-epilogue error-binder/discard cleanup) + site-4 (14).
+     Report-only checkpoint REQUIRED (measured premise mismatch:
+     site-3 does not fit generic CleanupHooks — compare lifetime
+     hooks at binder/temp creation sites vs a dedicated
+     Return-cleanup author).
+   - **C**: R3/R4/R8 String return/scope authority (0.27.145
+     re-proof against the CURRENT upstream-stake/ledger model).
+   - **D**: R5 + R1 + every remaining responsibility → DELETE
+     `string_arc.py` and its driver phase; retire migration-only
+     counters/tripwires/reporter paths/comments/tests unless
+     justified as permanent gates or historical; final
+     residual-reference sweep clean.
+   - **DoD**: string_arc.py + driver phase deleted; no production
+     import/shim; tests/diagnostics name FINAL authorities; final
+     corpus bijectively explained, hard gates zero, memcheck green;
+     THEN one full serial suite + certification.
+4. B-repr(B5) DESIGN-FIRST — SEPARATE release boundary (intentionally
+   ABI 21 → 22; own pool/toolchain coordination + certification),
+   per §10.2.1, with `pre_post_verdict_drift` as the clean modeling
+   input.
 
-Each numbered step above is its own checkpoint→review→implement
-cycle with predicted-delta acceptance; none is authorized by this
-document.
+CONSOLIDATED ENDGAME DIRECTIVE (2026-07-20T195625Z) — SUPERSEDES the
+per-step framing above: B1→B2→C→D are chunks on ONE 0.33.87 / ABI 21
+candidate, NOT independent release/cert boundaries. Intermediate
+commits for recoverability are encouraged; there are NO intermediate
+certifications — ONE full serial suite + certification only after
+`string_arc.py` and its driver phase are deleted (end of D).
+Report-only checkpoints are reserved for genuine architectural
+choice / measured-premise mismatch / LANGUAGE_BUG / ABI implication /
+failed invariant; mechanical relocation proceeds without
+micro-checkpoints. Development gates (focused tests, memcheck, corpus
+deltas, structural gates) still run after each chunk. B-repr (B5)
+remains a SEPARATE ABI 21→22 boundary with its own certification.
 
-## 6. STOP
+## 6. Status
 
-Report-only. No implementation, no code changes, no reordering of
-the maintainer's queue. Awaiting review.
+- **B1 — DONE, commit-clear** (final static review
+  2026-07-20T222129Z): three blockers closed; 924-fixture corpus
+  +0 (reconstructed via 21-fixture recompile after an interrupted
+  shard). Four non-blocking cleanup items folded into B2/final
+  cleanup (see SLICE-B §10). No standalone B1 suite/cert/deploy.
+- **B2 — architectural checkpoint OPEN** (this is the next
+  report-only gate; all remaining R6: site-3 1,088 + site-4 14).
+  Written: `SLICE-B2-R6-ARCHITECTURAL-CHECKPOINT.md` — recommends
+  Option A (relocate site-3+site-4 into a dedicated
+  `destructible_cleanup` MIR pass at string_arc's slot on ledger A),
+  defers Option B (creation-site lifetime hooks in HIR→MIR) as a
+  separate future project. Awaiting decision on its §7.

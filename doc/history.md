@@ -1,5 +1,47 @@
 # Drift development history
 
+## 2026-07-20 (0.33.87: string_arc endgame — consolidated ABI-21 cleanup that deletes string_arc.py; ABI stays 21)
+
+This is the CONSOLIDATED string_arc endgame candidate (maintainer
+direction 2026-07-20T195625Z): the whole ABI-21 endgame — moving or
+retiring every remaining string_arc responsibility until
+`string_arc.py` and its driver phase are deleted — ships under one
+version bump and is certified once when complete. Landed chunks are
+recorded below as they integrate; B-repr (ABI 21 → 22) remains a
+separate design/release boundary.
+
+### Chunk B1 — instruction-local overwrite cleanup
+
+The String and Array overwrite-cleanup emission that lived inside
+`string_arc` — releasing/dropping the OLD value at an overwriting
+store — moves to a dedicated `overwrite_cleanup` pass (Slice B1 of
+the string_arc endgame). Two instruction-local families:
+
+- **R2 String overwrite releases** (233,519): StoreLocal / MoveFromRef
+  into a String local, and StoreRef / ArrayIndexStore of a String
+  pointee/element — emit `StringRelease` of the prior value.
+- **R7 Array overwrite drops** (143,008): StoreLocal into an Array
+  local — emit `ArrayDrop` of the prior array.
+
+The pass runs AFTER `string_arc` and needs no ledger (pure structural
+type checks); running after keeps string_arc's release-recognition
+walk from ever seeing these releases, so its counters are unchanged.
+It authors the release/drop immediately before each user store
+(old-value-before-new-store order + span preserved), skipping
+string_arc's synthetic ZeroValue zero-backs (which are not
+overwrites). Retain-before-release / self-alias (`x = x`) safety is
+preserved by pipeline order: the store-value copy stake is
+materialized upstream before string_arc.
+
+`string_arc` loses its four R2 arms, its R7 arm, and `_drop_array_local`;
+the String/Array local classification is now the shared
+`classify_string_array_locals`. The `overwrite_release` counter is
+preserved by a strict counted-only reporter recorder. Compiler-
+internal cleanup-authority move only; no runtime or boundary change —
+ABI stays 21. Corpus: every counter +0 (`overwrite_release` 233,519
+exact). R6 (destructible Return-boundary site-3 + drop-before-
+overwrite site-4) stays in `string_arc`, deferred to Slice B2.
+
 ## 2026-07-20 (0.33.86: zero-storage-safe drop-flag retirement — flags exist only where a runtime ownership bit is needed; ABI stays 21)
 
 Drop flags are no longer allocated for zero-storage-safe types

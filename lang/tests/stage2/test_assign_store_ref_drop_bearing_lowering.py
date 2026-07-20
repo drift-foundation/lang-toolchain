@@ -17,8 +17,9 @@ replace-store sequence:
 	DropValue(value=old_val, ty)
 	StoreRef(ptr, value=new, inner_ty)           # store new
 
-double-released the old field value for `String` slots: `string_arc`'s
-StoreRef rewrite (`stage2/string_arc.py:1108-1121`) synthesizes
+double-released the old field value for `String` slots: the StoreRef
+overwrite rewrite (`stage2/overwrite_cleanup.py`, Slice B1; moved out of
+string_arc) synthesizes
 `LoadRef + StringRelease + StoreRef` for **every** `StoreRef` to a
 String place, so the tombstone-store at line 3 became a real release
 of the old slot value, and the explicit `DropValue` at line 4 then
@@ -33,14 +34,15 @@ transfer primitive that atomically tombstones the slot and captures
 the old value into a local; `MoveOut` drains the local into an SSA
 value the consumer can drop; `DropValue` performs the single
 release; the final `StoreRef` writes the new value into the
-tombstoned slot.  For String, `string_arc`'s post-pass rewrite of
+tombstoned slot.  For String, `overwrite_cleanup`'s rewrite of
 the final `StoreRef` synthesizes a `LoadRef + StringRelease`
 against the **already-tombstoned** slot — `drift_string_release` on
 null bytes is a documented runtime no-op, so the rewrite remains
 correct without changes.
 
-**Authority boundary.**  This pin observes the post-string_arc MIR
-of `mutate`.  It verifies that exactly one `M.MoveFromRef` is
+**Authority boundary.**  This pin observes the fully-lowered MIR of
+`mutate` (post-string_arc, post-`overwrite_cleanup`).  It verifies
+that exactly one `M.MoveFromRef` is
 emitted for the drop-bearing field assignment, exactly one
 `M.MoveOut` drains its local, exactly one `M.DropValue` releases the
 moved-out SSA value, and exactly one terminal `M.StoreRef` carries
@@ -139,7 +141,7 @@ def test_emit_assign_store_ref_uses_movefromref_at_ptr(tmp_path: Path) -> None:
 	   `_emit_assign_store_ref` reserves for replace-store
 	   tombstones.
 
-	String case is exercised here because `string_arc.py` rewrites
+	String case is exercised here because `overwrite_cleanup` rewrites
 	`StoreRef` for String places, but the canonical sequence
 	emitted by `_emit_assign_store_ref` is type-agnostic — any
 	drop-bearing `T` (Arc, Destructible struct, Array<U>, ...) goes
@@ -195,14 +197,14 @@ def test_emit_assign_store_ref_no_zero_tombstone_storeref(tmp_path: Path) -> Non
 		StoreRef(ptr, value=new_val)
 
 	double-released the old field value for `String` slots:
-	`string_arc.py:1108-1121` rewrites every `StoreRef` to a String
+	`overwrite_cleanup` rewrites every `StoreRef` to a String
 	place as `LoadRef + StringRelease + StoreRef`, so the
 	zero-tombstone `StoreRef` became a real release of the old slot
 	value AND the explicit `DropValue` released the same allocation
 	again via the SSA loaded before the tombstone.
 
 	`MoveFromRef` does the tombstoning atomically and does NOT route
-	through `string_arc`'s StoreRef rewrite, so it has exactly one
+	through `overwrite_cleanup`'s StoreRef rewrite, so it has exactly one
 	release of the old value (the explicit `DropValue` on the
 	moved-out SSA).  This pin catches a future regression that
 	reverts to the zero-tombstone shape — even if framed via a new
@@ -239,11 +241,11 @@ def test_emit_assign_store_ref_string_release_count(tmp_path: Path) -> None:
 	`DropValue`s of String type and asserts exactly one fires for
 	the assignment's old-field release.
 
-	Note: `string_arc`'s rewrite of the final `StoreRef` synthesizes
+	Note: `overwrite_cleanup`'s rewrite of the final `StoreRef` synthesizes
 	a `M.StringRelease` of the slot's pre-store contents — but that
 	release fires on the **already-tombstoned** slot (null bytes), a
 	documented runtime no-op.  We don't count `M.StringRelease`
-	(which `string_arc` may emit for that no-op release); we count
+	(which `overwrite_cleanup` may emit for that no-op release); we count
 	`M.DropValue` of String, which represents the explicit release
 	of the captured old value.
 	"""

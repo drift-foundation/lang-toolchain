@@ -4,7 +4,12 @@
 The stage2 ownership/cleanup passes (`cleanup_authoring`,
 `match_cleanup_authoring`, `string_arc`) read the attached ledger
 via `func._ownership_ledger` to drive emission decisions
-(`verdict_at`, `_DropVerdict`).  The driver (`driftc.py`) and
+(`verdict_at`, `_DropVerdict`).  Other passes (`string_stakes`,
+`overwrite_cleanup`) do NOT consult the ledger, but they MUTATE the
+MIR the ledger is cached against, so they follow the same dirty-bit
+discipline: any `(block, idx)`-shifting rewrite must
+`mark_ledger_dirty(func, ...)` so the next consumer rebuilds instead
+of reading stale cached state.  The driver (`driftc.py`) and
 in-pass code rebuild that ledger at well-known points
 (post-drop_flags, post-cleanup_authoring, etc).  Between rebuilds,
 any direct MIR mutation can invalidate the ledger silently:
@@ -21,7 +26,7 @@ of this failure mode.
 
 This module turns the discipline into a runtime assertion:
 
-  * Every direct MIR mutation in the four scoped files calls
+  * Every direct MIR mutation in the scoped files calls
     `mark_ledger_dirty(func, reason)` immediately after.
   * Every read of `func._ownership_ledger` routes through either
     `require_fresh_ledger` (hard-assert) or `maybe_fresh_ledger`
@@ -120,7 +125,8 @@ def mark_ledger_dirty(func: "M.MirFunc", reason: str) -> None:
 
 	Call IMMEDIATELY AFTER any direct MIR mutation in the stage2
 	ownership/cleanup passes (drop_flags, cleanup_authoring,
-	match_cleanup_authoring, string_arc).  No-op if no ledger
+	match_cleanup_authoring, string_arc, string_stakes,
+	overwrite_cleanup).  No-op if no ledger
 	is attached.
 
 	`reason` is free-text and appears in the staleness

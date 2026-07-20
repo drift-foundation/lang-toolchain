@@ -956,3 +956,35 @@ def compute_string_temp_liveness(
 				live_out[name] = out
 				changed = True
 	return live_out
+
+
+def classify_string_array_locals(
+	func: "M.MirFunc",
+	type_table: TypeTable,
+) -> "tuple[TypeId, Set[str], Set[str]]":
+	"""Shared single-source classifier for the STRING and ARRAY local
+	sets used by the overwrite-cleanup family (Slice B1) and string_arc.
+
+	Returns `(string_ty, string_locals, array_locals)`.  Extracted
+	VERBATIM from string_arc's inline builds so the overwrite-cleanup
+	pass and string_arc classify identically — a mismatch would leak
+	(missed release/drop) or double-free (both passes emit).  The
+	destructible / nullsafe / error apparatus is deliberately NOT here
+	(Slice B2 owns it)."""
+	string_ty = type_table.ensure_string()
+	local_types = func.local_types
+	string_locals: Set[str] = {
+		name
+		for name in (list(func.params) + list(func.locals))
+		if local_types.get(name) == string_ty
+	}
+	array_locals: Set[str] = {
+		name
+		for name in (list(func.params) + list(func.locals))
+		if (not name.startswith("__"))
+		or name.startswith("__match_binder_")
+		or name.startswith("__borrow_tmp")
+		if (tid := local_types.get(name)) is not None
+		and type_table.get(tid).kind is TypeKind.ARRAY
+	}
+	return string_ty, string_locals, array_locals

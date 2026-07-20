@@ -672,10 +672,12 @@ class MoveFromRef(MInstr):
 	  3. Transfer the loaded value into `local` (the local's storage
 	     receives the bytes; ownership of the value moves with them).
 
-	**The whole point**: this is a TRANSFER, not a Copy.  `string_arc`
-	(and any other ownership-aware pass) must recognise `MoveFromRef`
-	as moving the source's ownership stake into `local` — NO
-	`StringRetain` / equivalent retain is inserted on this store.  The
+	**The whole point**: this is a TRANSFER, not a Copy.  Ownership-
+	aware passes must recognise `MoveFromRef` as moving the source's
+	ownership stake into `local` — NO `StringRetain` / equivalent
+	retain is inserted on this store.  The RELEASE of the
+	destination's prior String value is authored by `overwrite_cleanup`
+	(Slice B1, 2026-07-20; it moved out of `string_arc`).  The
 	caller is responsible for releasing the transferred stake exactly
 	once via a tail chain that drains `local` (typically
 	`MoveOut(dest, local) + DropValue(dest)`, or `MoveOut(dest, local)`
@@ -723,8 +725,9 @@ class MoveFromRef(MInstr):
 	     `ctx.s = ctx.s + "A"` is materialised in `new_val` before
 	     the slot is tombstoned.  The legacy
 	     `LoadRef + ZeroValue + StoreRef(zero) + DropValue` shape
-	     this replaced double-released the old value via
-	     `string_arc.py:1108-1121`'s StoreRef rewrite — see the
+	     this replaced double-released the old value via the StoreRef
+	     overwrite rewrite (in `overwrite_cleanup` since Slice B1;
+	     `string_arc` before it) — see the
 	     LANGUAGE_BUG carrier at
 	     `lang/tests/memcheck/test_mut_struct_string_field_self_concat.py`
 	     and the contract pin at

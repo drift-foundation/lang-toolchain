@@ -8232,6 +8232,39 @@ def compile_stubbed_funcs(
 							return {}, checked, None
 						return {}, checked
 					return {}
+		# Slice B1 (string-arc-endgame-cleanup-authority, 2026-07-20):
+		# instruction-local OVERWRITE cleanup (R2 String overwrite
+		# releases + R7 Array overwrite drops) moved out of string_arc
+		# into a dedicated pass that runs AFTER it — string_arc's
+		# recognition walk never sees these releases, and R2/R7 need no
+		# ledger (pure structural type checks).  Same boundary
+		# containment as string_arc above.
+		with _timed("overwrite_cleanup"):
+			from lang.driftc.stage2.overwrite_cleanup import (
+				insert_overwrite_cleanup as _insert_overwrite_cleanup,
+			)
+			for fn_id, func in mir_funcs_by_id.items():
+				try:
+					mir_funcs_by_id[fn_id] = _insert_overwrite_cleanup(
+						func,
+						type_table=shared_type_table,
+					)
+				except AssertionError as err:
+					_append_boundary_contract_diag(
+						checked,
+						phase="overwrite_cleanup",
+						prefix="overwrite cleanup contract failure",
+						err=err,
+						fn_id=fn_id,
+						signatures_by_id=signatures_by_id,
+						origin_by_fn_id=origin_by_fn_id,
+					)
+					_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+					if return_checked:
+						if return_ssa:
+							return {}, checked, None
+						return {}, checked
+					return {}
 		unknown_ty = shared_type_table.ensure_unknown()
 		for func in mir_funcs_by_id.values():
 			func.local_types = dict(getattr(func, "local_types", {}) or {})

@@ -48,9 +48,11 @@ bug).
 	DropValue(old_val, ty=inner_ty)
 	StoreRef(ptr, value=new_val, inner_ty)
 
-For `inner_ty == String`, `string_arc.py:1108-1121` rewrites every
-`StoreRef` to a String place as `LoadRef + StringRelease + StoreRef`
-— so the zero-tombstone `StoreRef` became a real release of the
+For `inner_ty == String`, `overwrite_cleanup` (Slice B1,
+2026-07-20; the StoreRef overwrite release moved out of `string_arc`)
+rewrites every `StoreRef` to a String place as
+`LoadRef + StringRelease + StoreRef` — so the zero-tombstone
+`StoreRef` became a real release of the
 old slot value, and the explicit `DropValue` then released the same
 allocation a second time via the SSA snapshot loaded BEFORE the
 tombstone.  Two real releases of the same allocation; the new
@@ -69,7 +71,7 @@ new occupant.  `_emit_assign_store_ref` now emits
 
 The old-value release authority is the explicit `DropValue` on the
 moved-out SSA — exactly one release per assignment, regardless of
-type.  For String places `string_arc`'s rewrite of the final
+type.  For String places `overwrite_cleanup`'s rewrite of the final
 `StoreRef` still synthesizes a `LoadRef + StringRelease`, but it
 fires against the **already-tombstoned** slot (null bytes);
 `drift_string_release(null)` is a documented runtime no-op (see
@@ -273,8 +275,9 @@ def test_heap_seeded_one_call_no_uaf(tmp_path: Path) -> None:
 	  legacy `LoadRef + ZeroValue + StoreRef(zero) + DropValue`
 	  shape — the zero-tombstone `StoreRef` plus the explicit
 	  `DropValue` would re-emit two real releases of the old value
-	  via `string_arc`'s String StoreRef rewrite (`Invalid read` /
-	  `SIGABRT` from `drift_string_release`'s tcache check).
+	  via `overwrite_cleanup`'s String StoreRef rewrite (moved out of
+	  string_arc in Slice B1) (`Invalid read` / `SIGABRT` from
+	  `drift_string_release`'s tcache check).
 	- A regression that drops the `MoveFromRef` so the slot is no
 	  longer tombstoned before the final `StoreRef` — the final
 	  rewrite's release would then fire on the still-live old value

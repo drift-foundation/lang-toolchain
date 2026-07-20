@@ -40,7 +40,7 @@ The lowering itself is one MIR op (`ZeroValue(MaybeUninit<T>)`),
 but it composes with three other intrinsics (`maybe_write`,
 `maybe_assume_init_read`) that each do their own pointer-write /
 zero-fill / move-out steps.  The String case exercises
-`string_arc`'s late StoreRef rewrite against the slot tombstone;
+`overwrite_cleanup`'s StoreRef rewrite against the slot tombstone;
 the Arc case exercises the Arc destructor against the +1 stake
 transfer through the slot.  Both are direct heap-touching paths
 through the ledger and codegen layers.
@@ -168,7 +168,7 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 			f"  - `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.MAYBE_UNINIT`\n"
 			f"  - `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.MAYBE_WRITE`\n"
 			f"  - `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.MAYBE_ASSUME_INIT_READ`\n"
-			f"  - `lang/driftc/stage2/string_arc.py` (StoreRef drop-before-overwrite)\n"
+			f"  - `lang/driftc/stage2/overwrite_cleanup.py` (StoreRef overwrite release)\n"
 			f"Valgrind error count: {errors}\n\n"
 			f"Valgrind log tail:\n{vg_log[-2000:]}"
 		)
@@ -176,7 +176,7 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 
 def test_maybe_uninit_local_string_round_trip_no_uaf(tmp_path: Path) -> None:
 	"""String payload — refcount-bearing built-in type with the
-	`string_arc` late-rewrite path on `StoreRef`.
+	`overwrite_cleanup` StoreRef overwrite-release path.
 
 	The carrier writes a heap-allocated String into a standalone
 	`MaybeUninit<String>` slot via `maybe_write` (which lowers to

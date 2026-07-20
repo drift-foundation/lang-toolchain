@@ -4450,10 +4450,10 @@ class HIRToMIR:
 			# mutation reaches the destination.
 			#
 			# MoveFromRef vs LoadRef: LoadRef is a raw pointer copy
-			# with no ownership transfer.  string_arc's late-rewrite
-			# at `string_arc.py:StoreRef` synthesises a
-			# drop-before-overwrite (LoadRef + StringRelease) on every
-			# StoreRef to a String place — for non-Copy refcount types
+			# with no ownership transfer.  `overwrite_cleanup`'s
+			# StoreRef rewrite (Slice B1; moved out of string_arc)
+			# synthesises a drop-before-overwrite (LoadRef +
+			# StringRelease) on every StoreRef to a String place — for non-Copy refcount types
 			# that release would free the original allocation while the
 			# caller still holds the LoadRef'd pointer (use-after-free;
 			# carrier `lang/tests/memcheck/test_mem_replace_string_uaf.py`).
@@ -9168,9 +9168,9 @@ class HIRToMIR:
 		# stores the new value into the now-tombstoned slot.
 		#
 		# Why MoveFromRef and not the legacy `LoadRef + ZeroValue +
-		# StoreRef(zero) + DropValue` shape: `string_arc.py:1108-1121`
-		# rewrites every `StoreRef` to a String place as
-		# `LoadRef + StringRelease + StoreRef`.  In the legacy shape
+		# StoreRef(zero) + DropValue` shape: `overwrite_cleanup`
+		# (Slice B1; moved out of string_arc) rewrites every `StoreRef`
+		# to a String place as `LoadRef + StringRelease + StoreRef`.  In the legacy shape
 		# the zero-tombstone `StoreRef` therefore became a real
 		# release of the old slot value, and the explicit `DropValue`
 		# released the same allocation a second time via the SSA
