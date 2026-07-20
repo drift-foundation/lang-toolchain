@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Set
 
 from lang.driftc.core.types_core import TypeId, TypeTable
 from . import mir_nodes as M
-from .drop_policy_compute import compute_drop_policy
+from .drop_policy_compute import compute_drop_policy, zero_storage_drop_safe
 from .ledger_cache import mark_ledger_dirty
 from .ownership_ledger import DropVerdict, LiveState, build_ledger
 
@@ -121,6 +121,17 @@ def insert_drop_flags(
 		except Exception:
 			continue
 		if not policy.needs_drop:
+			continue
+		# Arm B (zero-storage-safe drop-flag retirement, 2026-07-20):
+		# zero-storage-safe types (variants via tag-0 dispatch; arrays
+		# via the zeroed header) are NEVER flag-admitted — their
+		# PathDependent cleanup is authored UNGUARDED in
+		# cleanup_authoring, so a runtime flag would gate nothing.
+		# This is an ADDITIONAL EXCLUSION: the user-moveout and
+		# (2a live-at-exit OR 2b unsafe-PD-hook) criteria below are
+		# unchanged and still required for the zero-UNSAFE types
+		# (String/struct) that genuinely need flags.
+		if zero_storage_drop_safe(ty, type_table):
 			continue
 		# Trigger criteria.  Criterion (1) is mandatory; EITHER (2a)
 		# OR (2b) must also hold.

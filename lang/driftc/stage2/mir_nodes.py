@@ -466,9 +466,10 @@ class CleanupHook(MInstr):
 	Consumed by `lang/driftc/stage2/cleanup_authoring.py` after
 	`build_ledger`: each candidate is queried via `verdict_at`, real
 	`MoveOut + DropValue` pairs are emitted for `MUST_DROP` (and for
-	`PathDependent` on zero-storage-drop-safe types — variants whose
-	tag-0 destructor is a no-op, and non-flag-managed arrays whose
-	zeroed header drops as a no-op; the policy axis is
+	`PathDependent` on ANY zero-storage-drop-safe type — variants
+	whose tag-0 destructor is a no-op, arrays whose zeroed header
+	drops as a no-op; uniform since the Arm B flag retirement,
+	2026-07-20; the policy axis is
 	`drop_policy_compute.zero_storage_drop_safe`, extracted from the
 	site-3 sub-step 3 variant widening).  The marker is removed after
 	authoring; downstream passes (`drop_flags`, `string_arc`) see

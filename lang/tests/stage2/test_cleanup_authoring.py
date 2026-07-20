@@ -552,18 +552,20 @@ def test_authoring_emits_unguarded_drop_for_path_dependent_array() -> None:
 	)
 
 
-def test_authoring_keeps_guarded_branch_for_flag_managed_array() -> None:
-	"""Counter-neutrality pin (checkpoint §2.3 implementation
-	decision): a FLAG-MANAGED Array candidate keeps the existing
-	flag-GUARDED authority — the std.json parse-accumulator class
-	(2a-admitted) must stay byte-identical through this slice;
-	unifying it under unguarded is a recorded follow-up with its own
-	acceptance.  In this edge-resolvable diamond the GUARDED decision
-	lands as per-arm edge elaboration: the drop + flag-clear sit on
-	the LIVE predecessor edge, and the hook position emits NOTHING —
-	the load-bearing assertion is that the flag machinery engaged
-	(flag-clear present) and no unconditional hook-position drop was
-	authored."""
+def test_authoring_ignores_stale_flag_metadata_for_zero_safe_array() -> None:
+	"""REWORKED + RENAMED for Arm B (zero-storage-safe drop-flag
+	retirement, 2026-07-20; formerly
+	test_authoring_keeps_guarded_branch_for_flag_managed_array, the
+	B-M counter-neutrality pin — its subject, the flag-managed-array
+	GUARDED exception, retired when drop_flags stopped admitting
+	zero-storage-safe types; the old name proved the OPPOSITE
+	behavior): STALE flag metadata on
+	a zs Array candidate must be FAIL-CLOSED — the ladder is
+	predicate-first, so the candidate takes UNGUARDED authoring at the
+	hook regardless of leftover `_drop_flag_managed_locals` /
+	`_drop_flag_for_local` attributes (with the standard flag-clear
+	for the stale flag, which is harmless).  No guarded split, no
+	edge elaboration."""
 	type_table = TypeTable()
 	string_ty = type_table.ensure_string()
 	arr_ty = type_table.new_array(string_ty)
@@ -588,28 +590,20 @@ def test_authoring_keeps_guarded_branch_for_flag_managed_array() -> None:
 	setattr(func, "_drop_flag_for_local", {"a": "__drop_flag_a"})
 	_attach_ledger(func)
 	emitted = author_cleanup(func, type_table=type_table)
-	assert emitted == 1, "flag-managed PD array must still emit (guarded family)"
+	assert emitted == 1, "stale-flagged zs array must still emit (unguarded)"
 	assert _has_drop_chain_for(func, "a")
-	# Flag machinery engaged: a flag-clear store exists somewhere.
-	flag_clears = [
-		ins
-		for blk in func.blocks.values()
-		for ins in blk.instructions
-		if isinstance(ins, M.StoreLocal) and ins.local == "__drop_flag_a"
-	]
-	assert flag_clears, (
-		"flag-managed Array lost its flag machinery — it must NOT take "
-		"Arm M's unguarded branch (counter-neutrality with the "
-		"2a-admitted json accumulators)"
+	# Predicate-first, fail-closed: UNGUARDED at the hook — no block
+	# split (guarded fallback) and no edge elaboration; the drop sits
+	# in if_join itself.
+	assert set(func.blocks) == {"entry", "if_then", "if_join"}, (
+		f"stale flag metadata re-engaged the guarded family: "
+		f"{sorted(func.blocks)}"
 	)
-	# And the hook position authored no unconditional drop: if_join
-	# carries no DropValue (the guarded family emitted on the edge or
-	# behind a flag guard, never unconditionally at the hook).
 	join_drops = [
 		ins for ins in func.blocks["if_join"].instructions
 		if isinstance(ins, M.DropValue)
 	]
-	assert not join_drops, (
-		f"unconditional hook-position drop for a flag-managed Array: "
-		f"{join_drops}"
+	assert join_drops, (
+		"zs Array with stale flag metadata must take UNGUARDED "
+		"hook-position authoring (predicate-first, fail-closed)"
 	)

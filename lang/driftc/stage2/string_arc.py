@@ -2659,13 +2659,20 @@ def insert_string_arc(
 					if _verdict is _DropVerdict.PATH_DEPENDENT:
 						initialized_at_return.add(_local)
 			# Phase 3B step 2 — `string_arc_return` swap (option 2:
-			# site-3 skips locals managed by Phase 3C drop-flag
-			# plumbing).  3C is the sole authority on scope-exit drops
-			# for flagged locals: it has already inserted a
-			# flag-guarded `MoveOut+DropValue` block reachable via the
-			# original Return block's `IfTerminator(flag)`.  If site 3
-			# also emitted a drop here, the flagged local would be
-			# double-dropped on the path through 3C's drop block.
+			# site-3 skips locals managed by drop-flag plumbing).
+			# Since the Arm B flag retirement (2026-07-20) this set
+			# contains ONLY zero-storage-UNSAFE destructibles
+			# (String-bearing structs etc.): cleanup_authoring is the
+			# sole authority on their scope-exit drops (flag-guarded /
+			# edge-elaborated), and a site-3 drop here would
+			# double-drop on the path through the authored drop block.
+			# Zero-storage-SAFE variants no longer appear here — their
+			# cleanup is authored UNGUARDED at the hooks, whose MoveOut
+			# transitions the rebuilt ledger to MOVED_OUT before the
+			# Return, so the generic consultation ABOVE already added
+			# them to `skip_cleanup_locals` (the ledger verdict, not
+			# the flag, is what suppresses site 3 — pinned by
+			# lang/tests/memcheck/test_variant_flag_retirement.py).
 			# Filter flagged locals out of site-3's cleanup universe by
 			# adding them to `skip_cleanup_locals`.
 			#

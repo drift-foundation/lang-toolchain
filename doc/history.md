@@ -1,5 +1,45 @@
 # Drift development history
 
+## 2026-07-20 (0.33.86: zero-storage-safe drop-flag retirement — flags exist only where a runtime ownership bit is needed; ABI stays 21)
+
+Drop flags are no longer allocated for zero-storage-safe types
+(`drop_policy_compute.zero_storage_drop_safe`: variants via tag-0
+dispatch, arrays via the zeroed header). A corpus inventory showed
+20,394 such flag locals with ≈137k bookkeeping instructions across
+the fixture universe, of which only 3,696 (the std.json parse
+accumulators' guarded array cleanups) still gated any emission — and
+flag-managed variants' cleanup was already authored unguarded, their
+flags gating nothing at all.
+
+- **Admission** (`drop_flags`): zero-storage-safety is an ADDITIONAL
+  exclusion on the existing criteria — a local is flag-admissible iff
+  it needs drop, is NOT zero-storage-safe, has a user move, and is
+  potentially live at an exit (2a) or zero-storage-unsafe
+  PathDependent at a CleanupHook (2b). String/struct flag populations
+  are byte-identical.
+- **Cleanup** (`cleanup_authoring`): the PathDependent ladder is one
+  uniform rule — zero-storage-safe → UNGUARDED (predicate-first,
+  fail-closed even against stale flag metadata); flag-managed →
+  guarded/edge-elaborated; else skip. The 3,696 guarded array
+  cleanups become unconditional null-safe drops at the same hooks
+  (same scope boundary, same reverse-declaration order; the flag
+  branch and its split blocks disappear).
+- **Site 3** (`string_arc`): the flagged-locals-at-return skip set
+  now contains only zero-unsafe destructibles. Retired variant flags
+  are subsumed by the generic ledger consultation — the authored
+  unguarded MoveOut transitions the rebuilt ledger to MOVED_OUT
+  before the Return, which is what suppresses site 3 (pinned by
+  `lang/tests/memcheck/test_variant_flag_retirement.py`, both
+  outcomes, valgrind).
+
+Corpus acceptance: `c3_moveout_flag_guarded` 8,316 → 4,620 and
+`c3_moveout_zero_safe` 10,254 → 13,950 (the ARRAY event share, exact
+— the fallback-only emission-shape proof rules out multiplicity
+drift); every other counter +0; zero-safe flag locals 20,394 → 0 and
+their 68,663 bookkeeping stores (with paired ConstBools) gone.
+Compiler-internal ownership/cleanup change only; no runtime or
+boundary contract change — ABI stays 21.
+
 ## 2026-07-19 (0.33.85: Return-boundary Array sweep retired — cleanup_authoring is the sole scope-exit array authority; generic zero-storage drop predicate; ABI stays 21)
 
 string_arc's Return-boundary array sweep (`_drop_all_arrays`) is

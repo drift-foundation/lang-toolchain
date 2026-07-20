@@ -36,14 +36,14 @@ Emission shapes per candidate:
 
   * **Unguarded** — `MUST_DROP`, or zero-storage-drop-safe
     `PathDependent` (`drop_policy_compute.zero_storage_drop_safe`:
-    variants via tag-0 dispatch, and — since
-    string-arc-endgame-array-sweep, 2026-07-19 — NON-flag-managed
-    arrays via the zeroed header; flag-managed arrays keep the
-    guarded branch for slice counter-neutrality, unification
-    recorded as a follow-up).  Inline `MoveOut + DropValue` at the
-    hook position.  If the local is flag-managed by `drop_flags`, a
-    flag-clear `StoreLocal(flag, false)` follows.  Uniform
-    invariant: "flag bit ≡ currently owns destructible storage."
+    variants via tag-0 dispatch, arrays via the zeroed header —
+    UNIFORM since the Arm B flag retirement, 2026-07-20; drop_flags
+    never admits zs types, and a stale flagged zs candidate still
+    takes this branch, fail-closed).  Inline `MoveOut + DropValue`
+    at the hook position.  If the local is flag-managed by
+    `drop_flags` (zero-unsafe types only), a flag-clear
+    `StoreLocal(flag, false)` follows.  Uniform invariant: "flag
+    bit ≡ currently owns destructible storage."
 
   * **Per-arm edge-elaborated** — `PathDependent` flag-managed +
     every hook candidate is flag-managed AND every predecessor edge
@@ -112,7 +112,7 @@ from __future__ import annotations
 import sys
 from typing import List, Optional
 
-from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
+from lang.driftc.core.types_core import TypeId, TypeTable
 from lang.driftc import debug as drift_debug
 from . import mir_nodes as M
 from . import cfg as _cfg
@@ -132,8 +132,8 @@ from .drop_policy_compute import compute_drop_policy, zero_storage_drop_safe
 # the case visible in observe so we can detect any real Drift code
 # that hits it.  Post Bug 2 architecture flip: fires ONLY when the
 # local is NOT flag-managed; flag-managed PathDependent takes the
-# guarded-emit branch, and zero-storage-SAFE PathDependent
-# (variants; unflagged arrays) takes unguarded authoring.
+# guarded-emit branch, and EVERY zero-storage-SAFE PathDependent
+# candidate takes unguarded authoring (Arm B, 2026-07-20).
 _REASON_PATH_DEPENDENT_NON_VARIANT_SKIP = "path_dependent_non_variant_skip"
 
 # Bug 2 architecture flip telemetry tags (2026-05-15).
@@ -225,9 +225,9 @@ def author_cleanup(
 	Bug 2 architecture flip (2026-05-15): this pass is the SOLE
 	emitter of cleanup drops.  Three emit shapes:
 
-	  - **Unguarded MUST_DROP** (or zero-storage-drop-safe
-	    PathDependent — variants, and non-flag-managed arrays since
-	    string-arc-endgame-array-sweep):
+	  - **Unguarded MUST_DROP** (or ANY zero-storage-drop-safe
+	    PathDependent candidate — `zero_storage_drop_safe`, uniform
+	    since the Arm B flag retirement, 2026-07-20):
 	    inline `MoveOut + DropValue` at the hook position.  If the
 	    local is flag-managed (`_drop_flag_managed_locals`), the
 	    sequence is followed by a flag clear `StoreLocal(flag,
@@ -372,27 +372,19 @@ def author_cleanup(
 			if verdict is DropVerdict.MUST_DROP:
 				kind = _KIND_UNGUARDED
 			elif verdict is DropVerdict.PATH_DEPENDENT:
-				# B-M (string-arc-endgame-array-sweep, 2026-07-19): the
-				# zero-storage axis is the extracted
-				# `zero_storage_drop_safe` (variants + arrays; the
-				# variant-only name is retired from production).
-				# VARIANTS keep today's decision exactly: predicate
-				# wins even when flag-managed (unguarded + flag-clear).
-				# ARRAYS take unguarded authoring ONLY when NOT
-				# flag-managed — flag-managed arrays (e.g. the
-				# std.json parse accumulators, 2a-admitted) keep their
-				# existing guarded authority so this slice's
-				# acceptance stays exactly ±924; unifying them under
-				# unguarded is a recorded follow-up with its own
-				# predicted-delta acceptance.
-				_zs = zero_storage_drop_safe(ty, type_table)
-				_flagged = local in flag_managed and local in flag_for
-				if _zs and (
-					type_table.get(ty).kind is not TypeKind.ARRAY
-					or not _flagged
-				):
+				# Arm B (zero-storage-safe drop-flag retirement,
+				# 2026-07-20): ONE uniform rule — zero-storage-safe
+				# candidates (`zero_storage_drop_safe`: variants via
+				# tag-0 dispatch, arrays via the zeroed header) take
+				# UNGUARDED authoring, predicate-first even against
+				# stale flag metadata (fail-closed: drop_flags no
+				# longer admits zs types, so a flagged zs candidate is
+				# a leftover attribute, never an authority).  The B-M
+				# flag-managed-array exception retired here — its
+				# counter-neutrality job ended when the flags did.
+				if zero_storage_drop_safe(ty, type_table):
 					kind = _KIND_UNGUARDED
-				elif _flagged:
+				elif local in flag_managed and local in flag_for:
 					kind = _KIND_GUARDED
 				else:
 					kind = _KIND_SKIP
@@ -401,15 +393,14 @@ def author_cleanup(
 			decisions.append((kind, local, ty, verdict, raw_state))
 
 		# Per-arm edge elaboration (Bug 2 architecture, 2026-05-15).
-		# Activates only when EVERY candidate at this hook is non-
-		# variant PathDependent + flag-managed (the `_KIND_GUARDED`
-		# decisions above).  This conservative gate preserves
-		# destructor order across all candidates at this hook: if any
-		# candidate must emit at the hook position (MUST_DROP, variant
-		# zero-tag, or non-flag-managed skip), per-arm is disabled and
-		# everything emits at the hook in reverse-decl order — matches
-		# the prior architecture.  Mixed-candidate hooks fall back to
-		# the existing flag-guarded path for PD candidates.
+		# Activates only when EVERY candidate at this hook is
+		# zero-storage-unsafe PathDependent and flag-managed (the
+		# `_KIND_GUARDED` decisions above).  If any candidate is
+		# classified UNGUARDED or SKIP, per-arm elaboration is
+		# disabled.  Remaining hook emissions retain
+		# reverse-declaration order; SKIP candidates emit nothing.
+		# Mixed-candidate hooks keep the guarded fallback for the
+		# guarded candidates.
 		#
 		# When all candidates are GUARDED, per-arm attempts to resolve
 		# them via predecessor edge cleanup.  If every PD candidate can
@@ -817,8 +808,8 @@ def _emit_decision_record(
 	  - emit + MUST_DROP, not flag-managed → `needs_drop`
 	  - emit + MUST_DROP, flag-managed → `must_drop_flag_clear`
 	    (Carrier 7 — uniform flag-clear invariant)
-	  - emit + PathDependent zero-storage-safe widening (variants;
-	    unflagged arrays) → `needs_drop`
+	  - emit + PathDependent zero-storage-safe (ANY zs candidate —
+	    uniform since Arm B, 2026-07-20) → `needs_drop`
 	  - emit + PathDependent flag-managed, edge-elaborated (per-arm
 	    Phase 1) → `path_dependent_edge_elaborated_emit`
 	  - emit + PathDependent flag-managed (guarded fallback) →

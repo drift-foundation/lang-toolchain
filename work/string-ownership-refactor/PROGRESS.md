@@ -2502,3 +2502,142 @@ the ownership fix is proven. OUT: String runtime representation (Scope B), `stri
   are offenders; shim_defs == 1 asserted), and AsyncFunctionDef /
   ClassDef shadows are offenders everywhere including string_arc.
   Commit msg delivered.
+
+- 2026-07-19 — **FLAG-RETIREMENT CHECKPOINT COMPLETE (report-only,
+  per direction) — STOPPED for review.**
+  FLAG-RETIREMENT-CHECKPOINT.md (copy: /tmp/drift-announce/
+  2026-07-19T203317Z-flag-retirement-checkpoint.md). Corpus
+  inventory (build/tmp/flaginv-measure, exit 0, universe identical;
+  scratch instrument across drop_flags/cleanup_authoring/string_arc/
+  reporter REVERTED byte-identically — 4× cmp vs pristine, zero
+  scratch refs, battery 51/51):
+  - Flag-managed ZERO-STORAGE-SAFE locals: ARRAY 15,711 (17/fixture,
+    49,906 bookkeeping stores) + VARIANT 4,683 (~5/fixture, 18,757
+    stores) = 20,394 locals / ≈137k bookkeeping instructions;
+    zero-UNSAFE keepers: SCALAR-String 7,406 + STRUCT 4,691.
+  - Identity: std.cli parse ×4, std.codec decode ×4, std.fs
+    _read_all_capped, std.io poll_many, std.json values/items/
+    occurrences, std.random buf, std.regex ×3 (arrays); fs cr +
+    json child_sp/node/sp (variants — the C3-population carriers).
+  - KEY FINDINGS: only 3,696 array flags still gate emission (the
+    json guarded cleanups; c3fg event split ARRAY 3,696 / SCALAR
+    2,772 / STRUCT 1,848); flag-managed VARIANTS (8,384 unguarded:
+    VARIANT:flag decisions) ALREADY take unguarded authoring — their
+    flags gate NOTHING (pure 2a-admission overhead + dead
+    flag-clears); most flagged arrays (15,711 vs 3,696) never reach
+    a PD hook at all.
+  - ARMS: A = array-only unification (−3,696 flag_guarded →
+    +3,696 zero_safe; 15,711 flags retired; leaves the variant
+    anomaly + a ladder special case). B = GENERIC zs retirement
+    (identical counter table — variants add ZERO movement; 20,394
+    flags/137k instructions retired; admission becomes ONE rule:
+    flag iff needs_drop AND NOT zero_storage_drop_safe; the B-M
+    counter-neutrality exception dies naturally). RECOMMENDED: B.
+  - Ordering: arrays move flag-branch → inline hook at the SAME
+    boundary (no observable reordering; carrier stays); variants:
+    zero emission change.
+  - Safety: B-M zero-storage chain for arrays; tag-0 doctrine for
+    variants; flag≡owns kept where needed (zero-unsafe); consumer
+    audit 5 entries — the ONE live-decision consumer is string_arc
+    site-3's _flag_managed_at_return (variants), subsumed by its
+    ledger consultation (authored cleanup → MOVED_OUT →
+    MUST_NOT_DROP) — REQUIRED PIN.
+  - Acceptance (Arm B): c3_moveout_flag_guarded 8,316 → 4,620,
+    c3_moveout_zero_safe 10,254 → 13,950, ALL else +0 (multiplicity
+    note + stop conditions §8); implementation targets 0.33.86 /
+    ABI 21 → cert → release.
+  - Recorded observation (OUT of scope): String zeroed-release is
+    also a runtime no-op — a String-predicate slice could retire
+    7,406 more flags, but only AFTER the string_arc re-homing
+    inventory.
+  NO code changed; tree = the reviewed 0.33.85 candidate. NEXT
+  after approval+slice: small recorded follow-ups → string_arc
+  endgame/re-homing inventory → B-repr(B5) entry audit.
+
+- 2026-07-20 — **Flag-retirement checkpoint REV 2 — all four review
+  amendments closed (report-only; Arm B reviewer-preferred; GO
+  attaches on closure).** Review: /tmp/drift-announce/
+  2026-07-20T020349Z-drift-lang-release-notes.md; rev 2 copy:
+  2026-07-20T021501Z-flag-retirement-checkpoint-rev2.md.
+  (1) FULL-POPULATION IDENTITY CLOSED (§1.2a): per-fixture
+  aggregate mining + instrumented re-probe of every deviant class
+  (instrument re-applied then REVERTED byte-identically — 4× cmp,
+  zero scratch refs, battery 51/51). ARRAY +3 = FutureGroup<T>::
+  join_all `out` generic inst ×2 fixtures (+3+3 stores) +
+  struct_ctor fixture-local `names` (+4 stores) — sums close
+  exactly (15,708+3; 49,896+10). VARIANT +63 across 53 fixtures =
+  fixture-local user Optional/Result locals (pop results, match
+  scrutinees/results, FutureGroup join results; 18,480+277 stores);
+  +68 unguarded decisions verified per-fn (m ×5 hooks, popped* ×6,
+  r ×5, any/all ×2; 8,316+68). All extras = the SAME anomaly class
+  (2a-admitted, flags gating nothing).
+  (2) EMISSION-SHAPE PROOF (§6): fallback=3,696 / edge-elaborated=0
+  DERIVED — pddec:guarded:ARRAY (decisions, pre-demotion) equals
+  c3fg_kind:ARRAY (A-rule structural fallback-shape events); an
+  edge demotion cannot match the A-rule (no flag-load guard block;
+  classifies c3_moveout_owned) → demotions=0, exactly one fallback
+  MoveOut per decision; ±3,696 table now DEFINITIVE, deviation
+  stays STOP.
+  (3) ADMISSION FORMULA CORRECTED (§2): zero-storage-safety is an
+  ADDITIONAL EXCLUSION — needs_drop AND NOT zs AND user-moveout AND
+  (2a OR 2b) — full pseudocode in-report; pins now cover 2a/2b
+  positive AND negative controls + user-moveout precondition.
+  (4) SITE-3 TIGHTENED (§5.3/§7): causality corrected — the ledger's
+  MOVED_OUT transition (from cleanup_authoring's authored MoveOut,
+  rebuilt ledger) drives the generic consultation's skip BEFORE
+  _flag_managed_at_return is formed; zero-backing proves drop
+  SAFETY only. Pin lands BEFORE the admission change and covers
+  parse_located sp + a §1.2a fixture-specific variant; stale site-3
+  flag-authority comments update in-slice.
+  ACCEPTANCE ADDITIONS folded (§6): structural deltas — zs flag
+  locals 20,394 → 0, zs stores 68,663 → 0 (+ConstBool pairs),
+  3,696 guarded block pairs removed, zero-unsafe String/Struct
+  populations byte-identical (7,406/27,762 + 4,691/16,842) — via
+  the same scratch instrument re-run at acceptance. Tree unchanged
+  (0.33.85 candidate); Arm B implementation → 0.33.86/ABI 21 →
+  cert → release on GO.
+
+- 2026-07-20 — **Arm B IMPLEMENTED + ACCEPTED (0.33.86 candidate,
+  ABI 21) — review HOLD amendments closed same day.** Order per
+  direction: (1) site-3 variant pins FIRST
+  (lang/tests/memcheck/test_variant_flag_retirement.py: parse_located
+  sp shape + Array.pop Optional shape, exactly-once destroy by EXACT
+  stdout both outcomes + valgrind; green PRE-change then POST-change);
+  (2) drop_flags zs ADDITIONAL exclusion (criteria preserved);
+  cleanup_authoring PD ladder → one uniform rule (zs → UNGUARDED
+  predicate-first/fail-closed; TypeKind import dropped); site-3
+  flag-skip comment rewritten to the ledger-causality wording;
+  (3) pins: admission 2a trio + no-move control + 2b criterion trio;
+  B-M exception pin reworked to stale-metadata fail-closed;
+  (4) 0.33.86 + history entry.
+  ACCEPTANCE — ALL EXACT: counters (build/tmp/flagret vs
+  sweep-closure, exit 0): c3_moveout_flag_guarded 8,316 → 4,620,
+  c3_moveout_zero_safe 10,254 → 13,950, EVERY other counter +0
+  (events/moveout_expansion +0 = the fallback-only proof held).
+  STRUCTURAL (build/tmp/flagret-struct, instrumented, exit 0):
+  flagmgd/flagstores zs keys ABSENT (20,394 locals / 68,663 stores →
+  0); SCALAR-String 7,406/27,762 + STRUCT 4,691/16,842
+  BYTE-IDENTICAL; guarded block-pair removal evidenced by the exact
+  event migration + the no-split unit pin. Instrument REVERTED
+  byte-identically (3× cmp, zero markers, battery green).
+  STANDALONE memcheck **105 passed + 1 skipped** (104 + the new
+  variant row — reconciles exactly). stage2 372/372.
+  REVIEW HOLD (2026-07-20T051815Z) — both static amendments CLOSED:
+  (a) NEW test_2b_admission_through_insert_drop_flags — 2a-false/
+  2b-true carrier (Unreachable-terminated; 2a counts Return blocks
+  only) through the PRODUCTION admission fn: struct admitted via 2b
+  alone, array/variant NOT on the identical carrier; helper pin kept
+  as supplemental. (b) Five stale authority surfaces genericized
+  (cleanup_authoring skip-tripwire comment ~136, author_cleanup
+  docstring ~229, per-arm gate ~400, telemetry mapping ~812;
+  mir_nodes CleanupHook contract ~470 — all now "ANY
+  zero-storage-safe candidate, uniform since Arm B") and the
+  reworked pin RENAMED
+  test_authoring_ignores_stale_flag_metadata_for_zero_safe_array
+  (old name proved the opposite behavior; retirement note kept).
+  Comment-only amendment edits postdate the corpus runs —
+  emission-inert by construction. Sweeps: zero scratch markers,
+  zero stale wording. Commit msg delivered. NEXT: reviewer static
+  delta → user-run full suite → 0.33.86 certification + release;
+  then small recorded follow-ups → string_arc endgame/re-homing
+  inventory → B-repr(B5) entry audit.

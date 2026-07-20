@@ -448,3 +448,191 @@ def test_param_flag_initialized_to_true() -> None:
 		f"param flag should init to True (param is live at entry); "
 		f"got init value = {flag_init_value!r}"
 	)
+
+
+# -- Arm B admission pins (zero-storage-safe drop-flag retirement, ------
+# -- 2026-07-20; checkpoint §7.1) ----------------------------------------
+
+
+def _declare_destructible_variant_tf(type_table: TypeTable) -> int:
+	from lang.driftc.core.types_core import (
+		GenericTypeExpr,
+		VariantArmSchema,
+		VariantFieldSchema,
+	)
+	base = type_table.declare_variant(
+		"test", "Vf", [],
+		[
+			VariantArmSchema(
+				name="Some",
+				fields=[VariantFieldSchema(name="value", type_expr=GenericTypeExpr(name="String", args=[]))],
+			),
+			VariantArmSchema(name="None", fields=[]),
+		],
+	)
+	return type_table.ensure_variant_instantiated(base, [])
+
+
+def _conditional_move_fixture(type_table: TypeTable, ty: int) -> M.MirFunc:
+	"""The 2a carrier shape (`var x; if b { move x; } return;`) with a
+	caller-chosen local type."""
+	bool_ty = type_table.ensure_bool()
+	func = _empty_fn(
+		"f_armb", params=["b"], locals_=["b", "x", "t"],
+		types={"b": bool_ty, "x": ty, "t": ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.terminator = M.IfTerminator(cond="b", then_target="if_then", else_target="if_join")
+	then_block = M.BasicBlock(name="if_then")
+	then_block.instructions.append(M.MoveOut(dest="t_move", local="x", ty=ty))
+	then_block.instructions.append(M.StoreLocal(local="t", value="t_move"))
+	then_block.terminator = M.Goto(target="if_join")
+	join_block = M.BasicBlock(name="if_join")
+	join_block.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
+	return func
+
+
+def test_zero_storage_safe_types_never_flag_admitted_2a() -> None:
+	"""2a positive/negative controls: on the IDENTICAL
+	conditional-move live-at-exit carrier, a zero-UNSAFE struct is
+	still admitted (positive — the exclusion must not disturb the
+	surviving population), while Array and Variant are NEVER admitted
+	(negative — `zero_storage_drop_safe` is an ADDITIONAL exclusion;
+	their PathDependent cleanup is authored unguarded and a flag
+	would gate nothing)."""
+	# Positive: zero-unsafe struct → flag.
+	tt = TypeTable()
+	sty = _make_droppable_struct(tt)
+	f_pos = _conditional_move_fixture(tt, sty)
+	insert_drop_flags(f_pos, type_table=tt, drop_policy=_drop_policy_for(tt))
+	assert "__drop_flag_x" in f_pos.locals
+	assert getattr(f_pos, "_drop_flag_for_local", {}).get("x") == "__drop_flag_x"
+	# Negative: Array<String> → never admitted.
+	tt2 = TypeTable()
+	arr_ty = tt2.new_array(tt2.ensure_string())
+	f_arr = _conditional_move_fixture(tt2, arr_ty)
+	f_arr, mutated_arr = insert_drop_flags(f_arr, type_table=tt2, drop_policy=_drop_policy_for(tt2))
+	assert not mutated_arr
+	assert "__drop_flag_x" not in f_arr.locals
+	assert "x" not in (getattr(f_arr, "_drop_flag_for_local", {}) or {})
+	# Negative: destructible Variant → never admitted.
+	tt3 = TypeTable()
+	vty = _declare_destructible_variant_tf(tt3)
+	f_var = _conditional_move_fixture(tt3, vty)
+	f_var, mutated_var = insert_drop_flags(f_var, type_table=tt3, drop_policy=_drop_policy_for(tt3))
+	assert not mutated_var
+	assert "__drop_flag_x" not in f_var.locals
+	assert "x" not in (getattr(f_var, "_drop_flag_for_local", {}) or {})
+	# User-moveout precondition control: zero-unsafe struct WITHOUT a
+	# user move is never admitted regardless of type (existing
+	# criterion, unchanged by the exclusion).
+	tt4 = TypeTable()
+	sty4 = _make_droppable_struct(tt4)
+	f_nomove = _empty_fn("f_nomove", params=[], locals_=["x"], types={"x": sty4})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.terminator = M.Return(value=None)
+	f_nomove.blocks = {"entry": entry}
+	f_nomove, mutated_nm = insert_drop_flags(f_nomove, type_table=tt4, drop_policy=_drop_policy_for(tt4))
+	assert not mutated_nm
+	assert "__drop_flag_x" not in f_nomove.locals
+
+
+def test_2b_hook_criterion_excludes_zero_storage_safe_types() -> None:
+	"""2b positive/negative controls at the criterion itself
+	(`_has_zero_storage_unsafe_path_dependent_at_cleanup_hook`): a
+	PathDependent candidate at a mid-fn CleanupHook admits a
+	zero-UNSAFE struct and rejects Array/Variant on the identical
+	carrier."""
+	from lang.driftc.stage2.drop_flags import (
+		_has_zero_storage_unsafe_path_dependent_at_cleanup_hook,
+	)
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+
+	def build(tt: TypeTable, ty: int) -> M.MirFunc:
+		bool_ty = tt.ensure_bool()
+		func = _empty_fn(
+			"f_2b", params=["b"], locals_=["b", "x", "t"],
+			types={"b": bool_ty, "x": ty, "t": ty},
+		)
+		entry = M.BasicBlock(name="entry")
+		entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+		entry.terminator = M.IfTerminator(cond="b", then_target="mv", else_target="hook")
+		mv = M.BasicBlock(name="mv")
+		mv.instructions.append(M.MoveOut(dest="t_move", local="x", ty=ty))
+		mv.instructions.append(M.StoreLocal(local="t", value="t_move"))
+		mv.terminator = M.Goto(target="hook")
+		hk = M.BasicBlock(name="hook")
+		hk.instructions.append(M.CleanupHook(scope_id=0, candidates=[("x", ty)]))
+		hk.terminator = M.Return(value=None)
+		func.blocks = {"entry": entry, "mv": mv, "hook": hk}
+		return func
+
+	def check(tt: TypeTable, ty: int) -> bool:
+		func = build(tt, ty)
+		ledger = build_ledger(func, drop_policy=_drop_policy_for(tt))
+		return _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
+			ledger=ledger, func=func, type_table=tt,
+			drop_policy=_drop_policy_for(tt), local_name="x",
+		)
+
+	tt = TypeTable()
+	assert check(tt, _make_droppable_struct(tt)) is True
+	tt2 = TypeTable()
+	assert check(tt2, tt2.new_array(tt2.ensure_string())) is False
+	tt3 = TypeTable()
+	assert check(tt3, _declare_destructible_variant_tf(tt3)) is False
+
+
+def test_2b_admission_through_insert_drop_flags() -> None:
+	"""Review amendment (2026-07-20): prove the FULL approved admission
+	contract `needs_drop && !zs && user_moveout && (2a || 2b)` through
+	the PRODUCTION entry point on a 2a-FALSE / 2b-TRUE carrier — the
+	criterion-level helper pin above stays as supplemental coverage.
+
+	Carrier: conditional move feeding a mid-fn CleanupHook where the
+	candidate is PathDependent, in a function with NO `Return` block
+	anywhere — its terminal block ends in `Unreachable` (the CFG also
+	carries the diamond's `IfTerminator`/`Goto`); 2a counts Return
+	blocks only, so 2a is False by construction.  The zero-unsafe
+	Struct must be ADMITTED purely via 2b; Array and Variant on the
+	IDENTICAL carrier must NOT be."""
+	def build(tt: TypeTable, ty: int) -> M.MirFunc:
+		bool_ty = tt.ensure_bool()
+		func = _empty_fn(
+			"f_2b_e2e", params=["b"], locals_=["b", "x", "t"],
+			types={"b": bool_ty, "x": ty, "t": ty},
+		)
+		entry = M.BasicBlock(name="entry")
+		entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+		entry.terminator = M.IfTerminator(cond="b", then_target="mv", else_target="hook")
+		mv = M.BasicBlock(name="mv")
+		mv.instructions.append(M.MoveOut(dest="t_move", local="x", ty=ty))
+		mv.instructions.append(M.StoreLocal(local="t", value="t_move"))
+		mv.terminator = M.Goto(target="hook")
+		hk = M.BasicBlock(name="hook")
+		hk.instructions.append(M.CleanupHook(scope_id=0, candidates=[("x", ty)]))
+		hk.terminator = M.Unreachable()
+		func.blocks = {"entry": entry, "mv": mv, "hook": hk}
+		return func
+
+	# 2b-positive: zero-unsafe struct admitted through the production
+	# admission function with 2a False.
+	tt = TypeTable()
+	sty = _make_droppable_struct(tt)
+	f_pos = build(tt, sty)
+	f_pos, mutated = insert_drop_flags(f_pos, type_table=tt, drop_policy=_drop_policy_for(tt))
+	assert mutated
+	assert "__drop_flag_x" in f_pos.locals
+	assert getattr(f_pos, "_drop_flag_for_local", {}).get("x") == "__drop_flag_x"
+	# 2b-negative: Array and Variant on the identical carrier.
+	tt2 = TypeTable()
+	f_arr = build(tt2, tt2.new_array(tt2.ensure_string()))
+	f_arr, m_arr = insert_drop_flags(f_arr, type_table=tt2, drop_policy=_drop_policy_for(tt2))
+	assert not m_arr and "__drop_flag_x" not in f_arr.locals
+	tt3 = TypeTable()
+	f_var = build(tt3, _declare_destructible_variant_tf(tt3))
+	f_var, m_var = insert_drop_flags(f_var, type_table=tt3, drop_policy=_drop_policy_for(tt3))
+	assert not m_var and "__drop_flag_x" not in f_var.locals
