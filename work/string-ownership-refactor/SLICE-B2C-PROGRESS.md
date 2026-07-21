@@ -77,13 +77,40 @@ step — power-loss recovery point.
   orphan. Teeth BOTH sides: insertion-before-anchor does NOT invalidate;
   move/replace/duplicate DOES. Gate: unit tests + both-side teeth green.
   STOP if the lifecycle needs a rebuild or dynamic MIR metadata.
-- [ ] **S2 — plan computation (site-3 + site-4 + nullsafe)** from
-  original MIR + ledger A: site-3 keeps structural definite-assignment
-  + ledger filters (MUST_NOT_DROP fold, PATH_DEPENDENT zero-storage
-  widen) + sorted order; site-4 keeps verdict_at at original index +
-  PATH_DEPENDENT→RuntimeError tripwire (fired at PLANNING time);
-  nullsafe unconditional. Gate: plan reproduces the 1,088 / 14 /
-  133,998 populations on a fixture sample.
+- [~] **S2 — plan computation (site-3 + site-4 + nullsafe)** from
+  original MIR + ledger A. NON-EMITTING; mutates neither MIR nor ledger.
+  DONE so far: frozen immutable payloads `cleanup_payloads.py`
+  (Site3ReturnPayload w/ ordered Site3Drop tuple + local_count; Site4Payload
+  w/ verdict + emit + frozen ty; NullsafePayload w/ frozen ty).
+  EXTRACTION STRATEGY (avoid a "second approximation" — reuse string_arc's
+  exact logic): pull the three decision computations out of
+  `insert_string_arc` into a shared module `destructible_authority.py` as
+  pure functions parameterized by (func, type_table, ledger, classification):
+    (a) `classify_destructibles(func, type_table)` → (destructible_locals,
+        nullsafe_destructible_locals) — extract lines ~241-316 predicates
+        (`_is_destructible_tid`/`_is_error_tid`/`_is_nullsafe_drop`) +
+        the two set comprehensions; reuse `classify_string_array_locals`
+        for string_locals/array_locals inputs.
+    (b) `plan_site4(func, ledger, type_table, destructible, nullsafe)` →
+        per (block, orig_index) StoreLocal verdict via `verdict_at`
+        (missing-ledger RuntimeError; PATH_DEPENDENT→RuntimeError at
+        PLANNING); records MUST_DROP + MUST_NOT_DROP; emit=MUST_DROP.
+    (c) `plan_nullsafe(func, destructible∩nullsafe)` → per StoreLocal;
+        `synthetic_zero_back` present at this pre-string_arc surface = STOP.
+    (d) `plan_site3(func, ledger, type_table, destructible, ...)` →
+        per-Return: `initialized_at_return` definite-assignment fixpoint
+        (assigned_in/store_defs), `skip_cleanup_locals` (moved/dropped +
+        ledger MUST_NOT_DROP fold + `_is_flag_managed`), PATH_DEPENDENT
+        zero-storage widening, `sorted(destructible_locals)` order.
+    Then `insert_string_arc` CALLS (a)-(d) for its emission (compute-then-
+    emit) so output is byte-identical (+0), and a new `destructible_planner.py`
+    builds a `CleanupPlan` from the same functions. Each extraction step is
+    corpus-verified +0 before the next.
+  Gate: **924-fixture** shadow census — site-3 emitted locals 1,088
+  (1,087 ERROR + exactly 1 Arc STRUCT); site-4 MUST_DROP 14 + full
+  candidate/verdict split w/ PATH_DEPENDENT=0; nullsafe 133,998
+  synthetic=0; every production counter +0; zero MIR/ledger-dirty/rebuild
+  deltas. Sample/unit ladder first, but acceptance is the full 924.
 - [ ] **S3 — site-3 Return emitter (BUILD + TEST IN ISOLATION, do NOT
   wire to production yet)**: narrow module; emits at Return anchors in
   `sorted(destructible_locals)` order; validates each decision vs object
@@ -177,5 +204,13 @@ before any mutation; all emitters consume it.
   Plus: declared semantic fields validated at `validate_and_freeze`
   (not only at consumption). Teeth **32/32** (added stale-session,
   closed-session, no-public-mark-consumed, field-mismatch-at-finalize).
-  **S1 commit-clear.** Next: S2 (plan computation: site-3 1,088 /
-  site-4 14 / nullsafe 133,998).
+  **S1 commit-clear.** Committed as recovery point 7df534dc.
+- 2026-07-21: S1 closure follow-up (post-commit, review 2026-07-21T051015Z
+  — the three items were already in 7df534dc; added the explicit phase
+  protocol): `EmitterPhase` enforces preflight `stage()` → `mark_rewritten()`
+  → `commit()` (fresh postflight validate, THEN consume — a decision is
+  never marked consumed on a stale preflight view; commit fails closed if
+  the rewrite broke an anchor, marking nothing). Full stale-matrix pins:
+  open-session then insert-before / remove / move / duplicate / field-drift
+  → rejected via O(1) is-recheck (no per-decision whole-function rescan).
+  Missing-attribute field validation pinned. Teeth **42/42**.

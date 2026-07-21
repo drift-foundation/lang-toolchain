@@ -516,6 +516,16 @@ class CleanupPlan:
 			)
 		return ConsumptionSession(self, func)
 
+	def begin_phase(self, func: "M.MirFunc") -> "EmitterPhase":
+		"""Open an emitter phase enforcing preflight → rewrite → postflight →
+		consume. Forbidden before finalization."""
+		if not self._frozen:
+			raise PlanContractError(
+				f"cleanup_plan[{self._fn_name}]: begin_phase() before "
+				f"validate_and_freeze()"
+			)
+		return EmitterPhase(self, func)
+
 	def _require_owned(self, dec: "Decision") -> None:
 		if not self._frozen:
 			raise PlanContractError(
@@ -564,6 +574,93 @@ class CleanupPlan:
 			)
 
 
+class EmitterPhase:
+	"""Enforces the preflight → rewrite → postflight → consume lifecycle for
+	one emitter phase over `func`.
+
+	    phase = plan.begin_phase(func)
+	    for dec in phase_decisions:
+	        idx = phase.stage(dec)        # PREFLIGHT validate (pre-mutation)
+	        ... capture emission from the pre-rewrite snapshot ...
+	    ... rewrite func (insert drops before anchors, etc.) ...
+	    phase.mark_rewritten()            # preflight snapshot now stale
+	    phase.commit()                    # POSTFLIGHT fresh-validate + consume
+
+	A decision is only marked consumed by `commit`, which FIRST re-validates
+	every staged decision against the mutated MIR via a FRESH session — so a
+	decision is never consumed on the strength of a stale preflight view, and
+	`assert_all_consumed()` cannot pass unless the post-rewrite MIR still
+	satisfies the anchor contract. `stage` is refused after rewrite; `commit`
+	is refused before it. Cost is one preflight scan + one postflight scan +
+	O(staged) — `O(MIR + decisions)` per phase.
+	"""
+
+	def __init__(self, plan: "CleanupPlan", func: "M.MirFunc") -> None:
+		self._plan = plan
+		self._func = func
+		self._preflight: ConsumptionSession | None = plan.open_session(func)
+		self._staged: List[Decision] = []
+		self._staged_tokens: set[int] = set()
+		self._rewritten = False
+		self._committed = False
+
+	def stage(self, dec: "Decision") -> int:
+		"""PREFLIGHT: validate `dec` against the pre-rewrite MIR and stage it
+		for consumption at commit. Returns the preflight index."""
+		if self._rewritten:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: stage() after "
+				f"mark_rewritten()"
+			)
+		assert self._preflight is not None
+		index = self._preflight.locate(dec)
+		if dec.token not in self._staged_tokens:
+			self._staged.append(dec)
+			self._staged_tokens.add(dec.token)
+		return index
+
+	def preflight_index(self, dec: "Decision") -> int:
+		"""PREFLIGHT read-only validate (does not stage for consumption)."""
+		if self._rewritten:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: preflight_index() after "
+				f"mark_rewritten()"
+			)
+		assert self._preflight is not None
+		return self._preflight.locate(dec)
+
+	def mark_rewritten(self) -> None:
+		if self._rewritten:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: mark_rewritten() twice"
+			)
+		self._rewritten = True
+		assert self._preflight is not None
+		self._preflight.close()
+		self._preflight = None
+
+	def commit(self) -> None:
+		"""POSTFLIGHT: fresh-validate every staged decision against the
+		mutated MIR, then mark them consumed. Fails closed (marking nothing)
+		if any staged anchor no longer satisfies the contract."""
+		if self._committed:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: commit() twice"
+			)
+		if not self._rewritten:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: commit() before "
+				f"mark_rewritten()"
+			)
+		post = self._plan.open_session(self._func)
+		for dec in self._staged:
+			post.locate(dec)          # fresh postflight validation (fail closed)
+		for dec in self._staged:
+			self._plan._mark_consumed(dec)
+		post.close()
+		self._committed = True
+
+
 def anchor_instr(block: str, orig_index: int) -> AnchorCoord:
 	return AnchorCoord(block=block, orig_index=orig_index, anchor_kind=ANCHOR_INSTR)
 
@@ -579,6 +676,7 @@ __all__ = (
 	"AnchorCoord",
 	"Decision",
 	"ConsumptionSession",
+	"EmitterPhase",
 	"CleanupPlan",
 	"anchor_instr",
 	"anchor_term",

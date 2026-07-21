@@ -410,6 +410,117 @@ def test_declared_field_mismatch_fails_at_finalize():
 		plan.validate_and_freeze(func)
 
 
+def test_declared_missing_field_fails_at_finalize():
+	"""A declared field the anchor object does not have fails at finalize."""
+	func, blk, store_x, ret = _pristine()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_x, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"nonexistent_attr": 1}, payload=None)
+	with pytest.raises(PlanContractError, match="does not match the anchor object"):
+		plan.validate_and_freeze(func)
+
+
+# --- EmitterPhase: preflight -> rewrite -> postflight -> consume -------
+
+def test_phase_preflight_rewrite_postflight_consume():
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	phase = plan.begin_phase(func)
+	s4 = plan.decisions_for_site("site4")[0]
+	s3 = plan.decisions_for_site("site3")[0]
+	assert phase.stage(s4) == 0                  # preflight index
+	assert phase.stage(s3) == 1
+	# Emitter rewrites: insert two drops before the store.
+	blk.instructions = [_store("d1"), _store("d2"), store_x]
+	phase.mark_rewritten()
+	phase.commit()                               # postflight fresh-validate + consume
+	plan.assert_all_consumed()
+
+
+def test_phase_stage_after_rewrite_fails():
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	phase = plan.begin_phase(func)
+	phase.mark_rewritten()
+	with pytest.raises(PlanContractError, match="stage.*after"):
+		phase.stage(plan.decisions_for_site("site4")[0])
+
+
+def test_phase_commit_before_rewrite_fails():
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	phase = plan.begin_phase(func)
+	phase.stage(plan.decisions_for_site("site4")[0])
+	with pytest.raises(PlanContractError, match="commit.*before"):
+		phase.commit()
+
+
+def test_phase_commit_fails_closed_if_rewrite_broke_anchor():
+	"""If the rewrite disturbed a staged anchor, postflight validation in
+	commit fails closed and marks nothing consumed."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	phase = plan.begin_phase(func)
+	s4 = plan.decisions_for_site("site4")[0]
+	phase.stage(s4)
+	blk.instructions = []                        # rewrite REMOVED the anchor
+	phase.mark_rewritten()
+	with pytest.raises(PlanContractError):
+		phase.commit()
+	# Nothing was consumed.
+	assert not plan.is_consumed(s4)
+
+
+# --- stale-matrix: open-session then disturb -> rejected --------------
+# (open BEFORE the disturbance; the O(1) is-recheck must reject, without a
+#  per-decision whole-function rescan.)
+
+def _open_then(disturb):
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	sess = plan.open_session(func)               # snapshot at index 0
+	disturb(blk, store_x)
+	return plan, sess
+
+
+def test_stale_matrix_insert_before():
+	plan, sess = _open_then(lambda blk, s: blk.instructions.insert(0, _store("t")))
+	with pytest.raises(PlanContractError, match="stale session"):
+		sess.consume(plan.decisions_for_site("site4")[0])
+
+
+def test_stale_matrix_remove():
+	plan, sess = _open_then(lambda blk, s: blk.instructions.clear())
+	with pytest.raises(PlanContractError, match="stale session"):
+		sess.consume(plan.decisions_for_site("site4")[0])
+
+
+def test_stale_matrix_move_within_block():
+	def disturb(blk, s):
+		blk.instructions[:] = [_store("t"), s]   # s moves 0 -> 1
+	plan, sess = _open_then(disturb)
+	with pytest.raises(PlanContractError, match="stale session"):
+		sess.consume(plan.decisions_for_site("site4")[0])
+
+
+def test_stale_matrix_duplicate():
+	"""A duplicated anchor is caught by a fresh session (the postflight path);
+	the stale preflight session's O(1) is-recheck cannot see a copy added
+	elsewhere, which is exactly why commit re-validates on a fresh scan."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	blk.instructions = [store_x, store_x]        # duplicate
+	sess = plan.open_session(func)               # fresh scan sees the duplicate
+	with pytest.raises(PlanContractError, match="exactly once"):
+		sess.consume(plan.decisions_for_site("site4")[0])
+
+
+def test_stale_matrix_field_drift():
+	plan, sess = _open_then(lambda blk, s: setattr(s, "local", "y"))
+	with pytest.raises(PlanContractError, match="field"):
+		sess.consume(plan.decisions_for_site("site4")[0])
+
+
 def test_add_after_freeze_fails_closed():
 	func, blk, store_x, ret = _pristine()
 	plan = _built(func, blk, store_x, ret)
