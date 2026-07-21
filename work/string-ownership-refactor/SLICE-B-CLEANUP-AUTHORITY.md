@@ -125,8 +125,14 @@ decisions for the same (fn, local):
 | CA_SKIP_ONLY | 0 | — |
 
 Local-name breakdown: `e` 1,073 (+ `err`/`_e` a few) = the
-try/catch/`throws` ERROR-BINDER locals; the rest `__discard.t*`
-compiler discard temps for destructible-valued expression statements.
+try/catch/`throws` ERROR-BINDER locals; the rest `__discard.t*` are
+**anonymous `catch _` binders** (CORRECTED 2026-07-20: NOT
+expression-statement discard temps — a `catch _` lowers via
+`_canonical_local(None, "_")` → `__discard{n}` with no
+`_register_drop_local`; the pure expr-statement discard path creates
+no local at all and cannot appear here). NOTE the census kind split is
+**1,087 ERROR + 1 STRUCT** — one non-binder outlier, identified in the
+B2 checkpoint §2.4.
 Precise result (matching the join table): 1,068 have NO CleanupHook
 at the same program point (nor anywhere for that fn/local), and 20
 have a cleanup_authoring hook decision for the (fn,local) only at a
@@ -153,14 +159,15 @@ does NOT close its bijection to cleanup_authoring:
 1. **"any emission lacks a new-author location"** — 1,068 of 1,088
    site-3 drops have NO CleanupHook. cleanup_authoring (the proposed
    R6 home) cannot author them; homing them there requires a HIR→MIR
-   lowering change to emit hooks for error binders / discard temps —
-   a new authoring surface outside the stated scope.
+   lowering change to emit hooks for error binders (named + anonymous
+   `catch _`) — a new authoring surface outside the stated scope.
 2. **"the measured population differs from the proposed scope"** — the
    scope framed R6 site-3 as user-destructible scope-exit drops that
    "naturally belong at cleanup hooks under ledger authority." The
-   measurement shows 98% are ERROR-BINDER (`throws`/try-catch) and
-   discard-temp cleanup with no hook — a different mechanism than the
-   user-scope destructibles cleanup_authoring models.
+   measurement shows ~99% are ERROR-BINDER (`throws`/try-catch,
+   including anonymous `catch _`) with no hook — a different mechanism
+   than the user-scope destructibles cleanup_authoring models (plus one
+   STRUCT outlier; see §3.2 / B2 checkpoint §2.4).
 
 site-4 + R2 + R7 bijections DO close (instruction-local → sibling
 overwrite-authoring pass, 1:1), and their homes are understood. But
@@ -171,9 +178,9 @@ rather than proceeding.
 ### Options for the maintainer (R6 site-3 only)
 
 - **A — expand scope**: add HIR→MIR CleanupHook emission for error
-  binders / discard temps so cleanup_authoring authors them under
-  ledger authority (largest surface; touches lowering + likely the
-  throws/try-catch machinery).
+  binders (named + anonymous `catch _`) so cleanup_authoring authors
+  them under ledger authority (largest surface; touches lowering +
+  likely the throws/try-catch machinery).
 - **B — sibling-pass relocation**: move site-3's exact apparatus
   (`initialized_at_return` dataflow + zero-storage widening + skip
   set + `_drop_all_destructibles`) into the sibling

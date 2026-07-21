@@ -892,3 +892,81 @@ opportunistic uplifts)" for the full rule.
 
 - **Scope when triggered:** v1 ~1 day (checker walk over struct
   schemas + one diagnostic + pins); v2 is its own design doc first.
+
+## Creation-site lifetime registration for all site-3-only owned locals
+
+- **Improvement:** give every local that today relies on the
+  Return-boundary destructible sweep (string_arc "site-3", relocated to
+  the coordinated late-cleanup phase by B2+C) a first-class creation-site
+  cleanup authority via `_register_drop_local` / `_materialize_owned_temp`,
+  so it flows through the mainstream scope-exit `_emit_scope_cleanup_hook`
+  → `cleanup_authoring` path instead of a Return sweep. Only when **ALL**
+  current site-3-only lifetime classes are covered can the relocated
+  site-3 sweep be **deleted outright**. Those classes (measured over the
+  924-fixture corpus, 1,088 site-3 drops) are:
+  1. **named error binders** (`catch e`) — deliberately unregistered
+     (`# materialize-audit: allow consumed`), inline drops on only some
+     exit edges + single-candidate rethrow hook;
+  2. **anonymous `catch _` binders** — lower via `_canonical_local(None,
+     "_")` → `__discard*` slots, also unregistered (these `__discard*`
+     slots are catch binders — there is NO separate discard-temp
+     owned-local population);
+  3. **immediate-lambda MOVE/SHARE capture locals** whose environment
+     field has no separate immediate-env drop authority
+     (`hir_to_mir.py:5768-5777` loads the env field into a body local but
+     deliberately skips `_register_drop_local` for MOVE/SHARE; the stack
+     immediate env has no drop thunk, so site-3's Return drop IS the live
+     release authority — measured instance:
+     `closures_share_capture_arc_generic::__lambda_main_0_0::app` (`Arc`),
+     the one STRUCT member of the 1,088).
+  Catch-binder registration **alone is insufficient** — class 3 is a
+  live second authority class that a binder-only change would leave
+  uncovered, so site-3 could not be deleted by registering binders only.
+
+- **Why deferred (2026-07-20):** the string-arc endgame adopted Option
+  A (relocate the structural site-3 sweep behind the coordinated
+  cleanup phase; see
+  `work/string-ownership-refactor/SLICE-B2-R6-ARCHITECTURAL-CHECKPOINT.md`).
+  This creation-site model is the architecturally cleaner end-state
+  (single cleanup authority) but **expands HIR→MIR catch/unwind
+  ownership semantics** — historically this compiler's densest bug
+  cluster (throw-unwind Destructible drop; typed-catch binder into
+  ctor field double-free; match-arm `move` binder zeroed variant;
+  VT-capture atexit UAF; cb_drop phantom destroy of moved-out
+  captures). Today both known classes are *deliberately* left out of
+  scope registration — error binders via `# materialize-audit: allow
+  consumed` (inline drops on only some exit edges + single-candidate
+  rethrow hook), immediate-lambda MOVE/SHARE capture locals via the
+  explicit skip at `hir_to_mir.py:5776` — and site-3 is their
+  Return-boundary safety net. Rewiring that during the endgame buys no
+  endgame-required benefit and reopens the whole cluster, so it is a
+  separate design-first, memcheck-gated project.
+
+- **Triggers:** (note — the "second category of unregistered owned
+  local" is NO LONGER a future trigger: immediate-lambda MOVE/SHARE
+  capture locals (class 3 above) are already a live site-3-only
+  authority class, folded into the improvement's scope. The remaining
+  forcing shapes are:)
+  - A **semantic leak / double-drop / ordering** bug in EITHER known
+    class (catch binders, or immediate-lambda MOVE/SHARE capture locals)
+    — i.e. site-3's relocated sweep mis-handles one of them.
+  - A **third / new** category of unregistered owned local that requires
+    the Return sweep (the safety-net pattern recurs for a local outside
+    the two known classes).
+  - A language feature that requires these lifetimes (catch binders and
+    immediate-lambda capture locals) to participate in normal
+    scope-order semantics (e.g. deterministic interleaving with other
+    scope locals).
+
+- **Scope when triggered:** design doc first. Must cover: retirement of
+  the inline binder fall-through/rethrow cleanup and the single-
+  candidate throw hook; a creation-site drop authority for immediate-
+  lambda MOVE/SHARE capture locals (and the immediate/callback
+  distinction — callback captures are already owned by the heap env +
+  cb drop thunk, immediate captures are not); `MoveOut`-before-transfer
+  proofs on every propagation edge so `verdict_at` returns
+  skip/`MUST_NOT_DROP` on moved-out paths; destruction-order equivalence
+  vs today's `sorted(destructible_locals)`; unwind + capture memcheck
+  coverage across all catch/throw/`_`-binder and immediate-lambda
+  MOVE/SHARE shapes; and removal of the relocated site-3 safety net only
+  after ALL of the above are green.
