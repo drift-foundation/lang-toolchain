@@ -26,14 +26,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple, TYPE_CHECKING
 
+from .ownership_ledger import DropVerdict
+
 if TYPE_CHECKING:
 	from lang.driftc.core.types_core import TypeId
 
 
-# Site-4 ledger verdicts (mirrors ownership_ledger DropVerdict names, kept
-# as plain strings so payloads carry no live ledger references).
-VERDICT_MUST_DROP = "MUST_DROP"
-VERDICT_MUST_NOT_DROP = "MUST_NOT_DROP"
+# The only two verdicts constructible as an emission payload. PATH_DEPENDENT
+# is deliberately absent — a drop-before-overwrite that returns PATH_DEPENDENT
+# fires the site-4 tripwire in the authority and is never turned into a
+# payload (an emitter must never silently treat it as "do not emit").
+_EMITTABLE_VERDICTS = frozenset({DropVerdict.MUST_DROP, DropVerdict.MUST_NOT_DROP})
 
 
 @dataclass(frozen=True)
@@ -61,18 +64,28 @@ class Site3ReturnPayload:
 class Site4Payload:
 	"""Drop-before-overwrite decision at a destructible `StoreLocal`.
 
-	`emit` is True iff `verdict == MUST_DROP` (the emission subset — 14
-	across the corpus). `needs_drop` is the type-level DropPolicy axis fed
-	to the ledger query. `ty` is the frozen expected local type.
+	`verdict` is the TYPED `DropVerdict` member (MUST_DROP / MUST_NOT_DROP)
+	— never a bare string whose unknown value could make `emit` silently
+	False. PATH_DEPENDENT is rejected at construction (the tripwire fires
+	upstream). `emit` is True iff `verdict is DropVerdict.MUST_DROP` (the
+	emission subset — 14 across the corpus). `needs_drop` is the canonical
+	DropPolicy axis; `ty` is the frozen expected local type.
 	"""
 	local: str
 	ty: "TypeId"
 	needs_drop: bool
-	verdict: str            # VERDICT_MUST_DROP | VERDICT_MUST_NOT_DROP
+	verdict: "DropVerdict"
+
+	def __post_init__(self) -> None:
+		if self.verdict not in _EMITTABLE_VERDICTS:
+			raise ValueError(
+				f"Site4Payload verdict must be MUST_DROP or MUST_NOT_DROP, "
+				f"got {self.verdict!r} (PATH_DEPENDENT is never a payload)"
+			)
 
 	@property
 	def emit(self) -> bool:
-		return self.verdict == VERDICT_MUST_DROP
+		return self.verdict is DropVerdict.MUST_DROP
 
 
 @dataclass(frozen=True)
@@ -84,8 +97,7 @@ class NullsafePayload:
 
 
 __all__ = (
-	"VERDICT_MUST_DROP",
-	"VERDICT_MUST_NOT_DROP",
+	"DropVerdict",
 	"Site3Drop",
 	"Site3ReturnPayload",
 	"Site4Payload",

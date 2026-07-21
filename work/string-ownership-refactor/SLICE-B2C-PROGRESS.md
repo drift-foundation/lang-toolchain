@@ -55,7 +55,8 @@ step — power-loss recovery point.
   + same-block + kind + semantic-field checks; `locate()` returns
   CURRENT index (may differ from orig); `check_relative_order()`;
   `assert_all_consumed()`. Teeth `lang/tests/stage2/test_cleanup_plan.py`
-  **15/15**: insertion-before-anchor stays valid + changed-index-OK
+  **43/43** (grown across S1 closure + B2+C amendments; the initial
+  container landed at 15/15 — see log): insertion-before-anchor stays valid + changed-index-OK
   (both sides), replace/duplicate/cross-block-move/disappear/field-drift/
   block-vanish/terminator-replace/reorder/dup-registration/unconsumed/
   double-consume/add-after-freeze all fail closed; two-sites-share-Return
@@ -111,6 +112,63 @@ step — power-loss recovery point.
   candidate/verdict split w/ PATH_DEPENDENT=0; nullsafe 133,998
   synthetic=0; every production counter +0; zero MIR/ledger-dirty/rebuild
   deltas. Sample/unit ladder first, but acceptance is the full 924.
+  EXECUTION (maintainer 2026-07-21T053232Z): TWO milestones, ≤2 full corpus.
+  - **Milestone A — DONE 2026-07-21**: `destructible_authority.py` extracted
+    (DropClassifier; classify_destructible_locals; site4_verdict w/
+    missing-ledger + PATH_DEPENDENT tripwires; compute_store_defs/
+    assigned_in; site3_return_drops — ordered, reproduces skip fold +
+    zero-storage widening BEFORE flag-managed fold). string_arc DELEGATES,
+    emission/order/audit/identities unchanged (net −222/+74). 12 differential
+    tests + existing string_arc suites green (121 in touched battery).
+    GATE PASS: instrumented 924 corpus — every production counter +0 (14/14
+    identical to flagret), universe identical (924, sym-diff 0), site-3
+    census 1,088 = 1,087 ERROR + 1 STRUCT (the Arc event
+    closures_share_capture_arc_generic::__lambda_main_0_0::app). Site-3
+    probe reverted byte-identically (0 traces). One transient redundancy:
+    string_arc keeps building skip/init inline for its String sweep +
+    observe reporter + boundary audit (dies with string_arc in D);
+    site3_return_drops is the single authority for the EMITTED drop set.
+  - **Amendments (review 2026-07-21T120409Z) — DONE**: (1) CLOSED authority
+    (canonical DropVerdict/compute_drop_policy/zero_storage_drop_safe/
+    is_flag_managed imports; site4_verdict returns typed DropVerdict; dropped
+    unused clf/string_ty/injected params). (2) Bookkeeping extracted ONCE —
+    `compute_return_move_state` (moved-out fixpoint + intra-block explicit-drop
+    replay) → immutable `ReturnMoveState`; string_arc + planner each invoke the
+    SAME authority function INDEPENDENTLY (no shared instance today; no other
+    read-sites; inline build removed). (3) PATH_DEPENDENT teeth
+    (site-4 tripwire; site-3 zero-safe widened / zero-unsafe not). (4) EmitterPhase
+    -in-production: AST pin forbids production `.consume`/`._mark_consumed`
+    (must use begin_phase→stage→mark_rewritten→commit) + S5 Return-identity note.
+    (5) prose: site3_return_drops = behavior-preserving recomposition; string_arc
+    inline skip/init marked TRANSITIONAL.
+  - **Milestone B — DONE, S2 CLOSED 2026-07-21**: standalone non-emitting
+    `destructible_planner.py` on the closed authority at the pre-mutation
+    ledger-A slot (immutable payloads, validate_and_freeze vs original snapshot,
+    mutates nothing). 4 planner unit teeth; env-gated driver shadow census
+    REVERTED after gate (driftc.py clean vs HEAD). FINAL 924 census PASS:
+    site-3 **1,088** (1,087 ERROR + 1 STRUCT = the Arc
+    `closures_share_capture_arc_generic::__lambda_main_0_0::app`); site-4
+    MUST_DROP **14** + MUST_NOT_DROP 72,995, PATH_DEPENDENT **0**; nullsafe
+    **133,998** synthetic **0**; planner_ok 1,107,693 / planner_fail 0; every
+    production counter **+0**, universe identical (924), no MIR/ledger-dirty/
+    build delta. Touched battery 153 green.
+  - **S2 static closure (review 2026-07-21T195839Z) — DONE**, no corpus rerun:
+    (1) planner uses `require_fresh_ledger` (ledger A REQUIRED regardless of
+    population; teeth: no-site4 missing-ledger + dirty-ledger fail). (2) AST
+    consume-bypass pin REPAIRED (was scanning nonexistent lang/lang/driftc):
+    correct root lang/driftc, asserts root exists + >50 files visited, excludes
+    only cleanup_plan.py impl, plus a synthetic positive/negative detector probe.
+    (3) Type relationships ENFORCED not carried: `Decision.type_bindings`
+    (local→TypeId) checked vs func.local_types at BOTH validate_and_freeze AND
+    locate; StoreLocal.value in fields; teeth: wrong-type-at-freeze, absent-local,
+    post-freeze type drift, value-operand drift. (4) Authority fully closed:
+    `site4_verdict` computes canonical needs_drop internally + returns
+    (DropVerdict, needs_drop); `compute_return_move_state` takes `string_ty`
+    datum (not a predicate); `Site4Payload.verdict` is typed `DropVerdict` with
+    __post_init__ rejecting PATH_DEPENDENT (unconstructible as a payload).
+    Doc: planner has NO production consumer (census wiring removed); string_arc
+    + planner invoke the same authority INDEPENDENTLY (no shared instance).
+    Behavior-preserving (Arc fixture compiles +0-equivalent). 161 teeth green.
 - [ ] **S3 — site-3 Return emitter (BUILD + TEST IN ISOLATION, do NOT
   wire to production yet)**: narrow module; emits at Return anchors in
   `sorted(destructible_locals)` order; validates each decision vs object
@@ -122,6 +180,11 @@ step — power-loss recovery point.
   overwrite_cleanup, consuming plan): independent counters/bijections
   (nullsafe 133,998; site-4 14). Remove nullsafe + site-4 emission from
   string_arc atomically. Gate: focused + corpus +0; tripwire intact.
+  NOTE (amendment 4): S5's Return rewrite MUST preserve the ORIGINAL
+  Return object (insert cleanup before it; do not replace it with a new
+  M.Return) so the plan's site-3 TERM anchor stays valid at postflight
+  commit. Emitters use `begin_phase`→stage→`mark_rewritten`→`commit`
+  (NOT `session.consume`; AST-pinned).
 - [ ] **S5 — unified Return authority (site-3 + R3/R4), PRODUCTION
   wiring**: ONE coordinated Return-authority traversal consumes site-3
   (from S3) + C's R3/R4 String Return/scope decisions ATOMICALLY in a

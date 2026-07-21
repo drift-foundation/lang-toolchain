@@ -97,7 +97,11 @@ class Decision:
 	obj: Any                         # the exact MInstr / MTerminator (identity)
 	site: str                        # "site3" | "site4" | "nullsafe" | "r3" | "r4" | "r8"
 	kind_name: str                   # type(obj).__name__ — expected node kind
-	fields: Tuple[Tuple[str, Any], ...]   # expected semantic fields, immutable
+	fields: Tuple[Tuple[str, Any], ...]   # expected semantic operands/fields, immutable
+	# Immutable `local -> expected TypeId` snapshot, checked against the
+	# (mutable) `func.local_types` at BOTH validate_and_freeze and locate, so
+	# planned type relationships are ENFORCED, not merely carried.
+	type_bindings: Tuple[Tuple[str, Any], ...]
 	payload: Any                     # site-specific emission data (S2 supplies immutable)
 
 
@@ -110,24 +114,26 @@ class ConsumptionSession:
 	`locate(dec)` / `consume(dec)` are then O(1). One session serves
 	arbitrarily many calls without rescanning — proven by `scan_count`.
 
-	Consumption is ONLY through a session (`session.consume`), so a
-	decision cannot be marked consumed without its anchor being validated
-	against the function first. The session is STALE-SAFE: every
-	`locate`/`consume` re-confirms (O(1)) that the anchor object is STILL
-	at its scanned location in the current MIR, so a session opened before
-	a mutation cannot validate/consume an anchor that the mutation moved
-	or removed. Use one session per emitter phase (PREFLIGHT before the
-	rewrite; a FRESH session POSTFLIGHT to re-validate surviving anchors):
+	The session is STALE-SAFE: every `locate`/`consume` re-confirms (O(1))
+	that the anchor object is STILL at its scanned location in the current
+	MIR, so a session opened before a mutation cannot validate/consume an
+	anchor that the mutation moved or removed.
 
-	    with plan.open_session(func) as sess:      # preflight
-	        for dec in ...: idx = sess.consume(dec)
-	        ... build new_instrs / rewrite ...     # mutate AFTER consuming
-	    with plan.open_session(func) as post:       # postflight (fresh scan)
-	        for dec in surviving: post.locate(dec)
+	PRODUCTION EMITTERS MUST NOT call `consume()` directly. `consume()`
+	marks a decision consumed against the CURRENT (pre-rewrite) view, which
+	a later rewrite in the same phase can invalidate. Production must use
+	`CleanupPlan.begin_phase(func)` — preflight `stage()` → rewrite →
+	`mark_rewritten()` → fresh postflight `commit()` — which re-validates
+	against the MUTATED MIR before marking anything consumed. A fail-closed
+	AST pin (`test_production_consumes_via_emitter_phase_not_session_bypass`)
+	forbids production modules from calling `consume`/`_mark_consumed`.
+	`consume()`/`locate()` remain for low-level/test use and for
+	`EmitterPhase`'s own read-validation:
 
-	Once the phase mutates the function, the preflight session is stale
-	and refuses further consumption — reopen a session against the new
-	state.
+	    phase = plan.begin_phase(func)             # preflight session
+	    for dec in decisions: phase.stage(dec)
+	    ... rewrite (preserve anchor objects, incl. the Return) ...
+	    phase.mark_rewritten(); phase.commit()     # postflight validate + consume
 	"""
 
 	def __init__(self, plan: "CleanupPlan", func: "M.MirFunc") -> None:
@@ -228,6 +234,9 @@ class ConsumptionSession:
 					f"{name!r} changed ({expected!r} → {actual!r}) for site "
 					f"{dec.site!r} at {dec.coord.block}"
 				)
+		# Type bindings (`local -> expected TypeId`) re-checked against the
+		# current `func.local_types` — catches post-freeze type drift.
+		self._plan._check_type_bindings(dec, self._func, when="consume")
 
 		entry = self._loc.get(oid)
 		total = self._count.get(oid, 0)
@@ -323,6 +332,7 @@ class CleanupPlan:
 		site: str,
 		fields: Dict[str, Any],
 		payload: Any,
+		type_bindings: "Dict[str, Any] | None" = None,
 	) -> Decision:
 		"""Register a decision against an original anchor object.
 
@@ -386,6 +396,7 @@ class CleanupPlan:
 			site=site,
 			kind_name=type(obj).__name__,
 			fields=tuple(sorted(fields_dict.items())),
+			type_bindings=tuple(sorted((type_bindings or {}).items())),
 			payload=payload,
 		)
 		self._decisions.append(dec)
@@ -485,8 +496,29 @@ class CleanupPlan:
 						f"at build ({value!r} != {actual!r}) at "
 						f"{dec.coord.block}:{dec.coord.orig_index}"
 					)
+			# Declared type bindings (`local -> expected TypeId`) must match
+			# `func.local_types` NOW — a mis-declared type is caught at build.
+			self._check_type_bindings(dec, func, when="build")
 		self._frozen = True
 		return self
+
+	def _check_type_bindings(self, dec: "Decision", func: "M.MirFunc", *, when: str) -> None:
+		lt = func.local_types
+		for local, expected_ty in dec.type_bindings:
+			if local not in lt:
+				raise PlanContractError(
+					f"cleanup_plan[{self._fn_name}]: type binding local "
+					f"{local!r} (site {dec.site!r}) is absent from "
+					f"func.local_types at {when} ({dec.coord.block}:"
+					f"{dec.coord.orig_index})"
+				)
+			if lt[local] != expected_ty:
+				raise PlanContractError(
+					f"cleanup_plan[{self._fn_name}]: type binding for local "
+					f"{local!r} (site {dec.site!r}) changed ({expected_ty!r} -> "
+					f"{lt[local]!r}) at {when} ({dec.coord.block}:"
+					f"{dec.coord.orig_index})"
+				)
 
 	# ---- introspection (read-only views) -----------------------------
 

@@ -39,7 +39,6 @@ from .ledger_cache import mark_ledger_dirty, maybe_fresh_ledger
 from .ownership_ledger import DropVerdict as _DropVerdict
 from .drop_policy_compute import compute_drop_policy as _compute_drop_policy
 from .drop_policy_compute import zero_storage_drop_safe as _zero_storage_drop_safe
-from .drop_flags import is_flag_managed as _is_flag_managed
 
 
 def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
@@ -73,6 +72,16 @@ def variant_zero_tag_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
 # emission code references are imported back here.  The dead
 # `consumes_string_operand` wrapper (zero call sites) was deleted
 # with the move; its contract prose lives with the library.
+from .destructible_authority import (
+	DropClassifier,
+	classify_destructible_locals,
+	compute_assigned_in,
+	compute_return_move_state,
+	compute_store_defs,
+	flag_managed_at_return,
+	site3_return_drops,
+	site4_verdict,
+)
 from .string_ownership_analysis import classify_string_array_locals
 from .string_ownership_analysis import (
 	DRIFT_STRING_HELPER_SYMBOLS,
@@ -154,14 +163,11 @@ def insert_string_arc(
 		for _ins in _blk.instructions:
 			if isinstance(_ins, M.AddrOfLocal):
 				addr_taken_locals.add(_ins.local)
-	_type_needs_drop_cache: Dict[TypeId, bool] = {}
-	# Cycle guard for _type_needs_drop: tids whose by-value field closure is
-	# still being computed up the call stack. A directly-recursive value type is
-	# rejected earlier by validate_no_recursive_value_types, but malformed/legacy
-	# package metadata could still present one here; this prevents a raw Python
-	# RecursionError on the back-edge (the result cache is written only AFTER the
-	# recursion returns, so it cannot break the cycle on its own).
-	_type_needs_drop_active: Set[TypeId] = set()
+	# DESTRUCTIBLE decision authority (Milestone A, 2026-07-20): the
+	# type-level classification predicates moved VERBATIM to
+	# `destructible_authority.DropClassifier`; the closure NAMES below are
+	# rebound to its methods so every existing call site is unchanged.
+	_clf = DropClassifier(type_table)
 	block_order = sorted(func.blocks.keys())
 
 	used_ids: Set[str] = set(local_types.keys())
@@ -179,141 +185,18 @@ def insert_string_arc(
 	def _is_string_tid(tid: TypeId | None) -> bool:
 		return tid == string_ty
 
-	def _type_needs_drop(tid: TypeId) -> bool:
-		cached = _type_needs_drop_cache.get(tid)
-		if cached is not None:
-			return cached
-		if tid in _type_needs_drop_active:
-			# Cycle back-edge: a directly-recursive value type should have been
-			# rejected by validate_no_recursive_value_types; break the edge as
-			# False (the correct least-fixpoint seed for the OR-of-fields below)
-			# instead of recursing forever into a Python RecursionError. Do NOT
-			# cache this provisional False — the outer in-progress call computes
-			# and caches the real result.
-			return False
-		_type_needs_drop_active.add(tid)
-		try:
-			td = type_table.get(tid)
-			if hasattr(type_table, "is_destructible"):
-				try:
-					if bool(type_table.is_destructible(tid)):
-						_type_needs_drop_cache[tid] = True
-						return True
-				except Exception:
-					pass
-			if td.kind is TypeKind.SCALAR:
-				needs = td.name == "String"
-				_type_needs_drop_cache[tid] = needs
-				return needs
-			if td.kind is TypeKind.REF:
-				_type_needs_drop_cache[tid] = False
-				return False
-			if td.kind is TypeKind.ERROR:
-				_type_needs_drop_cache[tid] = True
-				return True
-			if td.kind is TypeKind.ARRAY and td.param_types:
-				_type_needs_drop_cache[tid] = True
-				return True
-			if td.kind is TypeKind.STRUCT:
-				inst = type_table.get_struct_instance(tid)
-				if inst is not None:
-					needs = any(_type_needs_drop(fty) for fty in inst.field_types)
-					_type_needs_drop_cache[tid] = needs
-					return needs
-			if td.kind is TypeKind.VARIANT:
-				inst = type_table.get_variant_instance(tid)
-				if inst is not None:
-					needs = any(_type_needs_drop(fty) for arm in inst.arms for fty in arm.field_types)
-					_type_needs_drop_cache[tid] = needs
-					return needs
-			if td.param_types:
-				needs = any(_type_needs_drop(pt) for pt in td.param_types)
-				_type_needs_drop_cache[tid] = needs
-				return needs
-			_type_needs_drop_cache[tid] = False
-			return False
-		finally:
-			_type_needs_drop_active.discard(tid)
-
-	# __borrow_tmp: Stage 1 (borrow_materialize.py) normally materialises rvalue
-	# borrows into __tmp_borrow* locals that get scope-based drops.  This Stage 2
-	# inclusion is a defensive fallback in case that assumption breaks.
-	def _is_destructible_tid(tid: TypeId | None) -> bool:
-		if tid is None:
-			return False
-		return _type_needs_drop(tid)
-
-	def _is_error_tid(tid: TypeId | None) -> bool:
-		if tid is None:
-			return False
-		return type_table.get(tid).kind is TypeKind.ERROR
-
-	_dtor_fns = getattr(type_table, "destructor_fns", None) or {}
-	_nullsafe_drop_cache: Dict[TypeId, bool] = {}
-	# Cycle guard for _is_nullsafe_drop, mirroring _type_needs_drop_active: the
-	# result cache is written only after recursion returns, so it cannot break a
-	# self-loop in a malformed/legacy recursive value type on its own.
-	_nullsafe_drop_active: Set[TypeId] = set()
-
-	def _is_nullsafe_drop(tid: TypeId) -> bool:
-		cached = _nullsafe_drop_cache.get(tid)
-		if cached is not None:
-			return cached
-		if tid in _nullsafe_drop_active:
-			# Cycle back-edge: a directly-recursive value type should have been
-			# rejected before stage 2. True is the identity for the `all()`
-			# aggregation below, so the back-edge does not alter the real
-			# (non-cyclic) verdict; recurse no further (avoids RecursionError).
-			# Not cached — the outer in-progress call caches the real result.
-			return True
-		_nullsafe_drop_active.add(tid)
-		try:
-			return _is_nullsafe_drop_body(tid)
-		finally:
-			_nullsafe_drop_active.discard(tid)
-
-	def _is_nullsafe_drop_body(tid: TypeId) -> bool:
-		if tid in _dtor_fns:
-			_nullsafe_drop_cache[tid] = False
-			return False
-		td = type_table.get(tid)
-		if td.kind is TypeKind.SCALAR:
-			_nullsafe_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.ARRAY:
-			_nullsafe_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.ERROR:
-			_nullsafe_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.INTERFACE:
-			_nullsafe_drop_cache[tid] = True
-			return True
-		if td.kind is TypeKind.STRUCT:
-			inst = type_table.get_struct_instance(tid)
-			if inst is not None:
-				safe = all(_is_nullsafe_drop(fty) for fty in inst.field_types if _type_needs_drop(fty))
-				_nullsafe_drop_cache[tid] = safe
-				return safe
-		if td.kind is TypeKind.VARIANT:
-			inst = type_table.get_variant_instance(tid)
-			if inst is not None:
-				safe = all(_is_nullsafe_drop(fty) for arm in inst.arms for fty in arm.field_types if _type_needs_drop(fty))
-				_nullsafe_drop_cache[tid] = safe
-				return safe
-		_nullsafe_drop_cache[tid] = False
-		return False
-
-	# __borrow_tmp: defensive fallback — see comment above array_locals.
-	destructible_locals: Set[str] = {
-		name
-		for name in (list(func.params) + list(func.locals))
-		if (not name.startswith("__")) or name.startswith("__match_binder_") or name.startswith("__borrow_tmp") or _is_error_tid(local_types.get(name))
-		if name not in string_locals
-		if name not in array_locals
-		if _is_destructible_tid(local_types.get(name))
-	}
-	nullsafe_destructible_locals: Set[str] = {name for name in destructible_locals if _is_nullsafe_drop(local_types[name])}
+	# The type-level classification closures (`_type_needs_drop`,
+	# `_is_destructible_tid`, `_is_error_tid`, `_is_nullsafe_drop`) moved
+	# VERBATIM to `DropClassifier`; their only remaining call sites were the
+	# `destructible_locals` / `nullsafe_destructible_locals` split, which now
+	# consults `_clf` directly via `classify_destructible_locals`.
+	destructible_locals, nullsafe_destructible_locals = classify_destructible_locals(
+		func,
+		_clf,
+		local_types=local_types,
+		string_locals=string_locals,
+		array_locals=array_locals,
+	)
 
 	def _is_string_value(val: str) -> bool:
 		return _is_string_tid(local_types.get(val))
@@ -412,20 +295,10 @@ def insert_string_arc(
 		out.append(M.DropValue(value=tmp, ty=ty))
 		local_types[tmp] = ty
 
-	def _drop_all_destructibles(
-		out: list[M.MInstr],
-		*,
-		skip_locals: Set[str] | None = None,
-		only_locals: Set[str] | None = None,
-	) -> None:
-		skip = skip_locals or set()
-		only = only_locals
-		for local in sorted(destructible_locals):
-			if local in skip:
-				continue
-			if only is not None and local not in only:
-				continue
-			_drop_destructible_local(local, out)
+	# `_drop_all_destructibles` (the Return-boundary sorted+skip+only
+	# filter over `destructible_locals`) moved to
+	# `destructible_authority.site3_return_drops` (Milestone A); its
+	# per-local emission still runs here via `_drop_destructible_local`.
 
 	# TLR-2a: single-source alias — the shared occurrence iterator
 	# lives at module level (iter_used_values) so the release-point
@@ -455,17 +328,9 @@ def insert_string_arc(
 			type_table=type_table,
 		)
 
-	def _block_succs(term: M.MTerminator | None) -> list[str]:
-		# Central MIR CFG-successor contract (stage2/cfg.py).
-		return _cfg.terminator_successors(term)
-
-	def _block_preds() -> Dict[str, Set[str]]:
-		preds: Dict[str, Set[str]] = {name: set() for name in block_order}
-		for name in block_order:
-			for succ in _block_succs(func.blocks[name].terminator):
-				if succ in preds:
-					preds[succ].add(name)
-		return preds
+	# The CFG predecessor/successor helpers and the moved-out intersection
+	# fixpoint that used to live here moved to `destructible_authority`
+	# (`compute_return_move_state`, closed-authority follow-up).
 
 	# Fill in missing destination types first so string-use liveness sees all
 	# intermediate string temps (including conversion/call-produced values).
@@ -491,77 +356,24 @@ def insert_string_arc(
 		string_ty=string_ty,
 	)
 
-	# Definite local assignment across CFG.
-	preds = _block_preds()
-	store_defs: Dict[str, Set[str]] = {}
-	for name in block_order:
-		stores: Set[str] = set()
-		for instr in func.blocks[name].instructions:
-			if isinstance(instr, M.StoreLocal):
-				stores.add(instr.local)
-			elif isinstance(instr, M.MoveFromRef):
-				# MoveFromRef is a definite assignment to `local` — the
-				# transferred bytes land in the local's storage.
-				stores.add(instr.local)
-		store_defs[name] = stores
-	assigned_in: Dict[str, Set[str]] = {name: set() for name in block_order}
-	assigned_out: Dict[str, Set[str]] = {name: set() for name in block_order}
-	assigned_in[func.entry] = set(func.params)
-	assigned_out[func.entry] = set(func.params) | store_defs.get(func.entry, set())
-	changed = True
-	while changed:
-		changed = False
-		for name in block_order:
-			if name == func.entry:
-				new_in = set(func.params)
-			else:
-				ps = preds.get(name, set())
-				if not ps:
-					new_in = set()
-				else:
-					it = iter(ps)
-					new_in = set(assigned_out[next(it)])
-					for p in it:
-						new_in &= assigned_out[p]
-			new_out = new_in | store_defs.get(name, set())
-			if new_in != assigned_in[name] or new_out != assigned_out[name]:
-				assigned_in[name] = new_in
-				assigned_out[name] = new_out
-				changed = True
+	# Definite local assignment across CFG.  The `store_defs` /
+	# `assigned_in` definite-assignment dataflow moved VERBATIM to
+	# `destructible_authority` (Milestone A).
+	store_defs = compute_store_defs(func)
+	assigned_in = compute_assigned_in(func, store_defs)
 
-	# Track locals that are definitely moved-out at each block boundary so
-	# successor return blocks do not re-drop moved values.
-	moved_in: Dict[str, Set[str]] = {name: set() for name in block_order}
-	moved_out: Dict[str, Set[str]] = {name: set() for name in block_order}
-	changed = True
-	while changed:
-		changed = False
-		for name in block_order:
-			if name == func.entry:
-				new_in = set()
-			else:
-				ps = preds.get(name, set())
-				if not ps:
-					new_in = set()
-				else:
-					it = iter(ps)
-					new_in = set(moved_out[next(it)])
-					for p in it:
-						new_in &= moved_out[p]
-			cur = set(new_in)
-			for instr in func.blocks[name].instructions:
-				if isinstance(instr, M.StoreLocal):
-					cur.discard(instr.local)
-				elif isinstance(instr, M.MoveFromRef):
-					# Fresh assignment; local is no longer "moved-out."
-					cur.discard(instr.local)
-				elif isinstance(instr, M.MoveOut):
-					cur.add(instr.local)
-			new_out = cur
-			if new_in != moved_in[name] or new_out != moved_out[name]:
-				moved_in[name] = new_in
-				moved_out[name] = new_out
-				changed = True
+	# Per-block moved-out / explicitly-dropped bookkeeping, computed ONCE
+	# (closed-authority follow-up).  `move_state[b].moved_out` is the
+	# block-END value of the moved-out intersection fixpoint (verbatim from
+	# the loop that used to sit here); `.explicitly_dropped` is the
+	# intra-block explicit-drop replay.  BOTH the inline Return skip below
+	# and `site3_return_drops` consume this shared FROZEN result — neither
+	# string_arc nor the standalone planner recomputes these sets.
+	move_state = compute_return_move_state(
+		func,
+		destructible_locals=destructible_locals,
+		string_ty=string_ty,
+	)
 
 	owned_defs: Set[str] = set()
 	move_only_defs: Set[str] = set()
@@ -633,9 +445,10 @@ def insert_string_arc(
 		new_instrs: list[M.MInstr] = []
 		owned_values: Set[str] = set(owned_defs)
 		move_only_values: Set[str] = set(move_only_defs)
-		moved_out_locals: Set[str] = set(moved_in.get(block.name, set()))
-		explicitly_dropped_locals: Set[str] = set()
-		load_local_src: Dict[str, str] = {}
+		# The per-block `moved_out_locals` / `explicitly_dropped_locals` /
+		# `load_local_src` bookkeeping that used to be rebuilt inline here
+		# is now precomputed ONCE in `move_state` (compute_return_move_state);
+		# this loop no longer maintains it.
 
 		# Initialize string locals in the entry block to avoid uninitialized releases.
 		if block.name == func.entry:
@@ -830,14 +643,9 @@ def insert_string_arc(
 					)
 				new_instrs.append(instr)
 				continue
-			if isinstance(instr, M.StoreLocal):
-				moved_out_locals.discard(instr.local)
-				explicitly_dropped_locals.discard(instr.local)
-			if isinstance(instr, M.MoveFromRef):
-				# MoveFromRef defines `local` (transferred ownership);
-				# clear any prior moved/dropped state.
-				moved_out_locals.discard(instr.local)
-				explicitly_dropped_locals.discard(instr.local)
+			# (moved-out / explicitly-dropped bookkeeping discards on
+			# StoreLocal / MoveFromRef now live in
+			# `compute_return_move_state`; not maintained inline here.)
 			if isinstance(instr, M.StoreLocal) and instr.local in array_locals:
 				# R7 array overwrite drop MOVED to overwrite_cleanup
 				# (Slice B1, 2026-07-20). string_arc keeps no per-array
@@ -878,48 +686,27 @@ def insert_string_arc(
 				# line up with the indices string_arc walks here.
 				# Pinned by
 				# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
-				if _ledger is None:
-					raise RuntimeError(
-						f"drop_before_overwrite invoked without an "
-						f"attached ownership ledger (fn={func.name}, "
-						f"block={block.name}, local={instr.local}); "
-						f"Tier-1 site requires `func._ownership_ledger` "
-						f"to be set by the driver before `string_arc`."
-					)
-				_local_ty = local_types.get(instr.local)
-				_needs_drop = (
-					bool(_compute_drop_policy(type_table, _local_ty).needs_drop)
-					if _local_ty is not None
-					else False
-				)
-				_verdict = _ledger.verdict_at(
-					(block.name, _instr_idx),
-					instr.local,
-					needs_drop=_needs_drop,
+				# Verdict + tripwires (missing-ledger + PathDependent) AND the
+				# canonical `needs_drop` axis live in `site4_verdict` (closed
+				# authority).  The audit note, reporter check, and
+				# `_drop_destructible_local` emission stay here.
+				_verdict, _needs_drop = site4_verdict(
+					_ledger,
+					fn_name=func.name,
+					block_name=block.name,
+					instr_idx=_instr_idx,
+					local=instr.local,
+					local_ty=local_types.get(instr.local),
+					type_table=type_table,
 				)
 				if _verdict is _DropVerdict.MUST_DROP:
 					_should_drop = True
 					_site_verdict_str = _ledger_events.VERDICT_MUST_DROP
 					_site_reason = _ledger_events.REASON_NEEDS_DROP
-				elif _verdict is _DropVerdict.MUST_NOT_DROP:
+				else:
 					_should_drop = False
 					_site_verdict_str = _ledger_events.VERDICT_MUST_NOT_DROP
 					_site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
-				else:
-					# PathDependent — proof-obligation tripwire.  The
-					# observe re-run said the lattice never yields
-					# MaybeUninit at drop_before_overwrite points.  If
-					# it ever does, this raise signals the regression.
-					raise RuntimeError(
-						f"drop_before_overwrite: ledger returned "
-						f"PathDependent at (fn={func.name}, "
-						f"block={block.name}, idx={_instr_idx}, "
-						f"local={instr.local}).  Tier-1 promotion "
-						f"retired the `initialized_destructibles` "
-						f"fallback — if PathDependent is now reachable, "
-						f"either tighten the lattice or restore a "
-						f"flag-guarded path here before re-landing."
-					)
 				if drift_debug.enabled("ownership_ledger"):
 					_ledger_reporter.check(
 						_ledger,
@@ -991,7 +778,9 @@ def insert_string_arc(
 				setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
 				new_instrs.append(_zb)
 				local_types[zero] = instr.ty
-				moved_out_locals.add(instr.local)
+				# (moved-out bookkeeping for this MoveOut now lives in
+				# `compute_return_move_state`; the ZeroValue+StoreLocal
+				# emission above is unchanged.)
 				# Post-MoveOut the storage is zeroed.  A subsequent
 				# StoreLocal must NOT re-drop the zero bytes (tag=0
 				# can dispatch to a ctor whose drop reads zeroed
@@ -1037,7 +826,8 @@ def insert_string_arc(
 				if _is_string_tid(instr.ty):
 					owned_values.add(instr.dest)
 			elif isinstance(instr, M.LoadLocal):
-				load_local_src[instr.dest] = instr.local
+				# (load_local_src tracking for explicit-drop recognition
+				# now lives in `compute_return_move_state`.)
 				load_ty = local_types.get(instr.local)
 				if load_ty is not None:
 					local_types[instr.dest] = load_ty
@@ -1438,10 +1228,9 @@ def insert_string_arc(
 				if _is_string_value(val) and not _is_local_name(val):
 					_note_use(val, consume=True)
 				continue
-			if isinstance(instr, M.DropValue):
-				src_local = load_local_src.get(instr.value)
-				if src_local is not None and src_local in destructible_locals:
-					explicitly_dropped_locals.add(src_local)
+			# (Non-string DropValue explicit-drop bookkeeping now lives in
+			# `compute_return_move_state`; the instruction falls through to
+			# the passthrough below unchanged.)
 
 			new_instrs.append(instr)
 			for val in _iter_used_values(instr):
@@ -1451,9 +1240,17 @@ def insert_string_arc(
 		if isinstance(block.terminator, M.Return):
 			term = block.terminator
 			val = term.value
+			# TRANSITIONAL (delete with the unified Return authority, S5/D):
+			# string_arc keeps building `skip_cleanup_locals` /
+			# `initialized_at_return` inline ONLY for the String release
+			# sweep (`_release_all_locals`), the boundary audit, and the
+			# ownership_ledger observe reporter.  The DESTRUCTIBLE drop
+			# decision is authored by `site3_return_drops`; both consume the
+			# SAME `move_state` bookkeeping so they cannot diverge.
+			_return_move_state = move_state[block.name]
 			skip_cleanup_locals: Set[str] = set()
-			skip_cleanup_locals |= moved_out_locals
-			skip_cleanup_locals |= explicitly_dropped_locals
+			skip_cleanup_locals |= _return_move_state.moved_out
+			skip_cleanup_locals |= _return_move_state.explicitly_dropped
 			# Phase 4 site-3 sub-step 2 — destructor-method `self`
 			# skip is now ledger-authored.  The lattice transitions
 			# `self` to MOVED_OUT at the end of every Return-
@@ -1740,12 +1537,13 @@ def insert_string_arc(
 			# `drop_flags` ledger, but the skip itself does not depend
 			# on the ledger — it depends on the post-`drop_flags`
 			# `func.locals` (where the `__drop_flag_<L>` markers
-			# appear).  Detection via `_is_flag_managed`, which encodes
-			# the flag-naming convention behind one helper rather than
-			# scattering string matches.
-			_flag_managed_at_return: Set[str] = {
-				_dl for _dl in destructible_locals if _is_flag_managed(func, _dl)
-			}
+			# appear).  Detection delegates to the authority's
+			# `flag_managed_at_return` (canonical `drop_flags.is_flag_managed`),
+			# so string_arc and the standalone planner share one
+			# flag-managed set rather than each computing its own.
+			_flag_managed_at_return: Set[str] = flag_managed_at_return(
+				func, destructible_locals
+			)
 			skip_cleanup_locals |= _flag_managed_at_return
 			if _ledger is not None and drift_debug.enabled("ownership_ledger"):
 				# Site 3 observation: per-destructible-local verdict
@@ -1799,7 +1597,29 @@ def insert_string_arc(
 						needs_drop=_ledger_needs_drop,
 						emit=_ledger_reporter.stderr_emit,
 					)
-			_drop_all_destructibles(new_instrs, skip_locals=skip_cleanup_locals, only_locals=initialized_at_return)
+			# Destructible drop set at this Return is a BEHAVIOR-PRESERVING
+			# RECOMPOSITION in `site3_return_drops` (not a verbatim body
+			# move): it reassembles the destructible-relevant skip/init
+			# decision from the same inputs and returns the SAME
+			# `sorted(destructible_locals)` order `_drop_all_destructibles`
+			# emitted.  It consumes the SAME `move_state` bookkeeping the
+			# transitional inline skip above uses; the emission stays here
+			# via `_drop_destructible_local`, unchanged and in order.  (The
+			# `DropVerdict` / drop-policy / zero-storage helpers are imported
+			# canonically inside the authority — no longer injected here.)
+			for _da_local in site3_return_drops(
+				func,
+				block,
+				ledger=_ledger,
+				type_table=type_table,
+				destructible_locals=destructible_locals,
+				local_types=local_types,
+				move_state=_return_move_state,
+				assigned_in=assigned_in,
+				store_defs=store_defs,
+				flag_managed=_flag_managed_at_return,
+			):
+				_drop_destructible_local(_da_local, new_instrs)
 			new_term = M.Return(value=val)
 			if hasattr(term, "span"):
 				setattr(new_term, "span", getattr(term, "span"))

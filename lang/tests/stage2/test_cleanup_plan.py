@@ -534,3 +534,140 @@ def test_double_finalize_fails():
 	plan = _built(func, blk, store_x, ret)
 	with pytest.raises(PlanContractError, match="twice"):
 		plan.validate_and_freeze(func)
+
+
+# --- Amendment 4: production must consume via EmitterPhase, not the raw
+#     session.consume bypass (which can mark consumed before a later rewrite
+#     invalidates the anchor). Fail-closed source/AST pin over production
+#     modules that use cleanup_plan. ---
+
+import ast as _ast
+
+
+def _find_consume_bypass(source: str, name: str = "<probe>") -> list:
+	"""Return `[(lineno, attr)]` for every `X.consume(...)` or
+	`X._mark_consumed(...)` Call in `source`. These are the forbidden
+	production consumption bypasses — production must go through
+	`plan.begin_phase(...)` → stage → mark_rewritten → commit."""
+	found = []
+	tree = _ast.parse(source, filename=name)
+	for node in _ast.walk(tree):
+		if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
+			if node.func.attr in ("consume", "_mark_consumed"):
+				found.append((node.lineno, node.func.attr))
+	return found
+
+
+def test_consume_bypass_detector_catches_synthetic_calls():
+	"""The detector must actually FIRE on a production-shaped bypass — a
+	vacuous scan is worthless."""
+	probe = (
+		"def emit(plan, func):\n"
+		"    sess = plan.open_session(func)\n"
+		"    sess.consume(dec)\n"          # forbidden
+		"    plan._mark_consumed(dec)\n"    # forbidden
+	)
+	hits = _find_consume_bypass(probe)
+	attrs = sorted(a for _ln, a in hits)
+	assert attrs == ["_mark_consumed", "consume"], hits
+	# And it does NOT fire on the sanctioned phase lifecycle.
+	ok = ("def emit(plan, func):\n"
+	      "    ph = plan.begin_phase(func)\n"
+	      "    ph.stage(dec); ph.mark_rewritten(); ph.commit()\n")
+	assert _find_consume_bypass(ok) == []
+
+
+def test_production_consumes_via_emitter_phase_not_session_bypass():
+	import pathlib
+
+	# `<repo>/lang/tests/stage2/test_cleanup_plan.py`.parents:
+	#   [0]=stage2 [1]=tests [2]=lang → the production root is lang/driftc.
+	root = pathlib.Path(__file__).resolve().parents[2] / "driftc"
+	assert root.is_dir(), f"production scan root does not exist: {root}"
+
+	# cleanup_plan.py is the plan's own implementation — EmitterPhase.commit
+	# and ConsumptionSession.consume legitimately call `_mark_consumed`
+	# there. Every OTHER production module must not.
+	impl = (root / "stage2" / "cleanup_plan.py").resolve()
+
+	visited = 0
+	offenders = []
+	for path in root.rglob("*.py"):
+		if path.resolve() == impl:
+			continue
+		visited += 1
+		for lineno, attr in _find_consume_bypass(path.read_text(), str(path)):
+			offenders.append(f"{path.relative_to(root)}:{lineno} .{attr}()")
+
+	assert visited > 50, f"scan visited too few production files ({visited}); path is likely wrong"
+	assert not offenders, (
+		"production modules must consume plan decisions through the S1 "
+		"EmitterPhase postflight lifecycle (begin_phase -> stage -> "
+		"mark_rewritten -> commit), never a raw session.consume / "
+		"plan._mark_consumed bypass that marks consumed before a later "
+		"rewrite can invalidate the anchor. Offenders:\n  "
+		+ "\n  ".join(offenders)
+	)
+
+
+# --- Amendment 3: enforce type bindings + StoreLocal.value operand ------
+
+def _typed_func():
+	"""entry: [store_x (value=%v)] ; Return, with x typed 7 in local_types."""
+	func = _mk_func()
+	func.local_types = {"x": 7}
+	blk = M.BasicBlock(name="entry")
+	store_x = _store("x", "%v")
+	blk.instructions = [store_x]
+	blk.terminator = M.Return(value=None)
+	func.blocks["entry"] = blk
+	func.entry = "entry"
+	return func, blk, store_x
+
+
+def test_type_binding_wrong_at_freeze():
+	func, blk, store_x = _typed_func()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_x, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"local": "x", "value": "%v"},
+	         type_bindings={"x": 999},  # func.local_types["x"] == 7
+	         payload=None)
+	with pytest.raises(PlanContractError, match="type binding"):
+		plan.validate_and_freeze(func)
+
+
+def test_type_binding_absent_local_at_freeze():
+	func, blk, store_x = _typed_func()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_x, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"local": "x", "value": "%v"},
+	         type_bindings={"ghost": 7},  # not in func.local_types
+	         payload=None)
+	with pytest.raises(PlanContractError, match="absent from func.local_types"):
+		plan.validate_and_freeze(func)
+
+
+def test_type_binding_drift_at_consume():
+	func, blk, store_x = _typed_func()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_x, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"local": "x", "value": "%v"},
+	         type_bindings={"x": 7}, payload=None)
+	plan.validate_and_freeze(func)
+	func.local_types["x"] = 8            # post-freeze type drift
+	with plan.open_session(func) as sess:
+		with pytest.raises(PlanContractError, match="type binding"):
+			sess.locate(plan.all_decisions()[0])
+
+
+def test_storelocal_value_operand_drift_at_consume():
+	func, blk, store_x = _typed_func()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_x, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"local": "x", "value": "%v"},
+	         type_bindings={"x": 7}, payload=None)
+	plan.validate_and_freeze(func)
+	store_x.value = "%other"             # operand drift on the same object
+	with plan.open_session(func) as sess:
+		with pytest.raises(PlanContractError, match="field 'value'"):
+			sess.locate(plan.all_decisions()[0])
