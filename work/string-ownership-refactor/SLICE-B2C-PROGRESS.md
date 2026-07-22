@@ -241,25 +241,74 @@ step — power-loss recovery point.
   names none of the three analyses). Covered by the S5 combined 924
   corpus +0 gate (recognition affects codegen; `materialized_
   lastuse_release` 618,744 +0) + consume==fallback identity teeth.
-- [ ] **S7 — no-residual-rebuild proof**: after B2+C, no ledger
-  consumer forces an intermediate rebuild; ledger-build count gate
-  (zero additional vs pre-B2+C). Gate: instrumented build-count.
-- [ ] **S8 — B1/B2+C cleanup debts**: (1) _validate occurrence
-  hardening + teeth; (2) strip transient MIR attributes
-  (ow_authored_for, synthetic_zero_back once consumer ran); (3)
-  StoreRef prose retarget in test_mut_struct_string_field_self_concat;
-  (4) unused `mutated` in overwrite_cleanup; (5) retarget overbroad
-  hir_to_mir.py:5770-5776 comment (authority-comment only); (6) route
-  the 5 pre-existing bare-`insert_string_arc` unit-test failures
-  (`test_drop_before_overwrite_swap` ×4 +
-  `lang/codegen/llvm/tests/test_llvm_codegen_string::
-  test_string_literal_overwrite_emits_release`) through the full
-  pipeline — B1/S4 debt (site-4 emission left string_arc), NOT an
-  S5/S6 emission gap; must be repaired before the final full
-  suite/certification. Gate: battery + grep-clean.
-- [ ] **S9 — end static delta review** for the B2+C chunk (NOT a
-  cert). Then D (R5/R1 + delete string_arc.py + driver phase) → the
-  single 0.33.87 full serial suite + certification.
+- [x] **S7 — no-residual-rebuild proof — DONE 2026-07-22, review-HOLD
+  closure applied (test/proof-only)**: durable instrumented gate
+  `lang/tests/driver/test_b2c_zero_added_ledger_builds.py` (6 tests).
+  Instrumentation installed ONCE per test (stacking corrupted counts —
+  found & fixed) and covers EVERY bound build path: `ownership_ledger.
+  build_ledger` (source + driver l_post runtime import), `ledger_cache.
+  build_ledger` (attach traffic), and the PRE-BOUND aliases
+  `drop_flags.build_ledger` + `cleanup_authoring.build_and_attach_
+  ledger`.  ONE test compiles the fixture audit-OFF then audit-ON and
+  proves: (a) reason-set EQUALITY both directions vs the frozen set
+  (4 driver builds + `cleanup_authoring.in_pass_rebuild`; the fixture
+  exercises all 5 incl. `rebuild_after_drop_flags`); (b) FULL raw
+  attribution — raw == attach + drop_flags-internal + expected l_post
+  (0 off / exactly one per planned fn on), so any out-of-consumer
+  direct build fails; (c) cross-mode: identical reason MULTISET,
+  identical df count, raw_on == raw_off + planned_fns; (d) all four
+  B2+C consumers zero-build-delta in both modes.  Negative teeth:
+  missing frozen reason, extra reason, extra unattributed raw build,
+  missing l_post all fail the helpers.  Source pin extended to the
+  full plan-window/consumer surface incl. `string_arc.py` +
+  `string_ownership_analysis.py` (8 modules; none may name a build
+  entry point).
+- [x] **S8 — B1/B2+C cleanup debts — DONE 2026-07-22 (combined S7+S8
+  closure chunk)**:
+  (1) `_validate` rewritten-site survival hardened — output occurrence
+  count per inventoried store identity; vanished (0) or duplicated (>1)
+  store is a contained AssertionError, never a raw `pos[id]` KeyError /
+  silent position collapse; vanished+duplicated teeth added.
+  (2) transient MIR attributes STRIPPED — `_strip_transient_attrs` at
+  the end of `insert_overwrite_cleanup` (after every consumer: R2
+  recognition skip, `_validate`, plan-emission validator, planner
+  tripwire, Return-emitter checks, audit l_post) removes
+  `ow_authored_for` + `synthetic_zero_back` from all instructions;
+  pipeline tooth pins no-transient-attrs output; the plan-test
+  `_canonical_drop_before` helper no longer requires the tag.
+  (3) StoreRef authority prose retargeted in
+  `test_mut_struct_string_field_self_concat.py` (5 present-tense
+  `string_arc` claims + 2 stale `string_arc.py:NNNN` citations →
+  `overwrite_cleanup` `_K_STORE_REF` arm).
+  (4) unused `mutated` local removed from overwrite_cleanup.
+  (5) overbroad `hir_to_mir` MOVE/SHARE capture comment retargeted:
+  callback lambdas (heap env + cb-drop thunk owner) never reach the
+  register line with MOVE/SHARE; immediate lambdas do, and SITE-3 (the
+  unified Return authority) is their live release authority —
+  authority-comment only, no lowering change.
+  (6) the 5 pre-existing bare-`insert_string_arc` tests repaired
+  through the PRODUCTION-FAITHFUL pipeline (plan → string_arc →
+  return_cleanup → overwrite_cleanup): swap emit/skip/POD tests assert
+  the overwrite plan phase's emission; missing-ledger tripwire now
+  pins BOTH the production `require_fresh_ledger` refusal AND the
+  authority-level `site4_verdict` RuntimeError; PATH_DEPENDENT
+  tripwire raises from the plan build; observe-mode `[drift:
+  ownership_ledger]` site-4 telemetry RE-HOMED into
+  `destructible_planner`'s site-4 arm (debug-gated, same site tag/
+  verdict/reason/point/needs_drop axis — it had been LOST in the S4
+  migration); `test_llvm_codegen_string::
+  test_string_literal_overwrite_emits_release` runs the full sequence
+  before SSA→LLVM.
+  Plus carried S5/S6-review polish: the driver completeness guard
+  type-checks plan (`CleanupPlan`) / R8 (`R8Recognition`) / collector
+  (`StringArcAudit`) values, and `R8Recognition` rejects non-string
+  frozenset members; teeth for plan/R8 value injections.
+- [x] **S9 — end static delta review — DONE 2026-07-22, CLEAR** (NOT a
+  cert): `2026-07-22T152813Z-drift-lang-release-notes.md` — S7 HOLD
+  closed and the complete S7+S8 chunk commit-ready; no production,
+  test-contract, version, ABI, or architecture blocker remains.  Next:
+  D (R5/R1 + delete string_arc.py + driver phase) → the single 0.33.87
+  full serial suite + certification.
 
 ## Ordering note
 S3 builds the site-3 emitter in isolation; S5 wires the ONE unified
@@ -456,3 +505,41 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   driver-boundary / planner / mutation-audit 97 green; adjacent
   emitter/plan/authority/string_arc suites 141 green; 238 total).
   Awaiting static delta review.
+- 2026-07-22 (later): S5+S6 static review CLEAR
+  (2026-07-22T131935Z-drift-lang-release-notes.md); chunk committed as
+  `a40776a1`.  Non-blocking record correction applied: closure-delta
+  report's certified baseline corrected to **0.33.85 / ABI 21** (0.33.86
+  cert in flight per RESUME-CHECKPOINT), not 0.33.80.
+
+## S7+S8 combined closure chunk (authorized 2026-07-22, post-a40776a1)
+- Scope per clearance: prove zero added ledger builds (S7); discharge
+  all recorded cleanup debt + repair the 5 production-pipeline test
+  debts (S8, incl. the carried S5/S6 value-type/member polish); ONE
+  static review at the end; NO certification.
+- S7 + S8 item details recorded in the checkboxes above (both flipped
+  DONE this chunk).
+- Corpus policy: SLICE-B §9 standing rule (validator/authoring changes
+  MUST re-run the corpus) applies — `_validate` hardening + transient-
+  attr strip touch the validator/authoring surface, so the 924 audit
+  (`tools/drift_corpus_audit.py --out build/tmp/s7s8 --baseline
+  build/tmp/s5s6`) + full memcheck are part of this chunk's gate.
+  Observe re-home is debug-gated (off in corpus); strip runs after the
+  audit l_post build → expected +0.
+- Focused battery: 260 green across the touched set (overwrite family,
+  planner, authority, swap, plan-boundary incl. new value-type teeth,
+  r8 incl. member teeth, cleanup_plan, site3/return emitter, audit +
+  ownership-ledger reporters, mutation-audit, ledger-build gate,
+  codegen string, StoreRef lowering pin).  One test-helper update:
+  `_canonical_drop_before` no longer requires `synthetic_zero_back`
+  (the pass strips it — that IS debt item 2's contract).
+- **GATES PASS (2026-07-22)**: 924 corpus audit `build/tmp/s7s8` vs
+  accepted baseline `build/tmp/s5s6` — exit 0, universe identical
+  (924/1268, same partition), **all 14 counters +0** (incl.
+  drop_before_overwrite_site4=14, overwrite_release=233,519,
+  scope_exit_release=68,562, materialized_lastuse_release=618,744,
+  pre_post_verdict_drift=48,178).  Full memcheck: **105 passed /
+  1 skipped, 0 leaks**, lane audit PASS — identical to the S5+S6
+  gate.  Chunk complete; awaiting the single static review (NO
+  certification).  Next after review: S9 end static delta review →
+  Phase D (R5/R1 re-home + delete string_arc.py) → the single
+  0.33.87 full serial suite + certification.

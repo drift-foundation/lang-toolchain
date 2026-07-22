@@ -5768,11 +5768,20 @@ class HIRToMIR:
 			val = self._load_capture_from_env(slot)
 			self.b.emit(M.StoreLocal(local=local_name, value=val))
 			if local_ty is not None:
-				# Move/share-captured values remain owned by the lambda
-				# env object and are released by the env drop thunk;
-				# registering an additional local drop here double-drops
-				# non-Copy captures.  SHARE follows the same shape as
-				# MOVE: the env field is the +1 owner.
+				# MOVE/SHARE captures skip `_register_drop_local`, but the
+				# release authority DIFFERS by lambda class (B2+C retarget
+				# of a formerly-overbroad "env drop thunk" claim):
+				#   * CALLBACK lambdas never reach this line with a
+				#     MOVE/SHARE capture — those took the early `continue`
+				#     above (the heap env field is the +1 owner; the cb
+				#     env-drop thunk releases it).
+				#   * IMMEDIATE lambdas DO reach here: the stack env has
+				#     no drop thunk and no independently registered owner,
+				#     so the Return-boundary destructible sweep (site 3 —
+				#     the unified Return cleanup authority) is the live
+				#     release authority for the loaded body local.
+				# In both classes, registering an additional local drop
+				# here would double-author cleanup for the same stake.
 				if kind not in (C.HCaptureKind.MOVE, C.HCaptureKind.SHARE):
 					self._register_drop_local(local_name, local_ty)
 		self._lambda_capture_prologue_done = True

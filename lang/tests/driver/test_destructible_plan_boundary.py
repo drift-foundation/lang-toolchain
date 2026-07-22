@@ -209,6 +209,39 @@ def test_audit_disabled_maps_must_be_empty(tmp_path, monkeypatch) -> None:
 	_assert_completeness_contained(ir, checked, "audit DISABLED")
 
 
+def test_plan_value_type_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S7+S8 defensive polish: a non-CleanupPlan VALUE in the plan table
+	(complete key set, foreign value) is contained before any consumer."""
+	def _make_boom(real):
+		def _boom(func, **kw):
+			r = real(func, **kw)
+			if getattr(func, "name", "") == "main":
+				return (object(), r[1], r[2])
+			return r
+		return _boom
+
+	ir, checked = _compile_with_injected_plan_error(tmp_path, monkeypatch, _make_boom)
+	_assert_completeness_contained(ir, checked, "non-CleanupPlan value")
+
+
+def test_r8_value_type_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S7+S8 defensive polish: a non-R8Recognition VALUE in the R8 table
+	(complete key set, foreign value) is contained before string_arc."""
+	import lang.driftc.stage2.string_ownership_analysis as SOA
+
+	_real_r8 = SOA.compute_recognized_releases
+
+	def _bad_r8(func, **kw):
+		if getattr(func, "name", "") == "main":
+			return object()
+		return _real_r8(func, **kw)
+
+	monkeypatch.setattr(SOA, "compute_recognized_releases", _bad_r8)
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch, lambda real: real)
+	_assert_completeness_contained(ir, checked, "non-R8Recognition value")
+
+
 def test_finalize_contract_failure_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""S5 closure end-to-end: an injected `finalize` contract failure is
 	boundary-contained as phase `string_arc_audit_finalize` (clean `internal:`

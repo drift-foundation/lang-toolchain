@@ -1031,6 +1031,13 @@ class R8Recognition:
 					f"({_bn!r} -> {type(_vals).__name__}); every entry must be "
 					f"str -> frozenset"
 				)
+			for _m in _vals:
+				if not isinstance(_m, str):
+					raise AssertionError(
+						f"R8Recognition[{self.fn_name}]: block {_bn!r} carries a "
+						f"non-string member {_m!r} ({type(_m).__name__}); "
+						f"recognized temps are local NAMES"
+					)
 		object.__setattr__(self, "recognized_by_block", MappingProxyType(items))
 
 	def for_block(self, block_name: str) -> "frozenset":

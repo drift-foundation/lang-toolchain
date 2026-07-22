@@ -47,7 +47,9 @@ from .cleanup_payloads import (
 	Site4Payload,
 	StringReleasePayload,
 )
+from . import ownership_ledger_events as _ledger_events
 from . import ownership_ledger_reporter as _reporter
+from lang.driftc import debug as drift_debug
 
 
 class PlannerStop(RuntimeError):
@@ -191,6 +193,33 @@ def build_destructible_plan(
 					census["site4_must_drop"] += 1
 				else:
 					census["site4_must_not_drop"] += 1
+				# Site-4 observe-mode telemetry (S8 re-home): string_arc's
+				# per-StoreLocal `[drift:ownership_ledger]` record — lost when
+				# the S4 migration neutered its site-4 arm — now emits HERE,
+				# where the verdict is decided.  Same site tag / verdict /
+				# reason / point / has_drop needs_drop axis as the original
+				# emission, so observe re-runs keep catching any new
+				# bucket-5/6 class.  Debug-gated; zero cost otherwise.
+				if drift_debug.enabled("ownership_ledger"):
+					_reporter.check(
+						ledger,
+						fn_name=func.name,
+						site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
+						point=(bname, idx),
+						local=local,
+						site_verdict=(
+							_ledger_events.VERDICT_MUST_DROP
+							if verdict is DropVerdict.MUST_DROP
+							else _ledger_events.VERDICT_MUST_NOT_DROP
+						),
+						site_reason=(
+							_ledger_events.REASON_NEEDS_DROP
+							if verdict is DropVerdict.MUST_DROP
+							else _ledger_events.REASON_NOT_DROP_NEEDING
+						),
+						needs_drop=_ledger_needs_drop,
+						emit=_reporter.stderr_emit,
+					)
 
 		if isinstance(blk.terminator, M.Return):
 			_coord = anchor_term(bname, len(blk.instructions))

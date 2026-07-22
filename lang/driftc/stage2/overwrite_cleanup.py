@@ -214,7 +214,6 @@ def insert_overwrite_cleanup(
 			setattr(dst, "span", getattr(src, "span"))
 
 	overwrite_release_count = 0
-	mutated = False
 
 	for block in func.blocks.values():
 		new_instrs: List[M.MInstr] = []
@@ -281,7 +280,6 @@ def insert_overwrite_cleanup(
 			# the actual mutation (no allow marker) — a changed block's
 			# rewrite invalidates cached (block, idx) ledger state.
 			mark_ledger_dirty(func, "overwrite_cleanup.block_rewrite")
-			mutated = True
 
 	# ── Structural POST-rewrite BIJECTION validation (finding #2) ──
 	# R2/R7 authoring + this bijection validation are UNCHANGED and run
@@ -413,7 +411,27 @@ def insert_overwrite_cleanup(
 				_ledger_reporter.SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
 				site4_emitted_count,
 			)
+	# ── B2+C S8 debt (2): strip transient MIR attributes ──
+	# `ow_authored_for` (host-process object ids) and `synthetic_zero_back`
+	# (migration provenance) are validation-only metadata.  Every consumer
+	# has now run — the R2 recognition skip and `_validate` above, the plan
+	# emission validator, the planner's pre-string_arc tripwire, the
+	# Return-emitter's own pre-commit checks, and the audit L_post (built
+	# before this pass) — so neither attribute may survive into output MIR.
+	_strip_transient_attrs(func)
 	return func
+
+
+def _strip_transient_attrs(func: M.MirFunc) -> None:
+	"""Remove `ow_authored_for` / `synthetic_zero_back` from every
+	instruction — no object ids or migration provenance in output MIR
+	(SLICE-B §10 debt 2).  Attribute-only: instruction objects, order,
+	and operands are untouched (no ledger impact)."""
+	for block in func.blocks.values():
+		for ins in block.instructions:
+			for attr in ("ow_authored_for", "synthetic_zero_back"):
+				if hasattr(ins, attr):
+					delattr(ins, attr)
 
 
 def _emit_local_release(out, local, string_ty, new_temp, local_types, copy_span, src):
@@ -447,14 +465,34 @@ def _validate(func: M.MirFunc, type_table: TypeTable, inventory: Dict[int, Tuple
 	#    linkage checks.
 	authored: Dict[int, List[Tuple[str, int, M.MInstr]]] = {}
 	pos: Dict[int, Tuple[str, int]] = {}
+	# Occurrence count per instruction identity in the OUTPUT stream —
+	# `pos` alone would silently collapse a duplicated object to its last
+	# position, and a vanished object would surface as a raw KeyError.
+	occurrences: Dict[int, int] = {}
 	blocks_instrs: Dict[str, List[M.MInstr]] = {}
 	for bn, block in func.blocks.items():
 		blocks_instrs[bn] = block.instructions
 		for i, ins in enumerate(block.instructions):
 			pos[id(ins)] = (bn, i)
+			occurrences[id(ins)] = occurrences.get(id(ins), 0) + 1
 			tag = getattr(ins, "ow_authored_for", None)
 			if tag is not None:
 				authored.setdefault(tag, []).append((bn, i, ins))
+
+	# Rewritten-site survival (B1 debt item 1): every inventoried eligible
+	# store must occur EXACTLY ONCE in the output.  A store the authoring
+	# loop dropped (vanished) or aliased into the stream twice (duplicated)
+	# is a contained AssertionError here — never an uncaught KeyError from
+	# `pos[id(store)]` nor a silent position collapse below.
+	for sid, (kind, store) in inventory.items():
+		n = occurrences.get(id(store), 0)
+		if n != 1:
+			raise AssertionError(
+				f"overwrite_cleanup validation (fn '{func.name}'): inventoried "
+				f"{kind} store for '{_subject(store)}' occurs {n} time(s) in "
+				f"the rewritten output (expected exactly once — "
+				f"{'vanished store' if n == 0 else 'duplicated store'})."
+			)
 
 	authored_ids = set(authored)
 	inv_ids = set(inventory)

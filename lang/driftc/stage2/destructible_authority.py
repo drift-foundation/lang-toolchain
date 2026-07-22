@@ -245,8 +245,11 @@ def site4_verdict(
 	`DropVerdict.MUST_DROP`/`DropVerdict.MUST_NOT_DROP` member (never a
 	bare string) plus the computed axis the caller may retain. Preserves
 	the missing-ledger RuntimeError and the PathDependent proof-obligation
-	tripwire with byte-identical messages; the audit note, reporter check,
-	and emission stay in string_arc.
+	tripwire with byte-identical messages.  Post-S4/S5: the audit count
+	lives in `overwrite_cleanup` (counted-only recorder), the observe-mode
+	reporter check in `destructible_planner`'s site-4 arm, and the emission
+	in `overwrite_cleanup`'s plan phase — nothing site-4 remains in
+	string_arc.
 	"""
 	needs_drop = (
 		bool(compute_drop_policy(type_table, local_ty).needs_drop)

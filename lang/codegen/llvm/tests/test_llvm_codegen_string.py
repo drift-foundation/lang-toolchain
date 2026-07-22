@@ -165,7 +165,20 @@ def test_string_literal_overwrite_emits_release():
 	sig = FnSignature(name="f", return_type_id=str_ty, param_type_ids=[])
 	fn_info = FnInfo(fn_id=fn_id, name="f", declared_can_throw=False, signature=sig, return_type_id=str_ty)
 
+	# Production-faithful ownership sequence (B2+C): the String overwrite
+	# release (R2) is emitted by `overwrite_cleanup`, not string_arc — run
+	# the driver's per-fn order: plan (ledger A) → string_arc → unified
+	# Return cleanup → overwrite cleanup.
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	from lang.driftc.stage2.overwrite_cleanup import insert_overwrite_cleanup
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
+	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
+	setattr(func, "_ledger_dirty_reason", None)
+	plan, _census, _c1 = build_destructible_plan(func, type_table=table)
 	func = insert_string_arc(func, type_table=table, fn_infos={fn_id: fn_info})
+	emit_return_cleanups(func, plan)
+	insert_overwrite_cleanup(func, type_table=table, plan=plan)
 	ssa = MirToSSA().run(func)
 
 	ir = lower_ssa_func_to_llvm(func, ssa, fn_info, {fn_id: fn_info}, type_table=table, word_bits=host_word_bits())

@@ -177,6 +177,17 @@ def test_r8_malformed_value_rejected_at_construction():
 		R8Recognition(fn_name="test::bad", recognized_by_block={"entry": {"%a"}})
 	with pytest.raises(AssertionError, match="malformed entry"):
 		R8Recognition(fn_name="test::bad", recognized_by_block={"entry": ["%a"]})
+	# S7+S8 defensive polish: frozenset MEMBERS must be local-name strings.
+	with pytest.raises(AssertionError, match="non-string member"):
+		R8Recognition(
+			fn_name="test::bad",
+			recognized_by_block={"entry": frozenset({b"%a"})},
+		)
+	with pytest.raises(AssertionError, match="non-string member"):
+		R8Recognition(
+			fn_name="test::bad",
+			recognized_by_block={"entry": frozenset({1, "%a"})},
+		)
 
 
 def test_r8_missing_block_rejected_at_consumption():

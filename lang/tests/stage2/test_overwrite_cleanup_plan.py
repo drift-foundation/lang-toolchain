@@ -62,8 +62,10 @@ def _attach_ledger(func):
 def _canonical_drop_before(instrs, store_idx, local, ty) -> bool:
 	"""True iff the four instrs immediately before `instrs[store_idx]` are
 	the canonical destructible drop sequence for (local, ty):
-	LoadLocal(tmp, local) / ZeroValue(zero, ty) / StoreLocal(local, zero,
-	synthetic_zero_back) / DropValue(tmp, ty)."""
+	LoadLocal(tmp, local) / ZeroValue(zero, ty) / StoreLocal(local, zero) /
+	DropValue(tmp, ty).  The `synthetic_zero_back` provenance tag is NOT
+	checked here: the pass strips it (with `ow_authored_for`) after its
+	validators consume it (S8 debt 2 — no transient attrs in output MIR)."""
 	if store_idx < 4:
 		return False
 	load, zv, zb, drop = instrs[store_idx - 4:store_idx]
@@ -72,7 +74,6 @@ def _canonical_drop_before(instrs, store_idx, local, ty) -> bool:
 		and isinstance(zv, M.ZeroValue) and zv.ty == ty
 		and isinstance(zb, M.StoreLocal) and zb.local == local
 		and zb.value == zv.dest
-		and getattr(zb, "synthetic_zero_back", False) is True
 		and isinstance(drop, M.DropValue) and drop.value == load.dest
 		and drop.ty == ty
 	)

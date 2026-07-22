@@ -8216,7 +8216,9 @@ def compile_stubbed_funcs(
 		# the C1 ledger-A half).  Disabled → empty maps, no collector, no
 		# l_post, no telemetry dependency in codegen.
 		from lang.driftc.stage2 import ownership_ledger_reporter as _sa_reporter
+		from lang.driftc.stage2.cleanup_plan import CleanupPlan as _CleanupPlan
 		from lang.driftc.stage2.string_ownership_analysis import (
+			R8Recognition as _R8Recognition,
 			compute_recognized_releases as _compute_recognized_releases,
 		)
 		_audit_on = _sa_reporter.string_arc_audit_enabled()
@@ -8295,11 +8297,29 @@ def compile_stubbed_funcs(
 				f"(r8-only={set(_r8contrib) - _fn_set}, "
 				f"funcs-only={_fn_set - set(_r8contrib)})"
 			)
+		elif any(not isinstance(_p, _CleanupPlan) for _p in _dplans.values()):
+			_completeness_err = (
+				f"non-CleanupPlan value in the destructible plan table "
+				f"(a foreign value must fail closed before any consumer)"
+			)
+		elif any(not isinstance(_r, _R8Recognition) for _r in _r8contrib.values()):
+			_completeness_err = (
+				f"non-R8Recognition value in the R8 recognition table "
+				f"(a foreign value must fail closed before any consumer)"
+			)
 		elif _audit_on and set(_audit_collectors) != _fn_set:
 			_completeness_err = (
 				f"audit collector set != MIR function set with the audit "
 				f"enabled (collectors-only={set(_audit_collectors) - _fn_set}, "
 				f"funcs-only={_fn_set - set(_audit_collectors)})"
+			)
+		elif _audit_on and any(
+			not isinstance(_c, _sa_reporter.StringArcAudit)
+			for _c in _audit_collectors.values()
+		):
+			_completeness_err = (
+				f"non-StringArcAudit value in the audit collector table "
+				f"(a foreign value must fail closed before any consumer)"
 			)
 		elif _audit_on and set(_dc1contrib) != _fn_set:
 			_completeness_err = (

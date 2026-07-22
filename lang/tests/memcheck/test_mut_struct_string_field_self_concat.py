@@ -74,9 +74,9 @@ moved-out SSA — exactly one release per assignment, regardless of
 type.  For String places `overwrite_cleanup`'s rewrite of the final
 `StoreRef` still synthesizes a `LoadRef + StringRelease`, but it
 fires against the **already-tombstoned** slot (null bytes);
-`drift_string_release(null)` is a documented runtime no-op (see
-`stage2/string_arc.py:1097-1099`), so the rewrite is correct
-without changes.
+`drift_string_release(null)` is a documented runtime no-op (see the
+`_K_STORE_REF` arm in `stage2/overwrite_cleanup.py`), so the rewrite
+is correct without changes.
 
 **Self-referential RHS is safe at this layer.**
 `_visit_stmt_HAssign` lowers the RHS into `value` BEFORE invoking
@@ -89,14 +89,15 @@ RHS read.
 **Type-agnostic.**  The same `MoveFromRef → MoveOut → DropValue →
 StoreRef` sequence applies to any drop-bearing `T` behind a place
 (`String`, `Arc<U>`, Destructible struct, ...).  `String` exposed
-the legacy bug only because `string_arc` rewrites `StoreRef` for
-String places — for other drop-bearing types the legacy redundancy
+the legacy bug only because the String-place `StoreRef` rewrite
+(then in `string_arc`, now `overwrite_cleanup`'s) fires a synthetic
+release — for other drop-bearing types the legacy redundancy
 was silent but still wrong shape.  No String-special-case lives in
 the helper.
 
 The contract pin at
 `lang/tests/stage2/test_assign_store_ref_drop_bearing_lowering.py`
-asserts the canonical post-string_arc shape: exactly one
+asserts the canonical post-ownership-pipeline shape: exactly one
 `M.MoveFromRef` with an `__assign_old_*`-prefixed local at the
 field ptr, no `M.StoreRef` whose value is a `M.ZeroValue` dest
 (catches a legacy zero-tombstone resurrection under any naming),
@@ -241,9 +242,10 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 			f"StoreRef(zero) + DropValue + StoreRef(new)` shape)\n"
 			f"  - `lang/driftc/stage2/mir_nodes.py::MoveFromRef` (atomic "
 			f"tombstone + capture-into-local primitive)\n"
-			f"  - `lang/driftc/stage2/string_arc.py:1108-1121` (String StoreRef "
-			f"rewrite — its release of the post-tombstone slot is a "
-			f"`drift_string_release(null)` no-op, NOT the authoritative drop)\n"
+			f"  - `lang/driftc/stage2/overwrite_cleanup.py` (`_K_STORE_REF` arm "
+			f"— the String StoreRef overwrite rewrite; its release of the "
+			f"post-tombstone slot is a `drift_string_release(null)` no-op, "
+			f"NOT the authoritative drop)\n"
 			f"Stage2 contract pin: "
 			f"`lang/tests/stage2/test_assign_store_ref_drop_bearing_lowering.py`\n"
 			f"Valgrind error count: {errors}\n\n"
@@ -264,7 +266,7 @@ def test_heap_seeded_one_call_no_uaf(tmp_path: Path) -> None:
 	The fixed lowering at `_emit_assign_store_ref` produces exactly
 	one user-visible release of the old field value: the explicit
 	`DropValue` on the SSA drained out of the `MoveFromRef`
-	tombstone-and-capture local.  `string_arc`'s rewrite of the
+	tombstone-and-capture local.  `overwrite_cleanup`'s rewrite of the
 	final `StoreRef` does add a `LoadRef + StringRelease` against
 	the slot, but the slot has already been tombstoned to null bytes
 	by `MoveFromRef`, so that release is a `drift_string_release(null)`
@@ -295,7 +297,7 @@ def test_heap_seeded_one_call_no_uaf(tmp_path: Path) -> None:
 			"`ctx.s = ctx.s + \"A\"` through `&mut Ctx` is no longer "
 			"lowered as `MoveFromRef → MoveOut → DropValue → StoreRef`. "
 			"Either the slot is not tombstoned before the final "
-			"`StoreRef` (so `string_arc`'s rewrite fires a real release "
+			"`StoreRef` (so `overwrite_cleanup`'s rewrite fires a real release "
 			"on the live old value alongside the explicit `DropValue`), "
 			"or the explicit `DropValue` is gone (old-value leak)."
 		),

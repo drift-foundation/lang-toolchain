@@ -286,6 +286,35 @@ def test_validator_orphan_authoring_raises() -> None:
 		OC._validate(func, tt, inv)
 
 
+def test_validator_vanished_store_raises() -> None:
+	"""B1 debt item 1 (S8 hardening): an inventoried store MISSING from
+	the rewritten output is a contained AssertionError — never an
+	uncaught `KeyError` from the position index."""
+	tt, sty, func, store = _one_store_func()
+	entry = M.BasicBlock(name="entry")
+	# Authored cleanup present, but the store itself vanished.
+	entry.instructions = _canonical_release(store, sty)
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	inv = {id(store): (OC._K_STORE_LOCAL, store)}
+	with pytest.raises(AssertionError, match="vanished store"):
+		OC._validate(func, tt, inv)
+
+
+def test_validator_duplicated_store_raises() -> None:
+	"""B1 debt item 1 (S8 hardening): the SAME inventoried store object
+	aliased twice into the output is a contained AssertionError — never a
+	silent position collapse in the identity index."""
+	tt, sty, func, store = _one_store_func()
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = _canonical_release(store, sty) + [store, store]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	inv = {id(store): (OC._K_STORE_LOCAL, store)}
+	with pytest.raises(AssertionError, match="duplicated store"):
+		OC._validate(func, tt, inv)
+
+
 def test_validator_broken_zerovalue_type_link_raises() -> None:
 	"""Cleanup whose ZeroValue.ty is not String → type mismatch,
 	fail-closed."""
