@@ -80,7 +80,7 @@ def test_planner_site4_split_and_site3_and_non_mutation():
 	_attach_ledger(func)
 
 	before = _mir_snapshot(func)
-	plan, census = build_destructible_plan(func, type_table=tt)
+	plan, census, _ = build_destructible_plan(func, type_table=tt)
 
 	# Two site-4 decisions: idx0 MUST_NOT_DROP, idx1 MUST_DROP.
 	s4 = plan.decisions_for_site("site4")
@@ -118,7 +118,7 @@ def test_planner_nullsafe_overwrite_recorded():
 	func.blocks["entry"] = entry
 	_attach_ledger(func)
 
-	plan, census = build_destructible_plan(func, type_table=tt)
+	plan, census, _ = build_destructible_plan(func, type_table=tt)
 	ns = plan.decisions_for_site("nullsafe")
 	assert census["nullsafe"] == 2 == len(ns)
 	assert census["site4_must_drop"] == 0 and census["site4_must_not_drop"] == 0
@@ -157,7 +157,7 @@ def test_planner_finalizes_against_original_snapshot():
 	func.blocks["entry"] = entry
 	_attach_ledger(func)
 
-	plan, _ = build_destructible_plan(func, type_table=tt)
+	plan, _, _ = build_destructible_plan(func, type_table=tt)
 	# The site-4 anchor is the exact original StoreLocal object; site-3 the ret.
 	assert plan.decisions_for_site("site4")[0].obj is st
 	assert plan.decisions_for_site("site3")[0].obj is ret

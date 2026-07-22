@@ -8208,13 +8208,44 @@ def compile_stubbed_funcs(
 		# below, which now emits the null-safe + site-4 drop-before-
 		# overwrite cleanups string_arc formerly authored.
 		_dplans: dict = {}
+		# B2+C S5 audit lifecycle — the DRIVER is the sole authority for the
+		# string_arc differential audit.  ONLY when the audit is enabled:
+		# one `StringArcAudit` collector per function (string_arc produces
+		# notes into it; the driver runs the SINGLE deferred finalize below)
+		# and one FROZEN `C1Contribution` per function (the plan slot froze
+		# the C1 ledger-A half).  Disabled → empty maps, no collector, no
+		# l_post, no telemetry dependency in codegen.
+		from lang.driftc.stage2 import ownership_ledger_reporter as _sa_reporter
+		from lang.driftc.stage2.string_ownership_analysis import (
+			compute_recognized_releases as _compute_recognized_releases,
+		)
+		_audit_on = _sa_reporter.string_arc_audit_enabled()
+		_audit_collectors: dict = {}
+		_dc1contrib: dict = {}
+		# B2+C S6 — the R8 materialized-release RECOGNITION, re-homed onto the
+		# pre-string_arc planning window (over the ORIGINAL MIR, which already
+		# carries the StringReleases `materialize_lastuse_releases` emitted).
+		# NOTHING mutates the MIR between here and string_arc entry, so this is
+		# byte-identical to string_arc's former mid-rewrite recognition.  Frozen
+		# per-function (parallel to `_dplans`/`_dc1contrib`; never on the MIR)
+		# and CONSUMED by string_arc.  Computed for EVERY function (recognition
+		# affects codegen, not just telemetry).
+		_r8contrib: dict = {}
 		with _timed("destructible_plan"):
 			for fn_id, func in mir_funcs_by_id.items():
 				try:
-					_plan, _ = build_destructible_plan(
+					_plan, _, _c1 = build_destructible_plan(
 						func, type_table=shared_type_table
 					)
 					_dplans[fn_id] = _plan
+					_r8contrib[fn_id] = _compute_recognized_releases(
+						func,
+						type_table=shared_type_table,
+						fn_infos=checked.fn_infos_by_id,
+					)
+					if _audit_on:
+						_audit_collectors[fn_id] = _sa_reporter.StringArcAudit(func.name)
+						_dc1contrib[fn_id] = _c1
 				except (AssertionError, RuntimeError) as err:
 					# Boundary containment for EVERY planner failure as phase
 					# `destructible_plan`: a frozen-plan contract failure
@@ -8238,6 +8269,76 @@ def compile_stubbed_funcs(
 							return {}, checked, None
 						return {}, checked
 					return {}
+		# B2+C S5/S6 closure — EVERY driver-local contribution table must be
+		# COMPLETE before its first consumer runs: a missing R8 entry must
+		# never fall back to string_arc's direct-recomputation path, a
+		# missing collector/C1 entry must never silently select the
+		# monolithic finalize (string_arc no longer records C1 — it would
+		# silently disappear), and a missing plan must never mean skipped
+		# cleanup.  Audit disabled → both audit maps must be EMPTY.  This
+		# subsumes the former pre-overwrite `_dplans` completeness check.
+		# Every production consumer below indexes these tables EXACTLY
+		# (`[fn_id]`, never `.get`).
+		_fn_set = set(mir_funcs_by_id)
+		_completeness_err = None
+		if set(_dplans) != _fn_set:
+			_completeness_err = (
+				f"destructible plan set != MIR function set — a missing plan "
+				f"must never mean skipped cleanup "
+				f"(plans-only={set(_dplans) - _fn_set}, "
+				f"funcs-only={_fn_set - set(_dplans)})"
+			)
+		elif set(_r8contrib) != _fn_set:
+			_completeness_err = (
+				f"R8 recognition set != MIR function set — a missing entry "
+				f"must never select string_arc's direct-recomputation fallback "
+				f"(r8-only={set(_r8contrib) - _fn_set}, "
+				f"funcs-only={_fn_set - set(_r8contrib)})"
+			)
+		elif _audit_on and set(_audit_collectors) != _fn_set:
+			_completeness_err = (
+				f"audit collector set != MIR function set with the audit "
+				f"enabled (collectors-only={set(_audit_collectors) - _fn_set}, "
+				f"funcs-only={_fn_set - set(_audit_collectors)})"
+			)
+		elif _audit_on and set(_dc1contrib) != _fn_set:
+			_completeness_err = (
+				f"frozen C1 contribution set != MIR function set with the "
+				f"audit enabled — a missing entry must never select the "
+				f"monolithic finalize (c1-only={set(_dc1contrib) - _fn_set}, "
+				f"funcs-only={_fn_set - set(_dc1contrib)})"
+			)
+		elif _audit_on and any(
+			not isinstance(_c, _sa_reporter.C1Contribution)
+			for _c in _dc1contrib.values()
+		):
+			_completeness_err = (
+				f"non-C1Contribution value in the frozen C1 table with the "
+				f"audit enabled (a None/foreign value must fail closed, not "
+				f"select the monolithic finalize)"
+			)
+		elif (not _audit_on) and (_audit_collectors or _dc1contrib):
+			_completeness_err = (
+				f"audit maps populated with the audit DISABLED "
+				f"(collectors={set(_audit_collectors)}, c1={set(_dc1contrib)})"
+			)
+		if _completeness_err is not None:
+			_mismatch_fn = next(iter(_fn_set), None)
+			_append_boundary_contract_diag(
+				checked,
+				phase="destructible_plan",
+				prefix="destructible plan completeness failure",
+				err=AssertionError(_completeness_err),
+				fn_id=_mismatch_fn,
+				signatures_by_id=signatures_by_id,
+				origin_by_fn_id=origin_by_fn_id,
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				try:
@@ -8245,6 +8346,10 @@ def compile_stubbed_funcs(
 						func,
 						type_table=shared_type_table,
 						fn_infos=checked.fn_infos_by_id,
+						audit_collector=(
+							_audit_collectors[fn_id] if _audit_on else None
+						),
+						r8_recognition=_r8contrib[fn_id],
 					)
 					# Item-1 postflight: string_arc now PRESERVES the Return
 					# object at each Return-boundary rewrite, so the frozen
@@ -8286,36 +8391,109 @@ def compile_stubbed_funcs(
 		# recognition walk never sees these releases, and R2/R7 need no
 		# ledger (pure structural type checks).  Same boundary
 		# containment as string_arc above.
-		# A missing plan must NEVER mean skipped destructible cleanup: the
-		# plan set and the MIR function set must agree EXACTLY before the
-		# mandatory-plan overwrite pass. A mismatch is a plan-completeness
-		# contract failure — boundary-contain it as phase `destructible_plan`
-		# (clean `internal:` diagnostic, empty IR, no traceback).
-		if set(_dplans) != set(mir_funcs_by_id):
-			_plans_only = set(_dplans) - set(mir_funcs_by_id)
-			_funcs_only = set(mir_funcs_by_id) - set(_dplans)
-			_mismatch_fn = next(iter(_funcs_only), None)
-			if _mismatch_fn is None:
-				_mismatch_fn = next(iter(_plans_only), None)
-			_append_boundary_contract_diag(
-				checked,
-				phase="destructible_plan",
-				prefix="destructible plan completeness failure",
-				err=AssertionError(
-					f"destructible plan set != MIR function set before "
-					f"overwrite_cleanup — a missing plan must never mean skipped "
-					f"cleanup (plans-only={_plans_only}, funcs-only={_funcs_only})"
-				),
-				fn_id=_mismatch_fn,
-				signatures_by_id=signatures_by_id,
-				origin_by_fn_id=origin_by_fn_id,
+		# The former pre-overwrite `_dplans` completeness check moved UP to
+		# the table-completeness guard before string_arc (S5/S6 closure): no
+		# consumer runs before completeness is proven, and the string_arc /
+		# return_cleanup loops neither add nor remove `mir_funcs_by_id` keys.
+		# B2+C S5 — the UNIFIED Return authority.  Runs AFTER string_arc (which
+		# preserved every Return object) and BEFORE overwrite_cleanup, consuming
+		# the frozen plan's `string_release` + `site3` decisions ATOMICALLY: it
+		# appends the String scope-exit release band THEN the destructible drop
+		# tail before each preserved Return.  Same boundary containment.
+		with _timed("return_cleanup"):
+			from lang.driftc.stage2.return_cleanup_emitter import (
+				emit_return_cleanups as _emit_return_cleanups,
 			)
-			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
-			if return_checked:
-				if return_ssa:
-					return {}, checked, None
-				return {}, checked
-			return {}
+			for fn_id, func in mir_funcs_by_id.items():
+				try:
+					_emit_return_cleanups(func, _dplans[fn_id])
+				except AssertionError as err:
+					_append_boundary_contract_diag(
+						checked,
+						phase="return_cleanup",
+						prefix="return cleanup contract failure",
+						err=err,
+						fn_id=fn_id,
+						signatures_by_id=signatures_by_id,
+						origin_by_fn_id=origin_by_fn_id,
+					)
+					_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+					if return_checked:
+						if return_ssa:
+							return {}, checked, None
+						return {}, checked
+					return {}
+		# B2+C S5 DEFERRED SINGLE FINALIZE (audit only, driver = sole
+		# authority).  Build the ONE audit-only L_post over the FINAL MIR
+		# (string releases + site-3 drops now present — byte-identical to
+		# string_arc's former inline L_post) and run the SINGLE
+		# StringArcAudit.finalize, merging the frozen C1 contribution.  BEFORE
+		# overwrite_cleanup so L_post excludes R2/R7 overwrite emissions,
+		# exactly as the old in-pass L_post did.  post_ledger_build_failed is
+		# preserved on an L_post build failure; a missing collector fails closed.
+		if _audit_on:
+			from lang.driftc.stage2.ownership_ledger import build_ledger as _build_ledger_audit
+			from lang.driftc.stage2.drop_policy_compute import (
+				compute_drop_policy as _cdp_audit,
+				zero_storage_drop_safe as _zsds_audit,
+			)
+			with _timed("string_arc_audit_finalize"):
+				for fn_id, func in mir_funcs_by_id.items():
+					try:
+						# Exact indexing — completeness was proven before
+						# string_arc, so a missing entry here is a contract
+						# violation, contained below like every other
+						# finalize-lifecycle failure.
+						collector = _audit_collectors[fn_id]
+						try:
+							_l_post = _build_ledger_audit(
+								func, drop_policy=lambda tid: _cdp_audit(shared_type_table, tid)
+							)
+						except Exception:
+							# Audit must never break a compile, but a missing L_post
+							# is hard-counted (post_ledger_build_failed) + force-emitted
+							# by finalize; the corpus gate fails on any nonzero count.
+							_l_post = None
+						def _audit_needs_drop(local, _lt=func.local_types):
+							ty = _lt.get(local)
+							if ty is None:
+								return False
+							try:
+								return bool(shared_type_table.has_drop(ty))
+							except Exception:
+								return False
+						collector.finalize(
+							l_pre=getattr(func, "_ownership_ledger", None),
+							l_post=_l_post,
+							needs_drop=_audit_needs_drop,
+							func=func,
+							zero_safe_ty=lambda tid: _zsds_audit(tid, shared_type_table),
+							c1_contribution=_dc1contrib[fn_id],
+						)
+					except (AssertionError, KeyError) as err:
+						# S5 closure — the WHOLE finalize lifecycle (collector
+						# lookup, contribution lookup, validation, merge,
+						# exactly-once state) is boundary-contained as phase
+						# `string_arc_audit_finalize`: a contract failure
+						# surfaces as a clean `internal:` diagnostic with
+						# empty IR, never a traceback.  The observational
+						# L_post build-failure counter path above is inside
+						# this block but swallows its own exceptions.
+						_append_boundary_contract_diag(
+							checked,
+							phase="string_arc_audit_finalize",
+							prefix="string_arc audit finalize contract failure",
+							err=err,
+							fn_id=fn_id,
+							signatures_by_id=signatures_by_id,
+							origin_by_fn_id=origin_by_fn_id,
+						)
+						_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+						if return_checked:
+							if return_ssa:
+								return {}, checked, None
+							return {}, checked
+						return {}
 		with _timed("overwrite_cleanup"):
 			from lang.driftc.stage2.overwrite_cleanup import (
 				insert_overwrite_cleanup as _insert_overwrite_cleanup,

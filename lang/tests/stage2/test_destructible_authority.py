@@ -523,3 +523,66 @@ def test_site3_path_dependent_widens_zero_safe_only() -> None:
 	)
 	# Only the zero-storage-safe array is widened into the drop set.
 	assert drops == ["arr"]
+
+
+# ── R3/R4 string_return_releases (S5 decision) ────────────────────────
+
+def _StubStrLedger(verdict_map):
+	"""ledger returning a verdict per local at verdict_at."""
+	class _L:
+		def verdict_at(self, point, local, needs_drop=None):
+			return verdict_map.get(local, DropVerdict.MUST_DROP)
+	return _L()
+
+
+def test_string_return_releases_basic_and_moved_out():
+	from lang.driftc.stage2.destructible_authority import string_return_releases, ReturnMoveState
+	tt = TypeTable()
+	sty = tt.ensure_string()
+	func = _make_func("sr", params=[], locals_=["a", "b"], types={"a": sty, "b": sty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.StoreLocal(local="a", value="va"), M.StoreLocal(local="b", value="vb")]
+	entry.terminator = M.Return(value=None)   # not returning a or b
+	func.blocks["entry"] = entry
+	ms = ReturnMoveState(moved_out=frozenset({"b"}), explicitly_dropped=frozenset())
+	rel = string_return_releases(func, entry, ledger=None, type_table=tt,
+		string_locals={"a", "b"}, string_ty=sty, move_state=ms)
+	assert rel == ["a"]   # b is moved-out → skipped; sorted order
+
+
+def test_string_return_releases_r4_returned_source_skipped():
+	"""R4: the returned String's source storage local is NOT released."""
+	from lang.driftc.stage2.destructible_authority import string_return_releases, ReturnMoveState
+	tt = TypeTable()
+	sty = tt.ensure_string()
+	func = _make_func("sr4", params=[], locals_=["a", "b"], types={"a": sty, "b": sty})
+	entry = M.BasicBlock(name="entry")
+	# return a: LoadLocal(%r, a) ; Return(%r)
+	entry.instructions = [
+		M.StoreLocal(local="a", value="va"),
+		M.StoreLocal(local="b", value="vb"),
+		M.LoadLocal(dest="%r", local="a"),
+	]
+	entry.terminator = M.Return(value="%r")
+	func.blocks["entry"] = entry
+	ms = ReturnMoveState(moved_out=frozenset(), explicitly_dropped=frozenset())
+	rel = string_return_releases(func, entry, ledger=None, type_table=tt,
+		string_locals={"a", "b"}, string_ty=sty, move_state=ms)
+	assert rel == ["b"]   # a is the returned source → R4 skip
+
+
+def test_string_return_releases_r3_ledger_must_not_drop_elided():
+	"""R3: a string with ledger MUST_NOT_DROP at the return point is elided."""
+	from lang.driftc.stage2.destructible_authority import string_return_releases, ReturnMoveState
+	tt = TypeTable()
+	sty = tt.ensure_string()
+	func = _make_func("sr3", params=[], locals_=["a", "b"], types={"a": sty, "b": sty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.StoreLocal(local="a", value="va"), M.StoreLocal(local="b", value="vb")]
+	entry.terminator = M.Return(value=None)
+	func.blocks["entry"] = entry
+	ms = ReturnMoveState(moved_out=frozenset(), explicitly_dropped=frozenset())
+	ledger = _StubStrLedger({"a": DropVerdict.MUST_NOT_DROP})  # a elided
+	rel = string_return_releases(func, entry, ledger=ledger, type_table=tt,
+		string_locals={"a", "b"}, string_ty=sty, move_state=ms)
+	assert rel == ["b"]   # a MUST_NOT_DROP → elided

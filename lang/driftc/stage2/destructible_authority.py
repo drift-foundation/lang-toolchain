@@ -558,6 +558,82 @@ def site3_return_drops(
 	]
 
 
+def string_return_source_skip(block: "M.BasicBlock", string_locals: Set[str]) -> "str | None":
+	"""R4: the STRING storage local (if any) that backs the Return value, via
+	the intra-block AssignSSA-chain + LoadLocal alias walk (string_arc
+	~1219-1257).  This local is NOT released again at scope exit — the
+	0.27.145 never-released-twice guarantee — because its +1 travels with the
+	returned value (Return-as-move).  Reproduced over ORIGINAL block
+	instructions (string_arc only INSERTS AssignSSA/LoadLocal, never removes,
+	so the walk resolves to the same source).  Returns the local or None.
+	"""
+	term = block.terminator
+	val = getattr(term, "value", None) if term is not None else None
+	if val is None:
+		return None
+	alias = val
+	while True:
+		moved = False
+		for prev in reversed(block.instructions):
+			if isinstance(prev, M.AssignSSA) and prev.dest == alias:
+				alias = prev.src
+				moved = True
+				break
+		if not moved:
+			break
+	for prev in reversed(block.instructions):
+		if isinstance(prev, M.LoadLocal) and prev.dest == alias:
+			if prev.local in string_locals:
+				return prev.local
+			return None
+	return None
+
+
+def string_return_releases(
+	func: M.MirFunc,
+	block: M.BasicBlock,
+	*,
+	ledger,
+	type_table: TypeTable,
+	string_locals: Set[str],
+	string_ty: "TypeId | None",
+	move_state: ReturnMoveState,
+) -> "list[str]":
+	"""R3/R4: the ORDERED String scope-exit releases at a Return terminator,
+	= `sorted(string_locals)` minus the skip set, reproducing string_arc's
+	`_release_all_locals(skip=skip_cleanup_locals)` decision (string_arc
+	~1418) at the ORIGINAL return coordinate.
+
+	skip = move_state.moved_out ∪ move_state.explicitly_dropped
+	       ∪ {R4 alias-derived returned-String source local}
+	       ∪ {R3 ledger MUST_NOT_DROP strings}
+
+	The destructible ledger consultation adds only destructibles (never
+	strings), so it does not affect this set.  BEHAVIOR-PRESERVING
+	RECOMPOSITION; the emitted release quad is authored by the unified Return
+	authority, not here.
+	"""
+	skip: Set[str] = set()
+	skip |= move_state.moved_out
+	skip |= move_state.explicitly_dropped
+	# R4 (added BEFORE the R3 elision, matching string_arc ordering).
+	r4 = string_return_source_skip(block, string_locals)
+	if r4 is not None:
+		skip.add(r4)
+	# R3 elision: ledger MUST_NOT_DROP over sorted(string_locals) at the
+	# ORIGINAL return point `(block, len(instructions))`.  Only when a ledger
+	# is attached (no ledger → legacy, nothing elided).
+	if ledger is not None:
+		string_needs_drop = bool(compute_drop_policy(type_table, string_ty).needs_drop)
+		point = (block.name, len(block.instructions))
+		for sl in sorted(string_locals):
+			if sl in skip:
+				continue
+			if ledger.verdict_at(point, sl, needs_drop=string_needs_drop) is DropVerdict.MUST_NOT_DROP:
+				skip.add(sl)
+	return [sl for sl in sorted(string_locals) if sl not in skip]
+
+
 __all__ = [
 	"DropClassifier",
 	"classify_destructible_locals",
@@ -568,4 +644,6 @@ __all__ = [
 	"compute_return_move_state",
 	"flag_managed_at_return",
 	"site3_return_drops",
+	"string_return_source_skip",
+	"string_return_releases",
 ]

@@ -205,18 +205,42 @@ step — power-loss recovery point.
   M.Return) so the plan's site-3 TERM anchor stays valid at postflight
   commit. Emitters use `begin_phase`→stage→`mark_rewritten`→`commit`
   (NOT `session.consume`; AST-pinned).
-- [ ] **S5 — unified Return authority (site-3 + R3/R4), PRODUCTION
-  wiring**: ONE coordinated Return-authority traversal consumes site-3
-  (from S3) + C's R3/R4 String Return/scope decisions ATOMICALLY in a
-  single Return rewrite (0.27.145 re-proof vs current upstream-stake/
-  ledger model). The rewrite MUST preserve every original non-Return
-  instruction object AND original-anchor relative order so the overwrite
-  plan (S4) stays valid. Remove site-3 + R3/R4 emission from string_arc
-  atomically with wiring the unified authority. Gate: corpus site-3
-  +0 / R3=68,562, return-alias safety, memcheck; overwrite-plan anchors
-  still validate.
-- [ ] **S6 — C: R8** on the same original-MIR planning window. Gate:
-  corpus +0.
+- [x] **S5 — unified Return authority (site-3 + R3/R4), PRODUCTION
+  wiring — DONE 2026-07-22, GATE PASS + closure review applied**:
+  `return_cleanup_emitter.py::emit_return_cleanups(func, plan)` (replaces
+  the unwired S3 `site3_return_emitter.py`) consumes the plan's
+  `string_release` (R3/R4, new `StringReleasePayload` +
+  `string_return_releases` authority) AND `site3` decisions ATOMICALLY
+  per PRESERVED `M.Return`: string-release band (LoadLocal→ZeroValue→
+  StoreLocal[synthetic_zero_back]→StringRelease per local) THEN the
+  site-3 drop tail, both before the terminator; every original
+  non-Return instruction object + order untouched (S4 overwrite anchors
+  still validate). Driver phase `return_cleanup` (after string_arc,
+  before overwrite_cleanup), boundary-contained. AUDIT: differential
+  finalize moved out of string_arc — driver-owned SINGLE deferred
+  `StringArcAudit.finalize` per fn with ONE `l_post` built AFTER
+  return_cleanup and BEFORE overwrite_cleanup (byte-identical former
+  build point); plan slot freezes the C1 ledger-A half
+  (`C1BoundaryFrozen`/`C1Contribution`); split finalize synthesizes
+  `scope_exit_release` events exactly once (sole source; monolithic
+  path retained for the byte-identity reference test). string_arc's
+  R3/R4/site-3 emission + self-finalize removed atomically. **GATE
+  PASS: 924 corpus all 14 counters +0 (scope_exit_release=68,562,
+  pre_post_verdict_drift=48,178, materialized_lastuse_release=618,744),
+  universe identical; memcheck 105 passed/1 skipped, 0 leaks; focused
+  battery 218.**
+- [x] **S6 — C: R8 recognition on the plan window — DONE 2026-07-22,
+  same combined gate**: `compute_recognized_releases` in
+  `string_ownership_analysis.py` is the SINGLE recognition entry point
+  (seeds a COPY of local_types; invokes `build_fnwide_producers` +
+  `compute_string_temp_liveness` + per-block
+  `recognize_materialized_releases` ONLY there) returning frozen
+  `R8Recognition`. Driver computes `_r8contrib[fn_id]` for EVERY fn at
+  the plan slot; string_arc CONSUMES the frozen vessel (fallback via the
+  same entry point for bare unit invocation only; source pin: string_arc
+  names none of the three analyses). Covered by the S5 combined 924
+  corpus +0 gate (recognition affects codegen; `materialized_
+  lastuse_release` 618,744 +0) + consume==fallback identity teeth.
 - [ ] **S7 — no-residual-rebuild proof**: after B2+C, no ledger
   consumer forces an intermediate rebuild; ledger-build count gate
   (zero additional vs pre-B2+C). Gate: instrumented build-count.
@@ -225,8 +249,14 @@ step — power-loss recovery point.
   (ow_authored_for, synthetic_zero_back once consumer ran); (3)
   StoreRef prose retarget in test_mut_struct_string_field_self_concat;
   (4) unused `mutated` in overwrite_cleanup; (5) retarget overbroad
-  hir_to_mir.py:5770-5776 comment (authority-comment only). Gate:
-  battery + grep-clean.
+  hir_to_mir.py:5770-5776 comment (authority-comment only); (6) route
+  the 5 pre-existing bare-`insert_string_arc` unit-test failures
+  (`test_drop_before_overwrite_swap` ×4 +
+  `lang/codegen/llvm/tests/test_llvm_codegen_string::
+  test_string_literal_overwrite_emits_release`) through the full
+  pipeline — B1/S4 debt (site-4 emission left string_arc), NOT an
+  S5/S6 emission gap; must be repaired before the final full
+  suite/certification. Gate: battery + grep-clean.
 - [ ] **S9 — end static delta review** for the B2+C chunk (NOT a
   cert). Then D (R5/R1 + delete string_arc.py + driver phase) → the
   single 0.33.87 full serial suite + certification.
@@ -366,3 +396,63 @@ before any mutation; all emitters consume it.
   `KeyError`); removed-anchor tooth.
 - Emission-neutral (overwrite_release=250, events=2955 on the Arc fixture; no
   setattr of the removed tags). Affected battery 99 green. No corpus rerun.
+
+## S5+S6 static review closure (review 2026-07-22T130128Z) — DONE,
+contract-only (no recognition/decision/emitted-MIR change; NO corpus
+rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
+- Review verdict: architecture + measured production gate ACCEPTED
+  (unified Return ordering, l_post placement, R8 window, 924 +0,
+  memcheck); HOLD on five contract-closure groups, all now closed:
+- **(1) Driver contribution tables — exact completeness before first
+  consumption.** ONE table-completeness guard after the planning loop
+  and BEFORE string_arc (subsumes the former pre-overwrite `_dplans`
+  check): `set(_dplans) == set(_r8contrib) == set(mir_funcs_by_id)`;
+  audit ON additionally requires collector + C1 sets == fn set AND every
+  C1 value a `C1Contribution`; audit OFF requires both audit maps EMPTY.
+  Boundary-contained as `destructible_plan` ("completeness failure"
+  prefix, empty IR). Every production consumer now indexes EXACTLY
+  (`[fn_id]`, never `.get`) — a missing R8 entry can no longer select
+  string_arc's fallback, a missing collector/C1 entry can no longer
+  select the monolithic finalize. Driver teeth: ghost plan/R8/collector/
+  C1 entries + audit-off residue, all contained.
+- **(2) Exactly-once, boundary-contained finalize lifecycle.**
+  `StringArcAudit._finalized`: `finalize()` refuses a second call BEFORE
+  any event/aggregate mutation (flag set even on a failing finalize);
+  `note()`/`note_return_boundary()` after finalization fail closed. The
+  driver finalize loop (collector lookup, l_post, contribution lookup,
+  merge) is contained as phase `string_arc_audit_finalize` (clean
+  `internal:` diag, empty IR); the observational l_post
+  build-failure counter behavior preserved. Source pin STRENGTHENED:
+  whole-`lang/driftc` sweep — only the driver coordinator (driftc.py)
+  may contain a `.finalize(` invocation. End-to-end injected-finalize
+  containment driver tooth added.
+- **(3) Genuinely immutable, complete R8Recognition.** Mapping validated
+  (str -> frozenset) and COPIED into `MappingProxyType` at construction;
+  `for_block` fail-closed on a missing key (never default-empty).
+  string_arc validates at consumption BEFORE rewriting: recognition
+  block-key set == function block set, every value frozenset. Teeth:
+  immutability (direct + alias mutation), malformed value, missing
+  block, extra block, wrong function.
+- **(4) Structurally validated C1 tied bijectively to the plan.**
+  `validate_c1_contribution` (reporter): unique well-formed boundary
+  points; unique+sorted string_locals; released/skipped duplicate-free,
+  disjoint, PARTITION string_locals; verdict/raw key sets exactly ==
+  string_locals; enum-typed values — all AssertionError, never KeyError;
+  called in the split finalize BEFORE merge. `crosscheck_c1_against_plan`
+  (planner, at the plan slot while original coordinates are valid):
+  C1 boundaries ↔ plan `string_release` decisions in bijection by Return
+  coordinate with EXACT ORDERED equality of `released` vs payload locals.
+  Non-None C1 mandatory when audit enabled (group-1 guard); merge
+  exactly once (group-2 flag). Teeth: dup boundary/local, missing
+  verdict/raw entry, bad partition, wrong enum type, malformed-at-merge,
+  release drift/dropped/foreign boundary, double merge, late notes.
+- **(5) Records.** Status report toolchain line corrected (tree = the
+  consolidated **0.33.87 / ABI 21 candidate**, not 0.33.80; cert still
+  lands only after Phase D); S5/S6 flipped DONE above with the
+  single-finalize placement + exact counter gate recorded; the 5
+  pre-existing bare-`insert_string_arc` failures explicitly assigned to
+  S8 item (6).
+- Verification: focused affected batteries only (reporter / R8 /
+  driver-boundary / planner / mutation-audit 97 green; adjacent
+  emitter/plan/authority/string_arc suites 141 green; 238 total).
+  Awaiting static delta review.

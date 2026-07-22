@@ -53,10 +53,10 @@ SCOPED_FILES = (
 	# block.instructions (R2/R7 old-value releases) and marks the
 	# ledger dirty under the same discipline.
 	"lang/driftc/stage2/overwrite_cleanup.py",
-	# B2+C S3: the isolated site-3 Return-boundary emitter appends drop
-	# sequences to Return blocks and writes local_types; it marks the
-	# ledger dirty (iff emission occurred) under the same discipline.
-	"lang/driftc/stage2/site3_return_emitter.py",
+	# B2+C S5: the unified Return-boundary emitter appends the string-release
+	# band + site-3 drop tail to Return blocks and writes local_types; it
+	# marks the ledger dirty (iff emission occurred) under the same discipline.
+	"lang/driftc/stage2/return_cleanup_emitter.py",
 )
 
 # Each pattern matches a direct MIR mutation shape.  Kept narrow

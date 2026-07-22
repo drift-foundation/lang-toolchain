@@ -79,15 +79,12 @@ from .destructible_authority import (
 	compute_return_move_state,
 	compute_store_defs,
 	flag_managed_at_return,
-	site3_return_drops,
 )
 from .string_ownership_analysis import classify_string_array_locals
 from .string_ownership_analysis import (
 	DRIFT_STRING_HELPER_SYMBOLS,
-	build_fnwide_producers,
-	compute_string_temp_liveness,
+	compute_recognized_releases,
 	iter_used_values,
-	recognize_materialized_releases,
 	seed_string_dest_types,
 )
 
@@ -98,6 +95,8 @@ def insert_string_arc(
 	*,
 	type_table: TypeTable,
 	fn_infos: Mapping[FunctionId, FnInfo],
+	audit_collector=None,
+	r8_recognition=None,
 ) -> M.MirFunc:
 	# PIPELINE PRECONDITION: run `materialize_lastuse_releases` first in
 	# production — string_arc authors no last-use releases of its own
@@ -122,19 +121,23 @@ def insert_string_arc(
 	# attached ledger in pass-local testing.  A *stale* ledger still
 	# asserts; that is the bug class we are catching.
 	_ledger = maybe_fresh_ledger(func, "string_arc")
-	# B-arch-0 differential stake audit (Scope B §11.2).  OFF by default:
-	# `_audit is None` unless DRIFT_STRING_ARC_AUDIT=1, and every
-	# recording site below is guarded on that — the disabled path is
-	# behavior-identical (zero instructions, zero diagnostics, zero
-	# allocations beyond this None).  `_audit_point` is the pre-MIR
-	# program point of the instruction currently being rewritten (the
-	# L_pre anchor); Return-boundary emissions use the established
-	# site-3 convention (block, len(original_instructions)).
-	_audit = (
-		_ledger_reporter.StringArcAudit(func.name)
-		if _ledger_reporter.string_arc_audit_enabled()
-		else None
-	)
+	# B-arch-0 differential stake audit (Scope B §11.2).  DEFERRED-FINALIZE
+	# contract (B2+C S5): string_arc NO LONGER creates, owns, or finalizes
+	# the audit — it is only a NOTE PRODUCER.  `_audit` is the DRIVER-SUPPLIED
+	# collector (a `StringArcAudit` when the driver has audit enabled, else
+	# `None`); the driver is the sole lifecycle authority and runs the SINGLE
+	# `finalize` AFTER the unified Return emitter has appended the string
+	# releases + site-3 drops (so the deferred `l_post` sees them).  Every
+	# recording site below is guarded on `_audit is not None`, so the
+	# disabled path is behavior-identical (zero instructions, zero
+	# diagnostics, zero allocations beyond this None).  string_arc NEVER
+	# records the scope-exit releases (their emission moved to the unified
+	# authority) nor the Return boundaries (`note_return_boundary` is gone);
+	# the C1 ledger-A half is frozen at the plan slot and merged in the
+	# driver's single finalize.  `_audit_point` is the pre-MIR program point
+	# of the instruction currently being rewritten (the L_pre anchor for
+	# MoveOut-expansion notes).
+	_audit = audit_collector
 	_audit_point: list = [("", 0)]
 	def _ledger_needs_drop(local: str) -> bool:
 		ty = local_types.get(local)
@@ -243,61 +246,20 @@ def insert_string_arc(
 		td = type_table.get(tid)
 		return td.kind is TypeKind.REF
 
-	def _release_local(local: str, out: list[M.MInstr], *, site_class: str) -> None:
-		if local not in string_locals:
-			return
-		old = _new_temp()
-		out.append(M.LoadLocal(dest=old, local=local))
-		zero = _new_temp()
-		out.append(M.ZeroValue(dest=zero, ty=string_ty))
-		local_types[zero] = string_ty
-		_zb = M.StoreLocal(local=local, value=zero)
-		setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
-		out.append(_zb)
-		if _audit is not None:
-			# Subject is the STORAGE LOCAL (what C1 quantifies over),
-			# not the loaded temp.
-			_audit.note(
-				_ledger_reporter.STAKE_RELEASE, local, site_class,
-				pre_point=_audit_point[0],
-				post_point=(block.name, len(out)),
-			)
-		out.append(M.StringRelease(value=old))
-		local_types[old] = string_ty
-
-	def _release_all_locals(out: list[M.MInstr], *, skip_locals: Set[str] | None = None) -> None:
-		skip = skip_locals or set()
-		for local in sorted(string_locals):
-			if local in skip:
-				continue
-			_release_local(local, out, site_class=_ledger_reporter.SITE_CLASS_SCOPE_EXIT_RELEASE)
-
-	# `_drop_all_arrays` (Return-boundary array sweep) was deleted in B-U
-	# (2026-07-19); `_drop_array_local` (R7 array overwrite drop) was
-	# deleted in Slice B1 (2026-07-20) — that authority moved to
-	# `overwrite_cleanup`.
-
-	def _drop_destructible_local(local: str, out: list[M.MInstr]) -> None:
-		if local not in destructible_locals:
-			return
-		ty = local_types.get(local)
-		if ty is None:
-			return
-		tmp = _new_temp()
-		out.append(M.LoadLocal(dest=tmp, local=local))
-		zero = _new_temp()
-		out.append(M.ZeroValue(dest=zero, ty=ty))
-		local_types[zero] = ty
-		_zb = M.StoreLocal(local=local, value=zero)
-		setattr(_zb, "synthetic_zero_back", True)  # Slice B1 provenance
-		out.append(_zb)
-		out.append(M.DropValue(value=tmp, ty=ty))
-		local_types[tmp] = ty
-
-	# `_drop_all_destructibles` (the Return-boundary sorted+skip+only
-	# filter over `destructible_locals`) moved to
-	# `destructible_authority.site3_return_drops` (Milestone A); its
-	# per-local emission still runs here via `_drop_destructible_local`.
+	# B2+C S5 — the Return-boundary String scope-exit RELEASE emission
+	# (`_release_local` / `_release_all_locals`) and the destructible DROP
+	# emission (`_drop_destructible_local`) were DELETED here.  BOTH are now
+	# authored by the unified Return authority (`return_cleanup_emitter`,
+	# consuming the frozen `CleanupPlan`'s `string_release` + `site3`
+	# decisions), which the driver runs AFTER this pass.  The scope-exit
+	# release DECISION is `destructible_authority.string_return_releases`
+	# (frozen into the plan); the destructible drop DECISION is
+	# `site3_return_drops` (likewise).  string_arc keeps only the
+	# Return-branch bookkeeping the (debug-gated) observe reporter reads and
+	# the return-value string-liveness note; it PRESERVES the Return object
+	# in place.  (`_drop_all_arrays` / `_drop_array_local` were deleted in
+	# B-U / Slice B1; array + R2/R7 overwrite authority is
+	# `overwrite_cleanup`'s.)
 
 	# TLR-2a: single-source alias — the shared occurrence iterator
 	# lives at module level (iter_used_values) so the release-point
@@ -335,25 +297,49 @@ def insert_string_arc(
 	# intermediate string temps (including conversion/call-produced values).
 	_seed_dest_types()
 
-	# TLR-7: the fn-wide producer map — ONE lookup authority shared with
-	# the materialization pass (via `build_fnwide_producers`), consumed
-	# by per-block recognition and the TLR shim classification so
-	# cross-block family temps resolve identically everywhere.
-	producers_fnwide = build_fnwide_producers(
-		[func.blocks[bname] for bname in block_order]
+	# B2+C S6 — string_arc no longer OWNS the R8 materialized-release
+	# recognition (the `build_fnwide_producers` + `compute_string_temp_liveness`
+	# + per-block `recognize_materialized_releases` invocation).  That
+	# recognition is computed ONCE at the pre-string_arc planning window
+	# over the ORIGINAL MIR and CONSUMED here as a frozen `R8Recognition`.
+	# `_recognized` maps block name -> the recognized-released temp set the
+	# rewrite loop's R5/MoveOut/copy-through arm reads.  When the driver
+	# supplies the frozen recognition, consume it; when absent (bare
+	# unit-test invocation), fall back to the SINGLE shared entry point
+	# `compute_recognized_releases` (which is the ONLY place the three
+	# underlying analyses are invoked — string_arc's own body names none of
+	# them, pinned by `test_string_arc_no_longer_owns_r8_recognition`).  The
+	# recognition is byte-identical to the former mid-rewrite computation:
+	# nothing mutates the MIR between the plan window and here, and it reads
+	# only pre-string_arc operand types.
+	_recognized = (
+		r8_recognition
+		if r8_recognition is not None
+		else compute_recognized_releases(func, type_table=type_table, fn_infos=fn_infos)
 	)
-
-	# Per-block live-out for string temps — delegates to the shared
-	# module-level fixpoint (TLR-2b): single liveness author with the
-	# materialization pass.  (`_is_local_name` is always False — see its
-	# definition — so the historical name-exclusion is a no-op the shared
-	# helper drops.)
-	live_out = compute_string_temp_liveness(
-		func.blocks,
-		block_order,
-		local_types=local_types,
-		string_ty=string_ty,
-	)
+	if _recognized.fn_name != func.name:
+		raise AssertionError(
+			f"string_arc: R8 recognition belongs to fn {_recognized.fn_name!r}, "
+			f"not {func.name!r} (wrong-function recognition — fail closed)"
+		)
+	# A recognition vessel is CLOSED once supplied: its block-key set must
+	# equal this function's block set (a missing block must never read as
+	# "nothing recognized") and every value must be a frozenset.  Validated
+	# BEFORE any rewrite; the fallback result passes by construction.
+	_rec_blocks = set(_recognized.recognized_by_block.keys())
+	_fn_blocks = set(func.blocks.keys())
+	if _rec_blocks != _fn_blocks:
+		raise AssertionError(
+			f"string_arc: R8 recognition block set != function block set for "
+			f"{func.name!r} (missing={sorted(_fn_blocks - _rec_blocks)}, "
+			f"extra={sorted(_rec_blocks - _fn_blocks)}) — fail closed"
+		)
+	for _rb_name, _rb_vals in _recognized.recognized_by_block.items():
+		if not isinstance(_rb_vals, frozenset):
+			raise AssertionError(
+				f"string_arc: R8 recognition for block {_rb_name!r} is "
+				f"{type(_rb_vals).__name__}, not frozenset (malformed vessel)"
+			)
 
 	# Definite local assignment across CFG.  The `store_defs` /
 	# `assigned_in` definite-assignment dataflow moved VERBATIM to
@@ -493,25 +479,11 @@ def insert_string_arc(
 		# TLR-2b recognition — BEFORE use counting (the load-bearing
 		# ordering: StringRelease is a use per `_iter_used_values`, so an
 		# unrecognized materialized release would inflate its temp's
-		# count and move the last-use point).  In-contract
-		# pre-materialized releases are excluded from occurrence counts
-		# entirely; ANY out-of-contract input release fails closed inside
-		# the shared analysis (`unexpected input release`).  Fast path:
-		# blocks without input releases (every unit-test run without the
-		# materialization pass; post-pass blocks with no qualified temps)
-		# skip the analysis.
-		recognized_released: Set[str] = (
-			recognize_materialized_releases(
-				block,
-				local_types=local_types,
-				fn_infos=fn_infos,
-				type_table=type_table,
-				live_out_names=live_out.get(block.name, set()),
-				producers_fnwide=producers_fnwide,
-			)
-			if any(isinstance(_i, M.StringRelease) for _i in block.instructions)
-			else set()
-		)
+		# count and move the last-use point).  B2+C S6: the recognition is
+		# CONSUMED from the frozen `R8Recognition` (`for_block` returns the
+		# empty set for blocks the plan-window fast path skipped — those
+		# without any input release — matching the former inline gate).
+		recognized_released: "Set[str]" = _recognized.for_block(block.name)
 		# Sub-slice A1 (string-arc-endgame-array-sweep, 2026-07-18):
 		# the TLR-2b `owned_values -= recognized_released` prepass
 		# subtraction and the ConstString/StringFrom*/Concat re-add
@@ -1228,32 +1200,19 @@ def insert_string_arc(
 							break
 					if not moved:
 						break
-				# For STRING return-source locals, the legacy alias-walk
-				# skip is preserved here.  The Phase 4 sub-step 1
-				# ledger consultation below is limited to
-				# `destructible_locals`; strings have their own
-				# parallel ownership-tracking machinery
-				# (`_release_all_locals`), and folding them into
-				# `skip_cleanup_locals` via the generic consultation
-				# breaks that machinery in subtle ways (caught by the
-				# package-consumer memcheck regression
-				# `test_pkg_map_literal_string_leak`).  The ARRAY half
-				# of this skip was removed in the review-closure round
-				# of string-arc-endgame-array-sweep (2026-07-19): with
-				# the Return-boundary sweep gone, array membership in
-				# `skip_cleanup_locals` had no downstream consumer
-				# (arrays are excluded from `destructible_locals`;
-				# `_release_all_locals` and the boundary audit
-				# intersect strings) — scope-exit array drops are
-				# cleanup_authoring's, and a returned array is
-				# Return-as-move at the ledger there.  Once strings
-				# move to ledger authority on a future track, this can
-				# collapse into the consultation.
+				# B2+C S5: the R4 return-source STRING skip contribution
+				# (`skip_cleanup_locals.add(prev.local)`) was DELETED — the
+				# R4 alias decision now lives in the frozen plan
+				# (`destructible_authority.string_return_source_skip`, folded
+				# into `string_return_releases`), and string_arc no longer
+				# emits the scope-exit releases that skip fed.  The alias walk
+				# STAYS only to compute `can_move_from_skipped_local` (the
+				# return-value string-ownership transfer — a separate concern
+				# from cleanup, and the never-released-twice R4 proof it backs
+				# now holds at the unified Return authority).
 				for prev in reversed(new_instrs):
 					if isinstance(prev, M.LoadLocal) and prev.dest == alias:
 						can_move_from_skipped_local = True
-						if prev.local in string_locals:
-							skip_cleanup_locals.add(prev.local)
 						break
 			# Phase 4 sub-step 1 — ledger consultation for returned-
 			# value source suppression on DESTRUCTIBLES.  Every
@@ -1357,46 +1316,15 @@ def insert_string_arc(
 				else:
 					val = _ensure_owned(val, owned_values, new_instrs, site_class=_ledger_reporter.SITE_CLASS_RETURN_RETAIN_SITE3)
 					_note_use(val, consume=True)
-			# RELEASE ELISION (2026-07-11 slice; B-arch-1 prerequisite):
-			# String locals whose return-boundary ledger verdict is
-			# MUST_NOT_DROP are elided from the scope-exit release sweep.
-			# This is the strings analog of the Phase 4 destructible
-			# consultation above, unblocked by B-arch-1: with every
-			# copy-stake ledger-visible (C2 = 0), the 0.27.145 failure
-			# class — a WRONG MOVED_OUT verdict on a retain-wrapped
-			# return source — is structurally gone, and every
-			# MUST_NOT_DROP string slot at this boundary holds ZEROED
-			# bytes at runtime (UNINIT: never written on the path;
-			# MOVED_OUT: the MoveOut expansion zero-stores; TOMBSTONED:
-			# `_emit_tombstone_value` for String IS `_emit_zero_value`,
-			# proven 2026-07-11) — the elided release was a null-safe
-			# no-op quad (Load+Zero+Store+Release).
-			#
-			# Guardrails (review-pinned):
-			# - DropPolicy-backed needs_drop axis (String is
-			#   needs_drop=True despite structural Copy — cheap-copy,
-			#   NOT drop-free; verified against the Copy-shortcut
-			#   hazard before landing).
-			# - PATH_DEPENDENT keeps today's unconditional null-safe
-			#   release (no string drop-flag machinery in this slice).
-			# - No attached ledger → legacy behavior (loop guarded).
-			# - Arrays, site 4/drop_before_overwrite, and C3
-			#   flag-guarded cleanup MoveOuts untouched.
-			if _ledger is not None:
-				_string_needs_drop = bool(
-					_compute_drop_policy(type_table, string_ty).needs_drop
-				)
-				_ledger_point_str = (block.name, len(block.instructions))
-				for _sl in sorted(string_locals):
-					if _sl in skip_cleanup_locals:
-						continue
-					_sv = _ledger.verdict_at(
-						_ledger_point_str,
-						_sl,
-						needs_drop=_string_needs_drop,
-					)
-					if _sv is _DropVerdict.MUST_NOT_DROP:
-						skip_cleanup_locals.add(_sl)
+			# B2+C S5: the String RELEASE ELISION fold (MUST_NOT_DROP strings
+			# dropped from the scope-exit release sweep) was DELETED here.  The
+			# R3 elision decision now lives in the frozen plan
+			# (`destructible_authority.string_return_releases`, which applies
+			# the SAME DropPolicy-backed MUST_NOT_DROP elision over the ledger-A
+			# snapshot at the original return coordinate), and the unified
+			# Return authority emits exactly the surviving releases.  Its
+			# guardrails (String needs_drop=True; PATH_DEPENDENT keeps the
+			# null-safe release; no-ledger → legacy) moved with the decision.
 			# NO Return-boundary array sweep here (B-U,
 			# string-arc-endgame-array-sweep, 2026-07-19): the sweep,
 			# its MUST_NOT_DROP elision fold, and the Slice-3
@@ -1415,13 +1343,12 @@ def insert_string_arc(
 			# the entry-block array zero-init above SURVIVES (the
 			# zero-safety proof depends on it — endgame-inventory
 			# item).
-			_release_all_locals(new_instrs, skip_locals=skip_cleanup_locals)
-			if _audit is not None:
-				_audit.note_return_boundary(
-					(block.name, len(block.instructions)),
-					string_locals=string_locals,
-					skipped=(skip_cleanup_locals & string_locals),
-				)
+			# B2+C S5: the scope-exit release EMISSION (`_release_all_locals`)
+			# and the Return-boundary audit note (`note_return_boundary`) were
+			# DELETED here.  Emission is the unified Return authority's; the C1
+			# Return-boundary record + its released/skipped sets are frozen at
+			# the plan slot into the driver-local `C1Contribution` and merged
+			# in the driver's single deferred finalize.
 			initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
 			# Phase 4 site-3 sub-step 3 — variant zero-tag widening,
 			# now ledger-driven.  The legacy widening used site-3
@@ -1537,34 +1464,18 @@ def insert_string_arc(
 						needs_drop=_ledger_needs_drop,
 						emit=_ledger_reporter.stderr_emit,
 					)
-			# Destructible drop set at this Return is a BEHAVIOR-PRESERVING
-			# RECOMPOSITION in `site3_return_drops` (not a verbatim body
-			# move): it reassembles the destructible-relevant skip/init
-			# decision from the same inputs and returns the SAME
-			# `sorted(destructible_locals)` order `_drop_all_destructibles`
-			# emitted.  It consumes the SAME `move_state` bookkeeping the
-			# transitional inline skip above uses; the emission stays here
-			# via `_drop_destructible_local`, unchanged and in order.  (The
-			# `DropVerdict` / drop-policy / zero-storage helpers are imported
-			# canonically inside the authority — no longer injected here.)
-			for _da_local in site3_return_drops(
-				func,
-				block,
-				ledger=_ledger,
-				type_table=type_table,
-				destructible_locals=destructible_locals,
-				local_types=local_types,
-				move_state=_return_move_state,
-				assigned_in=assigned_in,
-				store_defs=store_defs,
-				flag_managed=_flag_managed_at_return,
-			):
-				_drop_destructible_local(_da_local, new_instrs)
+			# B2+C S5: the destructible site-3 drop EMISSION
+			# (`site3_return_drops` + `_drop_destructible_local`) was DELETED
+			# here.  The destructible drop DECISION is frozen into the plan by
+			# the planner (via the SAME `site3_return_drops` authority) and the
+			# unified Return authority emits the drop tail AFTER the string
+			# release band, before the preserved Return.
 			# PRESERVE the original Return object (item-1 site-3 anchor
 			# survival): the frozen `CleanupPlan` holds this exact M.Return
-			# as its site-3 TERM anchor, so string_arc must NOT swap in a new
-			# object here.  Update `term.value` IN PLACE only if it changed;
-			# the span already lives on `term`, so no new object is created.
+			# as its site-3 + string_release TERM anchor, so string_arc must
+			# NOT swap in a new object here.  Update `term.value` IN PLACE only
+			# if it changed; the span already lives on `term`, so no new object
+			# is created.
 			if term.value is not val:
 				term.value = val
 			block.terminator = term
@@ -1577,33 +1488,16 @@ def insert_string_arc(
 		block.instructions = new_instrs
 		mark_ledger_dirty(func, "string_arc.rewrite_block")
 
-	if _audit is not None:
-		# L_post: a fresh ledger over the pass OUTPUT.  Built directly
-		# (never attached) so the driver's ledger-cache sequencing and
-		# dirty-bit state are exactly as in the non-audit path.
-		from .ownership_ledger import build_ledger as _build_ledger
-		try:
-			_l_post = _build_ledger(func, drop_policy=lambda tid: _compute_drop_policy(type_table, tid))
-		except Exception:
-			# Audit must never break a compile (observational contract),
-			# but a missing L_post must never pass silently either:
-			# finalize hard-counts it as post_ledger_build_failed and
-			# force-emits the per-fn record; the corpus gate fails on
-			# any nonzero count (review finding, B-arch-0 acceptance).
-			_l_post = None
-		_audit.finalize(
-			l_pre=_ledger,
-			l_post=_l_post,
-			needs_drop=_ledger_needs_drop,
-			# C3 agree-class ladder inputs (Slice 2 Part 2): the func for
-			# STRUCTURAL flag-guard verification (terminators + pred
-			# LoadLocals survive this pass's rewrites) and the same
-			# zero-safety predicate cleanup_authoring used to author the
-			# unguarded cleanup arm.
-			func=func,
-			zero_safe_ty=lambda _tid: _zero_storage_drop_safe(_tid, type_table),
-		)
-
+	# B2+C S5 DEFERRED FINALIZE: string_arc NEVER builds L_post nor calls
+	# `finalize`.  The driver is the sole lifecycle authority — it builds the
+	# single audit-only L_post over the FINAL MIR (after the unified Return
+	# emitter has appended the string releases + site-3 drops) and runs the
+	# ONE `StringArcAudit.finalize`, merging the frozen `C1Contribution`.
+	# string_arc only PRODUCED notes into the driver-supplied `_audit`
+	# collector (MoveOut expansions etc.); it authored NO scope-exit release
+	# events and NO Return boundaries.  (Source pin:
+	# `test_string_arc_no_self_finalize` asserts this module contains no
+	# `_audit.finalize` call.)
 	return func
 
 

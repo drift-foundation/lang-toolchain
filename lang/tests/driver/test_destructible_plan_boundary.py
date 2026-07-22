@@ -110,43 +110,127 @@ def test_plan_build_planner_stop_runtimeerror_is_contained(tmp_path, monkeypatch
 	_assert_contained(ir, checked, "injected-plannerstop")
 
 
-def test_plan_set_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
-	"""item 1: a plan-set / function-set MISMATCH (a plan present for no
-	function, or vice-versa) is boundary-contained as phase `destructible_plan`
-	with a clean `internal:` diagnostic — NOT a bare `AssertionError` traceback
-	from `compile_stubbed_funcs`. The mismatch is otherwise structurally
-	unreachable (the driver populates `_dplans[fn_id]` for every function), so
-	we inject a spurious `_dplans` key during plan build to force the guard.
-	"""
+def _make_table_ghost_boom(table_name: str, value_factory):
+	"""A `build_destructible_plan` wrapper that, after the real plan build for
+	`main`, reaches the driver's local contribution table `table_name` via the
+	frame stack and injects a ghost key with no corresponding MIR function —
+	forcing the (otherwise structurally-unreachable) table-completeness guard
+	that runs BEFORE string_arc.  A missing entry trips the SAME set-equality
+	guard (the comparison is symmetric), so the ghost injection covers both
+	directions per table."""
 	import sys
 	from lang.driftc.core.function_id import FunctionId
 
-	def _make_boom(real):
+	def _factory(real):
 		def _boom(func, **kw):
 			r = real(func, **kw)
 			if getattr(func, "name", "") == "main":
-				# Reach the driver's local `_dplans` and inject a ghost plan
-				# key with no corresponding MIR function → set mismatch.
 				for depth in range(1, 8):
 					try:
 						fr = sys._getframe(depth)
 					except ValueError:
 						break
-					dp = fr.f_locals.get("_dplans")
-					if isinstance(dp, dict):
-						dp[FunctionId(module="ghost", name="ghost", ordinal=0)] = r[0]
+					tbl = fr.f_locals.get(table_name)
+					if isinstance(tbl, dict):
+						ghost = FunctionId(module="ghost", name="ghost", ordinal=0)
+						tbl[ghost] = value_factory(r)
 						break
 			return r
 		return _boom
+	return _factory
 
-	ir, checked = _compile_with_injected_plan_error(tmp_path, monkeypatch, _make_boom)
-	# The prefix differs ("completeness failure"); assert containment directly.
+
+def _assert_completeness_contained(ir, checked, needle: str) -> None:
 	errors = [d for d in getattr(checked, "diagnostics", [])
 	          if getattr(d, "severity", None) == "error"]
 	assert errors
 	assert any(
 		"internal: destructible plan completeness failure" in d.message
+		and needle in d.message
 		and getattr(d, "phase", None) == "destructible_plan"
 		for d in errors
 	), [(d.message, getattr(d, "phase", None)) for d in errors]
-	assert ir == "", "compile must not produce IR after a plan-set mismatch"
+	assert ir == "", "compile must not produce IR after a table mismatch"
+
+
+def test_plan_set_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""A plan-set / function-set MISMATCH (a plan present for no function, or
+	vice-versa) is boundary-contained as phase `destructible_plan` with a clean
+	`internal:` diagnostic — NOT a bare `AssertionError` traceback.  The guard
+	now runs BEFORE string_arc (S5/S6 closure: no consumer runs before
+	completeness is proven)."""
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch, _make_table_ghost_boom("_dplans", lambda r: r[0]))
+	_assert_completeness_contained(ir, checked, "destructible plan set")
+
+
+def test_r8_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S5/S6 closure: an R8-recognition table that does not exactly match the
+	MIR function set is contained BEFORE string_arc — a missing entry must
+	never silently select string_arc's direct-recomputation fallback."""
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch,
+		_make_table_ghost_boom("_r8contrib", lambda r: object()))
+	_assert_completeness_contained(ir, checked, "R8 recognition set")
+
+
+def test_audit_collector_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S5 closure (audit enabled): a collector table that does not exactly
+	match the MIR function set is contained before string_arc — a missing
+	collector must never surface later as a finalize-time failure."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch,
+		_make_table_ghost_boom("_audit_collectors", lambda r: object()))
+	_assert_completeness_contained(ir, checked, "audit collector set")
+
+
+def test_c1_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S5 closure (audit enabled): a frozen-C1 table that does not exactly
+	match the MIR function set is contained before string_arc — a missing
+	entry must never silently select the monolithic finalize path (string_arc
+	no longer records C1; the class would silently disappear)."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch,
+		_make_table_ghost_boom("_dc1contrib", lambda r: r[2]))
+	_assert_completeness_contained(ir, checked, "C1 contribution set")
+
+
+def test_audit_disabled_maps_must_be_empty(tmp_path, monkeypatch) -> None:
+	"""S5 closure (audit DISABLED): any residue in the audit maps is a
+	completeness contract failure — the disabled path must allocate nothing."""
+	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch,
+		_make_table_ghost_boom("_audit_collectors", lambda r: object()))
+	_assert_completeness_contained(ir, checked, "audit DISABLED")
+
+
+def test_finalize_contract_failure_is_boundary_contained(tmp_path, monkeypatch) -> None:
+	"""S5 closure end-to-end: an injected `finalize` contract failure is
+	boundary-contained as phase `string_arc_audit_finalize` (clean `internal:`
+	diagnostic, empty IR, no traceback)."""
+	from lang.driftc.stage2 import ownership_ledger_reporter as R
+
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
+
+	def _boom_finalize(self, **kw):
+		raise AssertionError("injected-finalize-boom")
+
+	monkeypatch.setattr(R.StringArcAudit, "finalize", _boom_finalize)
+	ir, checked = _compile_with_injected_plan_error(
+		tmp_path, monkeypatch, lambda real: real)
+	errors = [d for d in getattr(checked, "diagnostics", [])
+	          if getattr(d, "severity", None) == "error"]
+	assert errors
+	assert any(
+		"internal: string_arc audit finalize contract failure" in d.message
+		and "injected-finalize-boom" in d.message
+		and getattr(d, "phase", None) == "string_arc_audit_finalize"
+		for d in errors
+	), [(d.message, getattr(d, "phase", None)) for d in errors]
+	assert ir == "", "compile must not produce IR after a finalize contract failure"

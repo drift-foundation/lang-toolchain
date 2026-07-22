@@ -115,6 +115,19 @@ def _run_cleanup_then_attach_ledger(func: M.MirFunc, type_table: TypeTable) -> N
 	_attach_ledger(func)
 
 
+def _arc_and_return_emit(func: M.MirFunc, type_table: TypeTable) -> None:
+	"""B2+C S5 pipeline: build the frozen plan at the pre-string_arc ledger-A
+	slot, run string_arc (which no longer emits the site-3 destructible drop
+	tail), then the unified Return authority (`return_cleanup_emitter`) which
+	now authors that tail.  Matches the production driver order — the site-3
+	drops appear in the FINAL MIR, authored by the emitter, not string_arc."""
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
+	plan, _census, _c1 = build_destructible_plan(func, type_table=type_table)
+	insert_string_arc(func, type_table=type_table, fn_infos={})
+	emit_return_cleanups(func, plan)
+
+
 def _build_one_flagged_one_unflagged(type_table: TypeTable) -> M.MirFunc:
 	"""Function with two destructible locals at the same Return:
 	  - `flagged`: gets a 3C flag (user move on a conditional arm).
@@ -522,7 +535,7 @@ def test_site3_widens_path_dependent_variant_into_init_set() -> None:
 	vty = _declare_destructible_variant(type_table)
 	func = _build_conditional_variant_init(type_table, vty)
 	_run_cleanup_then_attach_ledger(func, type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	_arc_and_return_emit(func, type_table)
 	# A drop sequence for `v` must appear in the join block (or
 	# expanded out of `_drop_destructible_local` in any block).
 	drops = _all_drop_destructible_pairs_for(func, "v")
@@ -560,7 +573,7 @@ def test_site3_does_not_widen_non_variant_path_dependent_local() -> None:
 	join_block.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry, "if_then": then_block, "if_join": join_block}
 	_run_cleanup_then_attach_ledger(func, type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	_arc_and_return_emit(func, type_table)
 	drops = _all_drop_destructible_pairs_for(func, "s")
 	assert not drops, (
 		"non-variant local was widened — `variant_zero_tag_drop_safe` "

@@ -51,18 +51,59 @@ def _attach_ledger(func: M.MirFunc) -> None:
 	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
 
 
+def _run_arc_audit(func: M.MirFunc, tt: TypeTable, fn_infos=None) -> None:
+	"""B2+C S5 DEFERRED-FINALIZE audit pipeline for unit pins.  Reproduces
+	the driver: build the frozen plan + C1 contribution at the pre-string_arc
+	ledger-A slot, run string_arc into a DRIVER-owned collector (string_arc
+	no longer self-creates/self-finalizes the audit), run the unified Return
+	emitter (string-release band + site-3 drop tail), then the SINGLE
+	driver-side finalize (merging the frozen C1 contribution) with an L_post
+	built over the FINAL MIR.  The ledger must be attached + fresh on entry."""
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
+	from lang.driftc.stage2.ownership_ledger import build_ledger as _bl
+	from lang.driftc.stage2.drop_policy_compute import (
+		compute_drop_policy as _cdp,
+		zero_storage_drop_safe as _zsds,
+	)
+	plan, _census, c1 = build_destructible_plan(func, type_table=tt)
+	collector = R.StringArcAudit(func.name)
+	insert_string_arc(func, type_table=tt, fn_infos=fn_infos or {}, audit_collector=collector)
+	emit_return_cleanups(func, plan)
+	try:
+		l_post = _bl(func, drop_policy=lambda tid: _cdp(tt, tid))
+	except Exception:
+		l_post = None
+	def _nd(local, _lt=func.local_types):
+		ty = _lt.get(local)
+		if ty is None:
+			return False
+		try:
+			return bool(tt.has_drop(ty))
+		except Exception:
+			return False
+	collector.finalize(
+		l_pre=getattr(func, "_ownership_ledger", None),
+		l_post=l_post,
+		needs_drop=_nd,
+		func=func,
+		zero_safe_ty=lambda tid: _zsds(tid, tt),
+		c1_contribution=c1,
+	)
+
+
 def _run_pipeline(func: M.MirFunc, tt: TypeTable, fn_infos=None) -> None:
 	"""Production-faithful pipeline for unit pins: materialize last-use
-	releases → fresh ledger → insert_string_arc.  Bare insert_string_arc
-	is not a valid configuration for MIR containing family temps that
-	drain non-consumingly — string_arc authors no last-use releases of
-	its own (the in-pass arm was deleted with the tripwire-deletion
-	slice, 2026-07-18), so bare use silently under-releases such
-	temps."""
+	releases → fresh ledger → the S5 deferred-finalize audit pipeline.  Bare
+	insert_string_arc is not a valid configuration for MIR containing family
+	temps that drain non-consumingly — string_arc authors no last-use
+	releases of its own (the in-pass arm was deleted with the
+	tripwire-deletion slice, 2026-07-18), so bare use silently under-releases
+	such temps."""
 	from lang.driftc.stage2.string_releases import materialize_lastuse_releases
 	materialize_lastuse_releases(func, type_table=tt, fn_infos=fn_infos or {})
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos=fn_infos or {})
+	_run_arc_audit(func, tt, fn_infos)
 
 
 def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
@@ -100,7 +141,8 @@ def _string_shuffle_func(type_table: TypeTable) -> M.MirFunc:
 def test_audit_disabled_by_default(monkeypatch) -> None:
 	monkeypatch.delenv("DRIFT_STRING_ARC_AUDIT", raising=False)
 	assert not R.string_arc_audit_enabled()
-	# And the pass runs exactly as before with no audit machinery.
+	# And the pass runs exactly as before with no audit machinery (disabled
+	# production path = bare insert_string_arc, driver supplies no collector).
 	tt = TypeTable()
 	func = _string_shuffle_func(tt)
 	_attach_ledger(func)
@@ -120,7 +162,7 @@ def test_audit_collects_tags_and_classifies(monkeypatch, tmp_path: Path) -> None
 	tt = TypeTable()
 	func = _string_shuffle_func(tt)
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	assert out.exists(), "audit file must receive per-fn JSONL"
 	recs = [json.loads(line.split("] ", 1)[1]) for line in out.read_text().splitlines()]
 	fn_recs = [r for r in recs if r.get("record") == "fn" and r.get("fn") == "test::f"]
@@ -164,7 +206,7 @@ def test_classifier_c3_flags_moveout_of_uninit(monkeypatch, tmp_path: Path) -> N
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	recs = [json.loads(line.split("] ", 1)[1]) for line in out.read_text().splitlines()]
 	agg = [r for r in recs if r.get("record") == "fn" and r.get("fn") == "test::g"][0]
 	assert agg.get("c3_moveout_not_owned", 0) >= 1, agg
@@ -242,7 +284,7 @@ def test_c3_flag_guarded_cleanup_is_agree_class(monkeypatch, tmp_path: Path) -> 
 	tt = TypeTable()
 	func = _diamond_flag_func(tt, cond_loads_flag_of="x")
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::fg")
 	assert agg.get(R.AGREE_C3_FLAG_GUARDED, 0) == 1, agg
 	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
@@ -257,7 +299,7 @@ def test_c3_flag_guard_wrong_flag_stays_divergent(monkeypatch, tmp_path: Path) -
 	tt = TypeTable()
 	func = _diamond_flag_func(tt, cond_loads_flag_of="other")
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::fg")
 	assert agg.get(R.AGREE_C3_FLAG_GUARDED, 0) == 0, agg
 	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, agg
@@ -284,7 +326,7 @@ def test_c3_tombstoned_move_is_zero_safe(monkeypatch, tmp_path: Path) -> None:
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::tz")
 	assert agg.get(R.AGREE_C3_ZERO_SAFE, 0) == 1, agg
 	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
@@ -310,7 +352,7 @@ def test_c3_unreachable_block_event_is_observational(monkeypatch, tmp_path: Path
 	func.blocks = {"entry": entry, "dead_catch": dead}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::ur")
 	assert agg.get(R.OBS_C3_UNREACHABLE_BLOCK, 0) == 1, agg
 	assert agg.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 0, agg
@@ -416,7 +458,7 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::asw")
 	# The sweep and its note site are GONE: no scope_exit_arraydrop
 	# key may appear — for any state, any verdict.
@@ -463,7 +505,7 @@ def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) ->
 	func.blocks = {"entry": entry, "init": init, "join": join}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::apd")
 	# arr at the join boundary: LIVE on the init path, UNINIT on the
 	# else path → MAYBE_UNINIT → PATH_DEPENDENT.  Post-B-U the sweep
@@ -513,7 +555,7 @@ def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::zb")
 	# The zero-back must not stake — no store_value_retain, no C2.
 	assert agg.get("site_class:store_value_retain", 0) == 0, agg
@@ -649,7 +691,7 @@ def test_array_index_load_dest_is_owned_at_extraction(monkeypatch, tmp_path: Pat
 	tt = TypeTable()
 	func = _ail_store_func(tt, unchecked=False)
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})  # must not trip
+	_run_arc_audit(func, tt)  # must not trip
 	agg = _fn_agg(out, "test::ail_c")
 	assert agg.get("site_class:store_value_retain", 0) == 0, agg
 	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
@@ -669,7 +711,7 @@ def test_array_index_load_unchecked_dest_is_owned_at_extraction(monkeypatch, tmp
 	string_ty = tt.ensure_string()
 	func = _ail_store_func(tt, unchecked=True)
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})  # must not trip
+	_run_arc_audit(func, tt)  # must not trip
 	agg = _fn_agg(out, "test::ail_u")
 	assert agg.get("site_class:store_value_retain", 0) == 0, agg
 	assert agg.get(R.DIV_C2_INVISIBLE_STAKE, 0) == 0, agg
@@ -713,7 +755,7 @@ def test_c3_catch_binder_dead_cleanup_drop_is_zero_safe(monkeypatch, tmp_path: P
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::cb3")
 	# The dead cleanup drop of the moved binder reclassifies zero-safe;
 	# nothing in this fn stays divergent.  (The other MoveOuts: the
@@ -1208,7 +1250,7 @@ def test_tlr2b_pass_plus_arc_equals_arc_only(monkeypatch, tmp_path: Path) -> Non
 	fb = build("ab_b")
 	assert materialize_lastuse_releases(fb, type_table=tt, fn_infos={}) is True
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::ab_b")
 	# The family: %q (1), %p + %r (2), %u1 + %u2 (2), %cc (Concat, TLR-3)
 	# → 6 materialized; %c consumed → nothing.
@@ -1271,7 +1313,7 @@ def test_tlr2b_out_of_contract_input_release_trips_string_arc(monkeypatch, tmp_p
 			func.local_types[t] = string_ty
 		_attach_ledger(func)
 		with pytest.raises(AssertionError, match="unexpected input release"):
-			insert_string_arc(func, type_table=tt, fn_infos={})
+			_run_arc_audit(func, tt)
 
 	_run("oc_shape", [
 		M.ConstString(dest="%a", value="a"),
@@ -1355,7 +1397,7 @@ def test_tlr2b_cross_block_temp_untouched(monkeypatch, tmp_path: Path) -> None:
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::xb_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1409,7 +1451,7 @@ def test_tlr3_concat_chain_ab_byte_identity(monkeypatch, tmp_path: Path) -> None
 		("StringEq", "%e"), ("StringRelease", "%c2"),
 	], names
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::ch_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 5, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1462,7 +1504,7 @@ def test_tlr3_multiuse_and_consumed_concat(monkeypatch, tmp_path: Path) -> None:
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::mc_b")
 	# %a, %b, %c, %dd, %mu materialized (5); %cs consumed → none.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 5, agg_b
@@ -1509,7 +1551,7 @@ def test_tlr3_cross_block_concat_untouched(monkeypatch, tmp_path: Path) -> None:
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::xc_b")
 	# %a, %b AND %cc (cross-block, TLR-7) all materialized.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
@@ -1571,7 +1613,7 @@ def test_tlr4_call_family_ab_semantic_and_idempotence(monkeypatch, tmp_path: Pat
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	_run_arc_audit(fb, tt, fn_infos)
 	agg_b = _fn_agg(out, "test::c4_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1636,7 +1678,7 @@ def test_tlr4_nonfamily_calls_stay_out(monkeypatch, tmp_path: Path) -> None:
 		if type(i).__name__ == "StringRelease"]
 	assert rel_next == ["%xb"], rel_next  # only the family member
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos=fn_infos)
+	_run_arc_audit(fb, tt, fn_infos)
 	# Arc adds NOTHING: the family member's pass-authored release is
 	# copied through; the stay-out temps get no release from anywhere
 	# (string_arc authors no last-use releases since 2026-07-18).
@@ -1688,7 +1730,7 @@ def test_tlr4_indirect_iface_user_ret_type_family(monkeypatch, tmp_path: Path) -
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::ii_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1716,7 +1758,7 @@ def test_tlr4_out_of_contract_call_release_trips(monkeypatch, tmp_path: Path) ->
 		func.local_types["%qc"] = string_ty
 		_attach_ledger(func)
 		with pytest.raises(AssertionError, match="unexpected input release"):
-			insert_string_arc(func, type_table=tt, fn_infos=fn_infos)
+			_run_arc_audit(func, tt, fn_infos)
 
 	_run("c4_mis", [
 		M.Call(dest="%qc", fn_id=fid, args=[], can_throw=False),
@@ -1788,7 +1830,7 @@ def test_tlr5_stringfrom_and_exc_family(monkeypatch, tmp_path: Path) -> None:
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::t5_b")
 	# %si/%sb/%su/%sf/%ep/%ec/%mu → 7 materialized; %cs consumed → none.
 	assert agg_b.get("site_class:materialized_lastuse_release") == 7, agg_b
@@ -1830,7 +1872,7 @@ def test_tlr5_cross_block_stringfrom_untouched(monkeypatch, tmp_path: Path) -> N
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::t5x_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1893,7 +1935,7 @@ def test_tlr6_copyvalue_family(monkeypatch, tmp_path: Path) -> None:
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::t6_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 2, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1935,7 +1977,7 @@ def test_tlr6_cross_block_copyvalue_untouched(monkeypatch, tmp_path: Path) -> No
 	# in-pass author is gone, so pass-output + recognition-counter
 	# assertions below are the surviving contract.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::t6x_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 1, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -1994,7 +2036,7 @@ def test_tlr7_cfg_shapes_ab(monkeypatch, tmp_path: Path) -> None:
 		# Config-A retired with the release-arm tripwire; the pass-output
 		# `want` layout above plus recognition counters are the contract.
 		_attach_ledger(fb)
-		insert_string_arc(fb, type_table=tt, fn_infos={})
+		_run_arc_audit(fb, tt)
 		agg_b = _fn_agg(out, f"test::{name}_b")
 		assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, (name, agg_b)
 
@@ -2077,7 +2119,7 @@ def test_tlr7_loop_backedge_ab(monkeypatch, tmp_path: Path) -> None:
 		"exit": ["%seed"]}, got
 	# Config-A retired with the release-arm tripwire.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 	agg_b = _fn_agg(out, "test::lp_b")
 	assert agg_b.get("site_class:materialized_lastuse_release") == 3, agg_b
 	assert agg_b.get("site_class:temp_lastuse_release", 0) == 0, agg_b
@@ -2129,7 +2171,7 @@ def test_tlr7_consumed_and_terminator_cases(monkeypatch, tmp_path: Path) -> None
 	assert type(fb.blocks["mid"].instructions[-1]).__name__ == "StringRelease"
 	# Config-A retired with the release-arm tripwire.
 	_attach_ledger(fb)
-	insert_string_arc(fb, type_table=tt, fn_infos={})
+	_run_arc_audit(fb, tt)
 
 
 def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path: Path) -> None:
@@ -2154,7 +2196,7 @@ def test_tlr7_cross_block_out_of_contract_and_dup_producer(monkeypatch, tmp_path
 		func.local_types["%x"] = string_ty
 		_attach_ledger(func)
 		with pytest.raises(AssertionError, match="unexpected input release"):
-			insert_string_arc(func, type_table=tt, fn_infos={})
+			_run_arc_audit(func, tt)
 
 	_run("x7_mis", [
 		M.StringRelease(value="%x"),  # BEFORE the cross-block last use
@@ -2218,7 +2260,7 @@ def test_tlr8_moveout_family(monkeypatch, tmp_path: Path) -> None:
 	assert materialize_lastuse_releases(func, type_table=tt, fn_infos={}) is False
 	assert func.blocks["entry"].instructions == once
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::t8")
 	assert agg.get("site_class:materialized_lastuse_release") == 3, agg
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
@@ -2262,7 +2304,7 @@ def test_tlr8_cross_block_moveout(monkeypatch, tmp_path: Path) -> None:
 		if type(i).__name__ == "StringRelease"]
 	assert rel_entry == [] and rel_next == ["%m"], (rel_entry, rel_next)
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	_run_arc_audit(func, tt)
 	agg = _fn_agg(out, "test::t8x")
 	assert agg.get("site_class:materialized_lastuse_release") == 1, agg
 	assert agg.get("site_class:temp_lastuse_release", 0) == 0, agg
@@ -2450,3 +2492,374 @@ def test_c3_paired_maybe_uninit_array_moveout_is_zero_safe() -> None:
 	unpaired = run(False)
 	assert unpaired.get(R.DIV_C3_MOVEOUT_NOT_OWNED, 0) == 1, unpaired
 	assert unpaired.get(R.AGREE_C3_ZERO_SAFE, 0) == 0, unpaired
+
+
+# ── B2+C S5 deferred-finalize split/merge contract pins ───────────────
+
+
+def _two_live_strings_func(tt, name="split"):
+	"""`var a = ...; var b = ...; return None;` — two live String locals
+	released at the Return, NO destructibles, NO MoveOuts (so the only audit
+	events are the scope-exit releases; keeps the split-vs-monolithic
+	comparison about C1 alone)."""
+	string_ty = tt.ensure_string()
+	func = _make_func(name, params=[], locals_=["a", "b"],
+		types={"a": string_ty, "b": string_ty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [
+		M.ConstString(dest="%ca", value="x"),
+		M.StoreLocal(local="a", value="%ca"),
+		M.ConstString(dest="%cb", value="y"),
+		M.StoreLocal(local="b", value="%cb"),
+	]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	return func
+
+
+def _pipeline_to_final(func, tt):
+	"""Run plan → string_arc(collector) → emitter; return (collector, plan,
+	c1, l_pre, l_post, needs_drop) with the FINAL MIR in place."""
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
+	from lang.driftc.stage2.ownership_ledger import build_ledger as _bl
+	from lang.driftc.stage2.drop_policy_compute import (
+		compute_drop_policy as _cdp, zero_storage_drop_safe as _zsds)
+	plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	collector = R.StringArcAudit(func.name)
+	insert_string_arc(func, type_table=tt, fn_infos={}, audit_collector=collector)
+	emit_return_cleanups(func, plan)
+	l_post = _bl(func, drop_policy=lambda tid: _cdp(tt, tid))
+	l_pre = getattr(func, "_ownership_ledger", None)
+	def _nd(local, _lt=func.local_types):
+		ty = _lt.get(local)
+		if ty is None:
+			return False
+		try:
+			return bool(tt.has_drop(ty))
+		except Exception:
+			return False
+	zsds = lambda tid: _zsds(tid, tt)
+	return collector, plan, c1, l_pre, l_post, _nd, zsds
+
+
+def test_c1_split_merge_byte_identical_vs_monolithic(monkeypatch, tmp_path: Path) -> None:
+	"""The SPLIT finalize (frozen C1 contribution merged) produces a
+	byte-identical aggregate to a REFERENCE MONOLITHIC finalize (pass-recorded
+	release events + note_return_boundary + live l_pre re-query), with NO
+	double count of scope_exit_release or fns.  Also exercises the pre/post
+	verdict-drift equivalence: the two released locals hold live String bytes
+	pre (MUST_DROP) and zeroed bytes post (MUST_NOT_DROP) → drift in BOTH."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt)
+	_attach_ledger(func)
+	_collector, _plan, c1, l_pre, l_post, _nd, zsds = _pipeline_to_final(func, tt)
+	assert c1 is not None and len(c1.boundaries) == 1
+	assert c1.boundaries[0].released == ("a", "b")
+
+	# REFERENCE MONOLITHIC: reconstruct exactly what string_arc used to record.
+	audit_mono = R.StringArcAudit(func.name)
+	for b in c1.boundaries:
+		for loc in b.released:
+			audit_mono.note(R.STAKE_RELEASE, loc, R.SITE_CLASS_SCOPE_EXIT_RELEASE,
+				pre_point=b.point, post_point=b.point)
+		audit_mono.note_return_boundary(b.point, string_locals=b.string_locals,
+			skipped=b.skipped)
+	agg_mono = audit_mono.finalize(l_pre=l_pre, l_post=l_post, needs_drop=_nd,
+		func=func, zero_safe_ty=zsds, c1_contribution=None)
+
+	# SPLIT: empty audit + frozen contribution.
+	audit_split = R.StringArcAudit(func.name)
+	agg_split = audit_split.finalize(l_pre=l_pre, l_post=l_post, needs_drop=_nd,
+		func=func, zero_safe_ty=zsds, c1_contribution=c1)
+
+	assert agg_split == agg_mono, (agg_split, agg_mono)
+	# No double count: exactly two scope-exit releases, two events, one fn.
+	assert agg_split["site_class:scope_exit_release"] == 2, agg_split
+	assert agg_split["events"] == 2, agg_split
+	assert audit_split.events and all(
+		e.site_class == R.SITE_CLASS_SCOPE_EXIT_RELEASE for e in audit_split.events)
+	# pre/post drift equivalence actually exercised: both locals are released
+	# AND their pre-verdict (MUST_DROP, live) differs from the post-verdict
+	# (MUST_NOT_DROP, zeroed by the emitter's zero-back) → BOTH c1_agree (the
+	# release matched the pre must_drop) AND pre_post_verdict_drift fire, and
+	# byte-identically across the split and monolithic paths.
+	assert agg_split.get("pre_post_verdict_drift", 0) == 2, agg_split
+	assert agg_split.get("c1_agree", 0) == 2, agg_split
+
+
+def test_c1_merge_rejects_wrong_function(monkeypatch) -> None:
+	"""A C1 contribution whose fn_name does not match the audit fails closed."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "wf")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	import pytest
+	audit = R.StringArcAudit("test::OTHER_FN")
+	with pytest.raises(AssertionError, match="wrong-function merge"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+
+
+def test_c1_merge_rejects_double_source(monkeypatch) -> None:
+	"""A split finalize that ALSO carries pass-recorded return boundaries
+	(double C1 source) fails closed."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "ds")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	import pytest
+	audit = R.StringArcAudit(func.name)
+	audit.note_return_boundary(("entry", 4), string_locals=["a"], skipped=[])
+	with pytest.raises(AssertionError, match="double C1 source"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+
+
+def test_c1_merge_rejects_pass_recorded_releases(monkeypatch) -> None:
+	"""A split finalize whose audit already carries scope_exit_release events
+	(string_arc must not emit releases) fails closed — no double count."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "pr")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	import pytest
+	audit = R.StringArcAudit(func.name)
+	audit.note(R.STAKE_RELEASE, "a", R.SITE_CLASS_SCOPE_EXIT_RELEASE,
+		pre_point=("entry", 4), post_point=("entry", 4))
+	with pytest.raises(AssertionError, match="must not emit releases"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+
+
+def test_string_arc_no_self_finalize_source_pin() -> None:
+	"""Structural pin (contract point 5, STRENGTHENED by the S5 closure):
+	the DRIVER COORDINATOR (`driftc.py`) is the SOLE production caller of
+	`finalize` — no other file under `lang/driftc` (string_arc included)
+	contains a `.finalize(` invocation.  Tests/direct unit calls are
+	excluded by construction (the sweep covers the production tree only)."""
+	import lang.driftc.stage2.string_arc as _sa_mod
+	src = Path(_sa_mod.__file__).read_text()
+	assert "_audit.finalize(" not in src, "string_arc must not self-finalize the audit"
+	assert ".finalize(" not in src, "string_arc must not call finalize at all"
+	# Whole-production-tree sweep: only the coordinator may invoke finalize.
+	prod_root = Path(_sa_mod.__file__).resolve().parent.parent
+	assert prod_root.name == "driftc", prod_root
+	offenders = []
+	visited = 0
+	for py in prod_root.rglob("*.py"):
+		visited += 1
+		if ".finalize(" in py.read_text() and py.name != "driftc.py":
+			offenders.append(str(py))
+	assert visited > 50, f"production sweep visited only {visited} files (wrong root?)"
+	assert not offenders, (
+		f"only the driver coordinator may call finalize; offenders={offenders}"
+	)
+
+
+# ── S5 closure — exactly-once finalize lifecycle ──────────────────────
+
+
+def test_finalize_is_exactly_once(monkeypatch) -> None:
+	"""A second `finalize` fails closed BEFORE mutating events or aggregate
+	state — the split path may never re-synthesize releases nor double-fold
+	the global aggregate."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "once")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	import pytest
+	audit = R.StringArcAudit(func.name)
+	audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+		needs_drop=lambda _l: True, c1_contribution=c1)
+	events_after_first = list(audit.events)
+	with pytest.raises(AssertionError, match="exactly-once"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+	# The refused second call mutated nothing.
+	assert audit.events == events_after_first
+
+
+def test_failed_finalize_cannot_be_retried(monkeypatch) -> None:
+	"""Even a finalize that FAILED (contract violation) marks the collector
+	finalized: a retry against mutated collector state is refused."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "ftry")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	import pytest
+	audit = R.StringArcAudit("test::OTHER_FN")
+	with pytest.raises(AssertionError, match="wrong-function merge"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+	with pytest.raises(AssertionError, match="exactly-once"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=c1)
+
+
+def test_notes_after_finalize_fail_closed(monkeypatch) -> None:
+	"""`note()` and `note_return_boundary()` after finalization fail closed —
+	no note can arrive between the deferred finalize and overwrite cleanup."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	import pytest
+	audit = R.StringArcAudit("test::late")
+	audit.finalize(l_pre=None, l_post=None, needs_drop=lambda _l: True)
+	with pytest.raises(AssertionError, match="exactly-once"):
+		audit.note(R.STAKE_RELEASE, "a", R.SITE_CLASS_SCOPE_EXIT_RELEASE,
+			pre_point=("entry", 0), post_point=("entry", 0))
+	with pytest.raises(AssertionError, match="exactly-once"):
+		audit.note_return_boundary(("entry", 0), string_locals=["a"], skipped=["a"])
+
+
+# ── S5 closure — structurally validated C1 contribution ───────────────
+
+
+def _valid_boundary(**overrides):
+	"""A well-formed single-boundary kwargs base for tamper tests."""
+	base = dict(
+		point=("entry", 4),
+		string_locals=("a", "b"),
+		skipped=("b",),
+		released=("a",),
+		verdicts=(("a", R.DropVerdict.MUST_DROP), ("b", R.DropVerdict.MUST_NOT_DROP)),
+		raw_states=(("a", R.LiveState.LIVE), ("b", R.LiveState.MOVED_OUT)),
+	)
+	base.update(overrides)
+	return R.C1BoundaryFrozen(**base)
+
+
+def _contribution(*boundaries, fn="test::v"):
+	return R.C1Contribution(fn_name=fn, boundaries=tuple(boundaries))
+
+
+def test_c1_validation_accepts_well_formed() -> None:
+	R.validate_c1_contribution(_contribution(_valid_boundary()))
+
+
+def test_c1_validation_rejects_duplicate_boundary_points() -> None:
+	import pytest
+	with pytest.raises(AssertionError, match="duplicate boundary points"):
+		R.validate_c1_contribution(
+			_contribution(_valid_boundary(), _valid_boundary()))
+
+
+def test_c1_validation_rejects_unsorted_or_duplicate_string_locals() -> None:
+	import pytest
+	with pytest.raises(AssertionError, match="unique\\+sorted"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			string_locals=("b", "a"))))
+	with pytest.raises(AssertionError, match="unique\\+sorted"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			string_locals=("a", "a", "b"))))
+
+
+def test_c1_validation_rejects_bad_partition() -> None:
+	import pytest
+	# Overlap: a local both released and skipped.
+	with pytest.raises(AssertionError, match="overlap"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			skipped=("a", "b"))))
+	# Not a partition: a string local neither released nor skipped.
+	with pytest.raises(AssertionError, match="partition"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			skipped=())))
+	# Duplicate released entry.
+	with pytest.raises(AssertionError, match="duplicate released"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			released=("a", "a"), skipped=("b",))))
+
+
+def test_c1_validation_rejects_missing_or_foreign_verdict_keys() -> None:
+	import pytest
+	# Missing entry for 'b' — surfaced as AssertionError, never a KeyError
+	# inside the C1 merge loop.
+	with pytest.raises(AssertionError, match="verdicts key set != string_locals"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			verdicts=(("a", R.DropVerdict.MUST_DROP),))))
+	with pytest.raises(AssertionError, match="raw_states key set != string_locals"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			raw_states=(("a", R.LiveState.LIVE), ("zz", R.LiveState.LIVE)))))
+	# Duplicate key.
+	with pytest.raises(AssertionError, match="duplicate verdicts keys"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			verdicts=(("a", R.DropVerdict.MUST_DROP), ("a", R.DropVerdict.MUST_DROP),
+				("b", R.DropVerdict.MUST_NOT_DROP)))))
+
+
+def test_c1_validation_rejects_wrong_enum_types() -> None:
+	import pytest
+	with pytest.raises(AssertionError, match="expected DropVerdict"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			verdicts=(("a", "MUST_DROP"), ("b", R.DropVerdict.MUST_NOT_DROP)))))
+	with pytest.raises(AssertionError, match="expected LiveState"):
+		R.validate_c1_contribution(_contribution(_valid_boundary(
+			raw_states=(("a", "LIVE"), ("b", R.LiveState.MOVED_OUT)))))
+
+
+def test_c1_malformed_contribution_fails_at_merge_not_keyerror(monkeypatch) -> None:
+	"""End-to-end: a malformed contribution handed to the SPLIT finalize
+	surfaces as the audit contract class (AssertionError) BEFORE the C1
+	loop can raise a raw KeyError."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	import dataclasses
+	import pytest
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "mal")
+	_attach_ledger(func)
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	_plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	assert c1 is not None and len(c1.boundaries) == 1
+	# Drop one verdict entry — the merge loop would KeyError on it.
+	b = c1.boundaries[0]
+	tampered = dataclasses.replace(b, verdicts=b.verdicts[:1])
+	bad = R.C1Contribution(fn_name=c1.fn_name, boundaries=(tampered,))
+	audit = R.StringArcAudit(func.name)
+	with pytest.raises(AssertionError, match="verdicts key set != string_locals"):
+		audit.finalize(l_pre=getattr(func, "_ownership_ledger"), l_post=None,
+			needs_drop=lambda _l: True, c1_contribution=bad)
+
+
+def test_c1_plan_bijection_crosscheck(monkeypatch) -> None:
+	"""The planner PROVES the C1↔plan bijection at the plan slot: a frozen
+	C1 whose boundaries drift from the plan's `string_release` decisions —
+	release-order drift, a dropped boundary, or a foreign boundary — fails
+	closed via `crosscheck_c1_against_plan`."""
+	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
+	import dataclasses
+	import pytest
+	from lang.driftc.stage2.destructible_planner import (
+		build_destructible_plan, crosscheck_c1_against_plan)
+	tt = TypeTable()
+	func = _two_live_strings_func(tt, "bij")
+	_attach_ledger(func)
+	plan, _c, c1 = build_destructible_plan(func, type_table=tt)
+	assert c1 is not None and c1.boundaries[0].released == ("a", "b")
+	# The genuine pair passes.
+	crosscheck_c1_against_plan(plan, c1)
+	# Ordered-equality drift: reversed release order fails.
+	b = c1.boundaries[0]
+	rev = R.C1Contribution(fn_name=c1.fn_name, boundaries=(
+		dataclasses.replace(b, released=tuple(reversed(b.released))),))
+	with pytest.raises(AssertionError, match="release drift"):
+		crosscheck_c1_against_plan(plan, rev)
+	# Dropped boundary: bijection failure.
+	empty = R.C1Contribution(fn_name=c1.fn_name, boundaries=())
+	with pytest.raises(AssertionError, match="not in bijection"):
+		crosscheck_c1_against_plan(plan, empty)
+	# Foreign boundary point: bijection failure.
+	ghost = R.C1Contribution(fn_name=c1.fn_name, boundaries=(
+		b, dataclasses.replace(b, point=("ghost", 0)),))
+	with pytest.raises(AssertionError, match="not in bijection"):
+		crosscheck_c1_against_plan(plan, ghost)

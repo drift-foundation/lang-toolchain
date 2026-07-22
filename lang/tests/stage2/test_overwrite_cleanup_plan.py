@@ -99,7 +99,7 @@ def test_plan_consumer_emits_nullsafe_and_site4_drops():
 	func.blocks["entry"] = entry
 	_attach_ledger(func)
 
-	plan, census = build_destructible_plan(func, type_table=tt)
+	plan, census, _ = build_destructible_plan(func, type_table=tt)
 	assert census["nullsafe"] == 1
 	assert census["site4_must_drop"] == 1
 	assert census["site4_must_not_drop"] == 1

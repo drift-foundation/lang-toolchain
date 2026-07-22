@@ -15,8 +15,11 @@ Contents: `iter_used_values`, `seed_string_dest_types`,
 `is_materialized_release_family_producer`, `build_fnwide_producers`,
 `compute_lastuse_release_points`, `recognize_materialized_releases`,
 `compute_string_temp_liveness`, `string_operand_dispositions`, the
-`DISPOSITION_*` constants, `DRIFT_STRING_HELPER_SYMBOLS`, and the
-private `_analyze_lastuse_block` / `_is_semantic_string_tid` helpers.
+`DISPOSITION_*` constants, `DRIFT_STRING_HELPER_SYMBOLS`, the private
+`_analyze_lastuse_block` / `_is_semantic_string_tid` helpers, and (B2+C
+S6) the `R8Recognition` frozen vessel + `compute_recognized_releases` —
+the SINGLE plan-window recognition entry point that re-homes R8 off
+string_arc's rewrite loop.
 The per-operand dispositions CONTRACT prose lives with
 `string_operand_dispositions` below (the former
 `consumes_string_operand` thin wrapper was deleted with the R10 slice
@@ -26,6 +29,8 @@ derive it from `string_operand_dispositions` directly).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Dict, Iterable, Mapping, Sequence, Set
 
 from lang.driftc.checker import FnInfo
@@ -988,3 +993,111 @@ def classify_string_array_locals(
 		and type_table.get(tid).kind is TypeKind.ARRAY
 	}
 	return string_ty, string_locals, array_locals
+
+
+@dataclass(frozen=True)
+class R8Recognition:
+	"""Frozen per-function materialized-release RECOGNITION (R8, B2+C S6).
+
+	Carries the per-block recognized-released temp set that string_arc used
+	to OWN inline (`build_fnwide_producers` + `compute_string_temp_liveness`
+	+ per-block `recognize_materialized_releases`).  Computed once at the
+	pre-string_arc planning window and CONSUMED by string_arc's rewrite
+	loop (its R5/MoveOut/copy-through arm now reads these frozen values
+	rather than recomputing recognition).  Driver-local (parallel to
+	`_dplans`/`_dc1contrib`); never on the MIR, never inside the immutable
+	`CleanupPlan`.
+
+	`producers_fnwide`/`live_out` are deliberately NOT carried: they are
+	pure inputs to `recognize_materialized_releases` with NO other consumer
+	in string_arc, so freezing the recognition OUTPUT alone removes
+	string_arc's recognition ownership.
+
+	GENUINELY immutable (S6 closure): the mapping is validated and COPIED
+	into a read-only `MappingProxyType` at construction, so no alias of the
+	input dict can mutate the frozen vessel afterwards.  `for_block` is
+	fail-closed: recognition covers EVERY block of its function (the wrapper
+	records an explicit empty frozenset for release-free blocks), so a
+	missing key is a contract violation, never "nothing recognized"."""
+	fn_name: str
+	recognized_by_block: "Mapping[str, frozenset]"
+
+	def __post_init__(self) -> None:
+		items = dict(self.recognized_by_block)
+		for _bn, _vals in items.items():
+			if not isinstance(_bn, str) or not isinstance(_vals, frozenset):
+				raise AssertionError(
+					f"R8Recognition[{self.fn_name}]: malformed entry "
+					f"({_bn!r} -> {type(_vals).__name__}); every entry must be "
+					f"str -> frozenset"
+				)
+		object.__setattr__(self, "recognized_by_block", MappingProxyType(items))
+
+	def for_block(self, block_name: str) -> "frozenset":
+		try:
+			return self.recognized_by_block[block_name]
+		except KeyError:
+			raise AssertionError(
+				f"R8Recognition[{self.fn_name}]: no entry for block "
+				f"{block_name!r} — a missing planned block must fail closed, "
+				f"never default to empty recognition"
+			) from None
+
+
+def compute_recognized_releases(
+	func: "M.MirFunc",
+	*,
+	type_table: TypeTable,
+	fn_infos: "Mapping[FunctionId, FnInfo]",
+) -> "R8Recognition":
+	"""B2+C S6 — compute the per-block materialized-release recognition at
+	the PRE-string_arc planning window over the ORIGINAL MIR (which already
+	carries the StringReleases `materialize_lastuse_releases` emitted).
+
+	Byte-identical to string_arc's former mid-rewrite recognition: NOTHING
+	mutates the MIR between the plan window and string_arc entry, and
+	recognition reads ONLY pre-string_arc operand types
+	(`materialize_lastuse_releases` + `seed_string_dest_types`), never a
+	type string_arc's rewrite adds mid-pass.  NON-MUTATING: reproduces
+	string_arc's `_seed_dest_types` effect on a COPY of `func.local_types`,
+	so `func.local_types` is untouched here.
+
+	This is the SINGLE recognition entry point: the driver calls it at the
+	plan window (freezing the result) and string_arc calls it as the
+	bare-invocation fallback — so the three underlying analyses
+	(`build_fnwide_producers` / `compute_string_temp_liveness` /
+	`recognize_materialized_releases`) are invoked ONLY here, never in
+	string_arc's own body.
+
+	Fail-closed: an out-of-contract input release raises the same
+	`AssertionError` string_arc used to raise, now at the plan window."""
+	block_order = sorted(func.blocks.keys())
+	blocks = [func.blocks[b] for b in block_order]
+	string_ty, _string_locals, _array_locals = classify_string_array_locals(func, type_table)
+	# Reproduce `_seed_dest_types` on a COPY — deterministic over the SAME
+	# original blocks, so the seeded copy equals `func.local_types` after
+	# string_arc's own `_seed_dest_types` at recognition time.
+	lt = dict(func.local_types)
+	seed_string_dest_types(blocks, lt, fn_infos=fn_infos, type_table=type_table)
+	producers_fnwide = build_fnwide_producers(blocks)
+	live_out = compute_string_temp_liveness(
+		func.blocks, block_order, local_types=lt, string_ty=string_ty,
+	)
+	recognized: "Dict[str, frozenset]" = {}
+	for bname in block_order:
+		block = func.blocks[bname]
+		# SAME per-block gate string_arc used: skip the analysis for blocks
+		# without any input release (fast path; unit-test MIR with no
+		# materialization pass, or post-pass blocks with no qualified temps).
+		if any(isinstance(_i, M.StringRelease) for _i in block.instructions):
+			recognized[bname] = frozenset(recognize_materialized_releases(
+				block,
+				local_types=lt,
+				fn_infos=fn_infos,
+				type_table=type_table,
+				live_out_names=live_out.get(bname, set()),
+				producers_fnwide=producers_fnwide,
+			))
+		else:
+			recognized[bname] = frozenset()
+	return R8Recognition(fn_name=func.name, recognized_by_block=recognized)

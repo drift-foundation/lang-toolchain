@@ -96,10 +96,31 @@ class NullsafePayload:
 	ty: "TypeId"
 
 
+@dataclass(frozen=True)
+class StringReleasePayload:
+	"""All R3/R4 String scope-exit releases planned for ONE Return anchor,
+	in `string_return_releases` order (= `sorted(string_locals)` minus the
+	R3/R4 skip).  `locals` may be empty — an empty payload still records
+	that the Return was planned for the string-release site (explicit
+	coverage, symmetric with `Site3ReturnPayload`).
+
+	The per-local expected `String` TypeId is carried on the `Decision`'s
+	`type_bindings` (each local -> `string_ty`), so the emitter validates
+	the local/type relationship through the frozen plan without trusting
+	the mutable `func.local_types` at emission time — the same discipline
+	`Site3Drop.ty` provides for the destructible tail."""
+	locals: Tuple[str, ...]
+
+	@property
+	def local_count(self) -> int:
+		return len(self.locals)
+
+
 __all__ = (
 	"DropVerdict",
 	"Site3Drop",
 	"Site3ReturnPayload",
 	"Site4Payload",
 	"NullsafePayload",
+	"StringReleasePayload",
 )

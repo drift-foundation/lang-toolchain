@@ -487,6 +487,109 @@ class _ReturnBoundary:
 	skipped: Tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class C1BoundaryFrozen:
+	"""One Return-boundary's FROZEN ledger-A C1 inputs, computed at the
+	pre-string_arc plan slot (B2+C S5).  Reproduces byte-for-byte what
+	string_arc's monolithic finalize used to derive live from `l_pre` at
+	the ORIGINAL return coordinate.
+
+	Fields:
+	  * `point` — the return coordinate `(block, len(original_instructions))`;
+	  * `string_locals` — the sorted fn-wide String population (C1's
+	    quantification universe at this boundary);
+	  * `skipped` — the sorted skip set (= `string_locals - released`),
+	    the same value string_arc passed as `note_return_boundary(skipped=)`;
+	  * `released` — the ORDERED R3/R4 release set (`string_return_releases`
+	    result), the source both of the synthesized `scope_exit_release`
+	    events AND of C1's `released_at`;
+	  * `verdicts` / `raw_states` — the frozen ledger-A `verdict_at` /
+	    `state_pre` per (point, local) for local in `string_locals`, using
+	    the SAME `_ledger_needs_drop` (has_drop) axis finalize's C1 loop
+	    uses.  Frozen so the split finalize never re-queries a
+	    shifted/rebuilt ledger."""
+	point: Tuple[str, int]
+	string_locals: Tuple[str, ...]
+	skipped: Tuple[str, ...]
+	released: Tuple[str, ...]
+	verdicts: Tuple[Tuple[str, DropVerdict], ...]
+	raw_states: Tuple[Tuple[str, LiveState], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class C1Contribution:
+	"""Immutable per-function C1 contribution frozen at the plan slot and
+	merged into the SINGLE deferred `StringArcAudit.finalize` (B2+C S5).
+
+	Carries the whole C1 ledger-A half so the release EMISSION can leave
+	string_arc without shifting `scope_exit_release`, `c1_agree`,
+	`c1_path_dependent`, or the pre/post verdict-drift accounting.  Held
+	driver-local (parallel to `_dplans`), never on the MIR and never inside
+	the immutable `CleanupPlan`."""
+	fn_name: str
+	boundaries: Tuple[C1BoundaryFrozen, ...]
+
+
+def validate_c1_contribution(contribution: "C1Contribution") -> None:
+	"""Structural fail-closed validation of a frozen `C1Contribution`
+	(S5 closure, run BEFORE any merge): boundary points are unique and
+	well-formed; per boundary, `string_locals` is unique+sorted,
+	`released`/`skipped` are duplicate-free, DISJOINT, and PARTITION
+	`string_locals`; the `verdicts`/`raw_states` key sets are duplicate-free
+	and exactly equal `string_locals`; values carry the expected enum types.
+	Every violation surfaces as an `AssertionError` (the audit contract
+	class), never a downstream `KeyError`."""
+	def _bad(msg: str) -> "AssertionError":
+		return AssertionError(
+			f"c1_contribution[{contribution.fn_name}]: {msg} (malformed frozen "
+			f"C1 contribution — fail closed)"
+		)
+	points = [b.point for b in contribution.boundaries]
+	if len(set(points)) != len(points):
+		raise _bad(f"duplicate boundary points {points}")
+	for b in contribution.boundaries:
+		if (
+			not isinstance(b.point, tuple) or len(b.point) != 2
+			or not isinstance(b.point[0], str) or not isinstance(b.point[1], int)
+		):
+			raise _bad(f"boundary point {b.point!r} is not a (block, index) coordinate")
+		sl = b.string_locals
+		if list(sl) != sorted(set(sl)):
+			raise _bad(f"string_locals {sl} not unique+sorted at {b.point}")
+		if len(set(b.released)) != len(b.released):
+			raise _bad(f"duplicate released locals {b.released} at {b.point}")
+		if len(set(b.skipped)) != len(b.skipped):
+			raise _bad(f"duplicate skipped locals {b.skipped} at {b.point}")
+		if set(b.released) & set(b.skipped):
+			raise _bad(
+				f"released/skipped overlap {sorted(set(b.released) & set(b.skipped))} "
+				f"at {b.point}"
+			)
+		if (set(b.released) | set(b.skipped)) != set(sl):
+			raise _bad(
+				f"released+skipped do not partition string_locals at {b.point} "
+				f"(released={b.released}, skipped={b.skipped}, string_locals={sl})"
+			)
+		for label, pairs, want in (
+			("verdicts", b.verdicts, DropVerdict),
+			("raw_states", b.raw_states, LiveState),
+		):
+			keys = [k for k, _v in pairs]
+			if len(set(keys)) != len(keys):
+				raise _bad(f"duplicate {label} keys {keys} at {b.point}")
+			if set(keys) != set(sl):
+				raise _bad(
+					f"{label} key set != string_locals at {b.point} "
+					f"(keys={sorted(keys)}, string_locals={sl})"
+				)
+			for _k, _v in pairs:
+				if not isinstance(_v, want):
+					raise _bad(
+						f"{label}[{_k}] at {b.point} is {type(_v).__name__}, "
+						f"expected {want.__name__}"
+					)
+
+
 # Process-wide aggregate across all audited functions; flushed once at
 # exit as a single JSON line so corpus tooling can sum per-compile
 # aggregates without parsing per-event records.
@@ -568,9 +671,18 @@ def record_counted_only(site_class: str, n: int = 1) -> None:
 class StringArcAudit:
 	"""Per-function collector + differential classifier.
 
-	Created by `insert_string_arc` ONLY when the audit env is set; every
-	recording call in the pass is guarded on the audit object being
-	non-None, so the disabled path allocates nothing and emits nothing.
+	DEFERRED-FINALIZE LIFECYCLE (B2+C S5): the DRIVER — not string_arc — is
+	the sole lifecycle authority.  When the audit env is set, the driver
+	creates ONE collector per function, passes it to `insert_string_arc` (a
+	note PRODUCER only; every recording call is guarded on the collector
+	being non-None, so the disabled path allocates nothing and emits
+	nothing), and runs the SINGLE `finalize` AFTER the unified Return emitter
+	has appended the string releases + site-3 drops — so the deferred
+	`l_post` sees them.  string_arc no longer records the scope-exit releases
+	nor the Return boundaries; those are reconstructed from the driver-local
+	frozen `C1Contribution` inside `finalize` (its `c1_contribution` split
+	path).  `finalize` also keeps the MONOLITHIC path (`c1_contribution=None`)
+	used by the byte-identical reference test and direct-unit callers.
 	"""
 
 	def __init__(self, fn_name: str) -> None:
@@ -578,6 +690,20 @@ class StringArcAudit:
 		self.events: list[StringStakeEvent] = []
 		self.return_boundaries: list[_ReturnBoundary] = []
 		self.untagged = 0
+		# S5 closure — exactly-once lifecycle state: once `finalize` has run
+		# (or begun), no further notes may arrive and no second finalize may
+		# fold the aggregate again.  Checked FIRST in every recording entry
+		# point, before any event/aggregate mutation.
+		self._finalized = False
+
+	def _require_not_finalized(self, entry_point: str) -> None:
+		if self._finalized:
+			raise AssertionError(
+				f"string_arc_audit[{self.fn_name}]: {entry_point} after "
+				f"finalize (exactly-once deferred-finalize lifecycle — a "
+				f"finalized collector accepts no further notes and cannot "
+				f"finalize twice)"
+			)
 
 	def note(
 		self,
@@ -589,6 +715,7 @@ class StringArcAudit:
 		post_point: Tuple[str, int],
 		moveout_feeds_drop: bool = False,
 	) -> None:
+		self._require_not_finalized("note()")
 		if site_class not in STRING_ARC_SITE_CLASSES:
 			self.untagged += 1
 			site_class = "UNTAGGED:" + site_class
@@ -609,6 +736,7 @@ class StringArcAudit:
 		string_locals: Iterable[str],
 		skipped: Iterable[str],
 	) -> None:
+		self._require_not_finalized("note_return_boundary()")
 		self.return_boundaries.append(_ReturnBoundary(
 			point=point,
 			string_locals=tuple(sorted(string_locals)),
@@ -667,10 +795,26 @@ class StringArcAudit:
 		needs_drop: NeedsDrop,
 		func=None,
 		zero_safe_ty=None,
+		c1_contribution: "C1Contribution | None" = None,
 	) -> dict:
 		"""Run the C1-C4 comparisons and emit per-fn JSONL + fold into
 		the process aggregate.  Returns the per-fn aggregate (tests use
 		the return value; production consumers read the JSONL).
+
+		`c1_contribution` (B2+C S5): the deferred single-finalize SPLIT
+		path.  When supplied (production; the plan slot froze the C1
+		ledger-A half at the pre-string_arc coordinate), the C1 boundary
+		universe, the scope-exit `released` set, and the per-(point, local)
+		pre-verdict/raw-state come from the FROZEN contribution rather than
+		from pass-recorded events + a live `l_pre` re-query; string_arc no
+		longer emits the releases nor records their events, so this method
+		SYNTHESIZES the `scope_exit_release` events from `released` (exactly
+		once) before any counting so `events`, `site_class:scope_exit_release`
+		and C1's `released_at` stay byte-identical.  When None, the
+		MONOLITHIC path runs unchanged (the byte-identical reference test
+		and direct-unit finalize calls).  The pre/post verdict-drift check
+		compares the FROZEN ledger-A pre-verdict against the caller-built
+		`l_post` — `l_pre` is never re-queried for C1 in the split path.
 
 		`func` (the MirFunc, terminators un-rewritten by string_arc) and
 		`zero_safe_ty` (TypeId -> bool: zeroed bytes of this type are
@@ -680,6 +824,65 @@ class StringArcAudit:
 		the C3 agree-class ladder.  Both optional: without them every
 		non-LIVE MoveOut classifies as it did pre-slice-2 (divergent),
 		never silently as an agree class."""
+		# B2+C S5 split/merge PRELUDE (must run BEFORE any counting).  When a
+		# frozen C1 contribution is supplied, string_arc emitted no scope-exit
+		# releases and recorded neither their events nor the Return boundaries;
+		# rebuild both from the frozen ledger-A half so every downstream count
+		# (events, site_class:scope_exit_release, C1 released_at) is
+		# byte-identical to the old monolithic pass.  Exactly once, no double
+		# count: string_arc no longer produces these events, so the synthesis
+		# is their SOLE source.
+		# S5 closure — exactly-once: the guard fires BEFORE any event append
+		# or aggregate fold, so a double finalize can never double-count.
+		# The flag is set immediately (even a failing finalize may not be
+		# retried against mutated collector state).
+		self._require_not_finalized("finalize()")
+		self._finalized = True
+		if c1_contribution is not None:
+			if c1_contribution.fn_name != self.fn_name:
+				raise AssertionError(
+					f"string_arc_audit[{self.fn_name}]: C1 contribution belongs to "
+					f"fn {c1_contribution.fn_name!r} (wrong-function merge)"
+				)
+			# Structural validation BEFORE the merge (unique boundaries,
+			# partition, verdict/raw key closure, enum types) — every
+			# malformed contribution fails here as AssertionError, never as
+			# a KeyError inside the C1 loop below.
+			validate_c1_contribution(c1_contribution)
+			if self.return_boundaries:
+				raise AssertionError(
+					f"string_arc_audit[{self.fn_name}]: split finalize received both "
+					f"a frozen C1 contribution and pass-recorded return boundaries "
+					f"(double C1 source — string_arc must not call note_return_boundary "
+					f"under the deferred-finalize contract)"
+				)
+			if any(ev.site_class == SITE_CLASS_SCOPE_EXIT_RELEASE for ev in self.events):
+				raise AssertionError(
+					f"string_arc_audit[{self.fn_name}]: split finalize received "
+					f"pass-recorded scope_exit_release events (string_arc must not "
+					f"emit releases under the deferred-finalize contract — double count)"
+				)
+			for _b in c1_contribution.boundaries:
+				for _local in _b.released:
+					self.events.append(StringStakeEvent(
+						fn_name=self.fn_name,
+						kind=STAKE_RELEASE,
+						subject=_local,
+						site_class=SITE_CLASS_SCOPE_EXIT_RELEASE,
+						pre_point=_b.point,
+						post_point=_b.point,
+					))
+			_c1_boundaries = [
+				_ReturnBoundary(point=_b.point, string_locals=_b.string_locals, skipped=_b.skipped)
+				for _b in c1_contribution.boundaries
+			]
+			_c1_frozen = {
+				_b.point: (dict(_b.verdicts), dict(_b.raw_states))
+				for _b in c1_contribution.boundaries
+			}
+		else:
+			_c1_boundaries = self.return_boundaries
+			_c1_frozen = None
 		agg: dict = {"fn": self.fn_name, "events": len(self.events)}
 		details: list[dict] = []
 
@@ -715,11 +918,19 @@ class StringArcAudit:
 		for ev in self.events:
 			if ev.site_class == SITE_CLASS_SCOPE_EXIT_RELEASE:
 				released_at.setdefault(ev.pre_point, set()).add(ev.subject)
-		for rb in self.return_boundaries:
+		for rb in _c1_boundaries:
 			released = released_at.get(rb.point, set())
+			_fv, _fr = _c1_frozen[rb.point] if _c1_frozen is not None else (None, None)
 			for local in rb.string_locals:
-				verdict = l_pre.verdict_at(rb.point, local, needs_drop=needs_drop(local))
-				raw = l_pre.state_pre(rb.point, local)
+				if _c1_frozen is not None:
+					# Split path: the frozen ledger-A verdict/state at the
+					# ORIGINAL return coordinate (never a re-query of a
+					# shifted/rebuilt ledger).
+					verdict = _fv[local]
+					raw = _fr[local]
+				else:
+					verdict = l_pre.verdict_at(rb.point, local, needs_drop=needs_drop(local))
+					raw = l_pre.state_pre(rb.point, local)
 				was_released = local in released
 				if verdict is DropVerdict.PATH_DEPENDENT:
 					_bump(agg, DIV_C1_PATH_DEPENDENT)

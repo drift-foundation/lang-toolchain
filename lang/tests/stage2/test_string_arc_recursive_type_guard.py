@@ -84,6 +84,21 @@ def _func_holding(type_table: TypeTable, tid: int) -> M.MirFunc:
 	return func
 
 
+def _arc_pipeline(func: M.MirFunc, tt: TypeTable) -> M.MirFunc:
+	"""B2+C S5 pipeline: attach a fresh ledger, build the frozen plan, run
+	string_arc (no longer the site-3 drop emitter), then the unified Return
+	authority (`return_cleanup_emitter`) which authors the destructible drop
+	tail.  Used where the pin asserts the emitted drop shape."""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.destructible_planner import build_destructible_plan
+	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
+	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
+	plan, _census, _c1 = build_destructible_plan(func, type_table=tt)
+	insert_string_arc(func, type_table=tt, fn_infos={})
+	emit_return_cleanups(func, plan)
+	return func
+
+
 def test_string_arc_does_not_recurse_on_self_looping_variant() -> None:
 	"""Primary defense-in-depth contract: the pass terminates (no RecursionError)
 	on a by-value self-looping variant."""
@@ -102,13 +117,13 @@ def test_string_arc_string_in_cycle_remains_droppable() -> None:
 	# With a String arm -> droppable -> string_arc emits a drop for `r`.
 	tt_drop = TypeTable()
 	base_drop = _malformed_recursive_variant(tt_drop, with_string_arm=True)
-	func_drop = insert_string_arc(_func_holding(tt_drop, base_drop), type_table=tt_drop, fn_infos={})
+	func_drop = _arc_pipeline(_func_holding(tt_drop, base_drop), tt_drop)
 	assert _emits_drop_for(func_drop, "r"), "String-in-cycle variant must be droppable"
 
 	# Pure self-loop, no droppable leaf -> not droppable -> no drop emitted.
 	tt_nodrop = TypeTable()
 	base_nodrop = _malformed_recursive_variant(tt_nodrop, with_string_arm=False)
-	func_nodrop = insert_string_arc(_func_holding(tt_nodrop, base_nodrop), type_table=tt_nodrop, fn_infos={})
+	func_nodrop = _arc_pipeline(_func_holding(tt_nodrop, base_nodrop), tt_nodrop)
 	assert not _emits_drop_for(func_nodrop, "r"), "pure self-loop has no droppable leaf"
 
 
