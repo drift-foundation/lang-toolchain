@@ -49,8 +49,13 @@ COUNTER: R2 releases fold `overwrite_release` into the process
 aggregate via the reporter's strict counted-only recorder (env-gated).
 R7 array drops carry no counter (as before this slice).
 
-R6 (site-3 destructible Return cleanup, site-4 drop-before-overwrite)
-is NOT here — deferred to Slice B2; string_arc retains it.
+B2+C S4 (2026-07-21): the null-safe + site-4 drop-before-overwrite
+destructible cleanups now emit HERE, driven by the frozen `CleanupPlan`
+`destructible_planner` builds at the pre-string_arc ledger-A slot (a
+mandatory, non-`None` plan; an empty frozen plan for functions with no
+destructible decisions).  Site-3 destructible Return cleanup remains
+string_arc's authority until the unified Return authority (S5); this pass
+only PRESERVES + postflight-validates the plan's site-3 anchors.
 """
 
 from __future__ import annotations
@@ -60,6 +65,8 @@ from typing import Dict, List, Set, Tuple
 from lang.driftc.core.types_core import TypeId, TypeKind, TypeTable
 from . import mir_nodes as M
 from . import ownership_ledger_reporter as _ledger_reporter
+from .cleanup_plan import CleanupPlan, PlanContractError
+from .cleanup_payloads import NullsafePayload, Site4Payload
 from .ledger_cache import mark_ledger_dirty
 from .string_ownership_analysis import classify_string_array_locals
 
@@ -127,11 +134,36 @@ def insert_overwrite_cleanup(
 	func: M.MirFunc,
 	*,
 	type_table: TypeTable,
+	plan: CleanupPlan,
 ) -> M.MirFunc:
 	"""Author instruction-local overwrite releases/drops in `func`.
 
 	Runs after `string_arc`.  Mutates `func` in place and returns it.
+
+	B2+C S4 (2026-07-21): `plan` (a frozen destructible `CleanupPlan` from
+	`destructible_planner`) is MANDATORY.  A SEPARATE EmitterPhase runs
+	AFTER the R2/R7 rewrite + `_validate` and emits the null-safe + site-4
+	drop-before-overwrite destructible cleanups string_arc formerly
+	authored inline.  R2/R7 preserve every destructible StoreLocal object,
+	so the plan's identity anchors survive into this phase.  A function
+	with no destructible decisions is carried by an explicit EMPTY frozen
+	plan — a `None` plan is a fail-closed internal error (a missing plan
+	must NEVER silently mean "skip cleanup").
 	"""
+	# Fail closed: the plan is a required, frozen `CleanupPlan`.  The no-op
+	# `plan=None` path is GONE — a missing plan can never mean skipped
+	# destructible cleanup (a silent double-free/leak).
+	if plan is None:
+		raise PlanContractError(
+			f"overwrite_cleanup (fn '{func.name}'): a frozen destructible "
+			f"CleanupPlan is REQUIRED (pass an explicit empty plan for a "
+			f"function with no destructible decisions); plan is None"
+		)
+	if not isinstance(plan, CleanupPlan):
+		raise PlanContractError(
+			f"overwrite_cleanup (fn '{func.name}'): plan must be a "
+			f"CleanupPlan, got {type(plan).__name__}"
+		)
 	string_ty, string_locals, array_locals = classify_string_array_locals(
 		func, type_table
 	)
@@ -252,12 +284,135 @@ def insert_overwrite_cleanup(
 			mutated = True
 
 	# ── Structural POST-rewrite BIJECTION validation (finding #2) ──
+	# R2/R7 authoring + this bijection validation are UNCHANGED and run
+	# FIRST — they preserve every destructible StoreLocal object, so the
+	# plan phase below finds its identity anchors intact.
 	_validate(func, type_table, inventory)
-	if _ledger_reporter.string_arc_audit_enabled() and overwrite_release_count:
-		_ledger_reporter.record_counted_only(
-			_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
-			overwrite_release_count,
-		)
+
+	# ── B2+C S4 (2026-07-21): consume the FROZEN destructible plan ──
+	# The null-safe + site-4 drop-before-overwrite cleanups formerly
+	# authored inline by string_arc emit HERE, driven by the plan
+	# `destructible_planner` froze at the pre-string_arc ledger-A slot.
+	# SEPARATE EmitterPhase: preflight stage → rewrite → postflight commit,
+	# so a decision is consumed only once its anchor re-validates against
+	# the mutated MIR.  The drop lands IMMEDIATELY BEFORE its store
+	# (retain-before-release: Load old → Zero → Store(zero) → Drop old),
+	# so the StoreLocal anchor survives and the postflight passes.
+	site4_emitted_count = 0
+	phase = plan.begin_phase(func)
+	# id(original StoreLocal) -> (store_obj, local, ty, is_site4); only
+	# EMITTING anchors are listed.  MUST_NOT_DROP site-4 anchors are staged
+	# (so they are consumed) but emit nothing.
+	emit_anchors: Dict[int, Tuple[M.MInstr, str, TypeId, bool]] = {}
+	# MUST_NOT_DROP site-4 store ids — staged/consumed but MUST author no
+	# drop sequence (proven below).
+	must_not_drop_ids: Set[int] = set()
+	# Emitter-local authoring side table: (store id, DropValue) per authored
+	# drop, in emission order. Keeps plan/validation identity OUT of the MIR
+	# nodes (no dynamic `plan_authored_for` attribute); the pre-commit
+	# bijection reads this. A LIST (not a dict) so a duplicate authoring for
+	# one store is detectable rather than silently overwritten.
+	emitted_drops: List[Tuple[int, M.DropValue]] = []
+
+	def _register_emit(dec, *, is_site4: bool, pl) -> None:
+		# Fail closed on a duplicate identity key: the plain dict would
+		# else silently overwrite one emitting decision with another
+		# sharing the same anchor object.
+		if id(dec.obj) in emit_anchors:
+			raise PlanContractError(
+				f"overwrite_cleanup (fn '{func.name}'): duplicate emitting "
+				f"anchor identity for site {dec.site!r} at "
+				f"{dec.coord.block}:{dec.coord.orig_index} — two emitting "
+				f"decisions claim the same StoreLocal object"
+			)
+		emit_anchors[id(dec.obj)] = (dec.obj, pl.local, pl.ty, is_site4)
+
+	for dec in plan.decisions_for_site("nullsafe"):
+		pl = dec.payload
+		# Reject a wrong payload/site combination fail-closed.
+		if not isinstance(pl, NullsafePayload):
+			raise PlanContractError(
+				f"overwrite_cleanup (fn '{func.name}'): nullsafe decision at "
+				f"{dec.coord.block}:{dec.coord.orig_index} carries a "
+				f"{type(pl).__name__} payload (expected NullsafePayload)"
+			)
+		phase.stage(dec)                       # preflight validate
+		_register_emit(dec, is_site4=False, pl=pl)
+	for dec in plan.decisions_for_site("site4"):
+		pl = dec.payload
+		if not isinstance(pl, Site4Payload):
+			raise PlanContractError(
+				f"overwrite_cleanup (fn '{func.name}'): site4 decision at "
+				f"{dec.coord.block}:{dec.coord.orig_index} carries a "
+				f"{type(pl).__name__} payload (expected Site4Payload)"
+			)
+		phase.stage(dec)                       # preflight validate (even MUST_NOT_DROP)
+		if pl.emit:                            # MUST_DROP only (the 14)
+			_register_emit(dec, is_site4=True, pl=pl)
+		else:                                  # MUST_NOT_DROP: emits nothing
+			must_not_drop_ids.add(id(dec.obj))
+	for block in func.blocks.values():
+		new_instrs: List[M.MInstr] = []
+		block_changed = False
+		for instr in block.instructions:
+			hit = emit_anchors.get(id(instr))
+			if hit is not None:
+				_store_obj, d_local, d_ty, is_site4 = hit
+				tmp = _new_temp()
+				new_instrs.append(M.LoadLocal(dest=tmp, local=d_local))
+				zero = _new_temp()
+				new_instrs.append(M.ZeroValue(dest=zero, ty=d_ty))
+				local_types[zero] = d_ty
+				zb = M.StoreLocal(local=d_local, value=zero)
+				setattr(zb, "synthetic_zero_back", True)
+				new_instrs.append(zb)
+				drop = M.DropValue(value=tmp, ty=d_ty)
+				# Record authoring identity in the emitter-local side table,
+				# NOT on the MIR node.
+				emitted_drops.append((id(instr), drop))
+				new_instrs.append(drop)
+				local_types[tmp] = d_ty
+				if is_site4:
+					site4_emitted_count += 1
+				block_changed = True
+			new_instrs.append(instr)
+		if block_changed:
+			block.instructions = new_instrs
+			# Real dirty mark within the audit's proximity window of
+			# the actual mutation (no allow marker).
+			mark_ledger_dirty(func, "overwrite_cleanup.plan_overwrite")
+
+	# ── Pre-commit BIJECTION: emitting decision ↔ canonical drop sequence ──
+	# `phase.commit()` proves the STORE anchors survived, but not that each
+	# emitting decision produced EXACTLY ONE canonical cleanup.  Prove that
+	# separately (null-safe + site-4 MUST_DROP), and that no MUST_NOT_DROP
+	# store authored anything, BEFORE consuming.
+	_validate_plan_emission(func, emit_anchors, must_not_drop_ids, emitted_drops)
+
+	phase.mark_rewritten()
+	phase.commit()                             # postflight fresh-validate + consume
+	plan.assert_sites_consumed({"nullsafe", "site4"})
+	# Item-1 postflight: the site-3 Return anchors are NOT consumed here (the
+	# S5 Return authority owns them).  Prove they SURVIVED the null-safe /
+	# site-4 insertions above — a replaced/moved/dropped Return fails closed.
+	plan.validate_unconsumed(func)
+
+	if _ledger_reporter.string_arc_audit_enabled():
+		if overwrite_release_count:
+			_ledger_reporter.record_counted_only(
+				_ledger_reporter.SITE_CLASS_OVERWRITE_RELEASE,
+				overwrite_release_count,
+			)
+		# Preserve string_arc's former per-MUST_DROP site-4 note (14
+		# corpus-wide): the count moved from string_arc's `_audit.note(...
+		# SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 ...)` to this counted-only
+		# recorder, keeping the aggregate `events` + site_class total.
+		# Null-safe has NO counter (unmeasured) — emit nothing for it.
+		if site4_emitted_count:
+			_ledger_reporter.record_counted_only(
+				_ledger_reporter.SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
+				site4_emitted_count,
+			)
 	return func
 
 
@@ -335,6 +490,106 @@ def _validate(func: M.MirFunc, type_table: TypeTable, inventory: Dict[int, Tuple
 				f"block '{bn}'[{si}]): {kind} store for '{_subject(store)}' "
 				f"lacks a correctly-linked canonical cleanup immediately "
 				f"before it (operand/type mismatch)."
+			)
+
+
+def _validate_plan_emission(
+	func: M.MirFunc,
+	emit_anchors: Dict[int, Tuple[M.MInstr, str, "TypeId", bool]],
+	must_not_drop_ids: Set[int],
+	emitted_drops: List[Tuple[int, M.DropValue]],
+) -> None:
+	"""BIJECTION between the EMITTING plan decisions and the canonical
+	destructible drop sequences this pass authored (item 3).  Each emitting
+	decision (null-safe + site-4 MUST_DROP) must produce EXACTLY ONE
+	canonical sequence — `LoadLocal(tmp, local) -> ZeroValue(zero, ty) ->
+	StoreLocal(local, zero)[synthetic_zero_back] -> DropValue(tmp, ty)` —
+	immediately before its store, with the full operand/type linkage.  A
+	MUST_NOT_DROP site-4 store must author NOTHING.  Authoring identity comes
+	from the emitter-local `emitted_drops` side table (store id -> DropValue),
+	NOT any MIR attribute.  Missing / duplicate / orphan emission and any
+	broken link fail closed via `PlanContractError`."""
+	# Index each instruction's (block, position) by object identity.
+	pos: Dict[int, Tuple[str, int]] = {}
+	blocks_instrs: Dict[str, List[M.MInstr]] = {}
+	for bn, block in func.blocks.items():
+		blocks_instrs[bn] = block.instructions
+		for i, ins in enumerate(block.instructions):
+			pos[id(ins)] = (bn, i)
+
+	# 1) Side-table bijection: authored store ids must equal emitting store
+	#    ids exactly, one drop each (orphan = authored non-emitter; missing =
+	#    emitter with no authored drop; duplicate = a store authored twice).
+	authored: Dict[int, List[M.DropValue]] = {}
+	for sid_a, drop_a in emitted_drops:
+		authored.setdefault(sid_a, []).append(drop_a)
+	authored_ids = set(authored)
+	emit_ids = set(emit_anchors)
+	orphans = authored_ids - emit_ids
+	if orphans:
+		raise PlanContractError(
+			f"overwrite_cleanup plan-emission (fn '{func.name}'): "
+			f"{len(orphans)} authored destructible drop(s) target no emitting "
+			f"decision (orphan authoring)."
+		)
+	missing = emit_ids - authored_ids
+	if missing:
+		raise PlanContractError(
+			f"overwrite_cleanup plan-emission (fn '{func.name}'): "
+			f"{len(missing)} emitting decision(s) received no authored drop "
+			f"(suppressed authoring)."
+		)
+	dup = [sid for sid, drops in authored.items() if len(drops) != 1]
+	if dup:
+		raise PlanContractError(
+			f"overwrite_cleanup plan-emission (fn '{func.name}'): "
+			f"{len(dup)} emitting decision(s) authored more than one drop "
+			f"(duplicate authoring)."
+		)
+	# 2) A MUST_NOT_DROP site-4 store must have authored nothing.
+	bad_mnd = must_not_drop_ids & authored_ids
+	if bad_mnd:
+		raise PlanContractError(
+			f"overwrite_cleanup plan-emission (fn '{func.name}'): "
+			f"{len(bad_mnd)} MUST_NOT_DROP site-4 store(s) authored a drop "
+			f"sequence (MUST_NOT_DROP must emit nothing)."
+		)
+	# 3) Structural + full operand/type linkage for each emitting decision.
+	for sid, (store, local, ty, _is_site4) in emit_anchors.items():
+		# item 4: a removed/absent store anchor fails as a plan-contract
+		# error, NOT a raw KeyError.
+		if id(store) not in pos:
+			raise PlanContractError(
+				f"overwrite_cleanup plan-emission (fn '{func.name}'): the "
+				f"emitting store for '{local}' is absent from the function "
+				f"after authoring (removed/replaced anchor)."
+			)
+		bn, si = pos[id(store)]
+		instrs = blocks_instrs[bn]
+		if si < 4:
+			raise PlanContractError(
+				f"overwrite_cleanup plan-emission (fn '{func.name}', block "
+				f"'{bn}'[{si}]): destructible store for '{local}' has no room "
+				f"for a canonical drop sequence immediately before it."
+			)
+		load, zv, zb, drop = instrs[si - 4], instrs[si - 3], instrs[si - 2], instrs[si - 1]
+		ok = (
+			isinstance(load, M.LoadLocal) and load.local == local
+			and isinstance(zv, M.ZeroValue) and zv.ty == ty
+			and isinstance(zb, M.StoreLocal)
+			and zb.local == local and zb.value == zv.dest
+			and getattr(zb, "synthetic_zero_back", False) is True
+			and isinstance(drop, M.DropValue)
+			and drop.value == load.dest and drop.ty == ty
+			# identity linkage via the side table, not a MIR attribute:
+			and drop is authored[sid][0]
+		)
+		if not ok:
+			raise PlanContractError(
+				f"overwrite_cleanup plan-emission (fn '{func.name}', block "
+				f"'{bn}'[{si}]): destructible store for '{local}' lacks a "
+				f"correctly-linked canonical drop sequence immediately before "
+				f"it (operand/type mismatch)."
 			)
 
 

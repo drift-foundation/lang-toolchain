@@ -750,6 +750,32 @@ def test_retired_site_classes_are_untagged() -> None:
 	assert audit.events[1].site_class.startswith("UNTAGGED:")
 
 
+def test_record_counted_only_site4_exact_delta_isolation() -> None:
+	"""`record_counted_only(SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4, n)` bumps
+	ONLY the aggregate `events` by n and the
+	`site_class:drop_before_overwrite_site4` key by n — `fns`, every C1/C3
+	key, and unrelated keys are untouched (exact-delta)."""
+	before = dict(R._GLOBAL_AGGREGATE)
+	R.record_counted_only(R.SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4, 3)
+	after = dict(R._GLOBAL_AGGREGATE)
+	delta = {k: after.get(k, 0) - before.get(k, 0) for k in set(before) | set(after)}
+	nonzero = {k: v for k, v in delta.items() if v != 0}
+	assert nonzero == {
+		"events": 3,
+		"site_class:drop_before_overwrite_site4": 3,
+	}, nonzero
+	for forbidden in (
+		"fns", "skipped_no_ledger",
+		R.DIV_C1_RELEASE_WITHOUT_MUST_DROP, R.DIV_C1_MUST_DROP_WITHOUT_RELEASE,
+		R.DIV_C1_PATH_DEPENDENT, "c3_moveout_owned", "c3_moveout_not_owned",
+		"site_class:overwrite_release",
+	):
+		assert delta.get(forbidden, 0) == 0, (forbidden, delta.get(forbidden))
+	# restore
+	R._GLOBAL_AGGREGATE.clear()
+	R._GLOBAL_AGGREGATE.update(before)
+
+
 def test_materialized_lastuse_is_closed_counted_only() -> None:
 	"""Reporter contract pin (review tightening): the new
 	`materialized_lastuse_release` class is a member of the closed

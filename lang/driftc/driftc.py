@@ -164,6 +164,7 @@ from lang.driftc.stage1.non_retaining_analysis import analyze_non_retaining_para
 from lang.driftc.stage2 import HIRToMIR, make_builder, mir_nodes as M
 from lang.driftc.stage2.mir_lowering_error import MirLoweringError
 from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.destructible_planner import build_destructible_plan
 from lang.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang.driftc.stage4 import run_throw_checks
 from lang.driftc.stage4 import MirToSSA
@@ -8198,6 +8199,45 @@ def compile_stubbed_funcs(
 		# call above (after match_cleanup_authoring) for the new
 		# placement, and `work/stdlib-condvar/pr2_handoff.md` for
 		# the architecture rationale.
+		# B2+C S4 (2026-07-21): build the FROZEN destructible CleanupPlan
+		# for every function ONCE at the pre-string_arc ledger-A slot —
+		# the same pre-mutation point the reverted S2 census hook used.
+		# The planner READS ledger A only (no ledger build, no dirty
+		# transition, no MIR change).  The plan is kept in a driver-local
+		# dict (NOT a MIR attribute) and handed to `overwrite_cleanup`
+		# below, which now emits the null-safe + site-4 drop-before-
+		# overwrite cleanups string_arc formerly authored.
+		_dplans: dict = {}
+		with _timed("destructible_plan"):
+			for fn_id, func in mir_funcs_by_id.items():
+				try:
+					_plan, _ = build_destructible_plan(
+						func, type_table=shared_type_table
+					)
+					_dplans[fn_id] = _plan
+				except (AssertionError, RuntimeError) as err:
+					# Boundary containment for EVERY planner failure as phase
+					# `destructible_plan`: a frozen-plan contract failure
+					# (PlanContractError subclasses AssertionError), AND the
+					# site-4 / site-3 authority tripwires + the `PlannerStop`
+					# unexpected-population STOP, which are RuntimeError.  All
+					# surface as a clean `internal:` diagnostic (no traceback),
+					# never a partial compile.
+					_append_boundary_contract_diag(
+						checked,
+						phase="destructible_plan",
+						prefix="destructible plan contract failure",
+						err=err,
+						fn_id=fn_id,
+						signatures_by_id=signatures_by_id,
+						origin_by_fn_id=origin_by_fn_id,
+					)
+					_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+					if return_checked:
+						if return_ssa:
+							return {}, checked, None
+						return {}, checked
+					return {}
 		with _timed("string_arc"):
 			for fn_id, func in mir_funcs_by_id.items():
 				try:
@@ -8206,6 +8246,13 @@ def compile_stubbed_funcs(
 						type_table=shared_type_table,
 						fn_infos=checked.fn_infos_by_id,
 					)
+					# Item-1 postflight: string_arc now PRESERVES the Return
+					# object at each Return-boundary rewrite, so the frozen
+					# plan's site-3 TERM anchors must still validate.  Prove
+					# they survived (identity + same-block + fields) WITHOUT
+					# consuming — a replaced/moved/dropped Return fails closed,
+					# contained at this same string_arc boundary.
+					_dplans[fn_id].validate_unconsumed(mir_funcs_by_id[fn_id])
 				except AssertionError as err:
 					# string_arc boundary containment (introduced with
 					# slice 4a): any contract failure in the phase —
@@ -8239,6 +8286,36 @@ def compile_stubbed_funcs(
 		# recognition walk never sees these releases, and R2/R7 need no
 		# ledger (pure structural type checks).  Same boundary
 		# containment as string_arc above.
+		# A missing plan must NEVER mean skipped destructible cleanup: the
+		# plan set and the MIR function set must agree EXACTLY before the
+		# mandatory-plan overwrite pass. A mismatch is a plan-completeness
+		# contract failure — boundary-contain it as phase `destructible_plan`
+		# (clean `internal:` diagnostic, empty IR, no traceback).
+		if set(_dplans) != set(mir_funcs_by_id):
+			_plans_only = set(_dplans) - set(mir_funcs_by_id)
+			_funcs_only = set(mir_funcs_by_id) - set(_dplans)
+			_mismatch_fn = next(iter(_funcs_only), None)
+			if _mismatch_fn is None:
+				_mismatch_fn = next(iter(_plans_only), None)
+			_append_boundary_contract_diag(
+				checked,
+				phase="destructible_plan",
+				prefix="destructible plan completeness failure",
+				err=AssertionError(
+					f"destructible plan set != MIR function set before "
+					f"overwrite_cleanup — a missing plan must never mean skipped "
+					f"cleanup (plans-only={_plans_only}, funcs-only={_funcs_only})"
+				),
+				fn_id=_mismatch_fn,
+				signatures_by_id=signatures_by_id,
+				origin_by_fn_id=origin_by_fn_id,
+			)
+			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+			if return_checked:
+				if return_ssa:
+					return {}, checked, None
+				return {}, checked
+			return {}
 		with _timed("overwrite_cleanup"):
 			from lang.driftc.stage2.overwrite_cleanup import (
 				insert_overwrite_cleanup as _insert_overwrite_cleanup,
@@ -8248,6 +8325,7 @@ def compile_stubbed_funcs(
 					mir_funcs_by_id[fn_id] = _insert_overwrite_cleanup(
 						func,
 						type_table=shared_type_table,
+						plan=_dplans[fn_id],
 					)
 				except AssertionError as err:
 					_append_boundary_contract_diag(

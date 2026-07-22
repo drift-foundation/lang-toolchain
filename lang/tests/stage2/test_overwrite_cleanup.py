@@ -19,6 +19,7 @@ from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2 import overwrite_cleanup as OC
 from lang.driftc.stage2.overwrite_cleanup import insert_overwrite_cleanup
+from lang.driftc.stage2.cleanup_plan import CleanupPlan, PlanContractError
 
 
 def _make_func(name, *, params, locals_, types):
@@ -29,6 +30,16 @@ def _make_func(name, *, params, locals_, types):
 		fn_id=FunctionId(module="test", name=name, ordinal=0),
 		local_types=dict(types),
 	)
+
+
+def _empty_plan(func):
+	"""A validated EMPTY frozen CleanupPlan for `func`.  R2/R7 authoring is
+	independent of the destructible plan, so an R2/R7-only fixture carries
+	the now-MANDATORY plan as an explicit empty one (frozen against the
+	pre-mutation MIR)."""
+	ep = CleanupPlan(func.name)
+	ep.validate_and_freeze(func)
+	return ep
 
 
 def _seq(func):
@@ -68,7 +79,7 @@ def test_marked_synthetic_zeroback_is_skipped() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	assert _releases(func) == [], _kinds(func)
 
 
@@ -90,7 +101,7 @@ def test_unmarked_input_zerovalue_string_store_still_releases() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	# BOTH stores are input overwrites → two releases.
 	assert len(_releases(func)) == 2, _kinds(func)
 
@@ -112,7 +123,7 @@ def test_unmarked_input_zerovalue_array_store_still_drops() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	assert len(_arraydrops(func)) == 2, _kinds(func)
 
 
@@ -133,7 +144,7 @@ def test_r2_storelocal_canonical_sequence_and_order() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	assert _kinds(func) == [
 		"ZeroValue", "StoreLocal",                    # untouched synthetic init
 		"ConstString",
@@ -157,7 +168,7 @@ def test_r2_self_alias_retain_before_release_before_store() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	kinds = _kinds(func)
 	i_copy = kinds.index("CopyValue")
 	i_rel = kinds.index("StringRelease")
@@ -180,7 +191,7 @@ def test_r7_canonical_sequence_and_order() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	assert _kinds(func) == [
 		"ZeroValue", "StoreLocal",                    # untouched synthetic init
 		"ArrayLit",
@@ -206,7 +217,7 @@ def test_r2_all_four_instruction_kinds() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks = {"entry": entry}
 	func.entry = "entry"
-	insert_overwrite_cleanup(func, type_table=tt)
+	insert_overwrite_cleanup(func, type_table=tt, plan=_empty_plan(func))
 	assert len(_releases(func)) == 4, _kinds(func)
 
 
@@ -350,6 +361,25 @@ def test_recorder_allow_list_and_positive_int() -> None:
 	for bad in (0, -1, 1.5, True):
 		with pytest.raises(AssertionError):
 			R.record_counted_only(R.SITE_CLASS_OVERWRITE_RELEASE, bad)
+
+
+# ── mandatory-plan refusal (item 2) ───────────────────────────────────
+
+
+def test_none_plan_is_refused() -> None:
+	"""The plan is MANDATORY: passing `plan=None` raises a clean internal
+	error (PlanContractError) — a missing plan must never silently mean
+	skipped destructible cleanup."""
+	tt = TypeTable()
+	sty = tt.ensure_string()
+	func = _make_func("np", params=[], locals_=["x"], types={"x": sty})
+	entry = M.BasicBlock(name="entry")
+	entry.instructions = [M.ConstString(dest="%c", value="v"), M.StoreLocal(local="x", value="%c")]
+	entry.terminator = M.Return(value=None)
+	func.blocks = {"entry": entry}
+	func.entry = "entry"
+	with pytest.raises(PlanContractError, match="CleanupPlan is REQUIRED"):
+		insert_overwrite_cleanup(func, type_table=tt, plan=None)
 
 
 # ── driver-boundary containment ───────────────────────────────────────

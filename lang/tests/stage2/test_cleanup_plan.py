@@ -128,6 +128,68 @@ def test_one_scan_serves_many_decisions():
 		assert sess.scan_count == 1
 
 
+# --- validate_unconsumed: non-consuming survival postflight (item 1) --
+
+def test_validate_unconsumed_passes_after_legitimate_insertion():
+	"""After a legitimate insertion BEFORE the store (site-3 Return object
+	preserved, only end-index shifted), the unconsumed site-3 anchor still
+	validates — WITHOUT consuming it."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	blk.instructions = [_store("t1"), _store("t2"), store_x]  # insert before store
+	plan.validate_unconsumed(func, sites={"site3"})           # no raise
+	# Non-consuming: nothing marked consumed.
+	assert not plan.is_consumed(plan.decisions_for_site("site3")[0])
+	assert not plan.is_consumed(plan.decisions_for_site("site4")[0])
+
+
+def test_validate_unconsumed_fails_on_replaced_return():
+	"""A REPLACED Return (new identity) fails the non-consuming postflight."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	blk.terminator = M.Return(value=None)                     # same fields, new identity
+	with pytest.raises(PlanContractError, match="exactly once"):
+		plan.validate_unconsumed(func, sites={"site3"})
+
+
+def test_validate_unconsumed_fails_on_field_drift():
+	"""A field-drifted Return (value changed) fails the postflight."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	ret.value = "%z"                                          # was None
+	with pytest.raises(PlanContractError, match="field 'value' changed"):
+		plan.validate_unconsumed(func, sites={"site3"})
+
+
+def test_validate_unconsumed_fails_on_disappeared_return():
+	"""A disappeared Return (terminator dropped) fails the postflight."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	blk.terminator = None
+	with pytest.raises(PlanContractError):
+		plan.validate_unconsumed(func, sites={"site3"})
+
+
+def test_validate_unconsumed_skips_already_consumed():
+	"""A decision already consumed is NOT re-validated — so a post-consume
+	drift on a consumed anchor does not fail the postflight."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	with plan.open_session(func) as sess:
+		sess.consume(plan.decisions_for_site("site3")[0])     # site3 now consumed
+	ret.value = "%drifted"                                    # drift the CONSUMED anchor
+	plan.validate_unconsumed(func, sites={"site3"})           # skipped → no raise
+
+
+def test_validate_unconsumed_before_freeze_refused():
+	func, blk, store_x, ret = _pristine()
+	plan = CleanupPlan(func.name)
+	plan.add(obj=ret, coord=anchor_term("entry", 1), site="site3",
+	         fields={"value": None}, payload=("drops", ()))
+	with pytest.raises(PlanContractError, match="before freeze"):
+		plan.validate_unconsumed(func)
+
+
 # --- fail-closed: the anchor object itself is disturbed ---------------
 
 def test_replacement_fails_closed():
@@ -671,3 +733,27 @@ def test_storelocal_value_operand_drift_at_consume():
 	with plan.open_session(func) as sess:
 		with pytest.raises(PlanContractError, match="field 'value'"):
 			sess.locate(plan.all_decisions()[0])
+
+
+# --- site-scoped completeness (survives multiple emitter phases) --------
+
+def test_assert_sites_consumed_complete_and_orphan():
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)   # site4 (store) + site3 (return)
+	s4 = plan.decisions_for_site("site4")[0]
+	s3 = plan.decisions_for_site("site3")[0]
+	with plan.open_session(func) as sess:
+		sess.consume(s4)
+	# site4 fully consumed; site3 not yet → intermediate phase is OK for site4.
+	plan.assert_sites_consumed({"site4"})
+	# But the global check must still see the site3 orphan.
+	with pytest.raises(PlanContractError, match="unconsumed"):
+		plan.assert_all_consumed()
+	# And a site-scoped check over an unconsumed site fails closed.
+	with pytest.raises(PlanContractError, match="unconsumed"):
+		plan.assert_sites_consumed({"site3"})
+	# Consume site3 too → both pass.
+	with plan.open_session(func) as sess:
+		sess.consume(s3)
+	plan.assert_sites_consumed({"site3"})
+	plan.assert_all_consumed()

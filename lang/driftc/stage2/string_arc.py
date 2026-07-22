@@ -80,7 +80,6 @@ from .destructible_authority import (
 	compute_store_defs,
 	flag_managed_at_return,
 	site3_return_drops,
-	site4_verdict,
 )
 from .string_ownership_analysis import classify_string_array_locals
 from .string_ownership_analysis import (
@@ -653,81 +652,22 @@ def insert_string_arc(
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in nullsafe_destructible_locals:
-				_drop_destructible_local(instr.local, new_instrs)
+				# B2+C S4 (2026-07-21): drop-before-overwrite for
+				# destructibles (null-safe + site-4) MIGRATED to
+				# `overwrite_cleanup`, driven by the frozen CleanupPlan
+				# `destructible_planner` builds at the pre-string_arc
+				# ledger-A slot.  The site-4 ledger verdict + tripwires
+				# (missing-ledger + PathDependent) now fire at PLANNING
+				# time in the planner, not here.  The store passes through
+				# unchanged and is NOT reprocessed.
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.StoreLocal) and instr.local in destructible_locals:
-				# Phase 4 (post-3c) — `drop_before_overwrite` promoted
-				# to **Tier 1: pure ledger authority.**  The legacy
-				# `initialized_destructibles` dataflow fallback is
-				# RETIRED.  Site 4 authors nothing of its own; the
-				# verdict comes from `_ledger.verdict_at(...)` with
-				# `_compute_drop_policy(type_table, ty).needs_drop` as
-				# the sole type-level needs_drop axis.
-				#
-				# Proof obligation: the ledger MUST resolve every
-				# StoreLocal point here to either `MUST_DROP` or
-				# `MUST_NOT_DROP`.  `PathDependent` (lattice
-				# `MaybeUninit` at this point) is unreached at smoke
-				# + e2e today (100 % verdict agreement across 1031
-				# cases); if it ever appears, the `RuntimeError`
-				# below fires loudly so the regression is investigated
-				# before it silently reintroduces split authority.
-				# Same behavior if the ledger is unset — any caller
-				# that hits site 4 MUST attach a ledger first.
-				#
-				# Build-timing invariant: the ledger consulted here is
-				# the POST-`drop_flags` ledger (driver rebuilds it
-				# between `drop_flags` and `string_arc`).  drop_flags
-				# inserts drop-flag init instructions (`ConstBool` +
-				# `StoreLocal(__drop_flag_*)`) at block heads which
-				# shift every subsequent index, so the
-				# pre-drop_flags ledger's `(block, idx)` keys do not
-				# line up with the indices string_arc walks here.
-				# Pinned by
-				# `lang/tests/driver/test_if_join_drop_destructor_uniform_move.py`.
-				# Verdict + tripwires (missing-ledger + PathDependent) AND the
-				# canonical `needs_drop` axis live in `site4_verdict` (closed
-				# authority).  The audit note, reporter check, and
-				# `_drop_destructible_local` emission stay here.
-				_verdict, _needs_drop = site4_verdict(
-					_ledger,
-					fn_name=func.name,
-					block_name=block.name,
-					instr_idx=_instr_idx,
-					local=instr.local,
-					local_ty=local_types.get(instr.local),
-					type_table=type_table,
-				)
-				if _verdict is _DropVerdict.MUST_DROP:
-					_should_drop = True
-					_site_verdict_str = _ledger_events.VERDICT_MUST_DROP
-					_site_reason = _ledger_events.REASON_NEEDS_DROP
-				else:
-					_should_drop = False
-					_site_verdict_str = _ledger_events.VERDICT_MUST_NOT_DROP
-					_site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
-				if drift_debug.enabled("ownership_ledger"):
-					_ledger_reporter.check(
-						_ledger,
-						fn_name=func.name,
-						site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
-						point=(block.name, _instr_idx),
-						local=instr.local,
-						site_verdict=_site_verdict_str,
-						site_reason=_site_reason,
-						needs_drop=_ledger_needs_drop,
-						emit=_ledger_reporter.stderr_emit,
-					)
-				if _should_drop:
-					if _audit is not None:
-						_audit.note(
-							_ledger_reporter.STAKE_RELEASE, instr.local,
-							_ledger_reporter.SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
-							pre_point=(block.name, _instr_idx),
-							post_point=(block.name, len(new_instrs)),
-						)
-					_drop_destructible_local(instr.local, new_instrs)
+				# B2+C S4 (2026-07-21): neutered — see the null-safe arm
+				# above.  Site-4 drop-before-overwrite emission and its
+				# audit note moved to `overwrite_cleanup`; the ledger
+				# verdict + tripwires moved to `destructible_planner`.
+				# The store passes through unchanged and is NOT reprocessed.
 				new_instrs.append(instr)
 				continue
 			if isinstance(instr, M.MoveOut):
@@ -1620,10 +1560,14 @@ def insert_string_arc(
 				flag_managed=_flag_managed_at_return,
 			):
 				_drop_destructible_local(_da_local, new_instrs)
-			new_term = M.Return(value=val)
-			if hasattr(term, "span"):
-				setattr(new_term, "span", getattr(term, "span"))
-			block.terminator = new_term
+			# PRESERVE the original Return object (item-1 site-3 anchor
+			# survival): the frozen `CleanupPlan` holds this exact M.Return
+			# as its site-3 TERM anchor, so string_arc must NOT swap in a new
+			# object here.  Update `term.value` IN PLACE only if it changed;
+			# the span already lives on `term`, so no new object is created.
+			if term.value is not val:
+				term.value = val
+			block.terminator = term
 			mark_ledger_dirty(func, "string_arc.rewrite_return_terminator")
 		elif block.terminator is not None:
 			for val in _iter_term_used(block.terminator):

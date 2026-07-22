@@ -605,6 +605,66 @@ class CleanupPlan:
 				f"once (orphan fails closed): {sample}"
 			)
 
+	def validate_unconsumed(self, func: "M.MirFunc", sites: "set[str] | None" = None) -> None:
+		"""NON-CONSUMING postflight: prove every still-UNCONSUMED decision's
+		anchor is intact in the CURRENT `func` (identity + same-block +
+		exactly-once + unchanged kind/fields + type bindings), WITHOUT
+		marking anything consumed.
+
+		Opens one session and `locate`s each unconsumed decision (optionally
+		filtered to `sites`). Used to prove a decision population SURVIVED a
+		mutation phase it does NOT consume — e.g. site-3 Return anchors must
+		outlive `string_arc`'s block rewrite and `overwrite_cleanup`'s
+		null-safe/site-4 insertions before the later Return authority (S5)
+		consumes them. A replaced / disappeared / duplicated / moved /
+		field-drifted anchor fails closed via `PlanContractError`.
+		"""
+		if not self._frozen:
+			raise PlanContractError(
+				f"cleanup_plan[{self._fn_name}]: validate_unconsumed() before "
+				f"freeze"
+			)
+		session = self.open_session(func)
+		try:
+			for dec in self._decisions:
+				if dec.token in self._consumed:
+					continue
+				if sites is not None and dec.site not in sites:
+					continue
+				session.locate(dec)   # NON-consuming identity+location proof
+		finally:
+			session.close()
+
+	def assert_sites_consumed(self, sites: "set[str]") -> None:
+		"""Fail closed if any decision in `sites` is unconsumed.
+
+		The plan intentionally survives MULTIPLE emitter phases (overwrite
+		authority consumes nullsafe+site4; the unified Return authority later
+		consumes site3+R3+R4+R8), so `assert_all_consumed()` cannot run until
+		the LAST coordinated consumer. This site-scoped check lets an
+		intermediate phase prove its OWN sites are fully consumed without
+		weakening the final global orphan detection.
+		"""
+		if not self._frozen:
+			raise PlanContractError(
+				f"cleanup_plan[{self._fn_name}]: assert_sites_consumed() before "
+				f"freeze"
+			)
+		leftover = [
+			d for d in self._decisions
+			if d.site in sites and d.token not in self._consumed
+		]
+		if leftover:
+			sample = ", ".join(
+				f"{d.site}@{d.coord.block}:{d.coord.orig_index}"
+				for d in leftover[:8]
+			)
+			raise PlanContractError(
+				f"cleanup_plan[{self._fn_name}]: {len(leftover)} unconsumed "
+				f"decision(s) in sites {sorted(sites)} — this phase must consume "
+				f"every decision of its sites (orphan fails closed): {sample}"
+			)
+
 
 class EmitterPhase:
 	"""Enforces the preflight → rewrite → postflight → consume lifecycle for

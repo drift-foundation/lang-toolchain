@@ -532,7 +532,15 @@ def _bump(agg: dict, key: str, n: int = 1) -> None:
 # fail-closed error (the population cannot silently drift to a
 # mis-tagged bucket).  Env-gated identically to StringArcAudit: when
 # the audit env is off, callers construct nothing and record nothing.
-_SUPPLEMENTAL_ALLOWED = frozenset({SITE_CLASS_OVERWRITE_RELEASE})
+_SUPPLEMENTAL_ALLOWED = frozenset({
+	SITE_CLASS_OVERWRITE_RELEASE,
+	# B2+C S4 (2026-07-21): site-4 drop-before-overwrite drops migrated
+	# from string_arc's per-MUST_DROP `_audit.note(...)` into
+	# `overwrite_cleanup`'s counted-only recorder (the 14 corpus-wide),
+	# keeping the aggregate `site_class:drop_before_overwrite_site4` +
+	# `events` totals unchanged.
+	SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4,
+})
 
 
 def record_counted_only(site_class: str, n: int = 1) -> None:

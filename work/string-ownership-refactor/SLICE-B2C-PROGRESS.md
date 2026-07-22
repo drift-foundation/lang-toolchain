@@ -169,15 +169,35 @@ step — power-loss recovery point.
     Doc: planner has NO production consumer (census wiring removed); string_arc
     + planner invoke the same authority INDEPENDENTLY (no shared instance).
     Behavior-preserving (Arc fixture compiles +0-equivalent). 161 teeth green.
-- [ ] **S3 — site-3 Return emitter (BUILD + TEST IN ISOLATION, do NOT
-  wire to production yet)**: narrow module; emits at Return anchors in
-  `sorted(destructible_locals)` order; validates each decision vs object
-  identity + semantic fields + relative order. Production wiring is
-  DEFERRED to S5 (S3 and S5 must not be two independent Return rewriters
-  over the same original Return anchor). Gate: unit/focused tests on the
-  isolated emitter green (no production corpus wiring in this step).
-- [ ] **S4 — Overwrite authority** (nullsafe + site-4 into
-  overwrite_cleanup, consuming plan): independent counters/bijections
+- [x] **S3 — site-3 Return emitter (ISOLATED/UNWIRED) — DONE 2026-07-21**:
+  `site3_return_emitter.py::emit_site3_returns(func, plan)` uses the full
+  `EmitterPhase` lifecycle (begin_phase→stage all site-3→rewrite→
+  mark_rewritten→commit). APPENDS the canonical drop sequence
+  (LoadLocal→ZeroValue→StoreLocal[synthetic_zero_back]→DropValue) per
+  ordered `Site3Drop`, AFTER all original instructions and BEFORE the
+  PRESERVED `M.Return` (identity+value+span kept; original instruction
+  objects/order kept). UNWIRED (no driver caller; S5 wires the unified
+  authority). Plus `CleanupPlan.assert_sites_consumed(sites)` for
+  multi-consumer completeness (keeps final global `assert_all_consumed`).
+  Teeth `test_site3_return_emitter.py` (empty/multi-drop/order/Return-
+  identity/span-value/type-drift/replaced-Return) + completeness tooth.
+- [x] **S4 — Overwrite authority (PRODUCTION migration) — DONE 2026-07-21,
+  GATE PASS**: driver builds the frozen plan ONCE per fn at the pre-
+  string_arc ledger-A slot (driver-local dict, no MIR attr, no ledger
+  build) with boundary containment; passes it to `overwrite_cleanup`,
+  which after its unchanged R2/R7 rewrite+`_validate` runs a SEPARATE
+  EmitterPhase consuming nullsafe+site4: nullsafe emits one drop-before-
+  store each; site4 MUST_DROP emits (14), MUST_NOT_DROP validated+consumed
+  but emits nothing; `assert_sites_consumed({"nullsafe","site4"})`. site-4
+  audit note (14) migrated via `record_counted_only(SITE4)` (added to the
+  reporter allow-list). string_arc's nullsafe+site4 arms NEUTERED (stores
+  pass through). mutation-audit: `mark_ledger_dirty("overwrite_cleanup.
+  plan_overwrite")` per changed block. **924 GATE: every production
+  counter +0** (drop_before_overwrite_site4=14, overwrite_release=233,519),
+  universe identical (924, sym-diff 0). **Census (temp hook, reverted):
+  nullsafe 133,998, site4 14+72,995=73,009, PATH_DEPENDENT 0, site3 1,088.**
+  156 focused teeth green; self-alias/memcheck carriers pending.
+  ORIGINAL: independent counters/bijections
   (nullsafe 133,998; site-4 14). Remove nullsafe + site-4 emission from
   string_arc atomically. Gate: focused + corpus +0; tripwire intact.
   NOTE (amendment 4): S5's Return rewrite MUST preserve the ORIGINAL
@@ -277,3 +297,72 @@ before any mutation; all emitters consume it.
   open-session then insert-before / remove / move / duplicate / field-drift
   → rejected via O(1) is-recheck (no per-decision whole-function rescan).
   Missing-attribute field validation pinned. Teeth **42/42**.
+- 2026-07-21: post-S4 CONTRACT-HARDENING closure (fail-closed, guard-only —
+  NO production emission or decision-population change; item-1 `.ll` diff of
+  `closures_share_capture_arc_generic` byte-identical under `PYTHONHASHSEED=0`
+  modulo the build-timestamp banner):
+  * **Remaining-anchor postflight (item 1).** `string_arc` now PRESERVES the
+    original `M.Return` object at each Return-boundary rewrite (updates
+    `term.value` in place, keeps `block.terminator = term`) so the frozen
+    plan's site-3 TERM anchors survive.  New NON-consuming
+    `CleanupPlan.validate_unconsumed(func, sites=None)` re-proves every
+    still-unconsumed decision's anchor via `session.locate` without
+    consuming.  Driver calls it right after the string_arc loop (site-3
+    survived string_arc, contained at the string_arc boundary) and
+    `insert_overwrite_cleanup` calls it at the END of the plan phase (site-3
+    survived null-safe/site-4 insertion).  Teeth: legit-insertion validates;
+    replaced / disappeared / field-drifted Return fail; consumed decisions
+    skipped; before-freeze refused.
+  * **Mandatory plan + total planner containment (item 2).**
+    `insert_overwrite_cleanup(..., plan)` is now REQUIRED (no `=None`; a
+    `None`/non-CleanupPlan plan is a fail-closed `PlanContractError`); the
+    no-op path is gone.  Driver uses exact-key `_dplans[fn_id]` and asserts
+    `set(_dplans) == set(mir_funcs_by_id)` before the overwrite loop (a
+    missing plan can never mean skipped cleanup).  The plan-build loop now
+    catches `(AssertionError, RuntimeError)` — `PlannerStop` and the
+    site-4/site-3 authority tripwires join `PlanContractError` under one
+    `destructible_plan` boundary diag.  Legacy R2/R7 unit tests pass an
+    explicit validated EMPTY plan; the old `plan=None` no-op test is now a
+    REFUSAL test; new `test_destructible_plan_boundary.py` pins both the
+    PlanContractError and the PlannerStop/RuntimeError containment.
+  * **Emission↔consumption bijection in overwrite_cleanup (item 3).**
+    `emit_anchors` is built fail-closed (duplicate identity key and
+    wrong-payload/site rejected).  BEFORE `commit()`, `_validate_plan_emission`
+    proves, separately for null-safe and site-4 MUST_DROP, that each emitting
+    decision produced EXACTLY ONE canonical `LoadLocal→ZeroValue→StoreLocal
+    [synthetic_zero_back]→DropValue` (full operand/type links; drop↔store
+    identity tracked in an emitter-local side table, NOT a MIR attribute — see
+    closure delta 2), and that MUST_NOT_DROP authored nothing.  Teeth:
+    suppressed + duplicated + MUST_NOT_DROP-authored all fail before commit.
+  * **Hardened unwired S3 emitter → S5 base (item 4).**
+    `site3_return_emitter` seeds collision-proof temps from `local_types` +
+    every SSA dest/operand (collision pin against a pre-existing `.s3d*`
+    name), marks the ledger dirty IFF ≥1 drop emitted (added to the
+    mutation-audit `SCOPED_FILES`), self-calls
+    `assert_sites_consumed({"site3"})`, validates payloads to
+    `PlanContractError` (never a raw `AttributeError`), and proves the
+    site-3 expected/emitted bijection before commit (Return preserved).
+    Removed the unused `typing.Any` import.
+  * **Closure items (item 5).** Reporter exact-delta teeth for
+    `record_counted_only(SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4, n)`;
+    corrected `overwrite_cleanup.py` stale module prose (null-safe + site-4
+    now emit HERE from the plan; site-3 stays string_arc's until S5); this
+    entry.
+
+## S4 closure delta 2 (review 2026-07-22T043031Z) — DONE, contract-only
+- (1) `_dplans` set-mismatch now BOUNDARY-CONTAINED as phase `destructible_plan`
+  (clean internal diag, empty IR, no traceback) — was a bare `assert` that could
+  escape; driver tooth injects a ghost plan key to force the (otherwise
+  structurally-unreachable) guard.
+- (2) Removed dynamic MIR tags `plan_authored_for` (S4) + `s3_authored_for` (S3);
+  authoring identity now in emitter-local side tables (overwrite: list of
+  (store_id, drop); site3: {return_id: [drops]}), passed to the validators. Teeth
+  exercise the side tables, not tagged MIR.
+- (3) S3 validation is ORDER-SENSITIVE (emitted (local,ty) sequence in block order
+  == payload's sorted destruction order, no sorting) + requires `isinstance
+  Site3Drop` (was `hasattr`). Teeth: reordered-sequence fails; non-Site3Drop →
+  PlanContractError.
+- (4) `_validate_plan_emission` missing Store-anchor → `PlanContractError` (was raw
+  `KeyError`); removed-anchor tooth.
+- Emission-neutral (overwrite_release=250, events=2955 on the Arc fixture; no
+  setattr of the removed tags). Affected battery 99 green. No corpus rerun.
