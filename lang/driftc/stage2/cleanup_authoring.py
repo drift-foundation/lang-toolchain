@@ -9,7 +9,8 @@ fall-through, lambda-block exits, and HBreak / HContinue) emit
 `M.CleanupHook` markers via `_emit_scope_cleanup_hook(scope_index)`
 instead of inline drops.  Post Bug 2 architecture flip (2026-05-15),
 this pass runs AFTER `drop_flags` PLANNING (with a ledger rebuild
-in between) and BEFORE `string_arc`.  It is the SOLE emitter of
+in between) and BEFORE the plan slot + ownership normalization.
+It is the SOLE emitter of
 cleanup drops: for each `CleanupHook` it consults the ledger's
 `verdict_at` for every candidate (local, type) pair and emits real
 `MoveOut + DropValue` sequences — guarded, edge-elaborated, or
@@ -22,7 +23,7 @@ Pipeline order:
     rebuild ledger                                # mandatory
     cleanup_authoring                             # THIS PASS
     rebuild ledger
-    string_arc
+    ownership_normalization
 
 Authority: site 1's drop decisions are driven by `verdict_at`
 across all emission sites, NOT by HIR→MIR's `_moved_locals` set.

@@ -90,7 +90,7 @@ pub fn main() nothrow -> Int {
 \tval total = *(&m.tag) + *(&m2.tag);
 \treturn total;
 \t// Both Mixed structs drop at scope exit.  String fields
-\t// (handle's inner String, label) refcount via string_arc.
+\t// (handle's inner String, label) refcount via the ownership pipeline.
 \t// ConstArc handles refcount independently.
 }
 """
@@ -195,7 +195,7 @@ def test_synth_mixed_lifecycle_no_leak(tmp_path: Path) -> None:
 		lost, vg, errors,
 		label="synth_cs_mixed",
 		hint="mixed Copy+Frozen + ConstArc fields — String (Copy "
-		     "via string_arc) and Int (bitwise) must duplicate "
+		     "via the ownership pipeline) and Int (bitwise) must duplicate "
 		     "correctly while ConstArc retain/release stays balanced.",
 	)
 

@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """B-arch-1a pins: by-value String call-argument copy stakes are
-materialized as ledger-visible `CopyValue` MIR before string_arc
-(`stage2/string_stakes.py`), replacing string_arc's late
+materialized as ledger-visible `CopyValue` MIR upstream
+(`stage2/string_stakes.py`), replacing the legacy consumer's late
 `call_arg_retain`.
 
 Behavior contract (refcount sequence byte-identical to the late
@@ -224,7 +224,7 @@ def test_audit_shows_stake_materialized(tmp_path: Path) -> None:
 
 # Cross-package: the callee lives in a PACKAGE, so its by-value String
 # param type id is package-loaded (remapped) rather than the canonical
-# local String tid. The stake pass must match it via string_arc's
+# local String tid. The stake pass must match it via the historical
 # semantic SCALAR/"String" predicate, not tid equality (review finding,
 # B-arch-1a round 1).
 _PKG_LIB_SOURCE = """\

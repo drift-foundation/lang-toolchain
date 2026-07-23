@@ -41,7 +41,7 @@ null bytes is a documented runtime no-op, so the rewrite remains
 correct without changes.
 
 **Authority boundary.**  This pin observes the fully-lowered MIR of
-`mutate` (post-string_arc, post-`overwrite_cleanup`).  It verifies
+`mutate` (post-normalization, post-`overwrite_cleanup`).  It verifies
 that exactly one `M.MoveFromRef` is
 emitted for the drop-bearing field assignment, exactly one
 `M.MoveOut` drains its local, exactly one `M.DropValue` releases the

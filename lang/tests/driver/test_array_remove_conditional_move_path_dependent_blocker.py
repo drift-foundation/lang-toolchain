@@ -8,7 +8,8 @@ A loop that pops items from an `Array<T>` via `arr.remove(0)`,
 conditionally moves the popped value into another container,
 and implicitly drops it on the other branch, crashed stage2
 with `RuntimeError: drop_before_overwrite: ledger returned
-PathDependent` at `string_arc.py:960`.
+PathDependent` at the site-4 verdict (historically `string_arc.py:960`;
+now `destructible_authority.site4_verdict`, fired at planning time).
 
 Root cause: at the next iteration's `var w = arr.remove(0)`,
 the ledger merge of "user moved w on then-branch" (MOVED_OUT)
@@ -35,7 +36,7 @@ Per-arm cleanup elaboration in `cleanup_authoring`:
     hook with `w` in `MOVED_OUT`.  Lattice merge is uniform.
     Loop-back propagates `MOVED_OUT` to the next iteration's
     `StoreLocal w`; no PathDependent at
-    `string_arc.drop_before_overwrite`.
+    the site-4 drop-before-overwrite verdict (`site4_verdict`).
 
 ## What this test pins
 

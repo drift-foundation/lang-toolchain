@@ -8,7 +8,7 @@ LLVM lowering for String literals and ->.
 from lang.driftc.checker import FnInfo, FnSignature
 from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import BasicBlock, Call, ConstString, LoadLocal, MirFunc, Return, StoreLocal, StringRelease
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 from lang.driftc.stage4.ssa import MirToSSA
 from lang.codegen.llvm import lower_ssa_func_to_llvm, lower_module_to_llvm
 from lang.codegen.llvm.test_utils import host_word_bits
@@ -166,8 +166,8 @@ def test_string_literal_overwrite_emits_release():
 	fn_info = FnInfo(fn_id=fn_id, name="f", declared_can_throw=False, signature=sig, return_type_id=str_ty)
 
 	# Production-faithful ownership sequence (B2+C): the String overwrite
-	# release (R2) is emitted by `overwrite_cleanup`, not string_arc — run
-	# the driver's per-fn order: plan (ledger A) → string_arc → unified
+	# release (R2) is emitted by `overwrite_cleanup` — run
+	# the driver's per-fn order: plan (ledger A) → ownership normalization → unified
 	# Return cleanup → overwrite cleanup.
 	from lang.driftc.stage2.destructible_planner import build_destructible_plan
 	from lang.driftc.stage2.overwrite_cleanup import insert_overwrite_cleanup
@@ -176,7 +176,7 @@ def test_string_literal_overwrite_emits_release():
 	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
 	setattr(func, "_ledger_dirty_reason", None)
 	plan, _census, _c1 = build_destructible_plan(func, type_table=table)
-	func = insert_string_arc(func, type_table=table, fn_infos={fn_id: fn_info})
+	func = normalize_ownership_mir(func, type_table=table, fn_infos={fn_id: fn_info})
 	emit_return_cleanups(func, plan)
 	insert_overwrite_cleanup(func, type_table=table, plan=plan)
 	ssa = MirToSSA().run(func)
@@ -186,7 +186,7 @@ def test_string_literal_overwrite_emits_release():
 	assert "call void @drift_string_release(%DriftString" in ir
 
 
-def test_string_arc_return_from_local_without_temp_type_does_not_release_return_value():
+def test_normalization_return_from_local_without_temp_type_does_not_release_return_value():
 	table = TypeTable()
 	str_ty = _string_type(table)
 	block = BasicBlock(
@@ -210,7 +210,7 @@ def test_string_arc_return_from_local_without_temp_type_does_not_release_return_
 	)
 	sig = FnSignature(name="f", return_type_id=str_ty, param_type_ids=[])
 	fn_info = FnInfo(fn_id=fn_id, name="f", declared_can_throw=False, signature=sig, return_type_id=str_ty)
-	func = insert_string_arc(func, type_table=table, fn_infos={fn_id: fn_info})
+	func = normalize_ownership_mir(func, type_table=table, fn_infos={fn_id: fn_info})
 	entry = func.blocks["entry"]
 	assert isinstance(entry.terminator, Return)
 	ret_val = entry.terminator.value

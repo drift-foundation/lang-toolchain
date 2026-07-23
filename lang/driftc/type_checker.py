@@ -2886,7 +2886,7 @@ class TypeChecker:
 								# shape.  Plain Copy T (Int, String,
 								# etc.) needs no wrap — the deref load
 								# itself produces an owned value
-								# (string_arc retains via Copy
+								# (the ownership pipeline retains via Copy
 								# semantics for String).  Reuses the
 								# `_implicit_const_share_marks` cell
 								# directly rather than the

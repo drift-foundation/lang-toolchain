@@ -2320,7 +2320,7 @@ class _FuncBuilder:
 		`MoveFromRef(local=L, ...)` is also addr-taken-equivalent: codegen
 		needs stable alloca-backed storage for `L` to write the transferred
 		bytes into.  A subsequent `MoveOut(_, L, ty)` then reads the bytes
-		back via `LoadLocal(L)` (string_arc's lowering).  Without alloca-
+		back via `LoadLocal(L)` (the normalization MoveOut lowering).  Without alloca-
 		backed storage, the SSA rename map silently drops the MoveFromRef
 		write and the value never lands in `L`.
 		"""

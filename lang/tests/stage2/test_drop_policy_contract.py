@@ -179,10 +179,10 @@ def test_drop_policy_string_with_copy_hook_pins_shortcut_behaviour() -> None:
 	the new policy has `needs_drop=True AND is_cheap_copy=True`,
 	which the binder/scrut Copy paths handle by emitting `CopyValue`
 	(single retain) and registering the binder for its own scope-
-	exit drop.  string_arc continues to manage refcounted locals
-	independently; double-drop is prevented by `string_arc` skipping
+	exit drop.  The ownership pipeline manages refcounted locals
+	independently; double-drop is prevented by the plan authorities skipping
 	locals already authored by the generic path (see
-	`string_arc.py`'s skip-when-generic-handles logic).
+	the skip-when-generic-handles logic, now in `site3_return_decision`).
 	"""
 	type_table = TypeTable()
 	string_ty = type_table.ensure_string()

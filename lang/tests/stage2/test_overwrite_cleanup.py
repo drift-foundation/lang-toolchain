@@ -2,8 +2,8 @@
 """Slice B1 — overwrite_cleanup pass pins (R2 String overwrite releases
 + R7 Array overwrite drops), string-arc-endgame-cleanup-authority.
 
-The pass runs AFTER string_arc; these unit pins exercise it directly
-on hand-built MIR (post-string_arc shapes).  Coverage: PROVENANCE
+The pass runs AFTER ownership normalization; these unit pins exercise it
+directly on hand-built MIR (post-normalization shapes).  Coverage: PROVENANCE
 (marked synthetic zero-back skipped; UNMARKED input ZeroValue store
 still releases its live old value), exactly-one authored cleanup with
 the canonical sequence + order, the structural validator's TEETH,
@@ -68,7 +68,7 @@ def _marked_zero(store):
 
 
 def test_marked_synthetic_zeroback_is_skipped() -> None:
-	"""A string_arc-marked synthetic zero-back StoreLocal is NOT an
+	"""A pipeline-marked synthetic zero-back StoreLocal is NOT an
 	overwrite — the pass skips it (no release, no load-before-store)."""
 	tt = TypeTable()
 	sty = tt.ensure_string()

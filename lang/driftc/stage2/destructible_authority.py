@@ -2,8 +2,10 @@
 """
 Destructible drop-decision authority (Milestone A extraction, 2026-07-20).
 
-This module owns the DECISION logic that string_arc's `insert_string_arc`
-used to carry inline for non-string destructible locals:
+This module owns the DECISION logic that the legacy `string_arc` pass
+used to carry inline for non-string destructible locals (its surviving
+mutations live in `ownership_normalization`; the emissions in the
+frozen-plan emitters):
 
   * `DropClassifier` — the type-level classification predicates
     (`type_needs_drop`, `is_destructible_tid`, `is_error_tid`,
@@ -16,29 +18,27 @@ used to carry inline for non-string destructible locals:
     dataflow that feeds the Return-boundary drop set.
   * `compute_return_move_state` — the per-block moved-out / explicitly-
     dropped bookkeeping (moved-out intersection fixpoint + intra-block
-    explicit-drop replay). string_arc and the standalone planner each
-    invoke this SAME function INDEPENDENTLY (they do not share one
-    `ReturnMoveState` instance today); once production planning is wired,
+    explicit-drop replay).  The planner is the sole production caller;
     the emitters consume the FROZEN PLAN rather than recompute here.
   * `flag_managed_at_return` — the drop-flag-managed membership at a
     Return boundary, via the canonical `drop_flags.is_flag_managed`.
-  * `site3_return_drops` — the ordered list of destructible locals a
-    Return terminator must drop (site 3).
+  * `site3_return_decision` — the structured `Site3Decision` at a Return
+    terminator (site 3): the ordered drop list PLUS the flag-managed /
+    generic-skip / initialized facts observation needs (Phase D binding
+    decision 3 — one authority result for planning AND reporting).
 
 The `DropClassifier` predicates and the definite-assignment /
 moved-out dataflow bodies were moved VERBATIM out of `string_arc.py`;
 only captured closure variables were reparameterized into method/`self`
-or function parameters.  `site3_return_drops`, by contrast, is a
+or function parameters.  `site3_return_decision`, by contrast, is a
 BEHAVIOR-PRESERVING RECOMPOSITION of string_arc's former inline
 skip/init decision — same inputs, same `sorted(destructible_locals)`
 output, but reassembled as a standalone function rather than lifted
 line-for-line.  This module is a CLOSED authority: it imports the
 canonical `DropVerdict` / `compute_drop_policy` / `zero_storage_drop_safe`
 / `is_flag_managed` helpers directly rather than accepting them as
-caller-injected policy.  string_arc DELEGATES to this module and keeps
-every emission, audit note, MIR-object identity, and counter exactly
-where it was.  The EMISSION stays in string_arc; only the DECISION
-moved here.
+caller-injected policy.  The DECISIONS live here; the EMISSIONS live in
+the frozen-plan emitters (`return_cleanup_emitter`, `overwrite_cleanup`).
 """
 
 from __future__ import annotations
@@ -59,9 +59,8 @@ class DropClassifier:
 
 	Holds the `type_table`, the destructor-fn map, and the four caches /
 	active-sets that back the cycle-guarded predicates.  Bodies are
-	identical to string_arc's former inner closures.  (The former
-	`string_ty` state was dead — no predicate consulted it; the string
-	identity check `_is_string_tid` lives in string_arc.)
+	identical to the legacy string_arc pass's former inner closures.
+	(The former `string_ty` state was dead — no predicate consulted it.)
 	"""
 
 	def __init__(self, type_table: TypeTable):
@@ -245,11 +244,10 @@ def site4_verdict(
 	`DropVerdict.MUST_DROP`/`DropVerdict.MUST_NOT_DROP` member (never a
 	bare string) plus the computed axis the caller may retain. Preserves
 	the missing-ledger RuntimeError and the PathDependent proof-obligation
-	tripwire with byte-identical messages.  Post-S4/S5: the audit count
-	lives in `overwrite_cleanup` (counted-only recorder), the observe-mode
-	reporter check in `destructible_planner`'s site-4 arm, and the emission
-	in `overwrite_cleanup`'s plan phase — nothing site-4 remains in
-	string_arc.
+	tripwire with byte-identical messages.  The audit count lives in
+	`overwrite_cleanup` (counted-only recorder), the observe-mode reporter
+	check in `destructible_planner`'s site-4 arm, and the emission in
+	`overwrite_cleanup`'s plan phase.
 	"""
 	needs_drop = (
 		bool(compute_drop_policy(type_table, local_ty).needs_drop)
@@ -262,7 +260,7 @@ def site4_verdict(
 			f"attached ownership ledger (fn={fn_name}, "
 			f"block={block_name}, local={local}); "
 			f"Tier-1 site requires `func._ownership_ledger` "
-			f"to be set by the driver before `string_arc`."
+			f"to be set by the driver before ownership normalization."
 		)
 	_verdict = ledger.verdict_at(
 		(block_name, instr_idx),
@@ -369,11 +367,9 @@ class ReturnMoveState:
 
 	`moved_out` is the block-END value of the moved-out intersection
 	fixpoint; `explicitly_dropped` is the intra-block explicit-drop replay
-	result.  WITHIN string_arc, its two consumers (the inline Return skip
-	and `site3_return_drops`) share the ONE instance string_arc computed
-	via `compute_return_move_state`, so they cannot drift apart. The
-	standalone planner computes its OWN instance via the same function
-	(the two modules do not share an instance across the process).
+	result.  The planner's Return-arm consumers (`site3_return_decision`
+	and `string_return_releases`) share the ONE instance the planner
+	computed via `compute_return_move_state`, so they cannot drift apart.
 	"""
 
 	moved_out: frozenset
@@ -472,7 +468,38 @@ def flag_managed_at_return(func: M.MirFunc, destructible_locals: Set[str]) -> Se
 	return {dl for dl in destructible_locals if is_flag_managed(func, dl)}
 
 
-def site3_return_drops(
+@dataclass(frozen=True)
+class Site3Decision:
+	"""Structured, immutable site-3 Return-boundary decision (Phase D
+	binding decision 3): the ONE authority result shared by the frozen
+	plan payload AND the debug observe records — observation is never
+	inferred back from the emitted-drop tuple (an absent local may mean a
+	generic skip, flag ownership, or genuinely uninitialized storage, and
+	those had different record behavior).
+
+	  * `point` — the original Return coordinate
+	    `(block, len(original_instructions))`;
+	  * `drops` — the ORDERED emitted-drop locals (sorted destructible
+	    order minus skips, intersected with initialized) — exactly the
+	    former `site3_return_drops` list;
+	  * `flag_managed` — destructibles folded out because drop-flag
+	    plumbing owns their scope-exit cleanup (observe: MUST_NOT_DROP /
+	    REASON_DROP_FLAG_OWNED; checked FIRST, even when also generically
+	    skipped — string_arc's historical branch order);
+	  * `generic_skips` — moved-out / explicitly-dropped / ledger
+	    MUST_NOT_DROP skips BEFORE the flag fold (observe: SILENT);
+	  * `initialized` — the FINAL initialized-at-return set (post
+	    PATH_DEPENDENT zero-storage widening): a non-skipped local is
+	    MUST_DROP iff member (== drops), else MUST_NOT_DROP /
+	    REASON_NOT_DROP_NEEDING."""
+	point: "tuple[str, int]"
+	drops: "tuple[str, ...]"
+	flag_managed: frozenset
+	generic_skips: frozenset
+	initialized: frozenset
+
+
+def site3_return_decision(
 	func: M.MirFunc,
 	block: M.BasicBlock,
 	*,
@@ -484,15 +511,16 @@ def site3_return_drops(
 	assigned_in: Dict[str, Set[str]],
 	store_defs: Dict[str, Set[str]],
 	flag_managed: Set[str],
-) -> list[str]:
-	"""Ordered destructible-drop set at a Return terminator (site 3).
+) -> "Site3Decision":
+	"""Structured destructible decision at a Return terminator (site 3).
 
-	Returns the list of locals `_drop_all_destructibles` would emit a drop
-	for, in the SAME `sorted(destructible_locals)` order string_arc emits.
+	`decision.drops` is the list of locals `_drop_all_destructibles` would
+	have emitted a drop for, in the SAME `sorted(destructible_locals)`
+	order the historical string_arc emission used.
 
 	BEHAVIOR-PRESERVING RECOMPOSITION (not a verbatim body move): it
-	reassembles string_arc's destructible-relevant skip/init decision from
-	the same inputs:
+	reassembles the destructible-relevant skip/init decision from the same
+	inputs:
 	  * skip = moved_out ∪ explicitly_dropped ∪ (ledger MUST_NOT_DROP
 	    destructibles) ∪ flag_managed;
 	  * initialized = assigned_in[block] ∪ store_defs[block] ∪
@@ -500,11 +528,11 @@ def site3_return_drops(
 	    fold.
 	The `DropVerdict` / `compute_drop_policy` / `zero_storage_drop_safe`
 	helpers are imported canonically at module level (closed authority).
-	The String-only alias-walk additions to `skip_cleanup_locals` and the
-	string release-elision fold stay in string_arc — they never touch
-	`destructible_locals` (strings are excluded), so they do not affect
-	this set.  The `move_state` (moved_out / explicitly_dropped) is the
-	shared immutable bookkeeping from `compute_return_move_state`.
+	The String R3/R4 decisions live in `string_return_releases` — they
+	never touch `destructible_locals` (strings are excluded), so they do
+	not affect this set.  The `move_state` (moved_out /
+	explicitly_dropped) is the shared immutable bookkeeping from
+	`compute_return_move_state`.
 	"""
 	skip_cleanup_locals: Set[str] = set()
 	skip_cleanup_locals |= move_state.moved_out
@@ -534,7 +562,7 @@ def site3_return_drops(
 	initialized_at_return = assigned_in.get(block.name, set()) | store_defs.get(block.name, set()) | store_defs.get(func.entry, set())
 	# Phase 4 site-3 sub-step 3 — variant zero-tag widening, ledger-driven.
 	# The widening consults skip_cleanup_locals BEFORE the flag-managed fold
-	# below, exactly as string_arc did.
+	# below, exactly as the legacy string_arc did.
 	if ledger is not None:
 		_ledger_point = (block.name, len(block.instructions))
 		for _local in destructible_locals:
@@ -551,24 +579,34 @@ def site3_return_drops(
 			if _verdict is DropVerdict.PATH_DEPENDENT:
 				initialized_at_return.add(_local)
 	# Phase 3B step 2 — flag-managed locals are folded out of site-3's
-	# cleanup universe AFTER the widening (string_arc ordering).
+	# cleanup universe AFTER the widening (historical string_arc ordering).
+	# `generic_skips` is snapshotted BEFORE the fold so observation can
+	# distinguish flag ownership (recorded) from generic skips (silent).
+	generic_skips = frozenset(skip_cleanup_locals)
 	skip_cleanup_locals |= flag_managed
-	return [
+	drops = tuple(
 		local
 		for local in sorted(destructible_locals)
 		if local not in skip_cleanup_locals
 		if local in initialized_at_return
-	]
+	)
+	return Site3Decision(
+		point=(block.name, len(block.instructions)),
+		drops=drops,
+		flag_managed=frozenset(flag_managed),
+		generic_skips=generic_skips,
+		initialized=frozenset(initialized_at_return),
+	)
 
 
 def string_return_source_skip(block: "M.BasicBlock", string_locals: Set[str]) -> "str | None":
 	"""R4: the STRING storage local (if any) that backs the Return value, via
-	the intra-block AssignSSA-chain + LoadLocal alias walk (string_arc
-	~1219-1257).  This local is NOT released again at scope exit — the
+	the intra-block AssignSSA-chain + LoadLocal alias walk (legacy
+	string_arc ~1219-1257).  This local is NOT released again at scope exit — the
 	0.27.145 never-released-twice guarantee — because its +1 travels with the
 	returned value (Return-as-move).  Reproduced over ORIGINAL block
-	instructions (string_arc only INSERTS AssignSSA/LoadLocal, never removes,
-	so the walk resolves to the same source).  Returns the local or None.
+	instructions (the pipeline only INSERTS AssignSSA/LoadLocal, never
+	removes, so the walk resolves to the same source).  Returns the local or None.
 	"""
 	term = block.terminator
 	val = getattr(term, "value", None) if term is not None else None
@@ -603,7 +641,7 @@ def string_return_releases(
 	move_state: ReturnMoveState,
 ) -> "list[str]":
 	"""R3/R4: the ORDERED String scope-exit releases at a Return terminator,
-	= `sorted(string_locals)` minus the skip set, reproducing string_arc's
+	= `sorted(string_locals)` minus the skip set, reproducing the legacy
 	`_release_all_locals(skip=skip_cleanup_locals)` decision (string_arc
 	~1418) at the ORIGINAL return coordinate.
 
@@ -619,7 +657,7 @@ def string_return_releases(
 	skip: Set[str] = set()
 	skip |= move_state.moved_out
 	skip |= move_state.explicitly_dropped
-	# R4 (added BEFORE the R3 elision, matching string_arc ordering).
+	# R4 (added BEFORE the R3 elision, the historical string_arc ordering).
 	r4 = string_return_source_skip(block, string_locals)
 	if r4 is not None:
 		skip.add(r4)
@@ -646,7 +684,8 @@ __all__ = [
 	"ReturnMoveState",
 	"compute_return_move_state",
 	"flag_managed_at_return",
-	"site3_return_drops",
+	"Site3Decision",
+	"site3_return_decision",
 	"string_return_source_skip",
 	"string_return_releases",
 ]

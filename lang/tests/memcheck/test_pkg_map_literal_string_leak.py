@@ -6,7 +6,7 @@ The bookkeeper pattern:
     val _ = logger.info("event", {"port": fmt.format_int(port)});
 
 The format_int(port) temporary String must be consumed by the HashMap
-insert, and released when the HashMap is destroyed. If the string_arc
+insert, and released when the HashMap is destroyed. If the ownership
 pass fails to consume the temp (e.g., because the insert's param TypeId
 is FORWARD_NOMINAL instead of SCALAR String), the temp leaks.
 

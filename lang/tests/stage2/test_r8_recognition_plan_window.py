@@ -1,18 +1,18 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""B2+C S6 teeth — R8 materialized-release recognition re-homed onto the
-pre-string_arc PLANNING WINDOW.
+"""R8 materialized-release recognition on the pre-mutation PLANNING
+WINDOW (B2+C S6; consumer = `ownership_normalization` since Phase D).
 
 The recognition (`build_fnwide_producers` + `compute_string_temp_liveness`
 + per-block `recognize_materialized_releases`) is computed ONCE at the
-plan window over the ORIGINAL MIR and CONSUMED by string_arc's rewrite
-loop.  These pins lock:
+plan window over the ORIGINAL MIR and CONSUMED by the normalization
+pass's copy-through arm.  These pins lock:
   * the plan-window wrapper == the direct per-block analysis (equivalence);
-  * string_arc CONSUMING the frozen recognition == the bare-invocation
-    FALLBACK (which recomputes via the same single entry point) — identical
+  * consuming the frozen recognition == the bare-invocation FALLBACK
+    (which recomputes via the same single entry point) — identical
     output MIR (copy-through arm still correct);
-  * string_arc no longer OWNS recognition (source pin: its body invokes
-    none of the three underlying analyses);
-  * fail-closed on a wrong-function recognition.
+  * recognition has ONE owner (production source pin: only
+    `compute_recognized_releases` invokes the three analyses);
+  * fail-closed on a wrong-function recognition and a non-closed vessel.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ import pytest
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import mir_nodes as M
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 from lang.driftc.stage2.string_ownership_analysis import (
 	R8Recognition,
 	build_fnwide_producers,
@@ -98,20 +98,20 @@ def _kinds_and_releases(func: M.MirFunc):
 
 
 def test_r8_consume_equals_fallback_identical_output():
-	"""string_arc CONSUMING a frozen plan-window recognition produces the
+	"""The normalization pass CONSUMING a frozen plan-window recognition produces the
 	IDENTICAL output MIR to the bare-invocation FALLBACK (which recomputes
 	via the same single entry point) — the copy-through arm preserves the
 	materialized releases either way."""
 	tt = TypeTable()
 	func_fallback = _materialized_release_func(tt, "fb")
 	func_consume = _materialized_release_func(tt, "cn")
-	# Freeze recognition for the consume func BEFORE string_arc mutates it.
+	# Freeze recognition for the consume func BEFORE normalization mutates it.
 	r8 = compute_recognized_releases(func_consume, type_table=tt, fn_infos={})
 	# Rebind fn_name so the wrong-function guard accepts it for `func_consume`.
 	assert r8.fn_name == func_consume.name
 
-	insert_string_arc(func_fallback, type_table=tt, fn_infos={})           # fallback recomputes
-	insert_string_arc(func_consume, type_table=tt, fn_infos={}, r8_recognition=r8)  # consumes frozen
+	normalize_ownership_mir(func_fallback, type_table=tt, fn_infos={})           # fallback recomputes
+	normalize_ownership_mir(func_consume, type_table=tt, fn_infos={}, r8_recognition=r8)  # consumes frozen
 
 	k_fb, r_fb = _kinds_and_releases(func_fallback)
 	k_cn, r_cn = _kinds_and_releases(func_consume)
@@ -121,23 +121,38 @@ def test_r8_consume_equals_fallback_identical_output():
 	assert set(r_cn) == {"%a", "%b"}, r_cn
 
 
-def test_string_arc_no_longer_owns_r8_recognition_source_pin():
-	"""Structural pin (mirrors the S5 sole-finalize pin): string_arc.py
-	INVOKES none of the three R8 analyses and does not import them — the
-	single recognition entry point is `compute_recognized_releases`."""
-	import lang.driftc.stage2.string_arc as _sa_mod
-	src = Path(_sa_mod.__file__).read_text()
-	for fn in (
-		"recognize_materialized_releases(",
-		"build_fnwide_producers(",
-		"compute_string_temp_liveness(",
-	):
-		assert fn not in src, f"string_arc must not invoke {fn!r} (S6: recognition re-homed)"
-	# And it must not import them (only the single entry point + the seeder).
-	assert "compute_recognized_releases" in src
-	assert "\tbuild_fnwide_producers," not in src
-	assert "\tcompute_string_temp_liveness," not in src
-	assert "\trecognize_materialized_releases," not in src
+def test_single_recognition_owner_production_source_pin():
+	"""Structural pin (Phase D form): across the WHOLE production tree,
+	the three underlying R8 analyses are invoked ONLY inside their
+	defining library module (`string_ownership_analysis.py`, whose
+	`compute_recognized_releases` is the single entry point) — no other
+	production module may re-own recognition."""
+	import lang.driftc.stage2.string_ownership_analysis as _lib
+	lib_path = Path(_lib.__file__).resolve()
+	prod_root = lib_path.parent.parent
+	assert prod_root.name == "driftc", prod_root
+	offenders = []
+	visited = 0
+	for py in prod_root.rglob("*.py"):
+		visited += 1
+		if py.resolve() == lib_path:
+			continue
+		src = py.read_text()
+		# The RECOGNITION proper has exactly one owner.
+		if "recognize_materialized_releases(" in src:
+			offenders.append(f"{py.name}: recognize_materialized_releases(")
+		# The two INPUT analyses are shared with the release PRODUCER pass
+		# (`string_releases.materialize_lastuse_releases` computes last-use
+		# points from the same liveness/producer facts); no other module
+		# may invoke them.
+		if py.name != "string_releases.py":
+			for fn in ("build_fnwide_producers(", "compute_string_temp_liveness("):
+				if fn in src:
+					offenders.append(f"{py.name}: {fn}")
+	assert visited > 50, f"sweep visited only {visited} files (wrong root?)"
+	assert not offenders, (
+		f"recognition analyses invoked outside their owners: {offenders}"
+	)
 
 
 def test_r8_wrong_function_recognition_fails_closed():
@@ -147,7 +162,7 @@ def test_r8_wrong_function_recognition_fails_closed():
 	func = _materialized_release_func(tt, "wf")
 	bogus = R8Recognition(fn_name="test::SOMEONE_ELSE", recognized_by_block={})
 	with pytest.raises(AssertionError, match="wrong-function recognition"):
-		insert_string_arc(func, type_table=tt, fn_infos={}, r8_recognition=bogus)
+		normalize_ownership_mir(func, type_table=tt, fn_infos={}, r8_recognition=bogus)
 
 
 # ── S6 closure — genuinely-immutable, complete, fail-closed vessel ────
@@ -198,7 +213,7 @@ def test_r8_missing_block_rejected_at_consumption():
 	func = _materialized_release_func(tt, "mb")
 	hollow = R8Recognition(fn_name=func.name, recognized_by_block={})
 	with pytest.raises(AssertionError, match="block set != function block set"):
-		insert_string_arc(func, type_table=tt, fn_infos={}, r8_recognition=hollow)
+		normalize_ownership_mir(func, type_table=tt, fn_infos={}, r8_recognition=hollow)
 
 
 def test_r8_extra_block_rejected_at_consumption():
@@ -212,4 +227,4 @@ def test_r8_extra_block_rejected_at_consumption():
 		recognized_by_block={**dict(good.recognized_by_block), "ghost": frozenset()},
 	)
 	with pytest.raises(AssertionError, match="block set != function block set"):
-		insert_string_arc(func, type_table=tt, fn_infos={}, r8_recognition=padded)
+		normalize_ownership_mir(func, type_table=tt, fn_infos={}, r8_recognition=padded)

@@ -2,7 +2,7 @@
 """Ledger cache safety — dirty-bit enforcement for `func._ownership_ledger`.
 
 The stage2 ownership/cleanup passes (`cleanup_authoring`,
-`match_cleanup_authoring`, `string_arc`) read the attached ledger
+`match_cleanup_authoring`, the destructible planner) read the attached ledger
 via `func._ownership_ledger` to drive emission decisions
 (`verdict_at`, `_DropVerdict`).  Other passes (`string_stakes`,
 `overwrite_cleanup`) do NOT consult the ledger, but they MUTATE the
@@ -125,7 +125,7 @@ def mark_ledger_dirty(func: "M.MirFunc", reason: str) -> None:
 
 	Call IMMEDIATELY AFTER any direct MIR mutation in the stage2
 	ownership/cleanup passes (drop_flags, cleanup_authoring,
-	match_cleanup_authoring, string_arc, string_stakes,
+	match_cleanup_authoring, ownership_normalization, string_stakes,
 	overwrite_cleanup).  No-op if no ledger
 	is attached.
 
@@ -200,7 +200,7 @@ def maybe_fresh_ledger(
 	For passes that legitimately no-op when no ledger is
 	attached (pass-entry guard pattern used by
 	`cleanup_authoring`, `match_cleanup_authoring`,
-	`string_arc`).  Every non-test use of this helper requires
+	the legacy string_arc).  Every non-test use of this helper requires
 	an inline justification comment explaining the
 	optional-pass semantics — otherwise reviewers should prefer
 	`require_fresh_ledger`.

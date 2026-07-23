@@ -7,7 +7,7 @@ pass owns their last-use releases).
 Runtime-built strings throughout, so both failure directions are
 valgrind-visible:
 - MISSING RELEASE → definitely-lost blocks;
-- DOUBLE RELEASE (recognition failed to suppress string_arc's own
+- DOUBLE RELEASE (recognition failed to suppress the historical in-pass
   bookkeeping) → Invalid read/free.
 
 Rows:

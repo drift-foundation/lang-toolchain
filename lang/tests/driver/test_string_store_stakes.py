@@ -11,7 +11,7 @@ retain/release and MASK exactly that imbalance (which the heap-string
 e2e fixtures `main_argv_content` /
 `array_extend_borrowed_source_string_no_uaf` caught).
 
-Ordering contract pinned here: the stake lands BEFORE string_arc's
+Ordering contract pinned here: the stake lands BEFORE the pipeline's
 old-destination release expansion — the strictly safer order (the +1 is
 taken while the source is provably alive; the self-aliased-store pin
 exercises exactly the window today's retain-after-release order leaves).
@@ -298,7 +298,7 @@ def _audit_pin(tmp_path: Path, source: str, fn_tail: str) -> None:
 	assert ZERO store_value_retain (and no other stake regressions) in
 	the function that performs the store, plus all hard gates at 0.
 	Needed per-shape because the runtime rows CANNOT catch a rewrite
-	regression: if the pass stopped staking a shape, string_arc would
+	regression: if the pass stopped staking a shape, the pipeline would
 	fall back to its late retain and behavior would be identical — only
 	the audit sees the difference (review finding, 1d round 1)."""
 	audit = tmp_path / "audit.jsonl"
@@ -327,7 +327,7 @@ def _audit_pin(tmp_path: Path, source: str, fn_tail: str) -> None:
 def test_audit_store_stakes_materialized(tmp_path: Path) -> None:
 	"""ArrayIndexStore/StoreLocal stakes (AIL itself is terminal: its
 	dest is codegen-owned and moves into the holder without a
-	string_arc retain, so store_value_retain still reads 0)."""
+	late retain, so store_value_retain still reads 0)."""
 	_audit_pin(tmp_path, _ARRAY_STORE_SOURCE, "main")
 
 

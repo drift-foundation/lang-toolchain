@@ -4,13 +4,13 @@
 
 Two structural contracts, both enforced by AST walks (immune to
 aliasing, relative/absolute forms, and multiline imports — a textual
-`.string_arc` scan is insufficient per review):
+single-module scan is insufficient per review):
 
 1. `string_ownership_analysis` is NEUTRAL: it must never import
-   string_arc (that edge would recreate the cycle the extraction
+   any consuming pass (that edge would recreate the cycle the extraction
    exists to prevent).
 2. No production or test module imports a MOVED R10 member from
-   string_arc — every consumer goes through the neutral module.
+   a pass — every consumer goes through the neutral module.
 """
 
 from __future__ import annotations
@@ -50,22 +50,29 @@ def _imports_of(tree: ast.AST):
 				yield ("import", a.name, [], node.lineno)
 
 
-def test_neutral_module_never_imports_string_arc() -> None:
+def test_neutral_module_never_imports_a_pass() -> None:
+	"""The analysis library must stay NEUTRAL: importing any consuming
+	PASS module (ownership_normalization, string_releases, string_stakes
+	— or the deleted string_arc) would recreate the dependency cycle the
+	extraction removed."""
+	pass_modules = {
+		"string_arc", "ownership_normalization", "string_releases",
+		"string_stakes",
+	}
 	p = ROOT / "lang" / "driftc" / "stage2" / "string_ownership_analysis.py"
 	tree = ast.parse(p.read_text())
 	offenders = []
 	for kind, mod, names, lineno in _imports_of(tree):
-		# `import ...string_arc` / `from ...string_arc import X`.
-		if mod.split(".")[-1] == "string_arc" or mod.endswith(".string_arc"):
+		if mod.split(".")[-1] in pass_modules:
 			offenders.append(f"line {lineno}: {kind} {mod}")
-		# `from . import string_arc` / `from ...stage2 import string_arc`
-		# — the module is the PACKAGE and `string_arc` is an imported
-		# NAME (node.module is empty for the bare-package form).
-		elif kind == "from" and "string_arc" in names:
-			offenders.append(f"line {lineno}: from {mod or '.'} import string_arc")
+		elif kind == "from" and pass_modules & set(names):
+			offenders.append(
+				f"line {lineno}: from {mod or '.'} import "
+				f"{sorted(pass_modules & set(names))}"
+			)
 	assert not offenders, (
 		"string_ownership_analysis must stay neutral — it may never "
-		"import string_arc:\n" + "\n".join(offenders)
+		"import a consuming pass:\n" + "\n".join(offenders)
 	)
 
 

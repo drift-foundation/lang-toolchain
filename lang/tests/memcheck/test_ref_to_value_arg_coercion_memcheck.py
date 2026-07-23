@@ -3,7 +3,7 @@
 
 After the type-checker rewrites the argument to an explicit
 deref (`*s_ref`), HIR→MIR lowering for String must retain via
-the existing string_arc handler.  The callee then drops its
+the existing pipeline handler.  The callee then drops its
 parameter at scope end, and the caller still holds the borrow.
 Net effect: one extra retain + one extra release per call.
 
@@ -47,7 +47,7 @@ pub fn main() nothrow -> Int {
 \treturn total - 6;
 \t// Two `take_s(s_ref)` calls each dup the String via `*s_ref`.
 \t// String is Copy + ConstShare; the retain happens in
-\t// string_arc on deref-load.  Callee drops the param at scope
+\t// the pipeline on deref-load.  Callee drops the param at scope
 \t// end (refcount -1).  Caller still owns `s` until function
 \t// return.  Net: original 1 → +2 retains → -2 callee drops →
 \t// -1 caller drop → 0.

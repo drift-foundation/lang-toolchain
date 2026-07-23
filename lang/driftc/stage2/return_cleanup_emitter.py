@@ -18,7 +18,7 @@ S1 `EmitterPhase` postflight lifecycle, and APPENDS, before the PRESERVED
           StringRelease(old)
 
       with `local_types[old] = local_types[zero] = string_ty` (mirrors
-      string_arc's `_release_local`);
+      the legacy `_release_local`);
 
   (b) the SITE-3 DESTRUCTIBLE DROP TAIL — for each `Site3Drop`, in payload
       order:

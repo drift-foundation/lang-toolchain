@@ -306,9 +306,9 @@ step — power-loss recovery point.
 - [x] **S9 — end static delta review — DONE 2026-07-22, CLEAR** (NOT a
   cert): `2026-07-22T152813Z-drift-lang-release-notes.md` — S7 HOLD
   closed and the complete S7+S8 chunk commit-ready; no production,
-  test-contract, version, ABI, or architecture blocker remains.  Next:
-  D (R5/R1 + delete string_arc.py + driver phase) → the single 0.33.87
-  full serial suite + certification.
+  test-contract, version, ABI, or architecture blocker remains.
+  (The then-next step — Phase D — is COMPLETE; see the Phase D combined
+  sweep section below.)
 
 ## Ordering note
 S3 builds the site-3 emitter in isolation; S5 wires the ONE unified
@@ -532,6 +532,124 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   codegen string, StoreRef lowering pin).  One test-helper update:
   `_canonical_drop_before` no longer requires `synthetic_zero_back`
   (the pass strips it — that IS debt item 2's contract).
+- 2026-07-22 (later): S7 gate review-HOLD closed (equality + attribution
+  + pre-bound aliases + string_arc source pin + negative teeth); S9
+  static delta review CLEAR (2026-07-22T152813Z); chunk committed by
+  maintainer.  **Phase D deletion checkpoint OPENED (report-only):
+  `PHASE-D-DELETION-CHECKPOINT.md`** — full string_arc re-inventory
+  (R1/R5/R8-note + seeding side-effects + output-neutral proof),
+  permanent homes (new `moveout_zeroing.py` pass at the string_arc slot;
+  observe site-3 records → planner), pinned driver sequence with zero
+  added ledger builds, counter disposition (all 14 preserved +0),
+  complete deletion inventory, fail-closed pins, acceptance sequence
+  ending at the single full serial suite + 0.33.87/ABI-21 cert.
+  STOPPED for review; no implementation.
+
+## Phase D combined sweep (GO 2026-07-22T185411Z) — COMPLETE
+- Binding decisions applied: pass = `ownership_normalization.py::
+  normalize_ownership_mir` (driver phase `ownership_normalization`);
+  R8 freeze stays UNCONDITIONAL (production fail-closed release
+  validator); site-3 observation shares ONE structured authority result
+  (`Site3Decision` from `site3_return_decision` — drops + flag_managed +
+  generic_skips + initialized; planner consumes it for BOTH plan payload
+  and debug records, never inferred from the drop tuple); table-driven
+  seeding coverage; 924 shadow differential before deletion.
+- DONE so far: Site3Decision refactor + planner consumption + observe
+  re-home (authority tests updated); ownership_normalization.py written
+  (R1 + R5 + R8 copy-through by IDENTITY + verbatim seeding sweep +
+  dirty-iff-changed, no ledger); driver rewired (phase, containment,
+  validate_unconsumed relocated); S7 gate + mutation-audit retargeted;
+  20-test unit file incl. 12-family table-driven seeding pins; TEMP
+  shadow instrumentation in driver (declared-fields exact, dynamic
+  metadata one-directional — legacy reconstruction LOST span/debug_name
+  on rebuilt instructions; identity pass-through preserves them =
+  the sanctioned improvement); test migration: swap/codegen-string/
+  debug-return-span/site3-return-swap (renamed from string_arc_return_
+  swap)/move_from_ref_ownership_contract (renamed)/drop_classifier_
+  recursive_type_guard (renamed)/r8-plan-window (production-wide
+  single-owner pin, string_releases carve-out for the two shared input
+  analyses)/audit-reporter (boundary pin → ownership_normalization
+  phase; finalize pin anchored off the reporter)/extraction (neutral-
+  library pin generalized to all consuming passes)/zero_storage
+  (shim-retirement pin — green only post-deletion); production prose
+  sweep (191 → historical/retargeted).  FIXED in-flight: shadow-helper
+  insertion had detached `@_with_compile_recursion_headroom` from
+  `compile_stubbed_funcs` (caught by the headroom pin; CLI path was
+  unaffected — corpus valid).  Battery: 574 passed / 1 expected-red
+  (shim pin, green post-deletion).
+- **SHADOW DIFFERENTIAL GATE PASS** (build/tmp/phase-d-shadow vs s7s8):
+  exit 0, universe identical (all 924 compiled — zero old-vs-new
+  divergences across ~1.1M fns; comparator = declared dataclass fields
+  EXACT + dynamic metadata one-directional), all 14 counters +0 with
+  the NEW pass authoring the notes.
+- **string_arc.py DELETED**; shadow instrumentation removed from the
+  driver (grep-zero); file-absence + no-production-import pins added
+  and green; shim-retirement pin green; residual sweep: zero production
+  imports, flagged test prose retargeted (boundary/plan tests,
+  overwrite pins, memcheck carriers, alias-walk/typebox docstrings).
+- Post-deletion battery: **2,772 passed / 1 skipped** (one PRE-EXISTING
+  stale fixture repaired in-sweep: `test_variant_borrowed_match_
+  construct_int_payload` predates the 2026-06-30 "Require public app
+  entrypoints" enforcement — `fn main` → `pub fn main`; front-end only,
+  unrelated to Phase D).
+- **FINAL CORPUS GATE PASS** (build/tmp/phase-d-final vs s7s8, clean
+  run, string_arc deleted): exit 0, universe identical, **all 14
+  counters +0**, hard gates zero.
+- **Memcheck: 105 passed / 1 skipped, 0 leaks, lane audit PASS.**
+- **Ownership matrices: om 51/51 successful, 0 failed.**
+- **BROAD PYTEST BATTERY PASS**: `pytest -n16 --dist=worksteal lang/`
+  (superset of the 12 uniform emit_test_plan lanes + driver/codegen/
+  modules/checker/runtime/e2e) — **3,946 passed / 5 skipped**, exit 0,
+  lane audit PASS, 0 leaks (33m41s).  NOTE (final-review item 3): this
+  is NOT the repository certification gate — the full-suite gate is
+  `run-all.sh` (`just test` under BOTH `DRIFT_MEMCHECK=1` and
+  `DRIFT_ASAN=1`, incl. standalone LLVM/IR/e2e, deploy tooling, and
+  package-consumer boundary recipes) and remains PENDING as the single
+  release boundary (maintainer-run after commit-clear).
+- **PHASE D SWEEP COMPLETE — returned for the single final static
+  review.**  Final report:
+  `/tmp/drift-announce/2026-07-22T230000Z-phase-d-final-report.md`.
+- **Final-review closure (HOLD 2026-07-23T013128Z, four items — all
+  documentation/test-contract only, no corpus/memcheck rerun):**
+  (1) records closed onto the completed architecture — doc/history.md
+  0.33.87 entry now describes B1 + B2+C (S1–S9) + Phase D and the
+  final `ownership_normalization` topology; the Phase D checkpoint is
+  CLOSED with an implementation banner (moveout_zeroing name and the
+  R8 audit-gating remark marked superseded/retracted); this file's
+  stale "Phase D is next" tails annotated.
+  (2) live-prose sweep finished — planner "unwired/no consumer"
+  docstring replaced with the production plan-authority contract;
+  overwrite_cleanup placement/provenance/S4-tail corrected;
+  string_stakes old-destination release re-attributed to
+  overwrite_cleanup; drop_policy_compute zero-init/site-3/shim prose
+  retargeted (R1 in ownership_normalization; widening in
+  site3_return_decision; shim RETIRED); driver comments fixed; plus a
+  sweep of ledger_cache/ownership_ledger/reporter/string_releases/
+  string_stakes/mir_nodes/match_cleanup_authoring/cleanup_authoring/
+  destructible_authority residuals — every live authority statement
+  now true, genuine history preserved.
+  (3) the pytest lang/ result RELABELED as the broad battery (above);
+  the run-all.sh certification gate stays pending.
+  (4) seeding pin strengthened: table pin re-scoped to the
+  absent-destination axis; NEW teeth pin the two real axes —
+  instruction-carried families OVERWRITE a stale pre-existing dest
+  binding (StructGetField/LoadRef/LoadLocal probes) and the prescan
+  String-ZeroValue family PRESERVES an existing binding
+  (only-if-missing), each with an unrelated-binding noninterference
+  control.  Affected pins rerun green.
+  Stale-fixture `fn main` → `pub fn main` correction accepted by the
+  review.
+- **Round-2 mechanical closure (narrow HOLD 2026-07-23T015208Z) —
+  DONE**: this heading flipped to COMPLETE; report test-count 24→26;
+  ALL remaining current-tense references to the deleted pass finished
+  across production + migrated tests (final `rg` inventory: only stable
+  tags, pin/scanner internals, and explicitly historical prose remain);
+  two runtime strings kept matcher-stable (finalize diag prefix;
+  "must not emit releases" guard — both teeth verified); `git diff
+  --check` clean.  Per review: no pytest/corpus/memcheck rerun.
+  **COMMIT-CLEAR.  The maintainer runs the ACTUAL full suite
+  (`run-all.sh`), certifies, and deploys 0.33.87/ABI-21; then
+  B-repr(B5) opens as a separate design-first ABI-22 boundary.**
 - **GATES PASS (2026-07-22)**: 924 corpus audit `build/tmp/s7s8` vs
   accepted baseline `build/tmp/s5s6` — exit 0, universe identical
   (924/1268, same partition), **all 14 counters +0** (incl.
@@ -539,7 +657,5 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   scope_exit_release=68,562, materialized_lastuse_release=618,744,
   pre_post_verdict_drift=48,178).  Full memcheck: **105 passed /
   1 skipped, 0 leaks**, lane audit PASS — identical to the S5+S6
-  gate.  Chunk complete; awaiting the single static review (NO
-  certification).  Next after review: S9 end static delta review →
-  Phase D (R5/R1 re-home + delete string_arc.py) → the single
-  0.33.87 full serial suite + certification.
+  gate.  Chunk complete.  (The then-next steps — S9 review and Phase D
+  — are COMPLETE; see the Phase D combined sweep section below.)

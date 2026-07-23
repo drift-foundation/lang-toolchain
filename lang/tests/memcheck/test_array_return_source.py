@@ -9,8 +9,9 @@ requires explicit `return move arr;`, which lowers to
 `MoveOut(t, arr) + Return(t)`.  The Phase 4 Return-as-move lattice
 recognises this shape and transitions `arr` to `MOVED_OUT` at the
 `MoveOut` index — independently of the alias-walk's `array_locals`
-branch in `string_arc.py::Return-terminator`
-(approximately string_arc.py:1486-1491).
+branch (historically `string_arc.py::Return-terminator`; the decision
+now lives in the plan authorities)
+(historically string_arc.py:1486-1491).
 
 If that claim holds, the natural shape leaves the +1 with the
 caller and no function-exit cleanup runs on the source local.  If
@@ -254,7 +255,7 @@ def test_array_string_return_move_no_leak(tmp_path: Path) -> None:
 	multiple call sites and inner lengths.
 
 	If the residual `array_locals` branch in
-	`string_arc.py::Return-terminator` were load-bearing here, removing
+	the historical Return-terminator branch were load-bearing here, removing
 	it would cause function-exit cleanup to run on `xs` AFTER the
 	caller acquired ownership → double-release of every contained
 	String.  This test demonstrates that the natural shape does NOT

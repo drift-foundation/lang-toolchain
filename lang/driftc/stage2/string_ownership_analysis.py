@@ -4,11 +4,11 @@ String-ownership ANALYSIS library (R10 extraction,
 string-arc-endgame-r10-extraction, 2026-07-20).
 
 The shared, NON-EMITTING analyses behind the last-use-release
-materialization pipeline, extracted VERBATIM from `string_arc.py` so
-that both authors — `string_releases` (authoring) and `string_arc`
-(recognition + remaining emission responsibilities) — consume ONE
-neutral module with no dependency between them.  This module must
-never import `string_arc` (fail-closed AST pin in
+materialization pipeline (extracted VERBATIM from the legacy
+`string_arc.py`, R10) so that both consumers — `string_releases`
+(authoring) and `ownership_normalization` (R8 recognition/copy-through)
+— use ONE neutral module with no dependency between them.  This module
+must never import a consuming pass (fail-closed AST pin in
 `lang/tests/stage2/test_string_ownership_analysis_extraction.py`).
 
 Contents: `iter_used_values`, `seed_string_dest_types`,
@@ -19,7 +19,7 @@ Contents: `iter_used_values`, `seed_string_dest_types`,
 `_analyze_lastuse_block` / `_is_semantic_string_tid` helpers, and (B2+C
 S6) the `R8Recognition` frozen vessel + `compute_recognized_releases` —
 the SINGLE plan-window recognition entry point that re-homes R8 off
-string_arc's rewrite loop.
+the normalization pass's rewrite loop.
 The per-operand dispositions CONTRACT prose lives with
 `string_operand_dispositions` below (the former
 `consumes_string_operand` thin wrapper was deleted with the R10 slice
@@ -43,7 +43,7 @@ from . import cfg as _cfg
 def iter_used_values(instr: M.MInstr) -> Iterable[str]:
 	"""Module-level single source for per-instruction String-relevant
 	operand iteration (TLR-2a contract support).  Pure — no closure
-	state; extracted verbatim from insert_string_arc's former
+	state; extracted verbatim from the legacy consumer's former
 	_iter_used_values closure (which now aliases this)."""
 	if isinstance(instr, M.StoreLocal):
 		yield instr.value
@@ -218,7 +218,7 @@ def seed_string_dest_types(
 ) -> None:
 	"""Shared dest-type seeding (TLR-2a review finding 1): pre-seed
 	missing destination types from instruction shapes — the SAME logic
-	insert_string_arc runs internally (its `_seed_dest_types` delegates
+	normalize_ownership_mir runs internally (its `_seed_dest_types` delegates
 	here), exported so the TLR-2b pass can seed a COPY of
 	`func.local_types` before calling `compute_lastuse_release_points`
 	instead of duplicating the rules or silently missing temps whose
@@ -302,8 +302,8 @@ def seed_string_dest_types(
 # arms' non-selected operands).  Those are IGNORE: counted by the prescan
 # but never drained, so the temp can never reach zero and is never
 # released.  The calculator must reproduce that, or it would invent
-# releases string_arc never emits.  Conformance is pinned empirically
-# (calculator-vs-insert_string_arc agreement) in
+# releases the consumer never re-emits.  Conformance is pinned empirically
+# (calculator-vs-consumer agreement) in
 # test_string_arc_audit_reporter.py.
 
 DISPOSITION_CONSUME = "consume"
@@ -345,7 +345,7 @@ def is_materialized_release_family_producer(
 	produced by these instructions (in ANY block since TLR-7 — producer
 	resolution is fn-wide via `build_fnwide_producers`), with all-USE occurrences and no
 	live-out/terminator use, get their last-use release emitted by the
-	string_releases pass instead of string_arc's in-pass bookkeeping.
+	string_releases pass instead of the historical consumer's in-pass bookkeeping.
 	SINGLE SOURCE (replaces the TLR-3 MATERIALIZED_RELEASE_FAMILY tuple):
 	the release-point analysis / recognition (`_analyze_lastuse_block`)
 	consumes this predicate for qualification AND shape rejection — the
@@ -427,7 +427,7 @@ def string_operand_dispositions(
 	type_table: TypeTable,
 ) -> list[tuple[str, str]]:
 	"""(operand value-id, disposition) for every STRING-TYPED SSA operand
-	of `instr`, mirroring insert_string_arc's rewrite-loop arms.  Assumes
+	of `instr`, mirroring the historical consumer's rewrite-loop arms.  Assumes
 	well-typed MIR (e.g. a String value cannot be stored into an
 	array/destructible-typed local, so those early StoreLocal arms never
 	intercept a String operand)."""
@@ -610,7 +610,7 @@ def build_fnwide_producers(
 	blocks_in_order: "Sequence[M.BasicBlock]",
 ) -> Dict[str, M.MInstr]:
 	"""TLR-7: the ONE producer-lookup authority shared by the
-	materialization pass and string_arc's recognition — fn-wide, so
+	materialization pass and the normalization pass's recognition — fn-wide, so
 	family temps produced in one block and drained in another qualify.
 	SSA single-assignment makes the map unique by construction; a
 	duplicate dest fails closed (an upstream SSA-contract violation this
@@ -622,7 +622,7 @@ def build_fnwide_producers(
 			if isinstance(dest, str):
 				if dest in producers:
 					raise AssertionError(
-						f"string_arc fn-wide producer tripwire "
+						f"ownership fn-wide producer tripwire "
 						f"[duplicate SSA dest]: value '{dest}' defined by "
 						f"{type(producers[dest]).__name__} and "
 						f"{type(ins).__name__} — SSA single-assignment "
@@ -658,9 +658,9 @@ def _analyze_lastuse_block(
 	sit in ANY block; the release is placed in the DRAIN block);
 	String-typed;
 	not in `live_out_names`; ≥1 occurrence; every occurrence has USE
-	disposition (a CONSUME disqualifies — string_arc de-owns and never
+	disposition (a CONSUME disqualifies — the consumer contract de-owns and never
 	releases; an IGNORE disqualifies — the count never drains, so
-	string_arc never releases); no Return-terminator use (consuming).
+	re-releases); no Return-terminator use (consuming).
 
 	Recognition rule (the TLR-2b prescan-exclusion contract): an
 	in-contract pre-materialized `StringRelease(%t)` contributes NO
@@ -678,12 +678,12 @@ def _analyze_lastuse_block(
 	  terminator-drained temp is in contract when its release sits in
 	  the trailing release run — the len(instructions) point).
 	ANY input StringRelease that fails either half — including the shape
-	half: the only legitimate author of pre-string_arc releases is the
+	half: the only legitimate author of pre-normalization releases is the
 	string_releases pass, whose family is exactly the family
 	predicate — is
 	REJECTED fail-closed (AssertionError, `unexpected input release`
 	tag).  A mis-placed release recognized silently would suppress
-	string_arc's own release while leaving a later use reading freed
+	a duplicate release while leaving a later use reading freed
 	memory; an unknown-author release trusted silently would corrupt the
 	occurrence counts."""
 	string_ty = type_table.ensure_string()
@@ -709,19 +709,19 @@ def _analyze_lastuse_block(
 	# A shape-MISMATCHED input release (operand's fn-wide producer not
 	# a family member) is rejected here: no pass other than the
 	# string_releases materializer legitimately emits StringRelease
-	# before string_arc, and its family is exactly the shared predicate.
+	# before ownership normalization, and its family is exactly the shared predicate.
 	release_sites: dict[str, list[int]] = {}
 	for idx, ins in enumerate(block.instructions):
 		if isinstance(ins, M.StringRelease):
 			if not _is_family_temp(ins.value):
 				raise AssertionError(
-					f"string_arc release-recognition tripwire "
+					f"release-recognition tripwire "
 					f"[unexpected input release]: block '{block.name}'[{idx}], "
 					f"value '{ins.value}' — operand is not a family-producer "
 					f"String temp (fn-wide producer resolution) "
 					f"(producer={type(producers.get(ins.value)).__name__}). "
 					f"Only the string_releases materialization pass may "
-					f"emit StringRelease before string_arc."
+					f"emit StringRelease before ownership normalization."
 				)
 			release_sites.setdefault(ins.value, []).append(idx)
 	recognized_released: Set[str] = set(release_sites)
@@ -747,12 +747,12 @@ def _analyze_lastuse_block(
 	# Phase 3 — PLACEMENT validation of shape-recognized releases
 	# (review-hardened): recognition by producer shape alone would let a
 	# mis-placed release — e.g. one sitting BEFORE a later use — be
-	# excluded from counting and suppress string_arc's own release,
+	# excluded from counting and suppress any duplicate in-consumer release,
 	# turning an emission bug into a silent use-after-release.  Each
 	# recognized release must be the unique release of its temp, the
 	# temp's remaining occurrences must all be USE, and the release must
 	# sit immediately after the draining instruction.  Anything else is
-	# fail-closed (AssertionError → the driver's string_arc boundary
+	# fail-closed (AssertionError → the driver's ownership_normalization boundary
 	# wrap → clean `internal:` diagnostic).
 	for temp, rel_idxs in release_sites.items():
 		occs = occurrences.get(temp, [])
@@ -760,7 +760,7 @@ def _analyze_lastuse_block(
 		# Placement: the release sits after the draining instruction,
 		# separated ONLY by in-contract releases of temps draining at the
 		# same instruction (same-group temps release CONSECUTIVELY — the
-		# multiplicity/grouping reality string_arc's own emission
+		# multiplicity/grouping reality the legacy in-consumer emission
 		# produces; a gap containing ANY non-release instruction, e.g. a
 		# later use or a later drain point, still rejects).
 		# TERMINATOR-DRAINED temps (TLR-7, caught by the terminator-case
@@ -768,7 +768,7 @@ def _analyze_lastuse_block(
 		# maps to point len(instructions) — its release sits in the
 		# TRAILING release run (after every instruction occurrence, with
 		# only in-contract releases from there to the end of the list),
-		# exactly where string_arc's own terminator-note emission puts
+		# exactly where the legacy terminator-note emission put
 		# it.  A Return-consumed temp (term_consumed) still rejects.
 		if temp in term_used:
 			# The drain point is len(instructions), so the constraint is
@@ -806,7 +806,7 @@ def _analyze_lastuse_block(
 		)
 		if not in_contract:
 			raise AssertionError(
-				f"string_arc release-recognition tripwire "
+				f"release-recognition tripwire "
 				f"[unexpected input release]: block '{block.name}', "
 				f"value '{temp}', release at idx {rel_idxs}, "
 				f"expected unique release immediately after draining "
@@ -878,7 +878,7 @@ def recognize_materialized_releases(
 	"""TLR-2b handshake: the set of temps whose pre-materialized
 	StringRelease is IN-CONTRACT (shape AND placement — see
 	`_analyze_lastuse_block`), raising fail-closed on any out-of-contract
-	input release.  string_arc's per-block prescan consults this BEFORE
+	input release.  the normalization pass's per-block prescan consults this BEFORE
 	use counting: recognized releases contribute no occurrence, their
 	temps never enter `owned_values` at the ConstString producer (a
 	second release is impossible by construction), and the rewrite loop
@@ -905,8 +905,9 @@ def compute_string_temp_liveness(
 	string_ty: TypeId,
 ) -> Dict[str, Set[str]]:
 	"""Shared per-block live-out sets of String-typed SSA temps —
-	extracted verbatim from insert_string_arc's inline fixpoint (TLR-2b)
-	so the materialization pass and string_arc compute liveness with ONE
+	extracted verbatim from the legacy consumer's inline fixpoint (TLR-2b)
+	so the materialization pass and the plan-window recognition compute
+	liveness with ONE
 	author.  In-contract pre-materialized releases cannot change the
 	result (TLR-7 refinement of the argument — the conclusion is
 	unchanged): every in-contract release site is DOMINATED BY A USE of
@@ -915,7 +916,7 @@ def compute_string_temp_liveness(
 	end-of-instructions for a terminator-drained temp whose terminator
 	use this walk also sees — so `block_use` already contains the temp
 	before the release occurrence is reached, and defs are untouched.
-	The pass (running on MIR without releases) and string_arc (running on
+	The pass (running on MIR without releases) and the recognition (running on
 	MIR with them) see identical live-out sets by construction."""
 
 	def _is_str_temp(v: object) -> bool:
@@ -968,11 +969,13 @@ def classify_string_array_locals(
 	type_table: TypeTable,
 ) -> "tuple[TypeId, Set[str], Set[str]]":
 	"""Shared single-source classifier for the STRING and ARRAY local
-	sets used by the overwrite-cleanup family (Slice B1) and string_arc.
+	sets used by the overwrite-cleanup family (Slice B1) and the
+	normalization/plan passes.
 
 	Returns `(string_ty, string_locals, array_locals)`.  Extracted
-	VERBATIM from string_arc's inline builds so the overwrite-cleanup
-	pass and string_arc classify identically — a mismatch would leak
+	VERBATIM from the legacy inline builds so every consumer (overwrite
+	cleanup, normalization, the planner) classifies identically — a
+	mismatch would leak
 	(missed release/drop) or double-free (both passes emit).  The
 	destructible / nullsafe / error apparatus is deliberately NOT here
 	(Slice B2 owns it)."""
@@ -999,10 +1002,11 @@ def classify_string_array_locals(
 class R8Recognition:
 	"""Frozen per-function materialized-release RECOGNITION (R8, B2+C S6).
 
-	Carries the per-block recognized-released temp set that string_arc used
+	Carries the per-block recognized-released temp set that the legacy
+	string_arc used
 	to OWN inline (`build_fnwide_producers` + `compute_string_temp_liveness`
 	+ per-block `recognize_materialized_releases`).  Computed once at the
-	pre-string_arc planning window and CONSUMED by string_arc's rewrite
+	pre-normalization planning window and CONSUMED by the normalization pass's rewrite
 	loop (its R5/MoveOut/copy-through arm now reads these frozen values
 	rather than recomputing recognition).  Driver-local (parallel to
 	`_dplans`/`_dc1contrib`); never on the MIR, never inside the immutable
@@ -1010,8 +1014,8 @@ class R8Recognition:
 
 	`producers_fnwide`/`live_out` are deliberately NOT carried: they are
 	pure inputs to `recognize_materialized_releases` with NO other consumer
-	in string_arc, so freezing the recognition OUTPUT alone removes
-	string_arc's recognition ownership.
+	in the consumer, so freezing the recognition OUTPUT alone removes
+	the normalization pass's recognition ownership.
 
 	GENUINELY immutable (S6 closure): the mapping is validated and COPIED
 	into a read-only `MappingProxyType` at construction, so no alias of the
@@ -1058,32 +1062,34 @@ def compute_recognized_releases(
 	fn_infos: "Mapping[FunctionId, FnInfo]",
 ) -> "R8Recognition":
 	"""B2+C S6 — compute the per-block materialized-release recognition at
-	the PRE-string_arc planning window over the ORIGINAL MIR (which already
+	the pre-mutation planning window over the ORIGINAL MIR (which already
 	carries the StringReleases `materialize_lastuse_releases` emitted).
 
-	Byte-identical to string_arc's former mid-rewrite recognition: NOTHING
-	mutates the MIR between the plan window and string_arc entry, and
-	recognition reads ONLY pre-string_arc operand types
+	Byte-identical to the legacy mid-rewrite recognition: NOTHING
+	mutates the MIR between the plan window and normalization entry, and
+	recognition reads ONLY pre-normalization operand types
 	(`materialize_lastuse_releases` + `seed_string_dest_types`), never a
-	type string_arc's rewrite adds mid-pass.  NON-MUTATING: reproduces
-	string_arc's `_seed_dest_types` effect on a COPY of `func.local_types`,
+	type the rewrite adds mid-pass.  NON-MUTATING: reproduces the
+	`_seed_dest_types` effect on a COPY of `func.local_types`,
 	so `func.local_types` is untouched here.
 
 	This is the SINGLE recognition entry point: the driver calls it at the
-	plan window (freezing the result) and string_arc calls it as the
+	plan window (freezing the result) and `normalize_ownership_mir` calls
+	it as the
 	bare-invocation fallback — so the three underlying analyses
 	(`build_fnwide_producers` / `compute_string_temp_liveness` /
 	`recognize_materialized_releases`) are invoked ONLY here, never in
-	string_arc's own body.
+	the consumer's own body.
 
 	Fail-closed: an out-of-contract input release raises the same
-	`AssertionError` string_arc used to raise, now at the plan window."""
+	`AssertionError` the legacy consumer used to raise, now at the plan
+	window."""
 	block_order = sorted(func.blocks.keys())
 	blocks = [func.blocks[b] for b in block_order]
 	string_ty, _string_locals, _array_locals = classify_string_array_locals(func, type_table)
 	# Reproduce `_seed_dest_types` on a COPY — deterministic over the SAME
 	# original blocks, so the seeded copy equals `func.local_types` after
-	# string_arc's own `_seed_dest_types` at recognition time.
+	# the consumer's own `_seed_dest_types` at recognition time.
 	lt = dict(func.local_types)
 	seed_string_dest_types(blocks, lt, fn_infos=fn_infos, type_table=type_table)
 	producers_fnwide = build_fnwide_producers(blocks)
@@ -1093,7 +1099,7 @@ def compute_recognized_releases(
 	recognized: "Dict[str, frozenset]" = {}
 	for bname in block_order:
 		block = func.blocks[bname]
-		# SAME per-block gate string_arc used: skip the analysis for blocks
+		# SAME per-block gate the legacy consumer used: skip the analysis for blocks
 		# without any input release (fast path; unit-test MIR with no
 		# materialization pass, or post-pass blocks with no qualified temps).
 		if any(isinstance(_i, M.StringRelease) for _i in block.instructions):

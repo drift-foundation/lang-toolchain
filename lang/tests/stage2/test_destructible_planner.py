@@ -5,7 +5,7 @@
 The planner reuses the shared `destructible_authority` (covered by
 `test_destructible_authority.py`); these tests lock the planner's
 plumbing on hand-built MIR with a FRESH attached ledger (the real
-pre-string_arc slot): it builds a finalized `CleanupPlan` of immutable
+pre-normalization slot): it builds a finalized `CleanupPlan` of immutable
 payloads, counts the census, MUTATES NOTHING, and fails closed on an
 unexpected marked-synthetic null-safe store.
 """
@@ -133,7 +133,7 @@ def test_planner_stops_on_marked_synthetic_nullsafe():
 	func = _make_func("synth", locals_=["p"], types={"p": ns_ty})
 	entry = M.BasicBlock(name="entry")
 	st = M.StoreLocal(local="p", value="a")
-	setattr(st, "synthetic_zero_back", True)   # marked at the pre-string_arc surface
+	setattr(st, "synthetic_zero_back", True)   # marked at the pre-normalization surface
 	entry.instructions.append(st)
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry

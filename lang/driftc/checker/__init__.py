@@ -44,7 +44,7 @@ def user_facing_binding_name(name: str) -> str:
 
 	**Compiler-reserved prefix.**  `__match_binder_` is reserved for
 	the HIR lowering pass — it sits alongside other internal
-	identifiers like `__borrow_tmp` (cf. `stage2/string_arc.py`,
+	identifiers like `__borrow_tmp` (cf. `stage2/ownership_normalization.py`,
 	`borrow_checker_pass.py`).  Any local that begins
 	`__match_binder_<digits>_<rest>` is treated as compiler-generated
 	and unmangled here.  In the unlikely event a user-authored

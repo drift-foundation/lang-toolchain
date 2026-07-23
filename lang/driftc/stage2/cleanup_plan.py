@@ -614,7 +614,7 @@ class CleanupPlan:
 		Opens one session and `locate`s each unconsumed decision (optionally
 		filtered to `sites`). Used to prove a decision population SURVIVED a
 		mutation phase it does NOT consume — e.g. site-3 Return anchors must
-		outlive `string_arc`'s block rewrite and `overwrite_cleanup`'s
+		outlive `ownership_normalization`'s block rewrite and `overwrite_cleanup`'s
 		null-safe/site-4 insertions before the later Return authority (S5)
 		consumes them. A replaced / disappeared / duplicated / moved /
 		field-drifted anchor fails closed via `PlanContractError`.

@@ -4,10 +4,10 @@
 
 This file pins BOTH historical milestones on site 4, exercised through
 the PRODUCTION-FAITHFUL pipeline (B2+C S8 item 6 repair): the site-4
-verdict is decided at the pre-string_arc PLAN slot
+verdict is decided at the pre-normalization PLAN slot
 (`build_destructible_plan` → `site4_verdict`, the closed authority) and
 the drop-before-overwrite sequence is EMITTED by `overwrite_cleanup`'s
-plan phase — string_arc no longer owns any part of site 4.
+plan phase — neither owned by the ownership-normalization pass.
 
 Phase 3B step 1 — consumer-swap:
 - The drop verdict at every `StoreLocal(L, _)` for a destructible
@@ -33,7 +33,7 @@ Phase 4 Tier-1 promotion (2026-04-23):
     breaks that.
 
 Tests build minimal MIR fixtures and run the driver's per-fn ownership
-sequence: plan (ledger A) → string_arc → unified Return cleanup →
+sequence: plan (ledger A) → ownership normalization → unified Return cleanup →
 overwrite cleanup, asserting MIR-shape outcomes.
 """
 
@@ -45,7 +45,7 @@ from lang.driftc.checker import FnInfo
 from lang.driftc.core.function_id import FunctionId
 from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import mir_nodes as M
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 
 
 def _make_droppable_struct(type_table: TypeTable) -> int:
@@ -87,7 +87,7 @@ def _attach_ledger(func: M.MirFunc) -> None:
 
 def _run_production_pipeline(func: M.MirFunc, type_table: TypeTable, fn_infos=None):
 	"""The driver's per-fn ownership sequence post-B2+C (production-
-	faithful): frozen plan at the ledger-A slot → string_arc → unified
+	faithful): frozen plan at the ledger-A slot → ownership normalization → unified
 	Return cleanup → overwrite cleanup (the null-safe + site-4 consumer).
 	Returns the consumed plan."""
 	from lang.driftc.stage2.destructible_planner import build_destructible_plan
@@ -95,7 +95,7 @@ def _run_production_pipeline(func: M.MirFunc, type_table: TypeTable, fn_infos=No
 	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
 	fi = fn_infos if fn_infos is not None else {}
 	plan, _census, _c1 = build_destructible_plan(func, type_table=type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos=fi)
+	normalize_ownership_mir(func, type_table=type_table, fn_infos=fi)
 	emit_return_cleanups(func, plan)
 	insert_overwrite_cleanup(func, type_table=type_table, plan=plan)
 	return plan

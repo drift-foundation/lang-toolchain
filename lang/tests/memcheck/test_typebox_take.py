@@ -270,7 +270,7 @@ pub fn main() nothrow -> Int {
 # bytes (the String allocation made by `format_int(700)`).
 #
 # Root cause was in stage2's String late-rewrite pass:
-# `lang/driftc/stage2/string_arc.py` had no handler for
+# the legacy stage2 string ARC pass had no handler for
 # `M.RawBufferRead` in either the `owned_defs` precedent block
 # (around line 740) or the per-block `owned_values` precedent
 # block (around line 1085).  Without those entries the read
@@ -366,7 +366,7 @@ def _assert_clean(lost: int, vg_log: str, errors: int, *, label: str, broken_sta
 			f"  - `stdlib/std/runtime/runtime.drift::take` (TypeBox owning extraction)\n"
 			f"  - `stdlib/std/mem/mem.drift::rawbuffer_empty` (drained-state sentinel)\n"
 			f"  - `lang/driftc/stage2/hir_to_mir.py::IntrinsicKind.RAWBUFFER_EMPTY` (intrinsic lowering)\n"
-			f"  - `lang/driftc/stage2/string_arc.py::M.RawBufferRead` (refcount-stake handlers in the `owned_defs` and `owned_values` passes)\n"
+			f"  - `lang/driftc/stage2/ownership_normalization.py` + `string_stakes.py` (RawBufferRead owned-at-extraction contract; historically string_arc's owned_defs/owned_values handlers)\n"
 			f"Valgrind error count: {errors}\n\n"
 			f"Valgrind log tail:\n{vg_log[-2000:]}"
 		)
@@ -542,7 +542,7 @@ def test_c7_rawbuffer_string_write_read_drop(tmp_path: Path) -> None:
 	      → drop_value<String> (release; refcount → 0; alloc freed)
 	      → dealloc<String>    (frees backing storage)
 
-	Pre-0.31.24 the stage2 `string_arc.py` late-rewrite had no
+	Pre-0.31.24 the legacy stage2 string ARC late-rewrite had no
 	handler for `M.RawBufferRead` — the read result was treated
 	as borrowed and the subsequent `StoreLocal` synthesized a
 	spurious `StringRetain`, leaking exactly one allocation per
@@ -552,7 +552,7 @@ def test_c7_rawbuffer_string_write_read_drop(tmp_path: Path) -> None:
 	allocator: drift_string_concat) and pass post-fix.
 	`TypeBox<String>` (C1) and the HashMap shape (C4) cannot
 	work without this fix; do NOT special-case TypeBox to dodge
-	the leak — fix in `string_arc.py` next to the `PtrRead` /
+	the leak — fixed historically in string_arc next to the `PtrRead` /
 	`ArrayElemTake` / `MoveOut` precedents.
 	"""
 	lost, vg_log, errors = _compile_and_valgrind(
@@ -563,10 +563,10 @@ def test_c7_rawbuffer_string_write_read_drop(tmp_path: Path) -> None:
 		label="rawbuffer_string_round_trip",
 		broken_state_hint=(
 			"`mem.read<String>` returned a value but stage2 "
-			"`string_arc.py` did not register the dest as already-"
+			"`ownership_normalization.py` did not register the dest as already-"
 			"owning the +1 stake — a spurious `StringRetain` got "
 			"inserted on the assign-to-local.  Fix at "
-			"`lang/driftc/stage2/string_arc.py` (mirror the "
+			"`lang/driftc/stage2/ownership_normalization.py` (mirror the "
 			"`M.PtrRead` / `M.ArrayElemTake` / `M.MoveOut` "
 			"precedents in BOTH the `owned_defs` pass and the "
 			"per-block `owned_values` pass), NOT in stdlib or "

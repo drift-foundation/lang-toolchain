@@ -6,7 +6,7 @@ cleanup already unguarded) AND the post-change tree (flags retired).
 
 CAUSALITY CONTRACT (checkpoint §5.3): cleanup_authoring's existing
 unguarded `MoveOut` transitions the REBUILT ledger's state to
-MOVED_OUT before the Return, so string_arc's generic destructibles
+MOVED_OUT before the Return, so the site-3 generic destructible
 consultation adds the local to `skip_cleanup_locals` BEFORE
 `_flag_managed_at_return` is formed — the flag skip's retirement is
 statically subsumed by the ledger verdict.  The runtime zero-backing

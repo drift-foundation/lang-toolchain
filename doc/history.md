@@ -39,8 +39,89 @@ the String/Array local classification is now the shared
 preserved by a strict counted-only reporter recorder. Compiler-
 internal cleanup-authority move only; no runtime or boundary change —
 ABI stays 21. Corpus: every counter +0 (`overwrite_release` 233,519
-exact). R6 (destructible Return-boundary site-3 + drop-before-
-overwrite site-4) stays in `string_arc`, deferred to Slice B2.
+exact). (At B1 time, R6 — destructible Return-boundary site-3 +
+drop-before-overwrite site-4 — remained in `string_arc`; chunk B2+C
+below moved it onto the frozen plan.)
+
+### Chunk B2+C — frozen decision plan + plan-consuming emitters (S1–S9)
+
+Every remaining cleanup DECISION moved onto ONE frozen, fail-closed
+`CleanupPlan` computed per function at the pre-mutation plan slot over
+ledger A (`rebuild_after_cleanup_authoring`) and the ORIGINAL MIR —
+zero added ledger builds, proven by an instrumented build-count gate
+covering every bound build path (frozen 5-reason set; consumers
+zero-delta; audit l_post exactly one per planned fn, driver-owned):
+
+- `cleanup_plan.py` — identity-anchored decision container
+  (`validate_and_freeze`, phase-scoped `ConsumptionSession` /
+  `EmitterPhase` preflight→rewrite→postflight lifecycle, fail-closed on
+  moved/replaced/duplicated/vanished anchors, type bindings enforced).
+- `destructible_authority.py` — the CLOSED decision logic
+  (`DropClassifier`, `site4_verdict`, `compute_return_move_state`,
+  structured `site3_return_decision`, `string_return_releases`).
+- `destructible_planner.py` — the production planner: site-3 drops,
+  R3/R4 String releases, site-4 verdicts (missing-ledger +
+  PATH_DEPENDENT tripwires at PLANNING time), null-safe overwrites;
+  emits the debug-gated site-3/site-4 observe records from the SAME
+  structured authority results; freezes the audit's C1 ledger-A half
+  (validated + bijectively cross-checked against the plan).
+- `return_cleanup_emitter.py` — the UNIFIED Return authority: consumes
+  `string_release` + `site3` atomically per PRESERVED `M.Return`
+  (string-release band then destructible drop tail), pre-commit
+  bijections per band.
+- `overwrite_cleanup` — consumes `nullsafe` + `site4` after its
+  unchanged R2/R7 rewrite; occurrence-hardened validator; strips the
+  transient `ow_authored_for`/`synthetic_zero_back` attributes once
+  every consumer has run.
+- Driver: table-completeness guard (plans/R8/audit collectors/frozen C1
+  exactly cover the fn set, value-type-checked) before ANY consumer;
+  exact indexing everywhere; the differential audit is driver-owned —
+  one deferred `StringArcAudit.finalize` per fn (exactly-once,
+  boundary-contained) with ONE l_post built after Return cleanup and
+  before overwrite cleanup; C1 boundaries/releases synthesized from the
+  frozen contribution.
+- R8 materialized-release recognition re-homed to the plan window:
+  `string_ownership_analysis.compute_recognized_releases` is the single
+  entry point, frozen per fn into a genuinely immutable `R8Recognition`
+  (closed vessel: block-set equality, frozenset str members,
+  wrong-function rejection) — kept UNCONDITIONAL as the production
+  fail-closed release-placement validator.
+
+Gates at each step: 924-fixture corpus audit exact-delta (all 14
+counters +0, universe identical), full memcheck, focused fail-closed
+teeth.  Site-3 census 1,088 (1,087 ERROR + 1 Arc STRUCT); site-4
+MUST_DROP 14; nullsafe 133,998; R3 scope-exit 68,562.
+
+### Phase D — `ownership_normalization` + string_arc deletion
+
+The surviving output-bearing responsibilities moved into ONE permanent
+ledger-free pass, `ownership_normalization.py::normalize_ownership_mir`
+(driver phase `ownership_normalization`, at the former string_arc
+slot): **R1** entry-block zero-storage initialization (strings →
+arrays → null-safe destructibles; the zero-safety foundation), **R5**
+MoveOut expansion (original-index audit anchoring +
+`moveout_feeds_drop` pairing), **R8** closed-vessel validation +
+identity copy-through, and the complete `local_types` destination-
+seeding compatibility contract (table-pinned: instruction-carried
+families overwrite unconditionally; prescan families fill
+only-if-missing).  Every non-MoveOut instruction passes through BY
+OBJECT IDENTITY and Return terminators are never touched — which also
+FIXED a latent metadata loss: the legacy pass reconstructed several
+instruction kinds and silently dropped their dynamic `span`/
+`debug_name` attributes; the identity pass-through preserves them.
+
+`string_arc.py` is DELETED (with the `variant_zero_tag_drop_safe`
+compat shim — retirement-pinned — and ~1,200 lines of output-neutral
+bookkeeping whose neutrality the corpus proved).  Deletion was gated by
+a corpus-wide shadow differential: the legacy pass ran on a clone of
+every function in the 924 corpus and the normalized MIR structure,
+terminators, metadata, and `local_types` matched exactly (zero
+divergences across ~1.107M functions; only object identity and the
+legacy metadata loss excepted).  Final gates on the post-deletion
+tree: 924 corpus all 14 counters +0 vs the accepted baseline; memcheck
+105/1skip/0 leaks; ownership matrices 51/51; broad pytest battery
+3,946 passed.  Compiler-internal only; no runtime/boundary change —
+ABI stays 21.
 
 ## 2026-07-20 (0.33.86: zero-storage-safe drop-flag retirement — flags exist only where a runtime ownership bit is needed; ABI stays 21)
 

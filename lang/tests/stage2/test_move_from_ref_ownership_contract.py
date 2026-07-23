@@ -1,13 +1,13 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
-MIR / string_arc contract pins for `M.MoveFromRef` ownership transfer.
+MIR / ownership-pipeline contract pins for `M.MoveFromRef` transfer.
 
 `MoveFromRef` is the explicit ownership-transfer primitive used by
 `match_cleanup_authoring` for per-field cleanup chains.  The contract
 this file pins:
 
-  1. **No retain on transfer.**  `string_arc.insert_string_arc` must
-     NOT insert a `StringRetain` at a `MoveFromRef` whose `inner_ty`
+  1. **No retain on transfer.**  The ownership pipeline must NOT
+     insert a `StringRetain` at a `MoveFromRef` whose `inner_ty`
      is `String`.  The slot's stake is being transferred — retaining
      would create a parallel stake that the matched-up arm-end
      `MoveOut + DropValue` then unwinds, leaving the slot's original
@@ -16,7 +16,7 @@ this file pins:
      `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`).
 
   2. **Exactly one DropValue per transfer.**  After authoring +
-     string_arc, the per-field cleanup must produce exactly one
+     normalization, the per-field cleanup must produce exactly one
      `M.DropValue` for each emitted `MoveFromRef` of the same field
      type — no more, no less.  Two would double-release; zero would
      leak.
@@ -28,7 +28,7 @@ this file pins:
      stake.  This is the early-exit safety the drop_tmp pattern was
      designed for, preserved by the `MoveFromRef` migration.
 
-These pins exercise `match_cleanup_authoring → string_arc` directly
+These pins exercise `match_cleanup_authoring → ownership normalization` directly
 on hand-built MIR; they do NOT require running a full compile.  The
 end-to-end runtime regression carrier is
 `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`.
@@ -48,14 +48,7 @@ from lang.driftc.checker import FnInfo  # noqa: F401  (signature requires the ty
 from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2.ledger_cache import build_and_attach_ledger
 from lang.driftc.stage2.match_cleanup_authoring import author_match_cleanup
-# BARE-USE SAFETY: the single family temp here (t_str, ConstString)
-# is CONSUMED by a ConstructVariant String field, so it needs no
-# last-use release and bare insert_string_arc leaves nothing
-# under-released (string_arc authors no last-use releases of its own —
-# tripwire-deletion slice, 2026-07-18).  Adding family temps with
-# non-consuming last uses requires the _run_pipeline pattern
-# (see test_string_arc_audit_reporter.py).
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 
 
 def _build_v_string_table() -> tuple[TypeTable, int, int]:
@@ -121,7 +114,7 @@ def _build_authoring_carrier(
 	# initialised — matches HIR→MIR's `ensure_local + register_drop_local`
 	# pattern, where the alloca starts uninit (zero bytes).  Adding an
 	# explicit `ZeroValue + StoreLocal` here would trigger a spurious
-	# `StringRetain` on the zero from string_arc's own
+	# `StringRetain` on the zero from the pipeline's own
 	# StoreLocal-of-String handler — that's a test-setup artefact, not
 	# the contract we want to pin.
 	# Construct an Optional<String>::Some("x") and store into __match_scrut.
@@ -191,12 +184,12 @@ def _build_authoring_carrier(
 	return func, type_table, string_ty
 
 
-def _run_authoring_then_string_arc(
+def _run_authoring_then_normalize(
 	func: M.MirFunc,
 	type_table: TypeTable,
 ) -> M.MirFunc:
 	"""Run the production pipeline order: ledger build → authoring →
-	ledger rebuild → string_arc."""
+	ledger rebuild → ownership normalization."""
 	build_and_attach_ledger(
 		func, drop_policy=lambda _t: None, reason="test.initial_build"
 	)
@@ -208,9 +201,9 @@ def _run_authoring_then_string_arc(
 	)
 	# Note: site-1 cleanup_authoring would normally run here too; for
 	# pin #3 we exercise it via the test that includes the early-exit
-	# CleanupHook.  string_arc is the consumer that decides whether
-	# to insert StringRetain.
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	# CleanupHook.  Normalization (identity pass-through) must never
+	# insert a StringRetain.
+	normalize_ownership_mir(func, type_table=type_table, fn_infos={})
 	return func
 
 
@@ -224,7 +217,7 @@ def _collect_block_instructions(func: M.MirFunc) -> List[M.MInstr]:
 
 
 def test_move_from_ref_does_not_get_string_retain() -> None:
-	"""Pin #1: `string_arc` must NOT insert `StringRetain` at the
+	"""Pin #1: the ownership pipeline must NOT insert `StringRetain` at the
 	site of a `MoveFromRef` of a String.
 
 	A `StringRetain` adjacent to (or surrounding) the `MoveFromRef`
@@ -242,7 +235,7 @@ def test_move_from_ref_does_not_get_string_retain() -> None:
 	    retain.)
 	"""
 	func, type_table, _string_ty = _build_authoring_carrier()
-	func = _run_authoring_then_string_arc(func, type_table)
+	func = _run_authoring_then_normalize(func, type_table)
 
 	all_instrs = _collect_block_instructions(func)
 
@@ -258,7 +251,7 @@ def test_move_from_ref_does_not_get_string_retain() -> None:
 
 	retains = [ins for ins in all_instrs if isinstance(ins, M.StringRetain)]
 	assert not retains, (
-		f"string_arc inserted {len(retains)} `StringRetain`(s) into the "
+		f"the pipeline inserted {len(retains)} `StringRetain`(s) into the "
 		f"per-field cleanup chain.  `MoveFromRef` is an ownership "
 		f"transfer — retaining the transferred value re-introduces the "
 		f"slot-stake leak this primitive was designed to fix.  "
@@ -274,14 +267,14 @@ def test_per_field_cleanup_emits_exactly_one_drop_value() -> None:
 	  hook position: VariantGetFieldAddr + MoveFromRef
 	  arm-end position: MoveOut(_, drop_tmp) + DropValue
 
-	After string_arc rewrites `MoveOut` into LoadLocal + ZeroValue +
+	After normalization rewrites `MoveOut` into LoadLocal + ZeroValue +
 	StoreLocal, the surviving DropValue count must be exactly 1.
 	More than one would double-release.  Zero would leak (the
 	regression LANGUAGE_BUG shape this whole stack was built to
 	close).
 	"""
 	func, type_table, string_ty = _build_authoring_carrier()
-	func = _run_authoring_then_string_arc(func, type_table)
+	func = _run_authoring_then_normalize(func, type_table)
 
 	all_instrs = _collect_block_instructions(func)
 	drop_values = [
@@ -309,7 +302,7 @@ def test_early_exit_cleanuphook_includes_transferred_drop_tmp() -> None:
 	transferred field's release.
 	"""
 	func, type_table, _string_ty = _build_authoring_carrier(include_early_exit=True)
-	func = _run_authoring_then_string_arc(func, type_table)
+	func = _run_authoring_then_normalize(func, type_table)
 
 	all_instrs = _collect_block_instructions(func)
 	site1_hooks = [ins for ins in all_instrs if isinstance(ins, M.CleanupHook)]

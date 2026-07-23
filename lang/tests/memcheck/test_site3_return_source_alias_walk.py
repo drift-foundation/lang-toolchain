@@ -1,7 +1,9 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """
 Site 3 STRING return-source — regression carrier for the alias-walk
-skip in `string_arc.py::Return-terminator branch`.
+skip (historically string_arc's Return-terminator branch; the decision
+now lives in `destructible_authority.string_return_releases` and the
+emission in `return_cleanup_emitter`).
 
 **The shape under test.**  When a function returns a value derived
 from a heap-`String` local, site 3's alias-walk recognises the
@@ -11,7 +13,7 @@ cleanup would release the local's stake while the caller is holding
 the same bytes — refcount → 0, buffer freed, caller does UAF or
 double-free on subsequent use / drop.
 
-Lives in `string_arc.py`'s Return-terminator branch (the inline
+Historically lived in string_arc's Return-terminator branch (the inline
 `for prev in reversed(new_instrs)` loop that walks `Return.value`
 back through `AssignSSA` chains to a single `LoadLocal` and adds
 `prev.local` to `skip_cleanup_locals` if it's in `string_locals` —
@@ -165,7 +167,7 @@ def _assert_valgrind_clean(lost: int, vg_log: str, *, label: str, broken_state_h
 	assert lost == 0, (
 		f"[{label}] LANGUAGE_BUG: site-3 alias-walk regression — "
 		f"{lost} bytes definitely lost.\n"
-		f"Expected symptom if the alias-walk in `string_arc.py:1466-1491` "
+		f"Expected symptom if the return-source alias walk (`destructible_authority.string_return_source_skip`) "
 		f"was removed/weakened without a ledger-equivalent: {broken_state_hint}\n"
 		f"Touch points: `_collect_return_source_locals`, "
 		f"`skip_cleanup_locals`, and the inline LoadLocal walk in the "

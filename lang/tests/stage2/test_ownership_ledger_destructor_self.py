@@ -9,7 +9,7 @@ it.  The destructor body may freely use `self` (read fields, call
 methods), but at function exit the body is NOT responsible for
 dropping `self` — that would recurse into the destructor again.
 
-Pre-fix: `string_arc.py` site 3 had a hardcoded guard
+Pre-fix: the legacy string_arc site 3 had a hardcoded guard
 `if is_destructor_method and "self" in func.params:
 skip_cleanup_locals.add("self")` — site-local authority.
 

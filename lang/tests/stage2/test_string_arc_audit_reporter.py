@@ -33,7 +33,7 @@ from lang.driftc.core.types_core import TypeTable
 from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2 import ownership_ledger_reporter as R
 from lang.driftc.stage2.ownership_ledger import build_ledger
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 
 
 def _make_func(name: str, *, params: list[str], locals_: list[str], types: dict[str, int]) -> M.MirFunc:
@@ -68,7 +68,7 @@ def _run_arc_audit(func: M.MirFunc, tt: TypeTable, fn_infos=None) -> None:
 	)
 	plan, _census, c1 = build_destructible_plan(func, type_table=tt)
 	collector = R.StringArcAudit(func.name)
-	insert_string_arc(func, type_table=tt, fn_infos=fn_infos or {}, audit_collector=collector)
+	normalize_ownership_mir(func, type_table=tt, fn_infos=fn_infos or {}, audit_collector=collector)
 	emit_return_cleanups(func, plan)
 	try:
 		l_post = _bl(func, drop_policy=lambda tid: _cdp(tt, tid))
@@ -146,7 +146,7 @@ def test_audit_disabled_by_default(monkeypatch) -> None:
 	tt = TypeTable()
 	func = _string_shuffle_func(tt)
 	_attach_ledger(func)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	normalize_ownership_mir(func, type_table=tt, fn_infos={})
 
 
 def test_audit_env_gate(monkeypatch) -> None:
@@ -466,13 +466,13 @@ def test_arraydrop_note_site_covers_return_sweep(monkeypatch, tmp_path: Path) ->
 		k.startswith(("site_class:scope_exit_arraydrop", "arraydrop_"))
 		for k in agg
 	), agg
-	# string_arc emits ZERO ArrayDrops — the R7 overwrite drop authority
-	# moved to overwrite_cleanup (which runs after string_arc).
+	# The normalization pass emits ZERO ArrayDrops — the R7 overwrite
+	# drop authority lives in overwrite_cleanup (which runs later).
 	arraydrops = [
 		ins for blk in func.blocks.values() for ins in blk.instructions
 		if type(ins).__name__ == "ArrayDrop"
 	]
-	assert not arraydrops, f"string_arc must emit no ArrayDrop post-B1: {arraydrops}"
+	assert not arraydrops, f"normalization must emit no ArrayDrop post-B1: {arraydrops}"
 
 
 def test_array_elision_keeps_path_dependent_drop(monkeypatch, tmp_path: Path) -> None:
@@ -567,8 +567,8 @@ def test_zerovalue_store_needs_no_stake(monkeypatch, tmp_path: Path) -> None:
 	assert agg.get("site_class:overwrite_release", 0) == 0, agg
 
 
-def test_string_arc_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatch) -> None:
-	"""The driver's string_arc boundary converts pass AssertionErrors
+def test_normalization_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatch) -> None:
+	"""The driver's ownership_normalization boundary converts pass AssertionErrors
 	into a clean `internal:` diagnostic (best-effort span, phased) — an
 	operator never sees a Python traceback.  Generalized from the
 	tripwire-era pin (tripwire-deletion slice, 2026-07-18): the wrap is
@@ -593,14 +593,14 @@ def test_string_arc_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatc
 	for m in modules.values():
 		origin.update(m.origin_by_fn_id)
 
-	_orig = D.insert_string_arc
+	_orig = D.normalize_ownership_mir
 	def _boom(func, **kw):
 		if getattr(func, "name", "") == "main":
 			raise AssertionError(
-				"string_arc contract failure: injected-for-pin"
+				"normalization contract failure: injected-for-pin"
 			)
 		return _orig(func, **kw)
-	monkeypatch.setattr(D, "insert_string_arc", _boom)
+	monkeypatch.setattr(D, "normalize_ownership_mir", _boom)
 
 	ir, checked = D.compile_to_llvm_ir_for_tests(
 		func_hirs=func_hirs,
@@ -618,15 +618,16 @@ def test_string_arc_boundary_wrap_contains_assertions(tmp_path: Path, monkeypatc
 	assert errors, "injected contract failure must surface as a diagnostic"
 	msgs = [d.message for d in errors]
 	# Phase/internal diagnostic: the wrap's stable prefix carries the
-	# string_arc phase identity and the injected payload verbatim.
+	# ownership_normalization phase identity and the injected payload
+	# verbatim.
 	assert any(
-		"internal: string ownership stake contract failure" in m
+		"internal: ownership normalization contract failure" in m
 		and "injected-for-pin" in m
 		for m in msgs
 	), msgs
-	assert any(getattr(d, "phase", None) == "string_arc" for d in errors), [
-		(d.message, getattr(d, "phase", None)) for d in errors
-	]
+	assert any(
+		getattr(d, "phase", None) == "ownership_normalization" for d in errors
+	), [(d.message, getattr(d, "phase", None)) for d in errors]
 	# No traceback: the compile RETURNED with a diagnostic instead of
 	# propagating the AssertionError (reaching this line is the proof).
 	# Empty IR: containment aborts emission for the unit.
@@ -2528,7 +2529,7 @@ def _pipeline_to_final(func, tt):
 		compute_drop_policy as _cdp, zero_storage_drop_safe as _zsds)
 	plan, _c, c1 = build_destructible_plan(func, type_table=tt)
 	collector = R.StringArcAudit(func.name)
-	insert_string_arc(func, type_table=tt, fn_infos={}, audit_collector=collector)
+	normalize_ownership_mir(func, type_table=tt, fn_infos={}, audit_collector=collector)
 	emit_return_cleanups(func, plan)
 	l_post = _bl(func, drop_policy=lambda tid: _cdp(tt, tid))
 	l_pre = getattr(func, "_ownership_ledger", None)
@@ -2640,18 +2641,14 @@ def test_c1_merge_rejects_pass_recorded_releases(monkeypatch) -> None:
 			needs_drop=lambda _l: True, c1_contribution=c1)
 
 
-def test_string_arc_no_self_finalize_source_pin() -> None:
-	"""Structural pin (contract point 5, STRENGTHENED by the S5 closure):
-	the DRIVER COORDINATOR (`driftc.py`) is the SOLE production caller of
-	`finalize` — no other file under `lang/driftc` (string_arc included)
-	contains a `.finalize(` invocation.  Tests/direct unit calls are
-	excluded by construction (the sweep covers the production tree only)."""
-	import lang.driftc.stage2.string_arc as _sa_mod
-	src = Path(_sa_mod.__file__).read_text()
-	assert "_audit.finalize(" not in src, "string_arc must not self-finalize the audit"
-	assert ".finalize(" not in src, "string_arc must not call finalize at all"
-	# Whole-production-tree sweep: only the coordinator may invoke finalize.
-	prod_root = Path(_sa_mod.__file__).resolve().parent.parent
+def test_driver_sole_finalize_caller_source_pin() -> None:
+	"""Structural pin (contract point 5; Phase D form): the DRIVER
+	COORDINATOR (`driftc.py`) is the SOLE production caller of
+	`finalize` — no other file under `lang/driftc` contains a
+	`.finalize(` invocation.  Tests/direct unit calls are excluded by
+	construction (the sweep covers the production tree only)."""
+	import lang.driftc.stage2.ownership_ledger_reporter as _rep_mod
+	prod_root = Path(_rep_mod.__file__).resolve().parent.parent
 	assert prod_root.name == "driftc", prod_root
 	offenders = []
 	visited = 0

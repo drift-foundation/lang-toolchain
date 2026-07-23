@@ -7,18 +7,18 @@ Float} + ExcGetParamsJson/ExcGetContextJson since TLR-5, CopyValue since
 TLR-6, MoveOut since TLR-8 — the first post-closure member, admitted
 from the release-arm tripwire's production firing on `"lit" + move s`
 rather than a corpus measurement) as explicit MIR, before the ledger
-build that feeds `string_arc`.
+build that feeds the plan slot.
 Since TLR-7 producer resolution is FN-WIDE (`build_fnwide_producers` —
-the same authority string_arc's recognition consumes): a family temp
+the same authority the normalization pass's recognition consumes): a family temp
 produced in one block and drained in another qualifies, with the
-release placed in the DRAIN block at exactly the point string_arc's
+release placed in the DRAIN block at exactly the point the legacy
 in-pass bookkeeping used.
 
 Problem (TLR measurement, 2026-07-14): 618,744 corpus releases of owned
 String temps whose LAST use is non-consuming existed only as
-`string_arc`'s private per-block bookkeeping (`use_counts` /
+the legacy consumer's private per-block bookkeeping (`use_counts` /
 `owned_values`) — no ledger authority models SSA temp lifetimes.  TLR-1
-split the dominant family into its own audit class via an in-string_arc
+split the dominant family into its own audit class via an in-consumer
 shim; this pass makes the family's releases REAL MIR with a dedicated
 author (ALL 618,744 after TLR-7 — the cross-block tail was the last
 population, closed by fn-wide producer resolution):
@@ -28,8 +28,9 @@ population, closed by fn-wide producer resolution):
                                       StringRelease(%t)
 
 The release sits IMMEDIATELY AFTER the draining instruction — the same
-position `string_arc`'s in-pass emission used — so the output stream is
-byte-identical for the migrated family.  `string_arc` recognizes the
+position the legacy in-pass emission used — so the output stream is
+byte-identical for the migrated family.  The plan-window recognition
+(consumed by normalization's copy-through) accepts the
 in-contract releases (shape AND placement, validated fail-closed by the
 shared analysis), excludes them from use counting, never adds the temps
 to `owned_values` (a second release is impossible by construction), and
@@ -57,7 +58,7 @@ classification):
 
 Ledger placement (TLR-2 design §1/§2): this pass runs BEFORE the per-fn
 ledger build (`_ol_build_and_attach` in the driver's cleanup_authoring
-loop), so the one ledger `string_arc` consumes is built on
+loop), so the one ledger the plan slot consumes is built on
 post-materialization MIR — no extra rebuild.  `StringRelease` has no
 transfer-function arm in the ledger walker (it cannot change any
 tracked local's state), so the shifted snapshot is state-identical at
@@ -109,7 +110,7 @@ def materialize_lastuse_releases(
 		string_ty=string_ty,
 	)
 	# TLR-7: fn-wide producer resolution — the same shared authority
-	# string_arc's recognition consumes; cross-block family temps
+	# the normalization pass's recognition consumes; cross-block family temps
 	# qualify, with the release placed in the DRAIN block.
 	producers_fnwide = build_fnwide_producers(
 		[func.blocks[name] for name in block_order]
@@ -131,7 +132,7 @@ def materialize_lastuse_releases(
 		# DRAIN order — the position of each temp's LAST operand
 		# occurrence in the draining instruction's `iter_used_values`
 		# walk — mirroring `_note_use`'s decrement sequence in
-		# string_arc's generic fallthrough, so the materialized stream
+		# the consumer's generic fallthrough, so the materialized stream
 		# matches the in-pass emission order.
 		by_idx: Dict[int, List[str]] = {}
 		for temp, idx in points.items():

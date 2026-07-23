@@ -163,7 +163,7 @@ from lang.driftc.stage1.lambda_validate import validate_lambdas_non_retaining
 from lang.driftc.stage1.non_retaining_analysis import analyze_non_retaining_params
 from lang.driftc.stage2 import HIRToMIR, make_builder, mir_nodes as M
 from lang.driftc.stage2.mir_lowering_error import MirLoweringError
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 from lang.driftc.stage2.destructible_planner import build_destructible_plan
 from lang.driftc.stage3.throw_summary import ThrowSummaryBuilder
 from lang.driftc.stage4 import run_throw_checks
@@ -7970,7 +7970,7 @@ def compile_stubbed_funcs(
 		# Phase 3B kickoff: build the ownership ledger on every lowered
 		# function unconditionally, attach to func.  Site consumers
 		# being swapped over (3B step 1: `drop_before_overwrite` in
-		# string_arc) read it as the authoritative drop verdict.  Build
+		# the plan slot) read it as the authoritative drop verdict.  Build
 		# is cheap (worklist dataflow over MIR); cost is amortised
 		# across the consumers that read it.  Observe-mode telemetry
 		# (disagreement records to stderr) is still gated separately on
@@ -8079,7 +8079,7 @@ def compile_stubbed_funcs(
 			# Wrapped in its own bucket so the per-function
 			# author_cleanup + _rebuild_ledger loop stops hiding in
 			# the unattributed CSF gap between
-			# `ledger_rebuild_post_drop_flags` and `string_arc`.
+			# `ledger_rebuild_post_drop_flags` and the normalization pass.
 			# Profile (doc/perf-analysis-bookkeeper-profile.md)
 			# attributed ~17s of cumulative time here on a
 			# stdlib-regex workload; bookkeeper's residual
@@ -8095,8 +8095,8 @@ def compile_stubbed_funcs(
 					_author_cleanup(func, type_table=shared_type_table)
 					# B-arch-1a: materialize by-value String call-arg
 					# copy stakes (CopyValue) BEFORE the ledger rebuild
-					# below, so the ledger that string_arc consults
-					# models the copy — string_arc then MOVES the
+					# below, so the ledger that the ownership pipeline consults
+					# models the copy — the pipeline then MOVES the
 					# already-owned stake instead of inventing a late
 					# StringRetain the ledger never sees.
 					_materialize_call_arg_stakes(
@@ -8106,22 +8106,23 @@ def compile_stubbed_funcs(
 					)
 					# TLR-2b: materialize last-use releases for
 					# block-local ConstString temps BEFORE the ledger
-					# rebuild below — the one ledger string_arc consumes
+					# rebuild below — the one ledger the plan slot consumes
 					# is built on post-materialization MIR (StringRelease
 					# has no ledger transfer-function arm: index shifts
-					# only).  string_arc recognizes the in-contract
-					# releases and suppresses its own bookkeeping.
+					# only).  The plan-window R8 recognition validates the
+					# in-contract releases; ownership normalization copies
+					# them through by identity.
 					_materialize_lastuse_releases(
 						func,
 						type_table=shared_type_table,
 						fn_infos=checked.fn_infos_by_id,
 					)
-					# Rebuild the ledger so string_arc sees the
+					# Rebuild the ledger so the ownership pipeline sees the
 					# post-authoring per-instruction state instead of the
 					# stale pre-authoring snapshot.  Required for both
 					# the original patch-3 nested-scope expansion AND the
 					# Bug 2 architecture flip's block-splitting guarded
-					# emissions.  string_arc consults `verdict_at` at
+					# emissions.  the ownership pipeline consults `verdict_at` at
 					# every `drop_before_overwrite` site; stale state
 					# causes site-4 tripwire fires.
 					_ol_build_and_attach(
@@ -8133,7 +8134,7 @@ def compile_stubbed_funcs(
 			# Phase 3A observational: drain the decision events
 			# recorded by sites 1/2 during HIR→MIR and emit
 			# disagreement records to stderr.  Runs after ledger build,
-			# before string_arc.
+			# before ownership normalization.
 			from lang.driftc.stage2.ownership_ledger_reporter import (
 				compare_events as _ol_compare_events,
 				stderr_emit as _ol_stderr_emit,
@@ -8192,7 +8193,7 @@ def compile_stubbed_funcs(
 				)
 		# Bug 2 architecture flip (2026-05-15): the Phase 3C drop_flags
 		# pass moved BEFORE cleanup_authoring.  Its pre-flip position
-		# here (between observe-gate and string_arc) emitted Step-5
+		# here (between observe-gate and normalization) emitted Step-5
 		# Return-block guarded drops; that work migrated into
 		# cleanup_authoring at the CleanupHook positions, so this
 		# slot is intentionally empty.  See the drop_flags planning
@@ -8200,17 +8201,17 @@ def compile_stubbed_funcs(
 		# placement, and `work/stdlib-condvar/pr2_handoff.md` for
 		# the architecture rationale.
 		# B2+C S4 (2026-07-21): build the FROZEN destructible CleanupPlan
-		# for every function ONCE at the pre-string_arc ledger-A slot —
+		# for every function ONCE at the pre-normalization ledger-A slot —
 		# the same pre-mutation point the reverted S2 census hook used.
 		# The planner READS ledger A only (no ledger build, no dirty
 		# transition, no MIR change).  The plan is kept in a driver-local
 		# dict (NOT a MIR attribute) and handed to `overwrite_cleanup`
 		# below, which now emits the null-safe + site-4 drop-before-
-		# overwrite cleanups string_arc formerly authored.
+		# overwrite cleanups the legacy string_arc pass formerly authored.
 		_dplans: dict = {}
 		# B2+C S5 audit lifecycle — the DRIVER is the sole authority for the
-		# string_arc differential audit.  ONLY when the audit is enabled:
-		# one `StringArcAudit` collector per function (string_arc produces
+		# ownership differential audit.  ONLY when the audit is enabled:
+		# one `StringArcAudit` collector per function (the normalization pass produces
 		# notes into it; the driver runs the SINGLE deferred finalize below)
 		# and one FROZEN `C1Contribution` per function (the plan slot froze
 		# the C1 ledger-A half).  Disabled → empty maps, no collector, no
@@ -8225,12 +8226,12 @@ def compile_stubbed_funcs(
 		_audit_collectors: dict = {}
 		_dc1contrib: dict = {}
 		# B2+C S6 — the R8 materialized-release RECOGNITION, re-homed onto the
-		# pre-string_arc planning window (over the ORIGINAL MIR, which already
+		# pre-normalization planning window (over the ORIGINAL MIR, which already
 		# carries the StringReleases `materialize_lastuse_releases` emitted).
-		# NOTHING mutates the MIR between here and string_arc entry, so this is
-		# byte-identical to string_arc's former mid-rewrite recognition.  Frozen
+		# NOTHING mutates the MIR between here and normalization entry, so this is
+		# byte-identical to the former in-consumer mid-rewrite recognition.  Frozen
 		# per-function (parallel to `_dplans`/`_dc1contrib`; never on the MIR)
-		# and CONSUMED by string_arc.  Computed for EVERY function (recognition
+		# and CONSUMED by the normalization pass.  Computed for EVERY function (recognition
 		# affects codegen, not just telemetry).
 		_r8contrib: dict = {}
 		with _timed("destructible_plan"):
@@ -8273,9 +8274,9 @@ def compile_stubbed_funcs(
 					return {}
 		# B2+C S5/S6 closure — EVERY driver-local contribution table must be
 		# COMPLETE before its first consumer runs: a missing R8 entry must
-		# never fall back to string_arc's direct-recomputation path, a
+		# never fall back to the direct-recomputation fallback, a
 		# missing collector/C1 entry must never silently select the
-		# monolithic finalize (string_arc no longer records C1 — it would
+		# monolithic finalize (the normalization pass never records C1 — it would
 		# silently disappear), and a missing plan must never mean skipped
 		# cleanup.  Audit disabled → both audit maps must be EMPTY.  This
 		# subsumes the former pre-overwrite `_dplans` completeness check.
@@ -8293,7 +8294,7 @@ def compile_stubbed_funcs(
 		elif set(_r8contrib) != _fn_set:
 			_completeness_err = (
 				f"R8 recognition set != MIR function set — a missing entry "
-				f"must never select string_arc's direct-recomputation fallback "
+				f"must never select the direct-recomputation fallback "
 				f"(r8-only={set(_r8contrib) - _fn_set}, "
 				f"funcs-only={_fn_set - set(_r8contrib)})"
 			)
@@ -8359,10 +8360,10 @@ def compile_stubbed_funcs(
 					return {}, checked, None
 				return {}, checked
 			return {}
-		with _timed("string_arc"):
+		with _timed("ownership_normalization"):
 			for fn_id, func in mir_funcs_by_id.items():
 				try:
-					mir_funcs_by_id[fn_id] = insert_string_arc(
+					mir_funcs_by_id[fn_id] = normalize_ownership_mir(
 						func,
 						type_table=shared_type_table,
 						fn_infos=checked.fn_infos_by_id,
@@ -8371,28 +8372,26 @@ def compile_stubbed_funcs(
 						),
 						r8_recognition=_r8contrib[fn_id],
 					)
-					# Item-1 postflight: string_arc now PRESERVES the Return
-					# object at each Return-boundary rewrite, so the frozen
-					# plan's site-3 TERM anchors must still validate.  Prove
-					# they survived (identity + same-block + fields) WITHOUT
-					# consuming — a replaced/moved/dropped Return fails closed,
-					# contained at this same string_arc boundary.
+					# Anchor-survival postflight: normalization never touches
+					# Return terminators and passes every non-MoveOut
+					# instruction through by identity, so the frozen plan's
+					# anchors (site-3/string_release Returns + nullsafe/site-4
+					# StoreLocals) must still validate.  Prove they survived
+					# (identity + same-block + fields) WITHOUT consuming — a
+					# replaced/moved/dropped anchor fails closed, contained at
+					# this same boundary.
 					_dplans[fn_id].validate_unconsumed(mir_funcs_by_id[fn_id])
 				except AssertionError as err:
-					# string_arc boundary containment (introduced with
-					# slice 4a): any contract failure in the phase —
-					# e.g. the fn-wide producer or release-recognition
-					# fail-closed checks — surfaces as a clean
-					# `internal:` diagnostic with a best-effort span,
-					# never a Python traceback.  Same containment
-					# pattern as the HIR→MIR lowering wraps above.
-					# (The 4a/4b dead-stake and release-arm tripwires
-					# this wrap originally fronted were deleted
-					# 2026-07-18 after the clean 0.33.84 cert cycle.)
+					# Boundary containment: any contract failure in the
+					# phase — the R8 closed-vessel checks, the anchor
+					# postflight — surfaces as a clean `internal:`
+					# diagnostic with a best-effort span, never a Python
+					# traceback.  Same containment pattern as the HIR→MIR
+					# lowering wraps above.
 					_append_boundary_contract_diag(
 						checked,
-						phase="string_arc",
-						prefix="string ownership stake contract failure",
+						phase="ownership_normalization",
+						prefix="ownership normalization contract failure",
 						err=err,
 						fn_id=fn_id,
 						signatures_by_id=signatures_by_id,
@@ -8406,17 +8405,19 @@ def compile_stubbed_funcs(
 					return {}
 		# Slice B1 (string-arc-endgame-cleanup-authority, 2026-07-20):
 		# instruction-local OVERWRITE cleanup (R2 String overwrite
-		# releases + R7 Array overwrite drops) moved out of string_arc
-		# into a dedicated pass that runs AFTER it — string_arc's
-		# recognition walk never sees these releases, and R2/R7 need no
+		# releases + R7 Array overwrite drops) lives in a dedicated pass
+		# that runs LAST in the ownership pipeline (after normalization,
+		# Return cleanup, and the audit L_post build) — the plan-window
+		# recognition never sees these releases, and R2/R7 need no
 		# ledger (pure structural type checks).  Same boundary
-		# containment as string_arc above.
+		# containment as the normalization pass above.
 		# The former pre-overwrite `_dplans` completeness check moved UP to
-		# the table-completeness guard before string_arc (S5/S6 closure): no
-		# consumer runs before completeness is proven, and the string_arc /
+		# the table-completeness guard before ownership normalization (S5/S6 closure): no
+		# consumer runs before completeness is proven, and the normalization /
 		# return_cleanup loops neither add nor remove `mir_funcs_by_id` keys.
-		# B2+C S5 — the UNIFIED Return authority.  Runs AFTER string_arc (which
-		# preserved every Return object) and BEFORE overwrite_cleanup, consuming
+		# B2+C S5 — the UNIFIED Return authority.  Runs AFTER ownership
+		# normalization (which never touches Return terminators) and BEFORE
+		# overwrite_cleanup, consuming
 		# the frozen plan's `string_release` + `site3` decisions ATOMICALLY: it
 		# appends the String scope-exit release band THEN the destructible drop
 		# tail before each preserved Return.  Same boundary containment.
@@ -8461,9 +8462,9 @@ def compile_stubbed_funcs(
 				for fn_id, func in mir_funcs_by_id.items():
 					try:
 						# Exact indexing — completeness was proven before
-						# string_arc, so a missing entry here is a contract
-						# violation, contained below like every other
-						# finalize-lifecycle failure.
+						# the normalization pass, so a missing entry here is
+						# a contract violation, contained below like every
+						# other finalize-lifecycle failure.
 						collector = _audit_collectors[fn_id]
 						try:
 							_l_post = _build_ledger_audit(

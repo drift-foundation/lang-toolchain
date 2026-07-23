@@ -117,10 +117,10 @@ def test_authoring_emits_chain_for_must_drop_candidate() -> None:
 	# Hook-position chain: VariantGetFieldAddr + MoveFromRef(drop_tmp).
 	# `MoveFromRef` is the explicit ownership-transfer primitive
 	# introduced in 0.31.12 to replace `LoadRef + StoreLocal` —
-	# string_arc recognises it as a transfer (no StringRetain insertion)
+	# the ownership pipeline treats it as a transfer (no StringRetain insertion)
 	# so the slot's stake reaches the arm-end DropValue exactly once.
 	# See `lang/driftc/stage2/mir_nodes.py::MoveFromRef` and
-	# `lang/tests/stage2/test_move_from_ref_string_arc_contract.py`.
+	# `lang/tests/stage2/test_move_from_ref_ownership_contract.py`.
 	kinds = [type(ins).__name__ for ins in func.blocks["entry"].instructions]
 	assert "VariantGetFieldAddr" in kinds, f"missing VariantGetFieldAddr in authored chain; got {kinds}"
 	assert "MoveFromRef" in kinds, f"missing MoveFromRef in authored chain; got {kinds}"

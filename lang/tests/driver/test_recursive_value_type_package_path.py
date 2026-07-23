@@ -6,7 +6,7 @@ LANGUAGE_BUG (app-team report, driftc 0.33.32 / ABI 17): a directly-recursive
 value type (`variant IrType { ... TArray(elem: IrType) ... }`, no indirection)
 was accepted on the normal CLI package path and a consumer that loaded a package
 *and* embedded the type by value crashed with a raw Python `RecursionError`
-(`stage2/string_arc.py`), with no source location.
+(historically `stage2/string_arc.py`), with no source location.
 
 Root cause: the normal CLI pass-1 block (`driftc.py` ~11298) ran
 `validate_interface_schemas()` but NOT `validate_no_recursive_value_types()`, and

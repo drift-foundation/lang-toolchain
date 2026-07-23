@@ -103,7 +103,7 @@ def insert_drop_flags(
 		# Skip compiler-internal locals (HIR→MIR-generated `__` names
 		# such as `__match_scrut_tmp*`, `__try_err*`, intermediate
 		# diagnostic temps, etc.).  These have specialised handling in
-		# downstream passes (`string_arc.destructible_locals` excludes
+		# downstream passes (the destructible classification excludes
 		# them via the same prefix rule with a small allowlist for
 		# `__match_binder_*` / `__borrow_tmp`).  Adding flag plumbing
 		# for them produces MIR that downstream passes do not expect
@@ -161,7 +161,7 @@ def insert_drop_flags(
 		#       Without (2b) such locals would not get flagged and
 		#       `cleanup_authoring` would silently skip emission
 		#       (`path_dependent_non_variant_skip` tripwire), leaving
-		#       `string_arc.drop_before_overwrite` to crash on the
+		#       the site-4 drop-before-overwrite verdict to crash on the
 		#       next iteration.
 		#
 		# Together these criteria pick out every shape where
@@ -343,7 +343,7 @@ def flag_local_name_for(local_name: str) -> str:
 	`func._drop_flag_managed_locals: set[str]` of SOURCE-local names
 	at the end of the pass, and `is_flag_managed` reads that set.
 	See the regression at
-	`test_string_arc_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`."""
+	`test_site3_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`."""
 	return f"__drop_flag_{local_name}"
 
 
@@ -358,13 +358,14 @@ def is_flag_managed(func: M.MirFunc, local_name: str) -> bool:
 	name of a hypothetical source local named `<original>_N`, and a
 	name-parsing helper cannot distinguish the two.  A regression
 	for this shape lives at
-	`test_string_arc_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`.
+	`test_site3_return_swap.py::test_is_flag_managed_does_not_misattribute_collision_suffixed_flag`.
 
 	Returns False when the metadata set is missing (no-op pass run
 	or function that had no flag-managed locals) — the pre-3C
 	default assumption is "no local is flag-managed."
 
-	Phase 3B consumers (notably `string_arc_return` / site 3) call
+	Phase 3B consumers (notably site 3 — the `string_arc_return`
+	observe tag — via `site3_return_decision`) call
 	this to decide "this local is 3C's responsibility — skip my own
 	emission for it at scope-exit.\""""
 	managed: Set[str] = getattr(func, "_drop_flag_managed_locals", None) or set()

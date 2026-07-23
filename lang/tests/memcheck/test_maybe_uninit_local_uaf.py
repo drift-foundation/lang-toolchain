@@ -17,7 +17,7 @@ exercised end-to-end against valgrind.  These carriers pin the
 heap shape for the two payload classes that exercise the
 non-trivial-Drop axes:
 
-* **String** — refcount-bearing built-in type with `string_arc`
+* **String** — refcount-bearing built-in type with pipeline
   late-rewrite (drop-before-overwrite on `StoreRef`).  The
   carrier writes a heap-allocated String into the slot, reads it
   back out, and consumes it normally.  Any leak / UAF here
@@ -194,7 +194,7 @@ def test_maybe_uninit_local_string_round_trip_no_uaf(tmp_path: Path) -> None:
 	  (which doesn't run for the slot since it's no-drop) also
 	  did not release.
 	* **Invalid read/write**: the slot's tombstone bytes leaked
-	  through into the consumer (`out`), or the `string_arc`
+	  through into the consumer (`out`), or the pipeline
 	  StoreRef rewrite double-released against the freshly written
 	  bytes.
 	"""
@@ -210,7 +210,7 @@ def test_maybe_uninit_local_string_round_trip_no_uaf(tmp_path: Path) -> None:
 			"ownership of the String value into the slot, or "
 			"`mem.maybe_assume_init_read` no longer moves the "
 			"value out and leaves the slot tombstoned to zero "
-			"bytes (so `string_arc`'s implicit drop-before-"
+			"bytes (so the pipeline's implicit drop-before-"
 			"overwrite would touch live bytes)."
 		),
 	)

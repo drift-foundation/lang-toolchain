@@ -2,7 +2,9 @@
 """Regression: variant local conditionally moved across match arms must be
 destroyed at scope exit on the non-move path.
 
-Without the fix in string_arc.py, the scope-exit destroy for a variant
+Without the fix (historically in string_arc; now the site-3
+PATH_DEPENDENT widening in `site3_return_decision`), the scope-exit
+destroy for a variant
 local assigned in a match arm and moved on only one sub-arm is omitted.
 The variant's internal heap allocations (e.g. HashMap backing arrays
 from clone_deep) leak on every call.

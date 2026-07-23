@@ -184,9 +184,8 @@ def check(
 	"""
 	Prospective hook for sites 3 and 4.
 
-	Sites 3/4 run in the `string_arc` pass, which operates on a finished
-	MIR; the ledger is already built and the site can query at decision
-	time.  The returned record is classified identically to retrospective
+	Sites 3/4 are decided at the plan slot over a finished MIR; the
+	ledger is already built and the site can query at decision time.  The returned record is classified identically to retrospective
 	events — so downstream triage aggregates both APIs through one
 	schema.
 
@@ -285,12 +284,12 @@ def collecting_emit() -> Tuple[Emit, list[DisagreementRecord]]:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# B-arch-0: string_arc differential stake reporter (Scope B §11.2).
+# B-arch-0: string-ownership differential stake reporter (Scope B §11.2).
 #
 # OBSERVATIONAL ONLY.  Off by default; enabled by DRIFT_STRING_ARC_AUDIT=1.
-# When disabled, string_arc constructs no audit object and emits nothing —
+# When disabled, the pipeline constructs no audit object and emits nothing —
 # behavior-identical compilation.  When enabled, the audit records one
-# StringStakeEvent per string_arc-emitted refcount instruction (tagged at
+# StringStakeEvent per pipeline-emitted refcount instruction (tagged at
 # the emission point from the CLOSED site_class enumeration below), then
 # diffs the pass's input ledger (L_pre) against a ledger rebuilt on its
 # output MIR (L_post) and classifies every divergence into the closed
@@ -305,7 +304,7 @@ STAKE_RETAIN = "RETAIN"
 STAKE_RELEASE = "RELEASE"
 STAKE_MOVEOUT_EXPANSION = "MOVEOUT_EXPANSION"
 
-# CLOSED site_class enumeration — every string_arc emission point tags
+# CLOSED site_class enumeration — every pipeline emission point tags
 # itself with one of these AT the emission site (never inferred).  The
 # enumeration itself is a B-arch-0 deliverable: relative to the plan's
 # draft list, `temp_lastuse_release` (SSA-temp last-use releases inside
@@ -327,7 +326,7 @@ SITE_CLASS_RETURN_RETAIN_SITE3 = "return_retain_site3"
 SITE_CLASS_OVERWRITE_RELEASE = "overwrite_release"
 SITE_CLASS_SCOPE_EXIT_RELEASE = "scope_exit_release"
 # temp_lastuse_release: RETIRED from the closed set (tripwire-deletion
-# slice, 2026-07-18) — string_arc's in-pass last-use release arm went
+# slice, 2026-07-18) — the legacy in-pass last-use release arm went
 # corpus-zero when the TLR ladder closed (temp_lastuse 618,744 → 0
 # across TLR-1..7), was fail-closed (release-arm tripwire, 2026-07-16;
 # one production catch, TLR-8), and was DELETED after the clean
@@ -340,7 +339,7 @@ SITE_CLASS_TEMP_LASTUSE_RELEASE = "temp_lastuse_release"
 # of a family temp (`is_materialized_release_family_producer` — fn-wide
 # unique producer, all-USE occurrences, dead after the drain block)
 # AUTHORED by the string_releases materialization pass and noted at
-# string_arc's recognition arm as it copies the pre-materialized
+# the normalization pass's recognition arm as it copies the pre-materialized
 # StringRelease through.  Covers the ENTIRE lifetime population
 # (618,744).  Originally introduced by the TLR-1 option-B shim
 # (2026-07-14) as a classification split at the old in-pass emission
@@ -456,7 +455,7 @@ def string_arc_audit_enabled() -> bool:
 
 @dataclass(frozen=True, slots=True)
 class StringStakeEvent:
-	"""One string_arc-emitted refcount instruction (or MoveOut expansion).
+	"""One pipeline-emitted refcount instruction (or MoveOut expansion).
 
 	`pre_point` is the (block, index) of the SOURCE instruction being
 	rewritten when the emission happened — the L_pre-queryable anchor.
@@ -490,8 +489,8 @@ class _ReturnBoundary:
 @dataclass(frozen=True, slots=True)
 class C1BoundaryFrozen:
 	"""One Return-boundary's FROZEN ledger-A C1 inputs, computed at the
-	pre-string_arc plan slot (B2+C S5).  Reproduces byte-for-byte what
-	string_arc's monolithic finalize used to derive live from `l_pre` at
+	pre-normalization plan slot (B2+C S5).  Reproduces byte-for-byte what
+	the legacy monolithic finalize used to derive live from `l_pre` at
 	the ORIGINAL return coordinate.
 
 	Fields:
@@ -499,7 +498,7 @@ class C1BoundaryFrozen:
 	  * `string_locals` — the sorted fn-wide String population (C1's
 	    quantification universe at this boundary);
 	  * `skipped` — the sorted skip set (= `string_locals - released`),
-	    the same value string_arc passed as `note_return_boundary(skipped=)`;
+	    the same value the legacy pass passed as `note_return_boundary(skipped=)`;
 	  * `released` — the ORDERED R3/R4 release set (`string_return_releases`
 	    result), the source both of the synthesized `scope_exit_release`
 	    events AND of C1's `released_at`;
@@ -522,7 +521,7 @@ class C1Contribution:
 	merged into the SINGLE deferred `StringArcAudit.finalize` (B2+C S5).
 
 	Carries the whole C1 ledger-A half so the release EMISSION can leave
-	string_arc without shifting `scope_exit_release`, `c1_agree`,
+	the emitting pass without shifting `scope_exit_release`, `c1_agree`,
 	`c1_path_dependent`, or the pre/post verdict-drift accounting.  Held
 	driver-local (parallel to `_dplans`), never on the MIR and never inside
 	the immutable `CleanupPlan`."""
@@ -625,7 +624,7 @@ def _bump(agg: dict, key: str, n: int = 1) -> None:
 
 # ── Slice B1 (2026-07-20): strict counted-only supplemental recorder ──
 #
-# The overwrite-cleanup pass runs AFTER string_arc has finalized its
+# The overwrite-cleanup pass runs AFTER the driver has finalized the
 # per-fn audit, so it cannot fold its notes through StringArcAudit
 # (that would re-run C1/C2/C3, emit `skipped_no_ledger`, and double
 # `fns`).  This recorder folds ONLY explicitly-allow-listed
@@ -638,7 +637,7 @@ def _bump(agg: dict, key: str, n: int = 1) -> None:
 _SUPPLEMENTAL_ALLOWED = frozenset({
 	SITE_CLASS_OVERWRITE_RELEASE,
 	# B2+C S4 (2026-07-21): site-4 drop-before-overwrite drops migrated
-	# from string_arc's per-MUST_DROP `_audit.note(...)` into
+	# from the legacy per-MUST_DROP `_audit.note(...)` into
 	# `overwrite_cleanup`'s counted-only recorder (the 14 corpus-wide),
 	# keeping the aggregate `site_class:drop_before_overwrite_site4` +
 	# `events` totals unchanged.
@@ -671,14 +670,16 @@ def record_counted_only(site_class: str, n: int = 1) -> None:
 class StringArcAudit:
 	"""Per-function collector + differential classifier.
 
-	DEFERRED-FINALIZE LIFECYCLE (B2+C S5): the DRIVER — not string_arc — is
+	DEFERRED-FINALIZE LIFECYCLE (B2+C S5): the DRIVER — not the emitting
+	pass — is
 	the sole lifecycle authority.  When the audit env is set, the driver
-	creates ONE collector per function, passes it to `insert_string_arc` (a
+	creates ONE collector per function, passes it to the normalization
+	pass (a
 	note PRODUCER only; every recording call is guarded on the collector
 	being non-None, so the disabled path allocates nothing and emits
 	nothing), and runs the SINGLE `finalize` AFTER the unified Return emitter
 	has appended the string releases + site-3 drops — so the deferred
-	`l_post` sees them.  string_arc no longer records the scope-exit releases
+	`l_post` sees them.  No pass records the scope-exit releases
 	nor the Return boundaries; those are reconstructed from the driver-local
 	frozen `C1Contribution` inside `finalize` (its `c1_contribution` split
 	path).  `finalize` also keeps the MONOLITHIC path (`c1_contribution=None`)
@@ -758,7 +759,7 @@ class StringArcAudit:
 
 		The subject's OWN flag must be the branch condition — a load of
 		any other local's flag does not qualify.  Terminators and the
-		predecessor's LoadLocal survive string_arc's instruction
+		predecessor's LoadLocal survive the pipeline's instruction
 		rewrites (the pass inserts, it does not remove loads or touch
 		IfTerminators), so this check is stable at finalize time."""
 		if func is None or preds is None:
@@ -803,10 +804,10 @@ class StringArcAudit:
 
 		`c1_contribution` (B2+C S5): the deferred single-finalize SPLIT
 		path.  When supplied (production; the plan slot froze the C1
-		ledger-A half at the pre-string_arc coordinate), the C1 boundary
+		ledger-A half at the pre-normalization coordinate), the C1 boundary
 		universe, the scope-exit `released` set, and the per-(point, local)
 		pre-verdict/raw-state come from the FROZEN contribution rather than
-		from pass-recorded events + a live `l_pre` re-query; string_arc no
+		from pass-recorded events + a live `l_pre` re-query; the pipeline no
 		longer emits the releases nor records their events, so this method
 		SYNTHESIZES the `scope_exit_release` events from `released` (exactly
 		once) before any counting so `events`, `site_class:scope_exit_release`
@@ -816,7 +817,7 @@ class StringArcAudit:
 		compares the FROZEN ledger-A pre-verdict against the caller-built
 		`l_post` — `l_pre` is never re-queried for C1 in the split path.
 
-		`func` (the MirFunc, terminators un-rewritten by string_arc) and
+		`func` (the MirFunc, terminators un-rewritten by the pipeline) and
 		`zero_safe_ty` (TypeId -> bool: zeroed bytes of this type are
 		drop-safe; production passes
 		`drop_policy_compute.zero_storage_drop_safe` — variants +
@@ -825,12 +826,13 @@ class StringArcAudit:
 		non-LIVE MoveOut classifies as it did pre-slice-2 (divergent),
 		never silently as an agree class."""
 		# B2+C S5 split/merge PRELUDE (must run BEFORE any counting).  When a
-		# frozen C1 contribution is supplied, string_arc emitted no scope-exit
+		# frozen C1 contribution is supplied, the emitting pass authored no
+		# pass-recorded scope-exit
 		# releases and recorded neither their events nor the Return boundaries;
 		# rebuild both from the frozen ledger-A half so every downstream count
 		# (events, site_class:scope_exit_release, C1 released_at) is
 		# byte-identical to the old monolithic pass.  Exactly once, no double
-		# count: string_arc no longer produces these events, so the synthesis
+		# count: no pass produces these events anymore, so the synthesis
 		# is their SOLE source.
 		# S5 closure — exactly-once: the guard fires BEFORE any event append
 		# or aggregate fold, so a double finalize can never double-count.
@@ -853,13 +855,13 @@ class StringArcAudit:
 				raise AssertionError(
 					f"string_arc_audit[{self.fn_name}]: split finalize received both "
 					f"a frozen C1 contribution and pass-recorded return boundaries "
-					f"(double C1 source — string_arc must not call note_return_boundary "
+					f"(double C1 source — no pass may call note_return_boundary "
 					f"under the deferred-finalize contract)"
 				)
 			if any(ev.site_class == SITE_CLASS_SCOPE_EXIT_RELEASE for ev in self.events):
 				raise AssertionError(
 					f"string_arc_audit[{self.fn_name}]: split finalize received "
-					f"pass-recorded scope_exit_release events (string_arc must not "
+					f"pass-recorded scope_exit_release events (a pass must not "
 					f"emit releases under the deferred-finalize contract — double count)"
 				)
 			for _b in c1_contribution.boundaries:
@@ -978,7 +980,7 @@ class StringArcAudit:
 							point=list(rb.point), pre=verdict.value, post=v_post.value)
 
 		# C2: every retain is a stake the ledger has no event model for
-		# (StringRetain/StringRelease are string_arc's private
+		# (StringRetain/StringRelease are the pipeline's private
 		# vocabulary).  Operationalization: a RETAIN is a visible stake
 		# only if its subject is a ledger-tracked storage local whose
 		# pre-state at the emission anchor the lattice already models as
@@ -994,7 +996,7 @@ class StringArcAudit:
 			if ev.site_class == SITE_CLASS_RETURN_RETAIN_SITE3:
 				# Structurally extinct since Phase 4 (zero events across
 				# every corpus generation); with the C4 allowlist
-				# retired, a reappearance is a string_arc regression.
+				# retired, a reappearance is a pipeline regression.
 				_detail(DIV_UNCLASSIFIED,
 					kind="return_retain_site3_regression_retired_c4",
 					subject=ev.subject, point=list(ev.pre_point))

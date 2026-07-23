@@ -190,11 +190,11 @@ def author_match_cleanup(
 			#   1. load *slot_addr → loaded_value
 			#   2. tombstone bytes for `field_ty` written back to *slot_addr
 			#   3. transfer loaded_value into drop_tmp's storage
-			# `string_arc` recognises `MoveFromRef` as a TRANSFER
+			# the ownership pipeline treats `MoveFromRef` as a TRANSFER
 			# (no `StringRetain` insertion); the tail-chain `MoveOut +
 			# DropValue` then releases the transferred stake exactly
 			# once.  Pre-`MoveFromRef` this was `LoadRef + StoreLocal`,
-			# which `string_arc.StoreLocal` rewrote with a retain —
+			# which the legacy string-ARC StoreLocal arm rewrote with a retain —
 			# the net release count came out to zero, leaking the
 			# slot's original +1 (carrier:
 			# `lang/tests/memcheck/test_partial_move_copy_binder_string_slot_leak.py`).

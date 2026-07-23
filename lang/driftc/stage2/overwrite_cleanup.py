@@ -14,28 +14,28 @@ the two instruction-local families measured in Slice B:
        StoreLocal into an Array local.  Emits `ArrayDrop` of the
        prior array (143,008 corpus).
 
-PLACEMENT: runs AFTER `string_arc` (dedicated driver bucket).
-string_arc keeps its own `_note_use` bookkeeping for these stores;
-this pass adds ONLY the old-value release/drop, immediately BEFORE
-each eligible store, preserving old-value-before-new-store order and
-the store's span.  Running after string_arc keeps its
-recognition/occurrence-counting walk from ever seeing these releases,
-and needs NO ledger (R2/R7 are pure structural type checks).
+PLACEMENT: runs LAST in the ownership pipeline (dedicated driver
+bucket, after ownership normalization, the unified Return authority,
+and the audit L_post build).  This pass adds ONLY the old-value
+release/drop, immediately BEFORE each eligible store, preserving
+old-value-before-new-store order and the store's span.  Running after
+normalization keeps the plan-window recognition from ever seeing these
+releases, and needs NO ledger (R2/R7 are pure structural type checks).
 
 PROVENANCE (review 2026-07-20): a `StoreLocal(String|Array, zeroval)`
 is NOT categorically a non-overwrite — an INPUT-stream
-`ZeroValue(String) -> StoreLocal` into a live slot IS a real overwrite
-(string_arc recognizes fresh input ZeroValue Strings as valid owned
-empty values).  We must skip ONLY the zero-back stores string_arc
-ITSELF synthesized (entry init, `_release_local`, `_drop_*`, MoveOut
-expansion) — those were absent from the input the old R2/R7 arms
-walked.  string_arc marks each such store `synthetic_zero_back=True`;
-this pass skips exactly the marked stores, never inferring provenance
-from value shape, temp name, or adjacency.
+`ZeroValue(String) -> StoreLocal` into a live slot IS a real overwrite.
+We must skip ONLY the PIPELINE-synthesized zero-back stores (ownership
+normalization's R1 entry init + R5 MoveOut expansion, the unified
+Return authority's bands, and this pass's own plan phase) — each is
+marked `synthetic_zero_back=True` at authoring; this pass skips exactly
+the marked stores, never inferring provenance from value shape, temp
+name, or adjacency.  (The marks are stripped again at the END of this
+pass, after every consumer has run.)
 
 RETAIN-BEFORE-RELEASE / self-alias (`x = x`): the store-VALUE copy
 stake (retain) is materialized upstream by
-`string_stakes.materialize_call_arg_stakes` BEFORE string_arc, so a
+`string_stakes.materialize_call_arg_stakes` (pre-normalization), so a
 release here can never drop the shared refcount below the retain.
 
 COMPLETENESS: an INDEPENDENT pre-rewrite inventory of eligible sites
@@ -50,11 +50,11 @@ aggregate via the reporter's strict counted-only recorder (env-gated).
 R7 array drops carry no counter (as before this slice).
 
 B2+C S4 (2026-07-21): the null-safe + site-4 drop-before-overwrite
-destructible cleanups now emit HERE, driven by the frozen `CleanupPlan`
-`destructible_planner` builds at the pre-string_arc ledger-A slot (a
+destructible cleanups emit HERE, driven by the frozen `CleanupPlan`
+`destructible_planner` builds at the pre-normalization ledger-A slot (a
 mandatory, non-`None` plan; an empty frozen plan for functions with no
-destructible decisions).  Site-3 destructible Return cleanup remains
-string_arc's authority until the unified Return authority (S5); this pass
+destructible decisions).  Site-3 destructible Return cleanup is the
+unified Return authority's (`return_cleanup_emitter`, S5); this pass
 only PRESERVES + postflight-validates the plan's site-3 anchors.
 """
 
@@ -89,8 +89,9 @@ def _is_string_tid(type_table: TypeTable, tid: "TypeId | None", string_ty: TypeI
 
 
 def _is_synthetic_zero_back(instr: M.MInstr) -> bool:
-	"""True iff string_arc marked this as one of its OWN synthetic
-	zero-back stores (explicit provenance — never a shape guess)."""
+	"""True iff the ownership pipeline marked this as one of its OWN
+	synthetic zero-back stores (explicit provenance — never a shape
+	guess)."""
 	return bool(getattr(instr, "synthetic_zero_back", False))
 
 
@@ -103,7 +104,7 @@ def _eligible_kind(
 	array_locals: Set[str],
 ) -> "str | None":
 	"""Return the eligible-site kind for `instr`, or None.  A
-	string_arc-synthesized zero-back is explicitly NOT eligible."""
+	pipeline-synthesized zero-back is explicitly NOT eligible."""
 	if isinstance(instr, M.StoreLocal):
 		if _is_synthetic_zero_back(instr):
 			return None
@@ -138,7 +139,7 @@ def insert_overwrite_cleanup(
 ) -> M.MirFunc:
 	"""Author instruction-local overwrite releases/drops in `func`.
 
-	Runs after `string_arc`.  Mutates `func` in place and returns it.
+	Runs after ownership normalization.  Mutates `func` in place and returns it.
 
 	B2+C S4 (2026-07-21): `plan` (a frozen destructible `CleanupPlan` from
 	`destructible_planner`) is MANDATORY.  A SEPARATE EmitterPhase runs
@@ -195,7 +196,7 @@ def insert_overwrite_cleanup(
 					)
 				inventory[id(instr)] = (k, instr)
 
-	# Fresh-temp generator that cannot collide with string_arc's
+	# Fresh-temp generator that cannot collide with normalization's
 	# already-emitted `__arc*` temps (they are in local_types now).
 	used_ids: Set[str] = set(local_types.keys())
 	counter = 0
@@ -289,8 +290,8 @@ def insert_overwrite_cleanup(
 
 	# ── B2+C S4 (2026-07-21): consume the FROZEN destructible plan ──
 	# The null-safe + site-4 drop-before-overwrite cleanups formerly
-	# authored inline by string_arc emit HERE, driven by the plan
-	# `destructible_planner` froze at the pre-string_arc ledger-A slot.
+	# authored inline by the legacy string_arc emit HERE, driven by the plan
+	# `destructible_planner` froze at the pre-normalization ledger-A slot.
 	# SEPARATE EmitterPhase: preflight stage → rewrite → postflight commit,
 	# so a decision is consumed only once its anchor re-validates against
 	# the mutated MIR.  The drop lands IMMEDIATELY BEFORE its store
@@ -402,7 +403,7 @@ def insert_overwrite_cleanup(
 				overwrite_release_count,
 			)
 		# Preserve string_arc's former per-MUST_DROP site-4 note (14
-		# corpus-wide): the count moved from string_arc's `_audit.note(...
+		# corpus-wide): the count moved from the legacy `_audit.note(...
 		# SITE_CLASS_DROP_BEFORE_OVERWRITE_SITE4 ...)` to this counted-only
 		# recorder, keeping the aggregate `events` + site_class total.
 		# Null-safe has NO counter (unmeasured) — emit nothing for it.
@@ -415,7 +416,7 @@ def insert_overwrite_cleanup(
 	# `ow_authored_for` (host-process object ids) and `synthetic_zero_back`
 	# (migration provenance) are validation-only metadata.  Every consumer
 	# has now run — the R2 recognition skip and `_validate` above, the plan
-	# emission validator, the planner's pre-string_arc tripwire, the
+	# emission validator, the planner's pre-normalization tripwire, the
 	# Return-emitter's own pre-commit checks, and the audit L_post (built
 	# before this pass) — so neither attribute may survive into output MIR.
 	_strip_transient_attrs(func)
@@ -435,7 +436,7 @@ def _strip_transient_attrs(func: M.MirFunc) -> None:
 
 
 def _emit_local_release(out, local, string_ty, new_temp, local_types, copy_span, src):
-	"""Reproduce string_arc's `_release_local`: load the old value,
+	"""Reproduce the legacy `_release_local`: load the old value,
 	zero the slot, release the old value — immediately before the
 	overwriting store.  Span copied from the store.  Returns the
 	authored `StringRelease` (the caller tags it with the site id)."""

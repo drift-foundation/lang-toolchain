@@ -8,7 +8,7 @@ surface is gone.  The equivalent ownership shape is
 `core.diagnostic_json_string(&fmt.format_int(code))` returning the
 JSON-quoted String.  The borrowed `&` of an owned temporary still
 needs the source release to fire after the helper returns; without
-the ownership split, string_arc would miss the release for the temp
+the ownership split, the legacy consumer would miss the release for the temp
 → leak per call.
 
 This test asserts zero definitely-lost bytes.

@@ -3,8 +3,9 @@
 ownership/cleanup passes.
 
 Scans the scoped ownership/cleanup passes (`drop_flags.py`,
-`cleanup_authoring.py`, `match_cleanup_authoring.py`, `string_arc.py`,
-`string_stakes.py`, `overwrite_cleanup.py`) for the mutation
+`cleanup_authoring.py`, `match_cleanup_authoring.py`,
+`ownership_normalization.py`, `string_stakes.py`,
+`overwrite_cleanup.py`) for the mutation
 patterns enumerated in `work/ledger-cache-safety/plan.md` and
 requires each match to be paired with EITHER:
 
@@ -45,7 +46,7 @@ SCOPED_FILES = (
 	"lang/driftc/stage2/drop_flags.py",
 	"lang/driftc/stage2/cleanup_authoring.py",
 	"lang/driftc/stage2/match_cleanup_authoring.py",
-	"lang/driftc/stage2/string_arc.py",
+	"lang/driftc/stage2/ownership_normalization.py",
 	# B-arch-1a: the call-arg stake materialization pass mutates
 	# block.instructions and must follow the same dirty-bit discipline.
 	"lang/driftc/stage2/string_stakes.py",

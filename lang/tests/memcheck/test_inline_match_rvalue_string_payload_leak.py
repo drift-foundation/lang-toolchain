@@ -39,7 +39,7 @@ refcount stays > 0 at process exit.
 
 Likely fix site: lowering/drop scheduling for match-arm result bindings
 where the payload-move is the match-expression value (stage2 HIR→MIR
-or string_arc.py drop-flag insertion for variant-payload move-out at
+or ownership-pipeline drop-flag insertion for variant-payload move-out at
 arm exit).
 """
 from __future__ import annotations

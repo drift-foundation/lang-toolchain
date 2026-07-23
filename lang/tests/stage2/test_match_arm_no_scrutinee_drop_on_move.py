@@ -118,7 +118,7 @@ def test_match_ok_arm_no_scrutinee_drop_for_destructible_payload() -> None:
 		# 1117-1124 in hir_to_mir.py).  CopyValue means the payload was treated
 		# as Copy — the bug.
 		#
-		# Note: string_arc may emit its own DropValue for the scrutinee local at
+		# Note: the pipeline may emit a DropValue for the scrutinee local at
 		# return blocks — this is correct because the variant drop checks the tag
 		# and only drops the active arm's fields (which were zeroed for the moved
 		# Ok payload).  The bug is specifically when CopyValue is used instead of
@@ -142,7 +142,7 @@ def test_match_ok_arm_no_scrutinee_drop_for_destructible_payload() -> None:
 					has_moveout_for_server = True
 				if isinstance(instr, M.CopyValue) and getattr(instr, "ty", None) == server_tid:
 					has_copyvalue_for_server = True
-				# string_arc expands MoveOut to LoadLocal — check for the
+				# normalization expands MoveOut to LoadLocal — check for the
 				# __match_field_move pattern which is the MoveOut expansion.
 				if isinstance(instr, M.StoreLocal):
 					local = getattr(instr, "local", "")

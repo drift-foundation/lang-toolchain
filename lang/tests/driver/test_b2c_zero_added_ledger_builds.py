@@ -4,8 +4,9 @@
 The B2+C architecture promise: the frozen decision plan reuses ledger A
 (built once, `driftc.rebuild_after_cleanup_authoring`) and every emitter
 consumes the frozen plan — NO B2+C consumer (`build_destructible_plan`,
-`insert_string_arc`, `emit_return_cleanups`, `insert_overwrite_cleanup`)
-forces an intermediate ledger rebuild, and the build-reason population
+`normalize_ownership_mir`, `emit_return_cleanups`,
+`insert_overwrite_cleanup`) forces an intermediate ledger rebuild, and
+the build-reason population
 is EXACTLY the pre-B2+C fixed set:
 
     driftc.initial_build
@@ -164,8 +165,8 @@ def _instrument(monkeypatch):
 		_zero_delta("build_destructible_plan", D.build_destructible_plan,
 			count_planned=True))
 	monkeypatch.setattr(
-		D, "insert_string_arc",
-		_zero_delta("insert_string_arc", D.insert_string_arc))
+		D, "normalize_ownership_mir",
+		_zero_delta("normalize_ownership_mir", D.normalize_ownership_mir))
 	monkeypatch.setattr(
 		RCE, "emit_return_cleanups",
 		_zero_delta("emit_return_cleanups", RCE.emit_return_cleanups))
@@ -236,7 +237,7 @@ def _assert_clean_compile_and_consumers(ir, checked, state) -> None:
 	assert state["planned_fns"] > 0, "build_destructible_plan never ran"
 	deltas = state["consumer_deltas"]
 	assert set(deltas) == {
-		"build_destructible_plan", "insert_string_arc",
+		"build_destructible_plan", "normalize_ownership_mir",
 		"emit_return_cleanups", "insert_overwrite_cleanup",
 	}, f"a B2+C consumer never ran: {deltas}"
 	offenders = {k: v for k, v in deltas.items() if v != 0}
@@ -320,18 +321,19 @@ def test_attribution_check_fails_on_missing_lpost_build() -> None:
 
 
 def test_b2c_modules_cannot_build_ledgers_source_pin() -> None:
-	"""Source pin over the COMPLETE B2+C plan-window/consumer surface —
-	including string_arc (a named consumer) and the R8 plan-window module:
-	none of them may even NAME a ledger-build entry point, so a
-	consumer-side rebuild cannot be reintroduced without tripping this
-	pin (even through a pre-bound alias the runtime counter would miss)."""
+	"""Source pin over the COMPLETE plan-window/consumer surface —
+	including ownership_normalization (a named consumer) and the R8
+	plan-window module: none of them may even NAME a ledger-build entry
+	point, so a consumer-side rebuild cannot be reintroduced without
+	tripping this pin (even through a pre-bound alias the runtime counter
+	would miss)."""
 	import lang.driftc.stage2.cleanup_plan as m1
 	import lang.driftc.stage2.cleanup_payloads as m2
 	import lang.driftc.stage2.destructible_authority as m3
 	import lang.driftc.stage2.destructible_planner as m4
 	import lang.driftc.stage2.return_cleanup_emitter as m5
 	import lang.driftc.stage2.overwrite_cleanup as m6
-	import lang.driftc.stage2.string_arc as m7
+	import lang.driftc.stage2.ownership_normalization as m7
 	import lang.driftc.stage2.string_ownership_analysis as m8
 	for mod in (m1, m2, m3, m4, m5, m6, m7, m8):
 		src = Path(mod.__file__).read_text()

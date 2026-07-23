@@ -4,7 +4,7 @@ Central MIR control-flow-graph successor contract.
 
 Single source of truth for "given a block / terminator, which basic blocks may it
 branch to".  Every MIR pass that walks the CFG (drop & liveness dataflow in
-`ownership_ledger`/`string_arc`, cleanup authoring, SSA, dominance) consults these
+`ownership_ledger`/`ownership_normalization`, cleanup authoring, SSA, dominance) consults these
 helpers (which delegate to `MTerminator.successors()` / `.successor_edges()`)
 instead of hand-rolling `isinstance(term, Goto) → … ; isinstance(term, IfTerminator)
 → …` dispatch.

@@ -1,5 +1,5 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Driver-boundary containment for the pre-string_arc destructible PLAN
+"""Driver-boundary containment for the pre-normalization destructible PLAN
 build (`with _timed("destructible_plan"):` loop in `driftc.py`).
 
 The plan build reuses the shared destructible authority; its failure modes
@@ -115,7 +115,7 @@ def _make_table_ghost_boom(table_name: str, value_factory):
 	`main`, reaches the driver's local contribution table `table_name` via the
 	frame stack and injects a ghost key with no corresponding MIR function —
 	forcing the (otherwise structurally-unreachable) table-completeness guard
-	that runs BEFORE string_arc.  A missing entry trips the SAME set-equality
+	that runs BEFORE any consumer.  A missing entry trips the SAME set-equality
 	guard (the comparison is symmetric), so the ghost injection covers both
 	directions per table."""
 	import sys
@@ -157,7 +157,7 @@ def test_plan_set_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""A plan-set / function-set MISMATCH (a plan present for no function, or
 	vice-versa) is boundary-contained as phase `destructible_plan` with a clean
 	`internal:` diagnostic — NOT a bare `AssertionError` traceback.  The guard
-	now runs BEFORE string_arc (S5/S6 closure: no consumer runs before
+	now runs BEFORE every consumer (S5/S6 closure: no consumer runs before
 	completeness is proven)."""
 	ir, checked = _compile_with_injected_plan_error(
 		tmp_path, monkeypatch, _make_table_ghost_boom("_dplans", lambda r: r[0]))
@@ -166,8 +166,8 @@ def test_plan_set_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 
 def test_r8_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""S5/S6 closure: an R8-recognition table that does not exactly match the
-	MIR function set is contained BEFORE string_arc — a missing entry must
-	never silently select string_arc's direct-recomputation fallback."""
+	MIR function set is contained BEFORE any consumer — a missing entry must
+	never silently select the direct-recomputation R8 fallback."""
 	ir, checked = _compile_with_injected_plan_error(
 		tmp_path, monkeypatch,
 		_make_table_ghost_boom("_r8contrib", lambda r: object()))
@@ -176,7 +176,7 @@ def test_r8_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 
 def test_audit_collector_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""S5 closure (audit enabled): a collector table that does not exactly
-	match the MIR function set is contained before string_arc — a missing
+	match the MIR function set is contained before any consumer — a missing
 	collector must never surface later as a finalize-time failure."""
 	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
 	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
@@ -188,8 +188,8 @@ def test_audit_collector_table_mismatch_is_boundary_contained(tmp_path, monkeypa
 
 def test_c1_table_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""S5 closure (audit enabled): a frozen-C1 table that does not exactly
-	match the MIR function set is contained before string_arc — a missing
-	entry must never silently select the monolithic finalize path (string_arc
+	match the MIR function set is contained before any consumer — a missing
+	entry must never silently select the monolithic finalize path (the pipeline
 	no longer records C1; the class would silently disappear)."""
 	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT", "1")
 	monkeypatch.setenv("DRIFT_STRING_ARC_AUDIT_FILE", str(tmp_path / "audit.jsonl"))
@@ -226,7 +226,7 @@ def test_plan_value_type_mismatch_is_boundary_contained(tmp_path, monkeypatch) -
 
 def test_r8_value_type_mismatch_is_boundary_contained(tmp_path, monkeypatch) -> None:
 	"""S7+S8 defensive polish: a non-R8Recognition VALUE in the R8 table
-	(complete key set, foreign value) is contained before string_arc."""
+	(complete key set, foreign value) is contained before any consumer."""
 	import lang.driftc.stage2.string_ownership_analysis as SOA
 
 	_real_r8 = SOA.compute_recognized_releases

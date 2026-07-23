@@ -4,7 +4,8 @@
 #
 # Pins the single authoritative answer to "which blocks may a terminator branch
 # to" — `MTerminator.successors()` / `.successor_edges()` and the `cfg` helpers
-# that delegate to them.  Every CFG-walking pass (ownership_ledger, string_arc,
+# that delegate to them.  Every CFG-walking pass (ownership_ledger,
+# ownership_normalization,
 # cleanup_authoring, ssa, dom) is being migrated to consult these; this test is the
 # one place that guarantees each terminator reports its successors correctly, so a
 # new terminator (or a changed one) is caught here rather than silently mis-walked

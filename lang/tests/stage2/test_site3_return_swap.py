@@ -2,8 +2,9 @@
 """
 Phase 3B step 2 — `string_arc_return` consumer-swap pin.
 
-Pins the consumer-swap contract for site 3 in `string_arc.py`'s
-function-exit cleanup loop:
+Pins the consumer-swap contract for site 3, now decided at the frozen
+plan (`site3_return_decision`) and emitted by the unified Return
+authority:
 
 - Site 3 emits drops at function-exit Return blocks for destructible
   locals via `_drop_all_destructibles`, gated by `skip_cleanup_locals`
@@ -19,7 +20,8 @@ function-exit cleanup loop:
   `drop_flags`, NOT ad-hoc string matching at the site.
 
 These tests build minimal MIR fixtures, run `insert_drop_flags`
-followed by `insert_string_arc`, and assert MIR-shape outcomes:
+followed by the production plan → normalization → Return-cleanup
+sequence, and assert MIR-shape outcomes:
 
   - Flagged local: one drop emission (3C's, in the
     `<orig>_drop_<L>` block) + zero from site 3.
@@ -48,14 +50,7 @@ from lang.driftc.stage2 import mir_nodes as M
 from lang.driftc.stage2.drop_flags import insert_drop_flags, is_flag_managed, flag_local_name_for
 from lang.driftc.stage2.drop_policy_compute import compute_drop_policy
 from lang.driftc.stage2.ownership_ledger import build_ledger
-# BARE-USE SAFETY: this file's funcs construct NO family producers
-# (no ConstString/Concat/StringFrom*/CopyValue/Exc* temps), so bare
-# insert_string_arc leaves nothing under-released (string_arc authors
-# no last-use releases of its own — tripwire-deletion slice,
-# 2026-07-18).  Adding family temps with non-consuming last uses
-# requires the _run_pipeline pattern
-# (see test_string_arc_audit_reporter.py).
-from lang.driftc.stage2.string_arc import insert_string_arc, variant_zero_tag_drop_safe
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 
 
 def _drop_policy_for(type_table: TypeTable):
@@ -66,7 +61,7 @@ def _drop_policy_for(type_table: TypeTable):
 
 def _make_droppable_struct(type_table: TypeTable, name: str = "DropMe") -> int:
 	"""String-bearing destructible struct.  String-as-field gets it
-	into `string_arc.destructible_locals` (via recursive
+	into the destructible classification (via recursive
 	`_type_needs_drop`); destructor_fns entry makes it non-nullsafe
 	so it follows the conditional `initialized_at_return` flow."""
 	string_ty = type_table.ensure_string()
@@ -106,7 +101,7 @@ def _run_cleanup_then_attach_ledger(func: M.MirFunc, type_table: TypeTable) -> N
 	cleanup_authoring (which emits MoveOut+DropValue at CleanupHook
 	positions — guarded, edge-elaborated, or unguarded — depending on
 	verdict and flag-managed status), then rebuild the ledger so
-	string_arc consults the post-authoring per-instruction state.
+	the plan slot consults the post-authoring per-instruction state.
 
 	Matches the production driver order at `driftc.py`."""
 	from lang.driftc.stage2.cleanup_authoring import author_cleanup
@@ -116,15 +111,15 @@ def _run_cleanup_then_attach_ledger(func: M.MirFunc, type_table: TypeTable) -> N
 
 
 def _arc_and_return_emit(func: M.MirFunc, type_table: TypeTable) -> None:
-	"""B2+C S5 pipeline: build the frozen plan at the pre-string_arc ledger-A
-	slot, run string_arc (which no longer emits the site-3 destructible drop
-	tail), then the unified Return authority (`return_cleanup_emitter`) which
-	now authors that tail.  Matches the production driver order — the site-3
-	drops appear in the FINAL MIR, authored by the emitter, not string_arc."""
+	"""Production pipeline: build the frozen plan at the pre-mutation
+	ledger-A slot, run ownership normalization (R1/R5), then the unified
+	Return authority (`return_cleanup_emitter`) which authors the site-3
+	drop tail.  Matches the production driver order — the site-3 drops
+	appear in the FINAL MIR, authored by the emitter."""
 	from lang.driftc.stage2.destructible_planner import build_destructible_plan
 	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
 	plan, _census, _c1 = build_destructible_plan(func, type_table=type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	normalize_ownership_mir(func, type_table=type_table, fn_infos={})
 	emit_return_cleanups(func, plan)
 
 
@@ -177,11 +172,11 @@ def _build_one_flagged_one_unflagged(type_table: TypeTable) -> M.MirFunc:
 
 def _all_drop_destructible_pairs_for(func: M.MirFunc, local_name: str) -> list[tuple[str, int]]:
 	"""Return [(block_name, instr_idx_of_DropValue), ...] for every
-	post-string_arc drop emission of `local_name` — i.e. each
+	post-pipeline drop emission of `local_name` — i.e. each
 	`LoadLocal(t, L) ... DropValue(t)` sequence.
 
 	Both site 3's `_drop_destructible_local` and Phase 3C's drop-block
-	`MoveOut+DropValue` are expanded by string_arc into
+	`MoveOut+DropValue` are expanded by normalization into
 	`LoadLocal+ZeroValue+StoreLocal+DropValue`.  Counting the post-
 	expansion shape catches both, which is what double-drop accounting
 	requires."""
@@ -215,7 +210,7 @@ def test_site3_skips_flagged_local_at_return() -> None:
 	assert is_flag_managed(func, "flagged"), "test setup: 3C did not flag `flagged`"
 	assert not is_flag_managed(func, "unflagged"), "test setup: `unflagged` was unexpectedly flagged"
 	_run_cleanup_then_attach_ledger(func, type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	_arc_and_return_emit(func, type_table)
 	# Count drops for `flagged`: 3C's drop block contributes exactly
 	# one `MoveOut(flagged) + DropValue` pair; site 3 must contribute
 	# zero.  Total = 1.
@@ -244,7 +239,7 @@ def test_site3_still_drops_unflagged_destructible_at_same_return() -> None:
 	func = _build_one_flagged_one_unflagged(type_table)
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
 	_run_cleanup_then_attach_ledger(func, type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	_arc_and_return_emit(func, type_table)
 	unflagged_drops = _all_drop_destructible_pairs_for(func, "unflagged")
 	assert len(unflagged_drops) >= 1, (
 		f"site 3 silently skipped `unflagged` (a destructible local "
@@ -256,7 +251,7 @@ def test_site3_still_drops_unflagged_destructible_at_same_return() -> None:
 
 def test_no_second_drop_pair_for_flagged_local_outside_3c_drop_block() -> None:
 	"""Negative double-drop guard: every drop-emission pair for
-	`flagged` (post-string_arc `LoadLocal(t, flagged) ... DropValue(t)`)
+	`flagged` (post-pipeline `LoadLocal(t, flagged) ... DropValue(t)`)
 	MUST live in either:
 	  - `if_then` (the user move's expansion that consumed `flagged`
 	    into binder `t`), OR
@@ -270,7 +265,7 @@ def test_no_second_drop_pair_for_flagged_local_outside_3c_drop_block() -> None:
 	func = _build_one_flagged_one_unflagged(type_table)
 	insert_drop_flags(func, type_table=type_table, drop_policy=_drop_policy_for(type_table))
 	_run_cleanup_then_attach_ledger(func, type_table)
-	insert_string_arc(func, type_table=type_table, fn_infos={})
+	_arc_and_return_emit(func, type_table)
 	pairs = _all_drop_destructible_pairs_for(func, "flagged")
 	allowed_blocks = {"if_then"}
 	for blk_name in func.blocks:
@@ -302,7 +297,9 @@ def test_site3_emits_drop_flag_owned_observe_record_for_skipped_flagged_local(ca
 	from lang.driftc import debug as drift_debug
 	drift_debug._cached_flags = None
 	try:
-		insert_string_arc(func, type_table=type_table, fn_infos={})
+		from lang.driftc.stage2.destructible_planner import build_destructible_plan
+		setattr(func, "_ledger_dirty_reason", None)
+		build_destructible_plan(func, type_table=type_table)
 	finally:
 		drift_debug._cached_flags = None
 		if old_env is None:
@@ -463,29 +460,6 @@ def _declare_destructible_variant(type_table: TypeTable, name: str = "V") -> int
 	return tid
 
 
-# -- Helper-level: variant_zero_tag_drop_safe predicate -----------------
-
-
-def test_variant_zero_tag_drop_safe_true_for_variant() -> None:
-	type_table = TypeTable()
-	vty = _declare_destructible_variant(type_table)
-	assert variant_zero_tag_drop_safe(vty, type_table) is True
-
-
-def test_variant_zero_tag_drop_safe_false_for_struct() -> None:
-	type_table = TypeTable()
-	sty = _make_droppable_struct(type_table, name="DropMeForVariantTest")
-	assert variant_zero_tag_drop_safe(sty, type_table) is False
-
-
-def test_variant_zero_tag_drop_safe_false_for_scalar() -> None:
-	type_table = TypeTable()
-	int_ty = type_table.ensure_int()
-	string_ty = type_table.ensure_string()
-	assert variant_zero_tag_drop_safe(int_ty, type_table) is False
-	assert variant_zero_tag_drop_safe(string_ty, type_table) is False
-
-
 # -- Site-3 widening: PathDependent + variant → fold into init set ------
 
 
@@ -576,7 +550,7 @@ def test_site3_does_not_widen_non_variant_path_dependent_local() -> None:
 	_arc_and_return_emit(func, type_table)
 	drops = _all_drop_destructible_pairs_for(func, "s")
 	assert not drops, (
-		"non-variant local was widened — `variant_zero_tag_drop_safe` "
+		"non-variant local was widened — `zero_storage_drop_safe` "
 		"policy should reject struct types because struct drops are "
 		"NOT no-op on zero storage (the destructor reads field bytes "
 		"and would crash on PHI-zero data)."

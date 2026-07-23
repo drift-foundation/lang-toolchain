@@ -10,7 +10,7 @@ Every string is RUNTIME-BUILT (format_int concat) so both failure
 directions are valgrind-visible:
 - MISSING RELEASE (the pass skipped a qualified move temp) → the moved
   payload becomes a definitely-lost block;
-- DOUBLE RELEASE (recognition failed to suppress string_arc's own
+- DOUBLE RELEASE (recognition failed to suppress the historical in-pass
   bookkeeping, or the expansion arm re-owned a recognized temp) →
   Invalid read/free.
 

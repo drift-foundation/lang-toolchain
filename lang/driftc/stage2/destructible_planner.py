@@ -1,24 +1,25 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Standalone NON-EMITTING destructible cleanup planner (B2+C Milestone B).
+"""NON-EMITTING destructible + String-release cleanup PLANNER — the
+production plan authority (B2+C S2..S5; production-wired since S4).
 
-Runs at the pre-mutation `string_arc` slot over the ORIGINAL post-
-cleanup-authoring MIR and the attached fresh ledger A. It builds ONE
-`CleanupPlan` of immutable payloads — site-3 Return drops, site-4
-drop-before-overwrite verdicts, null-safe overwrites — finalizes it
-against that original snapshot, and MUTATES NOTHING (no MIR change, no
-ledger dirty-bit transition, no ledger build).
+Runs at the driver's plan slot over the ORIGINAL post-cleanup-authoring
+MIR and the attached fresh ledger A, BEFORE any mutation.  It builds ONE
+frozen `CleanupPlan` of immutable payloads — site-3 Return drops (via
+the structured `Site3Decision`), R3/R4 String scope-exit releases,
+site-4 drop-before-overwrite verdicts, null-safe overwrites — finalizes
+it against that original snapshot, and MUTATES NOTHING (no MIR change,
+no ledger dirty-bit transition, no ledger build).
 
-It reuses the shared `destructible_authority` (the SAME closed authority
-`string_arc` delegates to) — no copied or re-approximated logic. The
-site-4 missing-ledger / PATH_DEPENDENT and the site-3 widening tripwires
-fire here at PLANNING time, exactly as in the emitter.
+PRODUCTION CONSUMERS: `return_cleanup_emitter` (site3 + string_release,
+the unified Return authority) and `overwrite_cleanup` (nullsafe +
+site4), each through the S1 `EmitterPhase` postflight lifecycle — they
+consume the FROZEN PLAN and never recompute the decisions.  This module
+also emits the debug-gated site-3/site-4 observe records from the SAME
+authority results, and (audit only) freezes the C1 ledger-A half.
 
-This module currently has NO production consumer. The temporary
-env-gated driver census wiring used to validate the S2 population counts
-was REMOVED after the gate; the planner is intentionally unwired until
-S3+ production planning. When wired, the emitters will consume the
-FROZEN PLAN via the S1 `EmitterPhase` postflight lifecycle — they must
-NOT recompute the decisions.
+It reuses the shared closed `destructible_authority` — no copied or
+re-approximated logic.  The site-4 missing-ledger / PATH_DEPENDENT and
+the site-3 widening tripwires fire here at PLANNING time.
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ from .destructible_authority import (
 	compute_return_move_state,
 	compute_store_defs,
 	flag_managed_at_return,
-	site3_return_drops,
+	site3_return_decision,
 	site4_verdict,
 	string_return_releases,
 )
@@ -54,7 +55,7 @@ from lang.driftc import debug as drift_debug
 
 class PlannerStop(RuntimeError):
 	"""An unexpected-population STOP surfaced during planning (e.g. a
-	`synthetic_zero_back` null-safe store at the pre-string_arc surface,
+	`synthetic_zero_back` null-safe store at the pre-normalization surface,
 	where the measured baseline is zero)."""
 
 
@@ -111,7 +112,8 @@ def build_destructible_plan(
 	flag_managed = flag_managed_at_return(func, destructible_locals)
 
 	# The has_drop-based needs_drop axis the deferred single finalize's C1
-	# loop uses (`string_arc._ledger_needs_drop`).  DISTINCT from the
+	# loop uses (the has_drop axis, historically string_arc's
+	# `_ledger_needs_drop`).  DISTINCT from the
 	# DropPolicy axis the R3 release ELISION uses inside
 	# `string_return_releases`; the C1 verdict/state freeze must match
 	# finalize byte-for-byte, so it is reproduced here verbatim.
@@ -145,7 +147,7 @@ def build_destructible_plan(
 			if not isinstance(instr, M.StoreLocal):
 				continue
 			local = instr.local
-			# Null-safe check first (mirrors string_arc's branch order: the
+			# Null-safe check first (the historical branch order: the
 			# nullsafe arm precedes the destructible/site-4 arm).
 			if local in nullsafe_destructible_locals:
 				if getattr(instr, "synthetic_zero_back", False):
@@ -193,7 +195,7 @@ def build_destructible_plan(
 					census["site4_must_drop"] += 1
 				else:
 					census["site4_must_not_drop"] += 1
-				# Site-4 observe-mode telemetry (S8 re-home): string_arc's
+				# Site-4 observe-mode telemetry (S8 re-home): the legacy pass's
 				# per-StoreLocal `[drift:ownership_ledger]` record — lost when
 				# the S4 migration neutered its site-4 arm — now emits HERE,
 				# where the verdict is decided.  Same site tag / verdict /
@@ -223,7 +225,7 @@ def build_destructible_plan(
 
 		if isinstance(blk.terminator, M.Return):
 			_coord = anchor_term(bname, len(blk.instructions))
-			ordered = site3_return_drops(
+			decision = site3_return_decision(
 				func, blk,
 				ledger=ledger,
 				type_table=type_table,
@@ -235,7 +237,7 @@ def build_destructible_plan(
 				flag_managed=flag_managed,
 			)
 			drops = tuple(
-				Site3Drop(local=_l, ty=local_types[_l]) for _l in ordered
+				Site3Drop(local=_l, ty=local_types[_l]) for _l in decision.drops
 			)
 			plan.add(
 				obj=blk.terminator,
@@ -247,6 +249,52 @@ def build_destructible_plan(
 			)
 			census["site3_returns"] += 1
 			census["site3_locals"] += len(drops)
+			# Site-3 observe-mode telemetry (Phase D re-home): the historical
+			# per-destructible `string_arc_return` records now emit HERE,
+			# from the SAME structured `Site3Decision` the plan payload
+			# consumes — never inferred back from the drop tuple.  Branch
+			# order preserved: flag-managed records FIRST (even when also
+			# generically skipped); generic skips stay SILENT; the rest
+			# record MUST_DROP/MUST_NOT_DROP by final initialized membership
+			# (decision.drops == non-skipped ∩ initialized by construction).
+			# Debug-gated; same tag / point / has_drop needs_drop axis.
+			if drift_debug.enabled("ownership_ledger"):
+				for _dl in sorted(destructible_locals):
+					if _dl in decision.flag_managed:
+						_reporter.check(
+							ledger,
+							fn_name=func.name,
+							site=_ledger_events.SITE_STRING_ARC_RETURN,
+							point=decision.point,
+							local=_dl,
+							site_verdict=_ledger_events.VERDICT_MUST_NOT_DROP,
+							site_reason=_ledger_events.REASON_DROP_FLAG_OWNED,
+							needs_drop=_ledger_needs_drop,
+							emit=_reporter.stderr_emit,
+						)
+						continue
+					if _dl in decision.generic_skips:
+						continue
+					_dl_in_init = _dl in decision.initialized
+					_reporter.check(
+						ledger,
+						fn_name=func.name,
+						site=_ledger_events.SITE_STRING_ARC_RETURN,
+						point=decision.point,
+						local=_dl,
+						site_verdict=(
+							_ledger_events.VERDICT_MUST_DROP
+							if _dl_in_init
+							else _ledger_events.VERDICT_MUST_NOT_DROP
+						),
+						site_reason=(
+							_ledger_events.REASON_NEEDS_DROP
+							if _dl_in_init
+							else _ledger_events.REASON_NOT_DROP_NEEDING
+						),
+						needs_drop=_ledger_needs_drop,
+						emit=_reporter.stderr_emit,
+					)
 
 			# R3/R4 String scope-exit releases — the ORDERED decision the
 			# unified Return authority emits as the string-release band
@@ -272,7 +320,7 @@ def build_destructible_plan(
 			census["string_release_locals"] += len(released)
 
 			# FROZEN C1 ledger-A half (audit only): the boundary universe +
-			# the same `released`/`skipped` string_arc recorded, plus the
+			# the same `released`/`skipped` the legacy pass recorded, plus the
 			# per-(point, local) ledger-A verdict/raw-state at the ORIGINAL
 			# return coordinate.  Bijection: the C1 `released` IS the emitted
 			# R3 release set (same `string_return_releases` result).

@@ -4,7 +4,7 @@ Differential unit pins for `destructible_authority` (Milestone A
 extraction, 2026-07-20).
 
 These exercise the extracted DECISION authority directly on hand-built
-MIR + a real ownership ledger, independent of string_arc's emission:
+MIR + a real ownership ledger, independent of the emitters:
 
   * `DropClassifier` — String / Arc-struct / error / nullsafe-struct /
     ref classifications.
@@ -14,7 +14,7 @@ MIR + a real ownership ledger, independent of string_arc's emission:
     store of uninit), and the missing-ledger tripwire.
   * `compute_store_defs` / `compute_assigned_in` — definite-assignment
     dataflow.
-  * `site3_return_drops` — sorted drop order, plus the three skip
+  * `site3_return_decision` — sorted drop order, plus the three skip
     channels (moved-out, explicitly-dropped, ledger MUST_NOT_DROP).
 """
 
@@ -38,7 +38,7 @@ from lang.driftc.stage2.destructible_authority import (
 	compute_return_move_state,
 	compute_store_defs,
 	flag_managed_at_return,
-	site3_return_drops,
+	site3_return_decision,
 	site4_verdict,
 )
 
@@ -275,7 +275,7 @@ def test_site3_return_drops_sorted_and_skips() -> None:
 	store_defs = compute_store_defs(func)
 	assigned_in = compute_assigned_in(func, store_defs)
 
-	drops = site3_return_drops(
+	drops = site3_return_decision(
 		func,
 		entry,
 		ledger=ledger,
@@ -292,7 +292,12 @@ def test_site3_return_drops_sorted_and_skips() -> None:
 	)
 	# a,b,c dropped in sorted order; m/e skipped by the passed sets;
 	# z skipped by the ledger MUST_NOT_DROP verdict (MoveOut'd).
-	assert drops == ["a", "b", "c"]
+	assert drops.drops == ("a", "b", "c")
+	# Structured facts (Phase D): m/e are generic skips (silent in observe);
+	# z joins via the ledger MUST_NOT_DROP fold; none are flag-managed.
+	assert {"m", "e", "z"} <= set(drops.generic_skips)
+	assert drops.flag_managed == frozenset()
+	assert drops.point == ("entry", len(entry.instructions))
 
 
 def test_site3_return_drops_flag_managed_skip() -> None:
@@ -313,14 +318,17 @@ def test_site3_return_drops_flag_managed_skip() -> None:
 	)
 	store_defs = compute_store_defs(func)
 	assigned_in = compute_assigned_in(func, store_defs)
-	drops = site3_return_drops(
+	drops = site3_return_decision(
 		func, entry, ledger=ledger, type_table=tt,
 		destructible_locals=dest, local_types=types,
 		move_state=ReturnMoveState(moved_out=frozenset(), explicitly_dropped=frozenset()),
 		assigned_in=assigned_in, store_defs=store_defs,
 		flag_managed={"b"},  # b owned by drop-flag plumbing → skip
 	)
-	assert drops == ["a"]
+	assert drops.drops == ("a",)
+	# Flag ownership is a DISTINCT observe fact, not a generic skip.
+	assert drops.flag_managed == frozenset({"b"})
+	assert "b" not in drops.generic_skips
 
 
 # ── compute_return_move_state (Amendment 2 differential teeth) ─────────
@@ -510,7 +518,7 @@ def test_site3_path_dependent_widens_zero_safe_only() -> None:
 	func.blocks = {"entry": entry}
 	store_defs = compute_store_defs(func)
 	assigned_in = compute_assigned_in(func, store_defs)
-	drops = site3_return_drops(
+	drops = site3_return_decision(
 		func, entry,
 		ledger=_StubLedger(DropVerdict.PATH_DEPENDENT),
 		type_table=tt,
@@ -522,7 +530,9 @@ def test_site3_path_dependent_widens_zero_safe_only() -> None:
 		flag_managed=set(),
 	)
 	# Only the zero-storage-safe array is widened into the drop set.
-	assert drops == ["arr"]
+	assert drops.drops == ("arr",)
+	# The widening lands in the FINAL initialized set the decision carries.
+	assert "arr" in drops.initialized and "st" not in drops.initialized
 
 
 # ── R3/R4 string_return_releases (S5 decision) ────────────────────────

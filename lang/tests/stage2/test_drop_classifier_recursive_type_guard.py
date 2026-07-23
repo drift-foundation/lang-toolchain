@@ -1,13 +1,14 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Stage-2 defense-in-depth: insert_string_arc()'s `_type_needs_drop` must not
-blow the Python stack on a malformed recursive value-type TypeTable.
+"""Stage-2 defense-in-depth: the ownership-normalization classifier
+(`DropClassifier.type_needs_drop`) must not blow the Python stack on a
+malformed recursive value-type TypeTable.
 
 Background: the normal CLI/package recursive-value validator
 (`validate_no_recursive_value_types`) rejects directly-recursive value types
 before stage 2. This test deliberately bypasses that front-end gate by
 hand-constructing a malformed TypeTable whose variant instance has a by-value
 self-loop arm (as malformed/legacy package metadata could), then runs the
-stage-2 string_arc pass directly. The pass must terminate (the in-progress cycle
+stage-2 normalization pass directly. The pass must terminate (the in-progress cycle
 guard in `_type_needs_drop`) instead of raising RecursionError, and must still
 classify the type as droppable when a `String` participates in the cycle.
 """
@@ -22,13 +23,7 @@ from lang.driftc.core.types_core import (
 	VariantArmInstance,
 )
 from lang.driftc.stage2 import mir_nodes as M
-# BARE-USE SAFETY: this file's funcs construct NO family producers,
-# so bare insert_string_arc leaves nothing under-released (string_arc
-# authors no last-use releases of its own — tripwire-deletion slice,
-# 2026-07-18).  Adding family temps with non-consuming last uses
-# requires the _run_pipeline pattern
-# (see test_string_arc_audit_reporter.py).
-from lang.driftc.stage2.string_arc import insert_string_arc
+from lang.driftc.stage2.ownership_normalization import normalize_ownership_mir
 
 
 def _malformed_recursive_variant(type_table: TypeTable, *, with_string_arm: bool) -> int:
@@ -67,7 +62,7 @@ def _malformed_recursive_variant(type_table: TypeTable, *, with_string_arm: bool
 
 def _func_holding(type_table: TypeTable, tid: int) -> M.MirFunc:
 	"""A minimal MIR func with one local of type `tid`, listed as a scope-exit
-	cleanup candidate so the string_arc pass consults its drop classification."""
+	cleanup candidate so the normalization pass consults its drop classification."""
 	fn_id = FunctionId(module="test", name="recdrop", ordinal=0)
 	func = M.MirFunc(
 		name="test::recdrop",
@@ -94,27 +89,27 @@ def _arc_pipeline(func: M.MirFunc, tt: TypeTable) -> M.MirFunc:
 	from lang.driftc.stage2.return_cleanup_emitter import emit_return_cleanups
 	setattr(func, "_ownership_ledger", build_ledger(func, drop_policy=lambda _t: None))
 	plan, _census, _c1 = build_destructible_plan(func, type_table=tt)
-	insert_string_arc(func, type_table=tt, fn_infos={})
+	normalize_ownership_mir(func, type_table=tt, fn_infos={})
 	emit_return_cleanups(func, plan)
 	return func
 
 
-def test_string_arc_does_not_recurse_on_self_looping_variant() -> None:
+def test_classifier_does_not_recurse_on_self_looping_variant() -> None:
 	"""Primary defense-in-depth contract: the pass terminates (no RecursionError)
 	on a by-value self-looping variant."""
 	tt = TypeTable()
 	base = _malformed_recursive_variant(tt, with_string_arm=True)
 	func = _func_holding(tt, base)
 	# Must not raise RecursionError — the in-progress cycle guard breaks the edge.
-	result = insert_string_arc(func, type_table=tt, fn_infos={})
+	result = normalize_ownership_mir(func, type_table=tt, fn_infos={})
 	assert result is not None
 
 
-def test_string_arc_string_in_cycle_remains_droppable() -> None:
+def test_classifier_string_in_cycle_remains_droppable() -> None:
 	"""The guard must return the correct least-fixpoint: a cycle that contains a
 	`String` is still classified droppable (a drop is emitted for the local),
 	while a pure self-loop with no droppable leaf is not."""
-	# With a String arm -> droppable -> string_arc emits a drop for `r`.
+	# With a String arm -> droppable -> the pipeline emits a drop for `r`.
 	tt_drop = TypeTable()
 	base_drop = _malformed_recursive_variant(tt_drop, with_string_arm=True)
 	func_drop = _arc_pipeline(_func_holding(tt_drop, base_drop), tt_drop)
@@ -128,8 +123,8 @@ def test_string_arc_string_in_cycle_remains_droppable() -> None:
 
 
 def _emits_drop_for(func: M.MirFunc, local: str) -> bool:
-	"""True if the post-string_arc func contains a DropValue whose value traces to
-	a MoveOut/LoadLocal of `local` (string_arc's drop emission shape)."""
+	"""True if the post-pipeline func contains a DropValue whose value traces to
+	a MoveOut/LoadLocal of `local` (the historical drop emission shape)."""
 	# Collect temps loaded/moved from `local`, then look for a DropValue on them.
 	traced: set[str] = set()
 	drops: set[str] = set()

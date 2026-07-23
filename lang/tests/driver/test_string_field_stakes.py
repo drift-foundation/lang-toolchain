@@ -1,6 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """B-arch-1c pins: MIR FIELD/VIEW producers feeding String value-position
-stakes are materialized as ledger-visible `CopyValue` before string_arc.
+stakes are materialized as ledger-visible `CopyValue` before the
+ownership pipeline consumes them.
 
 Scope per the accepted checkpoint (premise-corrected): NOT surface field
 syntax — user `self.field`/`obj.name` copies already materialize

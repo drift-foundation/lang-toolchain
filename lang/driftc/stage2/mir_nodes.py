@@ -472,7 +472,8 @@ class CleanupHook(MInstr):
 	2026-07-20; the policy axis is
 	`drop_policy_compute.zero_storage_drop_safe`, extracted from the
 	site-3 sub-step 3 variant widening).  The marker is removed after
-	authoring; downstream passes (`drop_flags`, `string_arc`) see
+	authoring; downstream passes (`drop_flags`, ownership
+	normalization) see
 	only the canonical drop sequences they already understand.
 
 	`scope_id` is a per-function counter used for telemetry
@@ -684,7 +685,8 @@ class MoveFromRef(MInstr):
 	to surface the value as the expression's SSA result).
 
 	**Why**: the per-field match-arm cleanup chain previously emitted
-	`LoadRef + StoreLocal(drop_tmp, ...)`, which `string_arc.StoreLocal`
+	`LoadRef + StoreLocal(drop_tmp, ...)`, which the legacy string-ARC
+	StoreLocal arm
 	expanded into `LoadRef + StringRetain(...) + StoreLocal(drop_tmp, ...)`
 	— i.e. a Copy with retain.  The subsequent `DropValue` then released
 	the retained stake, leaving the source slot's original stake
@@ -727,7 +729,7 @@ class MoveFromRef(MInstr):
 	     `LoadRef + ZeroValue + StoreRef(zero) + DropValue` shape
 	     this replaced double-released the old value via the StoreRef
 	     overwrite rewrite (in `overwrite_cleanup` since Slice B1;
-	     `string_arc` before it) — see the
+	     the legacy string_arc before it) — see the
 	     LANGUAGE_BUG carrier at
 	     `lang/tests/memcheck/test_mut_struct_string_field_self_concat.py`
 	     and the contract pin at

@@ -1,8 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """B-arch-1b pins: String copy stakes at VALUE POSITIONS (ctor fields,
 variant/result payloads, exc-ABI strings, array literals/elements) are
-materialized as ledger-visible `CopyValue` MIR before string_arc,
-replacing string_arc's late `value_position_retain`.
+materialized as ledger-visible `CopyValue` MIR upstream,
+replacing the legacy consumer's late `value_position_retain`.
 
 Behavior contract unchanged from B-arch-1a: refcount sequences are
 byte-identical (String CopyValue lowers to drift_string_retain); locals

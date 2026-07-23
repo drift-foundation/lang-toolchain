@@ -11,7 +11,7 @@ Phase 3A contract:
 - No MIR emission changes.  The ledger is a pure reader.
 - No `TypeTable` / `DropPolicy` bypasses.  The builder consumes a caller-
   supplied `drop_policy` callable and does not import policy internals.
-- The ledger is built post-HIR-to-MIR, pre-`string_arc`.  Sites record or
+- The ledger is built post-HIR-to-MIR, pre-normalization.  Sites record or
   consult verdicts through the reporter module; this file has no knowledge
   of the sites themselves.
 
@@ -308,7 +308,7 @@ def build_ledger(
 	# Phase 4 step 3a: pre-pass to map AddrOfLocal dest → underlying
 	# local.  Required because `VariantGetFieldAddr.variant_ref` is a
 	# value-id pointing at the address-of, not the local name itself.
-	# Same scan pattern `string_arc.py` uses for `addr_taken_locals`.
+	# Same scan pattern the legacy string_arc used for `addr_taken_locals`.
 	addr_of_dest_to_local: Dict[str, str] = {}
 	for blk in func.blocks.values():
 		for ins in blk.instructions:

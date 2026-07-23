@@ -594,7 +594,7 @@ SITE_HELPERS["extend_source"] = helpers_extend_source
 #   - `reassignment_before_match`: `var r = old_value; r = new_value;
 #     match r { Payload(v) => ... }` — binder must reflect the NEW
 #     value; old value must be dropped by the `var`-reassignment path
-#     (exercises the `string_arc.py` MoveOut-discard hardening).
+#     (exercises the MoveOut-discard hardening, now in ownership_normalization).
 #   - `nested_match`: outer arm binds inner variant; inner match
 #     destructures its own payload.  Verifies tombstone / partial-move
 #     propagation through two layers of match lowering.
@@ -682,7 +682,7 @@ def _match_bind_pattern_arm_bind_vs_ignore(ty_info: dict, flavor: str | None) ->
 
 
 def _match_bind_pattern_reassignment_before_match(ty_info: dict, flavor: str | None) -> str:
-    # Exercises the MoveOut-then-reassign code path in string_arc.py
+    # Exercises the MoveOut-then-reassign code path in ownership normalization
     # that was hardened in 0.27.197.  The var holds `old`; the
     # subsequent `= new` reassignment must drop `old` cleanly BEFORE
     # the new value is committed.  Match then observes the NEW value.
@@ -959,7 +959,7 @@ def _token_match_bind_reassignment_before_match() -> str:
 		r = TokenMsg::Payload(t = make_token(&mut sess_new));
 		// Post-reassignment: old token dropped (sess_old.drops == 1),
 		// new token alive (sess_new.drops == 0).  Exercises the
-		// MoveOut-zero-then-StoreLocal hardening in string_arc.py —
+		// MoveOut-zero-then-StoreLocal hardening (ownership normalization) —
 		// the drop-before-overwrite must fire on the OLD value, not
 		// on the synthesized zero bytes.
 		if sess_old.drops != 1 { return 2; }

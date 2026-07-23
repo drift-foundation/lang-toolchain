@@ -8,7 +8,7 @@ Pinned bug (introduced by 0.31.9 Phase 3B step-1, commit 94a9c44d
 `cleanup_authoring`, then runs `drop_flags` which INSERTS new
 instructions at block heads (drop-flag init `ConstBool` + `StoreLocal`
 of `__drop_flag_*`).  The insertions shift instruction indices.  Then
-`string_arc` consults the pre-drop_flags ledger via
+the site-4 verdict consults the pre-drop_flags ledger via
 `_ledger.verdict_at((block, idx), local, needs_drop=...)` using
 POST-drop_flags indices — reading state from the wrong index.
 
@@ -30,7 +30,7 @@ enough for the bug to fire on the destructible local that follows.
 
 Acceptance: this test fails pre-fix with `RuntimeError: SSA: load
 before store for local 't' …` and passes after the ledger is rebuilt
-between `drop_flags` and `string_arc`.
+between `drop_flags` and the plan slot.
 """
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def test_destructible_local_moved_on_both_arms_no_join_drop(tmp_path: Path) -> N
 	the var declaration.
 
 	Pre-fix: ledger queries with shifted indices return MUST_DROP at
-	the first `StoreLocal(t)`, string_arc emits drop-before-overwrite
+	the first `StoreLocal(t)`, the plan emits drop-before-overwrite
 	reading uninit memory, SSA crashes with `load before store for
 	local 't'`.
 

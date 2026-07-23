@@ -325,7 +325,7 @@ def test_authoring_removes_cleanup_hook_instruction() -> None:
 	author_cleanup(func, type_table=type_table)
 	assert not _has_cleanup_hook(func), (
 		"CleanupHook must be removed by authoring — downstream "
-		"passes (drop_flags, string_arc) only understand canonical "
+		"passes (drop_flags, ownership normalization) only understand canonical "
 		"MoveOut/DropValue sequences, not the marker."
 	)
 

@@ -1,10 +1,10 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """B-arch-1a: materialize by-value String CALL-ARGUMENT copy stakes as
-ledger-visible MIR, before the ledger build that feeds `string_arc`.
+ledger-visible MIR, before the ledger build that feeds the plan slot.
 
 Problem (B-arch-0 inventory, C2 `call_arg_retain`, 58,680 corpus
 occurrences): passing a String local by value keeps the caller's copy
-alive, so a +1 stake for the callee must exist — but today `string_arc`
+alive, so a +1 stake for the callee must exist — historically `string_arc`
 invents it LATE (`_ensure_owned` → `StringRetain`) on MIR the ownership
 ledger never re-reads. The stake is invisible: the ledger cannot
 distinguish "arg copied, local still owned" from "arg moved", which is
@@ -20,8 +20,8 @@ This pass rewrites, per call site and per by-value String parameter:
 `CopyValue` is the canonical MIR-visible copy event: the ledger models
 the source local as still-owned (copy, not consume), and codegen lowers
 String CopyValue to `drift_string_retain` — the SAME runtime op
-string_arc's late retain produced, so the refcount sequence is
-byte-identical. Downstream, `string_arc` classifies the CopyValue dest
+the legacy late retain produced, so the refcount sequence is
+byte-identical. Downstream, the ownership pipeline treats the CopyValue dest
 as an owned single-use value and MOVES it into the call
 (`_can_move_owned_once`), emitting no `call_arg_retain` — the stake now
 predates the ledger snapshot instead of trailing it.
@@ -50,24 +50,24 @@ terminal-producer note in `_is_string_value_view`.
 
 B-arch-1c extends the PRODUCER side: the residual after 1a/1b was not
 surface field syntax (user `self.field`/`obj.name` copies materialize
-upstream of string_arc — checkpoint-probed) but MIR FIELD/VIEW
+upstream of the consumer — checkpoint-probed) but MIR FIELD/VIEW
 producers, dominated by `StructGetField` inside compiler-synthesized
 `Throw::throw_self` envelope builders and stdlib cursor internals.
 The candidate rule generalizes from "producer is LoadLocal of a String
 local" to "producer is a PROVEN semantically-String VALUE VIEW that
-string_arc would retain today": LoadLocal, StructGetField with a
+the legacy consumer would retain": LoadLocal, StructGetField with a
 String field_ty, LoadRef with a String inner_ty, LoadField whose dest
 is typed String, and bare storage operands (params/locals referenced
 directly as SSA ids). `VariantGetField` is NOT in the set — its dest
 is already owned (codegen retains at extraction; the ledger marks the
-field moved-out), so string_arc moves it. Producer
+field moved-out), so the value moves. Producer
 identity is resolved FN-WIDE (sound under SSA single-assignment);
 AddrOfField/AddrOfArrayElem and other address producers are NOT
 staked — an address is not a String value — and remain itemized
 residuals, per the 1c review guardrails.
 
-DECISION CRITERION — mirror `string_arc`, copy only where it would
-RETAIN: string_arc moves an operand iff it is an owned single-use
+DECISION CRITERION — mirror the historical consumer contract, copy only
+where it would RETAIN: an operand moves iff it is an owned single-use
 value (creator results: ConstString/StringConcat/StringFrom*/
 StringRetain/CopyValue dests; MoveOut dests are move-only;
 VariantGetField dests are owned at extraction). It retains iff the
@@ -78,7 +78,7 @@ at a PROVEN semantically-String VALUE VIEW: a plain `LoadLocal`, a
 reference, or a bare storage operand — a borrowed view of still-owned
 storage. We materialize exactly those cases (`_is_string_value_view`).
 Operands whose producer is anything else — address producers, unknown
-shapes — are left to string_arc and surface as itemized C2 residuals
+shapes — surface as itemized C2 residuals
 in the audit rather than risk a behavior change here.
 """
 
@@ -111,7 +111,7 @@ def materialize_call_arg_stakes(
 	string_ty = type_table.ensure_string()
 
 	def _param_is_string(ty_id: TypeId) -> bool:
-		# MIRROR string_arc's semantic predicate (`_param_is_string`):
+		# MIRROR the historical semantic predicate (`_param_is_string`):
 		# kind/name check, NOT tid equality — package-loaded or
 		# non-canonical String TypeIds must materialize too, or they
 		# linger as call_arg_retain residuals for the wrong reason
@@ -159,7 +159,7 @@ def materialize_call_arg_stakes(
 	def _is_string_value_view(prod: "M.MInstr | None", alias: str) -> bool:
 		"""True iff `alias` (with defining instr `prod`, possibly None)
 		is a PROVEN semantically-String VALUE VIEW — a borrowed alias
-		string_arc would retain at a staked position today. Address
+		the legacy consumer would retain at a staked position. Address
 		producers (AddrOfField/AddrOfArrayElem/...) never qualify: an
 		address is not a String value (1c guardrail); unknown shapes
 		stay residual and are itemized by the audit."""
@@ -176,10 +176,10 @@ def materialize_call_arg_stakes(
 		# owned-at-extraction: VariantGetField
 		# `VariantGetField` is deliberately NOT a view (review finding,
 		# 2026-07-10): its String dest is ALREADY OWNED — codegen lowers
-		# it as load + drift_string_retain (string_arc documents the
+		# it as load + drift_string_retain (the owned-at-extraction
 		# match-binder extra-retain leak that treating it as borrowed
 		# caused), and the ledger marks the variant field moved-out
-		# (by-value extraction). string_arc MOVES it; staking it would
+		# contract; by-value extraction). The value MOVES; staking it would
 		# add a duplicate retain. It stays terminal with the other
 		# owned/fresh producers.
 		if isinstance(prod, M.LoadRef):
@@ -229,8 +229,9 @@ def materialize_call_arg_stakes(
 		(M.ExcSetParamsJson, "json_text", False),
 		(M.ExcAppendContextFrame, "frame_json", False),
 		# B-arch-1d store positions. The stake (CopyValue) lands BEFORE
-		# the store instruction — and therefore before string_arc's
-		# old-destination release expansion — which is the strictly
+		# the store instruction — and therefore before `overwrite_cleanup`'s
+		# old-destination release (authored later, immediately before the
+		# store) — which is the strictly
 		# safer order (the +1 is taken while the source is provably
 		# alive; today's retain-after-release order has a latent
 		# self-aliased-store window). The destination-side release /
@@ -258,7 +259,7 @@ def materialize_call_arg_stakes(
 			"""The producer-chain criterion shared by call args and
 			value positions: follow AssignSSA fn-wide to the producer;
 			a stake is materialized only for a PROVEN String value view
-			(see `_is_string_value_view`) — mirroring string_arc's
+			(see `_is_string_value_view`) — mirroring the historical
 			move-vs-retain decision: creators/MoveOut/call-result dests
 			move and stay terminal; views retain and are staked."""
 			alias = arg

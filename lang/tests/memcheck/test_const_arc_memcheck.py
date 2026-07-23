@@ -23,7 +23,7 @@ If any of these tests fail, the regression is in one of:
     ARC_GET / ARC_DESTROY) — the wrapper exercises every one of
     those via the inner field
   - structural drop of struct fields whose type is itself a
-    refcount-bearing handle (`stage2/string_arc.py` and friends)
+    refcount-bearing handle (`stage2/ownership_normalization.py` and friends)
 
 This file MUST be in the memcheck gate for any future ConstArc /
 ConstShare substrate work — driver tests prove typing only; only

@@ -54,7 +54,7 @@ COPY-kind env-construction branch's retain/copy of the field does not
 survive intact once the field's value flows out of the callback and both
 the source struct and the callback env are later dropped. The plain
 `String` field case does not reproduce today, but only because a
-separate, independent pass (`string_arc.py`) happens to provide
+separate, independent pass (ownership normalization) happens to provide
 incidental coverage for that one type — not something this lowering path
 can rely on, and not true for the struct/variant case. So the downgrade
 is restricted to Copy-AND-BITCOPY fields (`type_table.is_bitcopy`, which

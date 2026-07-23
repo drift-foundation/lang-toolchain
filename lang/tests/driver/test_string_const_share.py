@@ -11,7 +11,7 @@ Pins three claims about `String`'s position in the trait surface:
   2. `val b = a` over a `String` binding — implicit duplication
      keeps both bindings live and value-equal (Copy semantics
      for static-flagged literals; refcount inc for heap
-     strings via `string_arc`).
+     strings via the ownership pipeline).
   3. A synthesized struct with a `String` field — proves
      `ConstShare` via the structural composition rule and
      duplicates cleanly.

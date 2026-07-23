@@ -110,20 +110,21 @@ def zero_storage_drop_safe(local_ty: TypeId, type_table: TypeTable) -> bool:
 	  the element-drop helper iterates zero times and
 	  `drift_free_array(NULL)` returns without effect
 	  (`array_runtime.c`).  NOTE: zeroed STORAGE is guaranteed by
-	  string_arc's entry-block array zero-init and the MoveOut
-	  expansion's zero-back — array allocas are not intrinsically
-	  zeroed.  That entry-init is a surviving string_arc
-	  responsibility (endgame-inventory item).
+	  `ownership_normalization`'s R1 entry-block array zero-init and
+	  its R5 MoveOut-expansion zero-back — array allocas are not
+	  intrinsically zeroed.
 
 	Everything else FAILS CLOSED — in particular structs with user
 	`core.Destructible` impls have no universally drop-safe zero
 	pattern (the destructor would read null-bearing receivers).
 
-	This predicate replaces `variant_zero_tag_drop_safe` for EVERY
+	This predicate replaced `variant_zero_tag_drop_safe` for EVERY
 	production decision (cleanup_authoring PD resolution, drop_flags
 	candidate admission, the ownership-ledger reporter's zero-safe C3
-	leg, string_arc's site-3 widening); the variant-named wrapper in
-	string_arc remains for compatibility/tests only.
+	leg, the site-3 widening in `site3_return_decision`); the
+	variant-named compatibility wrapper was RETIRED with the Phase D
+	string_arc deletion (a reintroduction fails the retirement pin in
+	`test_zero_storage_drop_safe.py`).
 	"""
 	td = type_table.get(local_ty)
 	return td.kind is TypeKind.VARIANT or td.kind is TypeKind.ARRAY

@@ -525,7 +525,7 @@ class HIRToMIR:
 				elif param_policy.has_structural_drop:
 					# Structural drop needed but the generic path
 					# returned `needs_drop=False` — this type is
-					# handled by string_arc (e.g. String, Array,
+					# handled by the ownership pipeline (e.g. String, Array,
 					# Error, Interface) on a parallel track.  Use
 					# the shortcut-free axis so
 					# we classify correctly even under the packaged-
@@ -1345,7 +1345,7 @@ class HIRToMIR:
 			# owned value, until `_copy_if_ref_alias` upgrades it at an
 			# ownership-transfer boundary (return, binding, call arg).
 			# NOTE: verified via mutation testing (revert + rerun under ASAN
-			# and Valgrind) that `string_arc.py`'s later, independent
+			# and Valgrind) that the ownership pipeline's later, independent
 			# ledger-based ARC-insertion pass currently provides an
 			# equivalent safety net for String specifically — this mark is
 			# not provably load-bearing today for String. It IS load-bearing
@@ -1749,7 +1749,7 @@ class HIRToMIR:
 						# traversal — so both the source local and
 						# `arm_scrut_local` end up with pointers into
 						# the same refcount header, each claiming
-						# ownership.  When `string_arc` later emits
+						# ownership.  When normalization later emits
 						# scope-exit drops for both, the refcount is
 						# released twice → UAF.  Phase 0 landed a
 						# compile-time fail-stop on this shape;
@@ -3833,8 +3833,8 @@ class HIRToMIR:
 			# `<error>.params` lowers to ExcGetParamsJson + ConstructStruct
 			# of `core.ErrorParamsView { json_text: <retained-canonical-JSON> }`.
 			# The runtime helper returns a retained DriftString per ABI
-			# spec §2.3; string_arc tracks the dest as an owned string
-			# result (see stage2/string_arc.py).
+			# spec §2.3; the ownership pipeline treats the dest as an owned
+			# string result.
 			json_dest = self.b.new_temp()
 			self.b.emit(M.ExcGetParamsJson(dest=json_dest, error=subject))
 			self._local_types[json_dest] = self._string_type
@@ -4460,7 +4460,7 @@ class HIRToMIR:
 			# MoveFromRef tombstones the slot atomically, so the
 			# subsequent StoreRef rewrite's release fires on null bytes
 			# (`drift_string_release(null)` is a runtime no-op; see
-			# `string_arc.py:1097-1099`).
+			# the `_K_STORE_REF` arm in stage2/overwrite_cleanup.py).
 			#
 			# Two argument shapes are accepted, matching the checker's
 			# acceptance criterion (resolved type == &mut T):
@@ -5295,7 +5295,7 @@ class HIRToMIR:
 					# before it's stored, or the env outlives (or is dropped
 					# alongside) the aliased source field.
 					# NOTE: mutation-tested (revert + rerun under ASAN and
-					# Valgrind) — `string_arc.py`'s later, independent
+					# Valgrind) — the ownership pipeline's later, independent
 					# ledger-based ARC-insertion pass currently inserts an
 					# equivalent retain on its own for String, so this call
 					# is not provably load-bearing today for that type. Kept
@@ -5543,7 +5543,7 @@ class HIRToMIR:
 					# the heap env must not persist a raw &T-field alias.
 					# NOTE: mutation-tested (revert + rerun under ASAN and
 					# Valgrind, see the boxed-callback String ASAN test) —
-					# `string_arc.py`'s later, independent ledger-based
+					# the ownership pipeline's later, independent ledger-based
 					# ARC-insertion pass currently inserts an equivalent
 					# retain on its own for String, so this call is not
 					# provably load-bearing today. Kept for consistency with
@@ -9187,7 +9187,7 @@ class HIRToMIR:
 		# `lang/tests/memcheck/test_mut_struct_string_field_self_concat.py`
 		# for the runtime carrier and
 		# `lang/tests/stage2/test_assign_store_ref_drop_bearing_lowering.py`
-		# for the post-string_arc MIR pin.
+		# for the post-normalization MIR pin.
 		#
 		# Caller ordering: `_visit_stmt_HAssign` lowers the RHS into
 		# `value` BEFORE invoking this helper (see `_lower_owning_consume`
