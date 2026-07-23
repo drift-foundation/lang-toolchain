@@ -959,7 +959,7 @@ def _token_match_bind_reassignment_before_match() -> str:
 		r = TokenMsg::Payload(t = make_token(&mut sess_new));
 		// Post-reassignment: old token dropped (sess_old.drops == 1),
 		// new token alive (sess_new.drops == 0).  Exercises the
-		// MoveOut-zero-then-StoreLocal hardening (ownership normalization) —
+		// MoveOut-zero-then-StoreLocal hardening in string_arc.py —
 		// the drop-before-overwrite must fire on the OLD value, not
 		// on the synthesized zero bytes.
 		if sess_old.drops != 1 { return 2; }

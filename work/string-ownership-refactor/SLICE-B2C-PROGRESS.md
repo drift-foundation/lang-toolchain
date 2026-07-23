@@ -647,9 +647,28 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   two runtime strings kept matcher-stable (finalize diag prefix;
   "must not emit releases" guard — both teeth verified); `git diff
   --check` clean.  Per review: no pytest/corpus/memcheck rerun.
-  **COMMIT-CLEAR.  The maintainer runs the ACTUAL full suite
-  (`run-all.sh`), certifies, and deploys 0.33.87/ABI-21; then
-  B-repr(B5) opens as a separate design-first ABI-22 boundary.**
+- **run-all.sh false start fixed (2026-07-23)**: `ownership-matrix-check`
+  failed because one round-2 prose retarget in `__ownership_matrix__/
+  _gen.py` was inside an EMITTED fixture template (the `//` comment in
+  `om_match_bind_token/main.drift`), desyncing generator vs checked-in
+  fixture.  REVERTED that one emitted line to its original historical
+  wording — the fixture text must stay byte-identical (it is corpus-
+  universe content; regenerating would shift the universe hash and
+  invalidate the +0 baseline chain).  The two Python-side generator
+  comments keep their retargets (not emitted).  `--check`: 51 fixtures
+  up to date.  Rule recorded: generated-fixture TEXT is frozen test
+  data — historical references inside it are provenance, not live prose.
+- **CERTIFICATION GATE PASS (2026-07-23, run by K per one-time
+  maintainer authorization)**: `./run-all.sh` — the FULL `just test`
+  under BOTH `DRIFT_MEMCHECK=1` and `DRIFT_ASAN=1` — **exit 0**, both
+  modes "lang tests: Success." + "ASAN suite OK"; zero FAILED, zero
+  recipe failures, zero sanitizer/leak reports (log:
+  `build/tmp/run-all-phase-d.log`; memcheck-mode driver lane 2,135
+  passed / 1 skipped; ASAN-mode driver lane 2,095 passed / 41
+  mode-selected skips; matrix-check + all shards green).
+  **COMMIT-CLEAR with the certification gate GREEN — certification +
+  deploy of 0.33.87/ABI-21 are maintainer-owned; then B-repr(B5)
+  opens as a separate design-first ABI-22 boundary.**
 - **GATES PASS (2026-07-22)**: 924 corpus audit `build/tmp/s7s8` vs
   accepted baseline `build/tmp/s5s6` — exit 0, universe identical
   (924/1268, same partition), **all 14 counters +0** (incl.
