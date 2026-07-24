@@ -26,7 +26,7 @@ Baseline comparison:
       (exit 2) or a nonzero hard gate in the new run (exit 1).
       Nonzero deltas on non-gate counters DO NOT fail in this mode.
 
-Certification comparison (v1.7.0):
+Certification comparison (v1.7.1):
   tools/drift_corpus_audit.py --out RUN2 --baseline BASE --require-zero-delta
       Everything above PLUS fail-closed exact equality: the counter
       key sets must be identical and every delta exactly 0 (exit 1
@@ -56,7 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 
-TOOL_VERSION = "1.7.0"
+TOOL_VERSION = "1.7.1"
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 
@@ -411,11 +411,23 @@ def main(argv: list[str] | None = None) -> int:
 	started = time.time()
 	compiled_ok: list[str] = []
 	failed: list[str] = []
+	total = len(fixtures)
+	# Progress cadence: every ~5% (min 10 fixtures) plus the final one, so
+	# a 924-fixture run reports ~20 lines instead of silence-then-summary.
+	step = max(10, total // 20)
 	with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
 		futures = [pool.submit(_compile_one, f, run_dir, extra) for f in fixtures]
 		for fut in concurrent.futures.as_completed(futures):
 			name, ok = fut.result()
 			(compiled_ok if ok else failed).append(name)
+			done = len(compiled_ok) + len(failed)
+			if done % step == 0 or done == total:
+				elapsed = time.time() - started
+				rate = done / elapsed if elapsed > 0 else 0.0
+				eta = (total - done) / rate if rate > 0 else 0.0
+				print(f"progress: {done}/{total} fixtures "
+				      f"({len(failed)} failed) elapsed {elapsed:.0f}s "
+				      f"eta {eta:.0f}s", file=sys.stderr, flush=True)
 
 	counters = _aggregate(run_dir, sorted(compiled_ok))
 	_write_run(run_dir, fixtures, excluded, compiled_ok, failed, counters,
