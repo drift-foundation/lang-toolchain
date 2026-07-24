@@ -137,6 +137,8 @@ def iter_used_values(instr: M.MInstr) -> Iterable[str]:
 		yield instr.value
 	elif isinstance(instr, M.StringByteAt):
 		yield instr.value
+	elif isinstance(instr, M.StringBytesBase):
+		yield instr.value
 	elif isinstance(instr, M.StringRetain):
 		yield instr.value
 	elif isinstance(instr, M.StringRelease):

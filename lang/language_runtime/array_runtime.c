@@ -149,7 +149,7 @@ static size_t drift_bcf_json_escape_byte(unsigned char b, char *out) {
 // `drift_bounds_check_fail` so the escape contract is testable from
 // outside the throwing path.  See array_runtime.h.
 /* drift-owned-string-audit: allow read-only-borrow -- container_id
- * Reads container_id.len and container_id.data to build the escaped
+ * Reads container_id via the drift_string_len/data accessors to build the escaped
  * JSON payload; never releases.  The refcount stake stays with the
  * caller (drift_bounds_check_fail's frame). */
 drift_isize drift_bounds_check_params_json_build(
@@ -158,11 +158,11 @@ drift_isize drift_bounds_check_params_json_build(
 	char *out_buf,
 	drift_isize out_cap) {
 	if (out_buf == NULL || out_cap <= 0) return -2;
-	if (container_id.len < 0) return -2;
-	// Slice 7a follow-up (K finding 3 v2, 2026-05-05): NULL-data-with-
-	// positive-length is undefined behavior to dereference.  Reject
-	// outright rather than UB-deref `data[0]` in the escape loop.
-	if (container_id.data == NULL && container_id.len > 0) return -2;
+	/* B5: the accessors fail closed on tombstone/malformed handles
+	 * (superseding the manual NULL/negative soft guards — a malformed
+	 * handle here is a compiler bug, not an input to tolerate). */
+	const drift_isize cid_len_checked = drift_string_len(container_id);
+	const unsigned char *cid_bytes = drift_string_data(container_id);
 	const char prefix[] = "{\"container_id\":\"";
 	const char mid[]    = "\",\"index\":";
 	const char suffix[] = "}";
@@ -175,13 +175,13 @@ drift_isize drift_bounds_check_params_json_build(
 	char *end = out_buf + out_cap;
 	memcpy(cursor, prefix, (size_t)prefix_len);
 	cursor += prefix_len;
-	for (drift_isize i = 0; i < container_id.len; i++) {
+	for (drift_isize i = 0; i < cid_len_checked; i++) {
 		// Worst-case escape is 6 bytes (`\u00XX`); reserve room for
 		// mid + idx + suffix at the tail.
 		drift_isize remaining = (drift_isize)(end - cursor);
 		drift_isize tail_reserve = mid_len + idx_buf_cap + suffix_len;
 		if (remaining < 6 + tail_reserve) return -1;
-		cursor += drift_bcf_json_escape_byte((unsigned char)container_id.data[i], cursor);
+		cursor += drift_bcf_json_escape_byte(cid_bytes[i], cursor);
 	}
 	if ((drift_isize)(end - cursor) < mid_len + idx_buf_cap + suffix_len) return -1;
 	memcpy(cursor, mid, (size_t)mid_len);
@@ -204,7 +204,10 @@ drift_isize drift_bounds_check_params_json_build(
 __attribute__((noreturn))
 void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, drift_isize len) {
 	(void)len;
-	struct DriftString event_fqn = { (drift_isize)(sizeof(k_index_error_event) - 1), (char *)k_index_error_event };
+	/* B5: handles may not be fabricated over raw rodata — allocate.
+	 * Noreturn diagnostic path; the process aborts before leaks matter. */
+	struct DriftString event_fqn = drift_string_from_utf8_bytes(
+		k_index_error_event, (drift_isize)(sizeof(k_index_error_event) - 1));
 	struct DriftError *err = drift_error_new(k_index_error_code, event_fqn);
 	if (err) {
 		// Slice 7c-1 (ABI 14, 2026-05-06): legacy DV-attrs path
@@ -228,7 +231,7 @@ void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, d
 		// shorter than 64 bytes, so the clamp never triggers in practice
 		// — it's a defense-in-depth guard for any future caller.
 		const drift_isize MAX_CONTAINER_ID_LEN = (drift_isize)(1 << 20); // 1 MiB
-		drift_isize cid_len = container_id.len;
+		drift_isize cid_len = drift_string_len(container_id);
 		if (cid_len < 0 || cid_len > MAX_CONTAINER_ID_LEN) cid_len = MAX_CONTAINER_ID_LEN;
 		drift_isize pj_cap = 64 + cid_len * 6;
 		char *pj_buf = (char *)malloc((size_t)pj_cap);

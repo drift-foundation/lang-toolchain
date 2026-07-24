@@ -1,5 +1,76 @@
 # Drift development history
 
+## 2026-07-23 (0.33.88: B-repr/B5 — ABI 22 RcBytes String representation)
+
+The String storage block moves from the ABI-21 "header behind the data
+pointer" trick to an explicit `DriftRcBytes` header at OFFSET 0
+(`_Atomic uint64_t strong; _Atomic uint64_t flags;` — 16 bytes,
+static-asserted) followed by EXACTLY `len + 1` tail bytes with a hidden
+trailing NUL.  The handle stays two words by value (`{drift_isize len;
+DriftRcBytes *storage}`); `%DriftString = type { i64, ptr }` keeps its
+shape while field 1 becomes the header pointer — the ABI still breaks,
+which is exactly what the link stamp exists for: **ABI 21 → 22**, no
+compatibility shim, no dual-layout runtime; every dependent artifact
+rebuilds and stale objects fail deterministically at link
+(`__drift_rt_abi_version_22`; the mismatch regression now proves BOTH
+directions).
+
+**Representation-only for valid programs — no valid-source semantic
+change.**  Copy/immutability/UTF-8 content, comparison, hashing, and
+concat semantics are unchanged; the 924-fixture ownership corpus keeps
+an identical universe with all 14 counters +0.  The APPROVED
+invalid-state hardening rides along, in exactly these terms: NULL and
+negative-length constructor inputs now fail closed
+(`drift_contract_fail`, unconditional in normal AND NDEBUG runtimes)
+instead of silently producing an empty string, and OBSERVING the
+reserved all-zero tombstone `{0, NULL}` (len/data/eq/cmp/concat/
+to_cstr/retain and every borrowed C-string API) fails closed instead of
+silently reading as "" — a tombstone reaching observation is a compiler
+use-after-move, and masking it as empty is the failure mode this
+forbids.  The tombstone remains DROP-ONLY: release/free/drop accept the
+exact all-zero handle as a no-op, preserving the ownership pipeline's
+zero-storage drop-safety proofs verbatim.
+
+Highlights:
+
+- **Flags**: STATIC (compiler rodata literals, bits computed at compile
+  time per literal) / IMMORTAL (runtime immortals — mutually exclusive
+  with STATIC) / NUL_SCANNED + HAS_INTERIOR_NUL (monotonic write-once
+  interior-NUL cache; one relaxed `fetch_or`; illegal states and
+  reserved bits are unconditional contract failures).
+- **Canonical empty singleton**: every source-level empty String
+  resolves to the one hidden runtime symbol `__drift_rt_string_empty`
+  (IMMORTAL|NUL_SCANNED, non-null NUL data; C-string conversion
+  succeeds); empty literals lower to `{0, @__drift_rt_string_empty}`.
+- **Allocation guards**: `DRIFT_STRING_MAX_LEN`, concat overflow via
+  the subtraction form, strlen validated before conversion; refcount
+  overflow fails closed at `DRIFT_RC_MAX_LIVE` (>=, ~2^63).  The
+  retain/release ordering protocol (relaxed inc / release dec +
+  acquire fence) is carried verbatim from ABI 21.
+- **Accessors + layout authority**: C consumers read exclusively via
+  `drift_string_len` / `drift_string_data`; layout knowledge is
+  confined to string_runtime.{h,c} and exactly THREE codegen lowerings
+  (literal emitters, StringByteAt +16, the new private
+  `string_bytes_base` intrinsic) — enforced by
+  `test_string_layout_audit.py`.  All ~75 runtime-C member reads
+  migrated (compiler-proof: the field names changed).
+- **std.ffi (new, ships complete per the §10 scope table)**:
+  `with_bytes(+throw)` (base-once borrowed bulk access, no retain
+  traffic), checked `with_cstr1..4(+throw)` with LEFT-TO-RIGHT
+  validation reporting `CStringError::InteriorNul(arg, index)`
+  (zero-copy borrowed C strings via the hidden NUL + the flags cache),
+  `with_cstr_unsafe1..4`, `OwnedCStr`/`OwnedCBytes`/`ReleasedCBytes`
+  (Destructible, release() handoff), `CStringScope`
+  (cstr/cstr_unsafe/argv → `CArgv`) with the helper-retained `&mut`
+  scope, plus the C bridge (`drift_string_interior_nul_index`,
+  `drift_string_to_owned_cstr/cbytes`,
+  `drift_string_to_owned_cstr_unchecked` — an implementation-time
+  bridge amendment backing `CStringScope.cstr_unsafe` in the cstr
+  allocation family — and `drift_cstr_free`/`drift_cbytes_free` as the
+  PAIRED deallocators; the Drift-side `cstr_free`/`cbytes_free` are
+  `pub unsafe` with exactly-once transferred-allocation provenance).  `drift_string_to_cstr`/`from_cstr` keep their
+  names and allocating/owned semantics.
+
 ## 2026-07-20 (0.33.87: string_arc endgame — consolidated ABI-21 cleanup that deletes string_arc.py; ABI stays 21)
 
 This is the CONSOLIDATED string_arc endgame candidate (maintainer

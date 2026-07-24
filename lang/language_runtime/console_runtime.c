@@ -11,11 +11,12 @@
  * the outer scope exit -- delegating to a release-on-entry helper
  * would double-release on the writeln path. */
 static void _drift_console_write_borrowed(DriftString s) {
-	if (s.len == 0 || s.data == NULL) {
+	drift_isize len = drift_string_len(s);  /* fails closed on tombstone/malformed */
+	if (len == 0) {
 		return;
 	}
-	size_t n = (size_t)s.len;
-	size_t written = fwrite(s.data, 1, n, stdout);
+	size_t n = (size_t)len;
+	size_t written = fwrite(drift_string_data(s), 1, n, stdout);
 	if (written < n && ferror(stdout)) {
 		abort();
 	}
@@ -25,11 +26,12 @@ static void _drift_console_write_borrowed(DriftString s) {
  * Stderr counterpart of _drift_console_write_borrowed.  Same
  * ownership contract: caller retains the stake. */
 static void _drift_console_eprint_borrowed(DriftString s) {
-	if (s.len == 0 || s.data == NULL) {
+	drift_isize len = drift_string_len(s);  /* fails closed on tombstone/malformed */
+	if (len == 0) {
 		return;
 	}
-	size_t n = (size_t)s.len;
-	size_t written = fwrite(s.data, 1, n, stderr);
+	size_t n = (size_t)len;
+	size_t written = fwrite(drift_string_data(s), 1, n, stderr);
 	if (written < n && ferror(stderr)) {
 		abort();
 	}

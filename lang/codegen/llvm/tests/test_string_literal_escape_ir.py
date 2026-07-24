@@ -25,7 +25,7 @@ def test_string_literal_with_quote_and_backslash_ir():
 	ir = _build_func([ConstString(dest="s", value='a"b\\c')])
 	assert (
 		f'private unnamed_addr constant {{ {word_ty}, {word_ty}, [6 x i8] }} '
-		f'{{ {word_ty} 1, {word_ty} 1, [6 x i8] c"a\\22b\\5Cc\\00" }}'
+		f'{{ {word_ty} 1, {word_ty} 5, [6 x i8] c"a\\22b\\5Cc\\00" }}'
 	) in ir
 	assert f'define {word_ty} @f()' in ir  # return type path still Int-only for this helper
 	assert 'ret' in ir

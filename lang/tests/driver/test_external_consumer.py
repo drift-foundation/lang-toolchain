@@ -624,6 +624,23 @@ pub fn main() nothrow -> Int {
 # ── K16: Package-consumer symbol completeness (integrated) ───────────
 
 
+def _empty_singleton_shim(work_dir: Path) -> Path:
+	"""ABI 22 (B-repr/B5): every module with an empty string literal
+	references the runtime empty singleton.  These harness programs are
+	otherwise self-contained (their IR carries its own string-helper
+	stubs), so link ONLY the singleton definition — built from the REAL
+	runtime header, no duplicated layout knowledge."""
+	shim = work_dir / "empty_singleton_shim.c"
+	shim.write_text(
+		'#include "string_runtime.h"\n'
+		'__attribute__((visibility("hidden")))\n'
+		"const struct DriftEmptyString __drift_rt_string_empty = {\n"
+		"\t{ 1, DRIFT_RCBYTES_IMMORTAL | DRIFT_RCBYTES_NUL_SCANNED },\n"
+		"\t{ 0 } };\n"
+	)
+	return shim
+
+
 def _audit_ir_symbols(ir: str) -> tuple[set[str], set[str], set[str]]:
 	"""Collect called, defined, and declared symbols from LLVM IR.
 
@@ -637,6 +654,10 @@ def _audit_ir_symbols(ir: str) -> tuple[set[str], set[str], set[str]]:
 	defined |= set(re.findall(r'define\s+[^@]*@([a-zA-Z_][\w.]*)', ir))
 	declared = set(re.findall(r'declare\s+[^@]*@"([^"]+)"', ir))
 	declared |= set(re.findall(r'declare\s+[^@]*@([a-zA-Z_][\w.]*)', ir))
+	# External GLOBAL declarations (e.g. the ABI-22 empty-String
+	# singleton `@__drift_rt_string_empty = external hidden constant ...`)
+	# are link-resolved symbols, not undefined call targets.
+	declared |= set(re.findall(r'@([a-zA-Z_][\w.]*)\s*=\s*external\b', ir))
 	return called, defined, declared
 
 
@@ -764,7 +785,10 @@ def test_ext_package_consumer_e2e(
 	ir_path.write_text(patched_ir)
 
 	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		[clang, "-x", "ir", str(ir_path), "-x", "none",
+		 str(_empty_singleton_shim(ir_path.parent)),
+		 "-I", str(Path(__file__).resolve().parents[3] / "lang" / "language_runtime"),
+		 "-o", str(bin_path)],
 		capture_output=True, text=True,
 	)
 	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
@@ -920,7 +944,10 @@ pub fn main() nothrow -> Int {
 	ir_path.write_text(patched_ir)
 
 	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		[clang, "-x", "ir", str(ir_path), "-x", "none",
+		 str(_empty_singleton_shim(ir_path.parent)),
+		 "-I", str(Path(__file__).resolve().parents[3] / "lang" / "language_runtime"),
+		 "-o", str(bin_path)],
 		capture_output=True, text=True,
 	)
 	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"
@@ -2038,7 +2065,10 @@ pub fn main() nothrow -> Int {
 	ir_path.write_text(patched_ir)
 
 	compile_res = subprocess.run(
-		[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+		[clang, "-x", "ir", str(ir_path), "-x", "none",
+		 str(_empty_singleton_shim(ir_path.parent)),
+		 "-I", str(Path(__file__).resolve().parents[3] / "lang" / "language_runtime"),
+		 "-o", str(bin_path)],
 		capture_output=True, text=True,
 	)
 	assert compile_res.returncode == 0, f"clang link failed:\n{compile_res.stderr}"

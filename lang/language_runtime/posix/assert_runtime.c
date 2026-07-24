@@ -143,11 +143,11 @@ void drift_assert_loc(int cond, DriftString file, drift_isize line, DriftString 
 	char *expr_c = drift_string_to_cstr(expr);
 	char *msg_c = drift_string_to_cstr(msg);
 
-	if (expr.len > 0 && msg.len > 0) {
+	if (drift_string_len(expr) > 0 && drift_string_len(msg) > 0) {
 		fprintf(stderr, "assertion failed: %s — %s\n", expr_c, msg_c);
-	} else if (expr.len > 0) {
+	} else if (drift_string_len(expr) > 0) {
 		fprintf(stderr, "assertion failed: %s\n", expr_c);
-	} else if (msg.len > 0) {
+	} else if (drift_string_len(msg) > 0) {
 		fprintf(stderr, "assertion failed: %s\n", msg_c);
 	} else {
 		fprintf(stderr, "assertion failed\n");

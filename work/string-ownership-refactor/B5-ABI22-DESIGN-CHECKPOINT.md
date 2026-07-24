@@ -587,7 +587,16 @@ pinned as (recommended option, adopted):
   char *drift_string_to_owned_cstr(const DriftString *s, drift_isize *nul_index_out);
       /* interior NUL → returns NULL, *nul_index_out = index;
        * else malloc'd NUL-terminated copy, *nul_index_out = -1 */
-  void drift_cstr_free(char *p);                    /* pairs to_owned_cstr */
+  char *drift_string_to_owned_cstr_unchecked(const DriftString *s);
+      /* IMPLEMENTATION AMENDMENT (recorded during the ABI-22 build,
+       * review round S9/S10): UNCHECKED owned NUL-terminated copy —
+       * interior NULs preserved (C sees truncation at the first one;
+       * caller accepted the hazard).  Backs CStringScope.cstr_unsafe
+       * so the scope's unsafe pins stay in the cstr allocation family
+       * (pairs with drift_cstr_free — the pinned allocator pairing;
+       * the checked path's NULL-on-interior-NUL return made it
+       * unusable for the unsafe variant). */
+  void drift_cstr_free(char *p);                    /* pairs to_owned_cstr(_unchecked) */
   typedef struct DriftCBytes { unsigned char *ptr; drift_isize len; } DriftCBytes;
   DriftCBytes drift_string_to_owned_cbytes(const DriftString *s);   /* infallible copy */
   void drift_cbytes_free(DriftCBytes b);            /* pairs to_owned_cbytes */

@@ -1228,6 +1228,17 @@ class StringByteAt(MInstr):
 
 
 @dataclass
+class StringBytesBase(MInstr):
+	"""dest = borrowed bytes-base pointer of a String (storage + 16).
+
+	B5 §3.3 layout-authority op: a BORROW with no retain; the pointer is
+	valid only while the source String is live (the std.ffi with_*
+	wrappers own that window)."""
+	dest: ValueId
+	value: ValueId
+
+
+@dataclass
 class StringEq(MInstr):
 	"""dest = (left == right) for strings; result is Bool."""
 	dest: ValueId
@@ -1775,6 +1786,7 @@ __all__ = [
 	"StringFromFloat",
 	"StringLen",
 	"StringByteAt",
+	"StringBytesBase",
 	"StringEq",
 	"StringCmp",
 	"StringConcat",

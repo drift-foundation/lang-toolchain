@@ -840,3 +840,62 @@ pub fn main() nothrow -> Int {
 		f"ABI 14 binary references deleted DV runtime symbols — Slice "
 		f"7c-1 contract failure.  Hits ({len(uniq_hits)}): {uniq_hits[:20]}"
 	)
+
+
+def test_abi_mismatch_bidirectional_21_22(tmp_path: Path) -> None:
+	"""B-repr(B5) §5.4: the ABI 21→22 boundary is enforced in BOTH
+	directions by the link stamp:
+
+	  (a) an ABI-21 object (IR referencing __drift_rt_abi_version_21)
+	      cannot link against the ABI-22 runtime archive — the linker
+	      error names the v21 symbol (the driver-hint predicate fires);
+	  (b) an ABI-22 object cannot link against an ABI-21 runtime
+	      (facsimile: the real archive with its v22 stamp member swapped
+	      for a v21 stamp) — the error names the v22 symbol.
+	"""
+	assert DRIFT_RT_ABI_VERSION == 22, "test written at the 21→22 boundary"
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
+	assert abi_sym in ir
+
+	clang = shutil.which("clang")
+	assert clang, "clang not available"
+	variant = runtime_archive_variant(debug_style=False, asan_enabled=False, alloc_track_enabled=False)
+	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
+	assert archive.exists()
+
+	def _link(ir_text: str, rt: Path, tag: str):
+		ir_path = tmp_path / f"{tag}.ll"
+		ir_path.write_text(ir_text)
+		return subprocess.run(
+			[clang, "-pthread", "-x", "ir", str(ir_path), "-x", "none", str(rt),
+			 "-lz", "-Wl,--as-needed", "-o", str(tmp_path / f"{tag}.out")],
+			capture_output=True, text=True, cwd=ROOT,
+		)
+
+	# (a) old object x new runtime
+	old_ir = re.sub(re.escape(abi_sym) + r'(?=[\s()\"])', "__drift_rt_abi_version_21", ir)
+	assert "__drift_rt_abi_version_21" in old_ir
+	result_a = _link(old_ir, archive, "old_obj_new_rt")
+	assert result_a.returncode != 0, "ABI-21 object must not link against the ABI-22 runtime"
+	assert "__drift_rt_abi_version_21" in result_a.stderr, result_a.stderr[:500]
+	assert "__drift_rt_abi_version_" in result_a.stderr  # driver-hint predicate
+
+	# (b) new object x old runtime (archive copy with the stamp swapped to v21)
+	old_rt = tmp_path / "libdrift_rt_abi21_facsimile.a"
+	shutil.copyfile(archive, old_rt)
+	members = subprocess.run(["ar", "t", str(old_rt)], capture_output=True, text=True)
+	stamp_members = [m for m in members.stdout.split() if "abi_version_stamp" in m]
+	assert stamp_members, f"stamp member not found in archive: {members.stdout[:400]}"
+	for m in stamp_members:
+		subprocess.run(["ar", "d", str(old_rt), m], check=True, capture_output=True)
+	stamp21_c = tmp_path / "stamp21.c"
+	stamp21_c.write_text('void __drift_rt_abi_version_21(void) {}\n')
+	stamp21_o = tmp_path / "stamp21.o"
+	subprocess.run([clang, "-c", str(stamp21_c), "-o", str(stamp21_o)], check=True, capture_output=True)
+	subprocess.run(["ar", "q", str(old_rt), str(stamp21_o)], check=True, capture_output=True)
+
+	result_b = _link(ir, old_rt, "new_obj_old_rt")
+	assert result_b.returncode != 0, "ABI-22 object must not link against an ABI-21 runtime"
+	assert abi_sym in result_b.stderr, result_b.stderr[:500]
+	assert "__drift_rt_abi_version_" in result_b.stderr  # driver-hint predicate

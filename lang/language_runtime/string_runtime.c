@@ -1,4 +1,4 @@
-// Drift String runtime support (lang, v1).
+// Drift String runtime support (lang, ABI 22 — B-repr/B5 RcBytes).
 #include "string_runtime.h"
 
 #include <stdio.h>
@@ -11,6 +11,77 @@
 #include <unistd.h>
 
 #include "ryu/ryu.h"
+
+/* ── Contract failure (unconditional, both runtime variants) ─────── */
+
+_Noreturn void drift_contract_fail(const char *what) {
+	fprintf(stderr, "[drift:contract] %s\n", what ? what : "(null)");
+	fflush(stderr);
+	abort();
+}
+
+/* ── The canonical empty singleton (ABI-22 symbol) ────────────────── */
+
+__attribute__((visibility("hidden")))
+const struct DriftEmptyString __drift_rt_string_empty = {
+	{ 1, DRIFT_RCBYTES_IMMORTAL | DRIFT_RCBYTES_NUL_SCANNED },
+	{ 0 } };
+
+DriftString drift_string_empty(void) {
+	DriftString s = {0, (DriftRcBytes *)&__drift_rt_string_empty.hdr};
+	return s;
+}
+
+/* ── Handle validation (shared prologue, ALL builds) ──────────────────
+ * Exactly {0, NULL} is the drop-only TOMBSTONE (the compiler's
+ * zero-storage doctrine writes it; release-family accepts it as a
+ * no-op, observation-family fails closed).  Everything else malformed
+ * fails closed everywhere.  Illegal flag combinations and reserved
+ * bits go through the UNCONDITIONAL contract path — never
+ * NDEBUG-gated. */
+
+typedef struct DriftStringCheck {
+	enum { DRIFT_STR_TOMBSTONE, DRIFT_STR_LIVE } state;
+	uint64_t flags;
+} DriftStringCheck;
+
+/* drift-owned-string-audit: allow read-only-borrow -- s
+ * Pure validation prologue: inspects the handle words and the flags
+ * word; never touches refcounts or ownership. */
+static DriftStringCheck drift_string_validate(DriftString s) {
+	DriftStringCheck chk;
+	if (s.storage == NULL) {
+		if (s.len != 0) {
+			drift_contract_fail("malformed String handle: nonzero len, NULL storage");
+		}
+		chk.state = DRIFT_STR_TOMBSTONE;
+		chk.flags = 0;
+		return chk;
+	}
+	if (s.len < 0) {
+		drift_contract_fail("malformed String handle: negative len");
+	}
+	uint64_t f = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
+	if (f & DRIFT_RCBYTES_RESERVED_MASK) {
+		drift_contract_fail("String flags: reserved bit set");
+	}
+	if ((f & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL))
+			== (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
+		drift_contract_fail("String flags: STATIC+IMMORTAL");
+	}
+	if ((f & (DRIFT_RCBYTES_NUL_SCANNED | DRIFT_RCBYTES_HAS_INTERIOR_NUL))
+			== DRIFT_RCBYTES_HAS_INTERIOR_NUL) {
+		drift_contract_fail("String flags: HAS_INTERIOR_NUL without NUL_SCANNED");
+	}
+	chk.state = DRIFT_STR_LIVE;
+	chk.flags = f;
+	return chk;
+}
+
+/* Live-handle bytes base — layout authority, this file only. */
+static unsigned char *drift_string_bytes_mut(DriftString s) {
+	return (unsigned char *)(s.storage + 1);
+}
 
 /* DRIFT_STR_TRACE: env-gated diagnostic for refcount-race investigations.
  * Logs every retain/release on heap-allocated (non-static) DriftStrings
@@ -53,69 +124,59 @@ static void drift_str_trace_event(const char *what, void *hdr,
 	fflush(stderr);
 }
 
-typedef struct DriftStringHeader {
-	_Atomic uint64_t refcount;
-	uint64_t flags;
-} DriftStringHeader;
+/* ── Allocation (§2.5: every invalid input fails closed, never
+ *    silently empty) ──────────────────────────────────────────────── */
 
-enum {
-	DRIFT_STRING_FLAG_STATIC = 1ULL << 0,
-};
-
-_Static_assert(sizeof(DriftStringHeader) == 16, "DriftStringHeader layout must stay stable");
-_Static_assert(offsetof(DriftStringHeader, flags) == 8, "DriftStringHeader flags offset must stay stable");
-_Static_assert(DRIFT_STRING_FLAG_STATIC == 1ULL, "DriftStringHeader static flag must stay stable");
-
-
-static DriftStringHeader *drift_string_header(char *data) {
-	return (DriftStringHeader *)(data - sizeof(DriftStringHeader));
-}
-
-static char *drift_string_alloc(drift_isize len) {
+static DriftRcBytes *drift_string_alloc_block(drift_isize len) {
 	if (len < 0) {
-		return NULL;
+		drift_contract_fail("negative String length");
 	}
-	size_t total = sizeof(DriftStringHeader) + (size_t)len + 1;
-	DriftStringHeader *hdr = (DriftStringHeader *)malloc(total);
-	if (!hdr) {
+	if (len > DRIFT_STRING_MAX_LEN) {
+		drift_contract_fail("String length overflow");
+	}
+	size_t total = sizeof(DriftRcBytes) + (size_t)len + 1;
+	DriftRcBytes *blk = (DriftRcBytes *)malloc(total);
+	if (!blk) {
 		abort();
 	}
-	hdr->refcount = 1;
-	hdr->flags = 0;
-	return (char *)(hdr + 1);
+	atomic_store_explicit(&blk->strong, 1, memory_order_relaxed);
+	atomic_store_explicit(&blk->flags, 0, memory_order_relaxed);
+	((unsigned char *)(blk + 1))[len] = 0;
+	return blk;
+}
+
+/* Shared copying constructor body: data must be non-NULL when len > 0;
+ * len == 0 canonicalizes to the empty singleton. */
+static DriftString drift_string_new_copy(const char *data, drift_isize len, const char *null_what) {
+	if (len == 0) {
+		return drift_string_empty();
+	}
+	if (data == NULL) {
+		drift_contract_fail(null_what);
+	}
+	DriftRcBytes *blk = drift_string_alloc_block(len);
+	memcpy(blk + 1, data, (size_t)len);
+	DriftString s = {len, blk};
+	return s;
 }
 
 DriftString drift_string_from_cstr(const char *cstr) {
 	if (cstr == NULL) {
-		DriftString s = {0, NULL};
-		return s;
+		drift_contract_fail("NULL cstr");
 	}
-	drift_isize len = (drift_isize)strlen(cstr);
-	char *buf = drift_string_alloc(len);
-	if (!buf) {
-		DriftString s = {0, NULL};
-		return s;
+	size_t n = strlen(cstr);
+	if (n > (size_t)DRIFT_STRING_MAX_LEN) {
+		/* validate BEFORE the size_t -> drift_isize conversion */
+		drift_contract_fail("String length overflow");
 	}
-	memcpy(buf, cstr, (size_t)len);
-	buf[len] = '\0';
-	DriftString s = {len, buf};
-	return s;
+	return drift_string_new_copy(cstr, (drift_isize)n, "NULL cstr");
 }
 
 DriftString drift_string_from_utf8_bytes(const char *data, drift_isize len) {
-	if (data == NULL || len == 0) {
-		DriftString s = {0, NULL};
-		return s;
+	if (len < 0) {
+		drift_contract_fail("negative String length");
 	}
-	char *buf = drift_string_alloc(len);
-	if (!buf) {
-		DriftString s = {0, NULL};
-		return s;
-	}
-	memcpy(buf, data, (size_t)len);
-	buf[len] = '\0';
-	DriftString s = {len, buf};
-	return s;
+	return drift_string_new_copy(data, len, "NULL bytes with nonzero length");
 }
 
 DriftString drift_string_from_int64(int64_t v) {
@@ -157,117 +218,113 @@ DriftString drift_string_from_f64(double v) {
 }
 
 DriftString drift_string_from_bool(int v) {
-	static struct {
-		DriftStringHeader hdr;
-		char data[5];
-	} k_true = {
-		.hdr = {.refcount = 1, .flags = DRIFT_STRING_FLAG_STATIC},
-		.data = "true",
+	/* Runtime-owned immortal constants: IMMORTAL (not STATIC — mutual
+	 * exclusion; STATIC is the compiler-rodata population) and fully
+	 * NUL-scanned at construction. */
+	static const struct { DriftRcBytes hdr; unsigned char data[5]; } k_true = {
+		{ 1, DRIFT_RCBYTES_IMMORTAL | DRIFT_RCBYTES_NUL_SCANNED },
+		"true",
 	};
-	static struct {
-		DriftStringHeader hdr;
-		char data[6];
-	} k_false = {
-		.hdr = {.refcount = 1, .flags = DRIFT_STRING_FLAG_STATIC},
-		.data = "false",
+	static const struct { DriftRcBytes hdr; unsigned char data[6]; } k_false = {
+		{ 1, DRIFT_RCBYTES_IMMORTAL | DRIFT_RCBYTES_NUL_SCANNED },
+		"false",
 	};
 	if (v) {
-		DriftString s = {4, k_true.data};
+		DriftString s = {4, (DriftRcBytes *)&k_true.hdr};
 		return s;
 	}
-	DriftString s = {5, k_false.data};
+	DriftString s = {5, (DriftRcBytes *)&k_false.hdr};
 	return s;
 }
 
 DriftString drift_string_literal(const char *data, drift_isize len) {
-	if (data == NULL || len == 0) {
-		DriftString s = {0, NULL};
-		return s;
+	if (len < 0) {
+		drift_contract_fail("negative String length");
 	}
-	char *buf = drift_string_alloc(len);
-	if (!buf) {
-		DriftString s = {0, NULL};
-		return s;
-	}
-	memcpy(buf, data, (size_t)len);
-	buf[len] = '\0';
-	DriftString s = {len, buf};
-	return s;
+	return drift_string_new_copy(data, len, "NULL literal bytes with nonzero length");
 }
 
 /* drift-owned-string-audit: allow read-only-borrow -- a, b
- * Reads a.len/a.data and b.len/b.data to build a fresh allocation.
- * Does NOT release a or b; the originating Drift IR emits explicit
- * `drift_string_release(a); drift_string_release(b);` after the
- * concat call to drop the input stakes. */
+ * Reads a and b through the layout-authority bytes base to build a
+ * fresh allocation.  Does NOT release a or b; the originating Drift IR
+ * emits explicit `drift_string_release(a); drift_string_release(b);`
+ * after the concat call to drop the input stakes. */
 DriftString drift_string_concat(DriftString a, DriftString b) {
-	if ((size_t)-1 - (size_t)a.len < (size_t)b.len) {
-		abort();
+	DriftStringCheck ca = drift_string_validate(a);
+	DriftStringCheck cb = drift_string_validate(b);
+	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (concat)");
+	}
+	if (b.len > DRIFT_STRING_MAX_LEN - a.len) {
+		/* subtraction form cannot wrap: a.len <= MAX_LEN is invariant */
+		drift_contract_fail("String concat overflow");
 	}
 	drift_isize total = a.len + b.len;
-	/* For empty result, canonicalize to len=0, data=NULL to avoid heap allocs. */
 	if (total == 0) {
-		DriftString s = {0, NULL};
-		return s;
+		return drift_string_empty();
 	}
-	char *buf = drift_string_alloc(total);
-	if (!buf) {
-		DriftString s = {0, NULL};
-		return s;
+	DriftRcBytes *blk = drift_string_alloc_block(total);
+	unsigned char *out = (unsigned char *)(blk + 1);
+	if (a.len > 0) {
+		memcpy(out, drift_string_bytes_mut(a), (size_t)a.len);
 	}
-	if (a.len > 0 && a.data) {
-		memcpy(buf, a.data, (size_t)a.len);
+	if (b.len > 0) {
+		memcpy(out + a.len, drift_string_bytes_mut(b), (size_t)b.len);
 	}
-	if (b.len > 0 && b.data) {
-		memcpy(buf + a.len, b.data, (size_t)b.len);
-	}
-	buf[total] = '\0';
-	DriftString s = {total, buf};
+	DriftString s = {total, blk};
 	return s;
 }
 
 /* drift-owned-string-audit: allow refcount-primitive -- s
  * This IS the retain primitive; bumps the refcount and returns the
  * same handle.  Deliberately keeps the caller's stake AND adds one
- * for the returned value. */
+ * for the returned value.  Tombstone retain FAILS CLOSED (§2.4 —
+ * subject to the armed-trap reachability gate). */
 DriftString drift_string_retain(DriftString s) {
-	if (s.data == NULL) {
+	DriftStringCheck chk = drift_string_validate(s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("retain of String tombstone");
+	}
+	if (chk.flags & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
 		return s;
 	}
-	DriftStringHeader *hdr = drift_string_header(s.data);
-	if (hdr->flags & DRIFT_STRING_FLAG_STATIC) {
-		return s;
+	uint64_t prev = atomic_fetch_add_explicit(&s.storage->strong, 1, memory_order_relaxed);
+	if (prev >= DRIFT_RC_MAX_LIVE) {
+		/* unconditional fail-closed, normal AND NDEBUG builds; fires
+		 * ~2^63 increments before any wrap (>= not >) */
+		drift_contract_fail("String refcount overflow");
 	}
-	uint64_t prev = atomic_fetch_add_explicit(&hdr->refcount, 1, memory_order_relaxed);
 	if (getenv("DRIFT_STR_TRACE")) {
-		drift_str_trace_event("retain", hdr, s.data, (long)s.len, prev, prev + 1);
+		drift_str_trace_event("retain", s.storage,
+			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev + 1);
 	}
 	return s;
 }
 
 /* drift-owned-string-audit: allow refcount-primitive -- s
  * This IS the release primitive; do NOT wrap in DRIFT_OWNED_STRING
- * (would recurse on every call). */
+ * (would recurse on every call).  The exact all-zero tombstone is a
+ * drop-only NO-OP (zero-storage drop safety); malformed handles fail
+ * closed even here. */
 void drift_string_release(DriftString s) {
-	if (s.data == NULL) {
+	DriftStringCheck chk = drift_string_validate(s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
 		return;
 	}
-	DriftStringHeader *hdr = drift_string_header(s.data);
-	if (hdr->flags & DRIFT_STRING_FLAG_STATIC) {
+	if (chk.flags & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
 		return;
 	}
-	uint64_t prev = atomic_fetch_sub_explicit(&hdr->refcount, 1, memory_order_release);
+	uint64_t prev = atomic_fetch_sub_explicit(&s.storage->strong, 1, memory_order_release);
 	if (prev == 0) {
-		abort();
+		abort(); /* underflow — unconditional, as B0 */
+	}
+	if (getenv("DRIFT_STR_TRACE")) {
+		drift_str_trace_event("release", s.storage,
+			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev - 1);
 	}
 	if (prev == 1) {
 		atomic_thread_fence(memory_order_acquire);
-#ifndef NDEBUG
-		if (hdr->flags & DRIFT_STRING_FLAG_STATIC) {
-			abort();
-		}
-#endif
-		free(hdr);
+		free(s.storage);
 	}
 }
 
@@ -278,17 +335,22 @@ void drift_string_free(DriftString s) {
 }
 
 /* drift-owned-string-audit: allow read-only-borrow -- s
- * Pure read: copies s.data bytes into a freshly malloc'd cstring.
+ * Pure read: copies the bytes into a freshly malloc'd cstring.
  * Does NOT release; caller retains the stake (typically released
- * after the returned cstring is consumed). */
+ * after the returned cstring is consumed).  RETAINED ABI-21 semantics
+ * (decision 7): allocating/owned, name unchanged. */
 char *drift_string_to_cstr(DriftString s) {
+	DriftStringCheck chk = drift_string_validate(s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (to_cstr)");
+	}
 	size_t len = (size_t)s.len;
 	char *buf = (char *)malloc(len + 1);
 	if (!buf) {
 		abort();
 	}
-	if (s.data && s.len > 0) {
-		memcpy(buf, s.data, len);
+	if (len > 0) {
+		memcpy(buf, drift_string_bytes_mut(s), len);
 	}
 	buf[len] = '\0';
 	return buf;
@@ -297,21 +359,28 @@ char *drift_string_to_cstr(DriftString s) {
 /* drift-owned-string-audit: allow read-only-borrow -- a, b
  * Pure read: compares bytes; does not touch refcounts. */
 int drift_string_eq(DriftString a, DriftString b) {
+	DriftStringCheck ca = drift_string_validate(a);
+	DriftStringCheck cb = drift_string_validate(b);
+	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (eq)");
+	}
 	if (a.len != b.len) {
 		return 0;
 	}
 	if (a.len == 0) {
 		return 1;
 	}
-	if (!a.data || !b.data) {
-		return 0;
-	}
-	return memcmp(a.data, b.data, (size_t)a.len) == 0;
+	return memcmp(drift_string_bytes_mut(a), drift_string_bytes_mut(b), (size_t)a.len) == 0;
 }
 
 /* drift-owned-string-audit: allow read-only-borrow -- a, b
  * Pure read: byte-lex compare; does not touch refcounts. */
 int drift_string_cmp(DriftString a, DriftString b) {
+	DriftStringCheck ca = drift_string_validate(a);
+	DriftStringCheck cb = drift_string_validate(b);
+	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (cmp)");
+	}
 	const size_t a_len = (size_t)a.len;
 	const size_t b_len = (size_t)b.len;
 	const size_t min_len = a_len < b_len ? a_len : b_len;
@@ -319,7 +388,7 @@ int drift_string_cmp(DriftString a, DriftString b) {
 	if (min_len > 0) {
 		// memcmp uses unsigned byte ordering; this matches our spec for
 		// `String` comparison operators.
-		const int cmp = memcmp(a.data, b.data, min_len);
+		const int cmp = memcmp(drift_string_bytes_mut(a), drift_string_bytes_mut(b), min_len);
 		if (cmp != 0) {
 			return cmp;
 		}
@@ -333,4 +402,103 @@ int drift_string_cmp(DriftString a, DriftString b) {
 		return 1;
 	}
 	return 0;
+}
+
+/* ── C-string bridge helpers (§3.3) ──────────────────────────────── */
+
+/* drift-owned-string-audit: allow read-only-borrow -- s (by pointer)
+ * Owns the NUL-cache protocol: EXISTENCE is cached monotonically in
+ * the flags (one relaxed fetch_or from the unknown state; concurrent
+ * scanners race benignly to identical bits); the exact INDEX is
+ * re-scanned on the error path. */
+drift_isize drift_string_interior_nul_index(const DriftString *s) {
+	DriftStringCheck chk = drift_string_validate(*s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (interior_nul_index)");
+	}
+	if (s->len == 0) {
+		return -1;
+	}
+	const unsigned char *bytes = (const unsigned char *)(s->storage + 1);
+	if (chk.flags & DRIFT_RCBYTES_NUL_SCANNED) {
+		if (!(chk.flags & DRIFT_RCBYTES_HAS_INTERIOR_NUL)) {
+			return -1; /* zero-copy fast path: scanned, clean */
+		}
+		const unsigned char *hit = memchr(bytes, 0, (size_t)s->len);
+		if (hit == NULL) {
+			drift_contract_fail("String NUL cache: HAS_INTERIOR_NUL but no NUL found");
+		}
+		return (drift_isize)(hit - bytes);
+	}
+	const unsigned char *hit = memchr(bytes, 0, (size_t)s->len);
+	uint64_t publish = DRIFT_RCBYTES_NUL_SCANNED
+		| (hit ? DRIFT_RCBYTES_HAS_INTERIOR_NUL : 0);
+	atomic_fetch_or_explicit(&s->storage->flags, publish, memory_order_relaxed);
+	return hit ? (drift_isize)(hit - bytes) : -1;
+}
+
+char *drift_string_to_owned_cstr(const DriftString *s, drift_isize *nul_index_out) {
+	drift_isize nul = drift_string_interior_nul_index(s);
+	if (nul >= 0) {
+		if (nul_index_out) {
+			*nul_index_out = nul;
+		}
+		return NULL;
+	}
+	if (nul_index_out) {
+		*nul_index_out = -1;
+	}
+	size_t len = (size_t)s->len;
+	char *buf = (char *)malloc(len + 1);
+	if (!buf) {
+		abort();
+	}
+	if (len > 0) {
+		memcpy(buf, s->storage + 1, len);
+	}
+	buf[len] = '\0';
+	return buf;
+}
+
+char *drift_string_to_owned_cstr_unchecked(const DriftString *s) {
+	DriftStringCheck chk = drift_string_validate(*s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (to_owned_cstr_unchecked)");
+	}
+	size_t len = (size_t)s->len;
+	char *buf = (char *)malloc(len + 1);
+	if (!buf) {
+		abort();
+	}
+	if (len > 0) {
+		memcpy(buf, s->storage + 1, len);
+	}
+	buf[len] = '\0';
+	return buf;
+}
+
+void drift_cstr_free(char *p) {
+	free(p);
+}
+
+DriftCBytes drift_string_to_owned_cbytes(const DriftString *s) {
+	DriftStringCheck chk = drift_string_validate(*s);
+	if (chk.state == DRIFT_STR_TOMBSTONE) {
+		drift_contract_fail("String tombstone observed (to_owned_cbytes)");
+	}
+	size_t len = (size_t)s->len;
+	unsigned char *buf = (unsigned char *)malloc(len + 1);
+	if (!buf) {
+		abort();
+	}
+	if (len > 0) {
+		memcpy(buf, s->storage + 1, len);
+	}
+	buf[len] = 0;
+	DriftCBytes out = {buf, s->len};
+	return out;
+}
+
+void drift_cbytes_free(DriftCBytes b) {
+	free(b.ptr);
 }

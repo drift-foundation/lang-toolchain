@@ -37,6 +37,7 @@ class IntrinsicKind(Enum):
 	WRAPPING_MUL_U64 = "wrapping_mul_u64"
 	BYTE_LENGTH = "byte_length"
 	STRING_BYTE_AT = "string_byte_at"
+	STRING_BYTES_BASE = "string_bytes_base"
 	STRING_EQ = "string_eq"
 	STRING_CONCAT = "string_concat"
 	CALLBACK0 = "callback0"

@@ -4711,6 +4711,25 @@ class HIRToMIR:
 			self.b.emit(M.StringByteAt(dest=dest, value=str_val, index=idx_val))
 			self._local_types[dest] = self._byte_type
 			return dest
+		if intrinsic is IntrinsicKind.STRING_BYTES_BASE:
+			name = intrinsic.value
+			if info is None or len(info.sig.param_types) < 1:
+				raise AssertionError(f"{name}(...) missing CallInfo types (checker bug)")
+			if info.sig.param_types[0] != self._type_table.ensure_ref(self._string_type):
+				raise AssertionError(f"{name} requires a &String operand (checker bug)")
+			str_val = self.lower_expr(expr.args[0])
+			str_arg_ty = info.sig.param_types[0]
+			td = self._type_table.get(str_arg_ty)
+			if td.kind is TypeKind.REF and td.param_types:
+				inner_ty = td.param_types[0]
+				load = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=load, ptr=str_val, inner_ty=inner_ty))
+				self._local_types[load] = inner_ty
+				str_val = load
+			dest = self.b.new_temp()
+			self.b.emit(M.StringBytesBase(dest=dest, value=str_val))
+			self._local_types[dest] = info.sig.user_ret_type
+			return dest
 		if intrinsic is IntrinsicKind.STRING_EQ:
 			if info is None or len(info.sig.param_types) < 2:
 				raise AssertionError("string_eq(...) missing CallInfo types (checker bug)")

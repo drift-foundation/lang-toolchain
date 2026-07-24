@@ -34,6 +34,10 @@ char *drift_string_to_cstr(DriftString s) { (void)s; return 0; }
  * externs) reference the release; this resolver-only whitebox never
  * exercises them. */
 void drift_string_release(DriftString s) { (void)s; }
+/* ABI 22 (B-repr/B5): the inline accessors in string_runtime.h
+ * reference the unconditional contract-failure primitive; stub it for
+ * this resolver-only whitebox (never exercised here). */
+_Noreturn void drift_contract_fail(const char *what) { (void)what; abort(); }
 
 static uint64_t pack(uint32_t gen, int fd) {
 	return ((uint64_t)gen << 32) | (uint32_t)fd;

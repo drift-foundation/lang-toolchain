@@ -215,6 +215,7 @@ INTRINSIC_ARITY_TABLE: dict[IntrinsicKind, IntrinsicSpec] = {
 	IntrinsicKind.WRAPPING_MUL_U64: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_WRAPPING_U64", label="wrapping_mul_u64"),
 	IntrinsicKind.BYTE_LENGTH: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_BYTE_LENGTH", label="byte_length"),
 	IntrinsicKind.STRING_BYTE_AT: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_STRING_BYTE_AT", label="string_byte_at"),
+	IntrinsicKind.STRING_BYTES_BASE: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_STRING_BYTES_BASE", label="string_bytes_base"),
 	IntrinsicKind.STRING_EQ: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_STRING_OP", label="string_eq"),
 	IntrinsicKind.STRING_CONCAT: IntrinsicSpec(expected_args=2, code="E_INTRINSIC_ARITY_STRING_OP", label="string_concat"),
 	IntrinsicKind.CALLBACK0: IntrinsicSpec(expected_args=1, code="E_INTRINSIC_ARITY_CALLBACK", label="callback0"),

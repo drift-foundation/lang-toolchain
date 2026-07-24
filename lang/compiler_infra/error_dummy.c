@@ -3,10 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
-extern struct DriftString drift_string_retain(struct DriftString s);
-extern void drift_string_release(struct DriftString s);
-extern struct DriftString drift_string_from_cstr(const char *cstr);
-extern struct DriftString drift_string_from_utf8_bytes(const char *data, drift_isize len);
+/* B-repr/B5 (ABI 22): the real string runtime header is included via
+ * error_dummy.h -> diagnostic_runtime.h; all byte access goes through
+ * the drift_string_len/data accessors (layout audit). */
 
 struct DriftError* drift_error_new_dummy(drift_error_code_t code, struct DriftString event_fqn, struct DriftString key, struct DriftString payload) {
     struct DriftError* err = malloc(sizeof(struct DriftError));
@@ -19,7 +18,8 @@ struct DriftError* drift_error_new_dummy(drift_error_code_t code, struct DriftSt
     // allocation class (heap / static / raw cstring all handled
     // uniformly).  drift_error_release safely drops the runtime's
     // owned copy.
-    err->event_fqn = drift_string_from_utf8_bytes(event_fqn.data, event_fqn.len);
+    err->event_fqn = drift_string_from_utf8_bytes(
+        (const char *)drift_string_data(event_fqn), drift_string_len(event_fqn));
     // Initialize JSON segments to empty canonical form ("{}" / "[]")
     // so getters always observe well-formed JSON.
     err->params_json = drift_string_from_cstr("{}");
@@ -43,8 +43,7 @@ drift_error_code_t drift_error_get_code(struct DriftError* err) {
 
 struct DriftString drift_error_get_event_fqn(const struct DriftError* err) {
     if (!err) {
-        struct DriftString empty = {0, NULL};
-        return empty;
+        return drift_string_empty();
     }
     return err->event_fqn;
 }
@@ -59,8 +58,7 @@ uint8_t __exc_attrs_get(struct DriftString* out, const struct DriftError* err, s
     (void)err;
     (void)key;
     if (out) {
-        out->len = 0;
-        out->data = NULL;
+        *out = drift_string_empty();
     }
     return 0;
 }
@@ -130,16 +128,19 @@ void drift_error_append_context_frame(struct DriftError* err, struct DriftString
     struct DriftString prior = err->context_json;
     // Shape invariant: prior is a well-formed canonical JSON array
     // string.  Empty form is exactly "[]" (len == 2).  Non-empty form
-    // ends with "]" at prior.data[prior.len - 1].
-    int prior_is_empty = (prior.len == 2);
-    drift_isize body_len = prior.len - 2;  // strip leading "[" and trailing "]"
+    // ends with "]" as its final byte.
+    drift_isize prior_len = drift_string_len(prior);
+    const unsigned char *prior_bytes = drift_string_data(prior);
+    int prior_is_empty = (prior_len == 2);
+    drift_isize body_len = prior_len - 2;  // strip leading "[" and trailing "]"
     if (body_len < 0) {
         // Defensive: malformed prior — re-initialize before splice.
         body_len = 0;
         prior_is_empty = 1;
     }
+    drift_isize frame_len = drift_string_len(frame_json);
     drift_isize need_comma = prior_is_empty ? 0 : 1;
-    drift_isize merged_len = 1 /* "[" */ + body_len + need_comma + frame_json.len + 1 /* "]" */;
+    drift_isize merged_len = 1 /* "[" */ + body_len + need_comma + frame_len + 1 /* "]" */;
 
     // Build the merged document in a temporary buffer, then hand the
     // bytes to the string runtime to allocate a properly-headered
@@ -153,18 +154,17 @@ void drift_error_append_context_frame(struct DriftError* err, struct DriftString
     drift_isize pos = 0;
     tmp[pos++] = '[';
     if (!prior_is_empty && body_len > 0) {
-        memcpy(tmp + pos, prior.data + 1, (size_t)body_len);
+        memcpy(tmp + pos, prior_bytes + 1, (size_t)body_len);
         pos += body_len;
         tmp[pos++] = ',';
     }
-    if (frame_json.len > 0) {
-        memcpy(tmp + pos, frame_json.data, (size_t)frame_json.len);
-        pos += frame_json.len;
+    if (frame_len > 0) {
+        memcpy(tmp + pos, drift_string_data(frame_json), (size_t)frame_len);
+        pos += frame_len;
     }
     tmp[pos++] = ']';
     tmp[pos] = '\0';
 
-    extern struct DriftString drift_string_from_utf8_bytes(const char* data, drift_isize len);
     struct DriftString merged = drift_string_from_utf8_bytes(tmp, merged_len);
     free(tmp);
 
@@ -175,16 +175,14 @@ void drift_error_append_context_frame(struct DriftError* err, struct DriftString
 
 struct DriftString drift_error_get_params_json(const struct DriftError* err) {
     if (!err) {
-        struct DriftString empty = {0, NULL};
-        return empty;
+        return drift_string_empty();
     }
     return drift_string_retain(err->params_json);
 }
 
 struct DriftString drift_error_get_context_json(const struct DriftError* err) {
     if (!err) {
-        struct DriftString empty = {0, NULL};
-        return empty;
+        return drift_string_empty();
     }
     return drift_string_retain(err->context_json);
 }

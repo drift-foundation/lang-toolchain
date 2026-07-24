@@ -31,8 +31,13 @@ def _run_ir_with_clang(ir: str) -> int:
 		bin_path = work_dir / "a.out"
 		ir_path.write_text(ir)
 
+		# ABI 22 (B-repr/B5): empty string literals reference the runtime
+		# empty singleton — IR-only programs link the string runtime.
+		runtime_dir = Path(__file__).resolve().parents[3] / "lang" / "language_runtime"
 		compile_res = subprocess.run(
-			[clang, "-x", "ir", str(ir_path), "-o", str(bin_path)],
+			[clang, "-x", "ir", str(ir_path), "-x", "none",
+			 str(runtime_dir / "string_runtime.c"), str(runtime_dir / "ryu_d2s.c"),
+			 "-I", str(runtime_dir), "-o", str(bin_path)],
 			capture_output=True,
 			text=True,
 		)

@@ -2560,11 +2560,10 @@ void drift_exec_set_name(uint64_t exec, DriftString name_in) {
 	if (!ex) {
 		return;
 	}
-	int64_t n = name.len;
-	if (n < 0) n = 0;
+	int64_t n = drift_string_len(name);
 	if (n > DRIFT_LIVENESS_EXEC_NAME_CAP) n = DRIFT_LIVENESS_EXEC_NAME_CAP;
-	if (n > 0 && name.data) {
-		memcpy(ex->name, name.data, (size_t)n);
+	if (n > 0) {
+		memcpy(ex->name, drift_string_data(name), (size_t)n);
 	}
 	atomic_store_explicit(&ex->name_len, (int)n, memory_order_release);
 }
@@ -2582,11 +2581,10 @@ void drift_vt_set_op(uint64_t vt, DriftString label_in) {
 	if (!h) {
 		return;
 	}
-	int64_t n = label.len;
-	if (n < 0) n = 0;
+	int64_t n = drift_string_len(label);
 	if (n > DRIFT_LIVENESS_OP_LABEL_CAP) n = DRIFT_LIVENESS_OP_LABEL_CAP;
-	if (n > 0 && label.data) {
-		memcpy(h->op_label, label.data, (size_t)n);
+	if (n > 0) {
+		memcpy(h->op_label, drift_string_data(label), (size_t)n);
 	}
 	DriftVt *self = drift_vt_tls_get();
 	lv_set_u(&h->submitter_vtid, self ? self->vtid : 0);

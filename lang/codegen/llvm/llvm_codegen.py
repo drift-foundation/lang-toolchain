@@ -184,6 +184,7 @@ from lang.driftc.stage2 import (
 	StringCmp,
 	StringLen,
 	StringByteAt,
+	StringBytesBase,
 	StringFromBool,
 	StringFromInt,
 	StringFromUint,
@@ -671,6 +672,8 @@ class LlvmModuleBuilder:
 	needs_string_eq: bool = False
 	needs_string_cmp: bool = False
 	needs_string_concat: bool = False
+	needs_string_ffi_bridge: bool = False
+	needs_string_observe_guard: bool = False
 	needs_string_from_int64: bool = False
 	needs_string_from_uint64: bool = False
 	needs_string_from_bool: bool = False
@@ -1445,6 +1448,89 @@ class LlvmModuleBuilder:
 			lines.append(f"declare i32 @drift_string_cmp({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
 		if self.needs_string_concat:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_concat({DRIFT_STRING_TYPE}, {DRIFT_STRING_TYPE})")
+		if self.needs_string_ffi_bridge:
+			lines.extend([
+				f"declare {self._llty(DRIFT_INT_TYPE)} @drift_string_interior_nul_index(ptr)",
+				"declare ptr @drift_string_to_owned_cstr(ptr, ptr)",
+				f"declare {{ ptr, {self._llty(DRIFT_INT_TYPE)} }} @drift_string_to_owned_cbytes(ptr)",
+				"declare ptr @drift_string_to_owned_cstr_unchecked(ptr)",
+				"declare void @drift_cstr_free(ptr)",
+				f"declare void @drift_cbytes_free({{ ptr, {self._llty(DRIFT_INT_TYPE)} }})",
+			])
+		if self.needs_string_observe_guard:
+			# B-repr/B5 §2.6 OBSERVATION contract, enforced at the
+			# compiler's own three layout-authority observation paths
+			# (StringLen / StringByteAt / StringBytesBase): the reserved
+			# all-zero tombstone and malformed handles FAIL CLOSED before
+			# any length/storage use — matching the runtime accessors.
+			# One internal alwaysinline guard per module; LLVM inlines and
+			# hoists it, and the cold arms never merge into the hot path.
+			word = self._llty(DRIFT_INT_TYPE)
+			def _obs_msg(name: str, text: str) -> None:
+				data = text.encode("utf-8")
+				esc = "".join(_escape_byte(b) for b in data) + "\\00"
+				lines.append(
+					f"@{name} = private unnamed_addr constant [{len(data) + 1} x i8] c\"{esc}\""
+				)
+			_obs_msg("__drift_obs_msg_tomb", "String tombstone observed (byte access)")
+			_obs_msg("__drift_obs_msg_malformed", "malformed String handle: nonzero len, NULL storage")
+			_obs_msg("__drift_obs_msg_neg", "malformed String handle: negative len")
+			_obs_msg("__drift_obs_msg_rsv", "String flags: reserved bit set")
+			_obs_msg("__drift_obs_msg_si", "String flags: STATIC+IMMORTAL")
+			_obs_msg("__drift_obs_msg_orphan", "String flags: HAS_INTERIOR_NUL without NUL_SCANNED")
+			lines.extend([
+				"declare void @drift_contract_fail(ptr)",
+				f"define internal void @__drift_string_observe_guard({word} %len, ptr %storage) alwaysinline {{",
+				"__bb_entry:",
+				"  %isnull = icmp eq ptr %storage, null",
+				"  br i1 %isnull, label %__bb_null, label %__bb_nonnull",
+				"__bb_null:",
+				f"  %nz = icmp ne {word} %len, 0",
+				"  br i1 %nz, label %__bb_malformed, label %__bb_tomb",
+				"__bb_tomb:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_tomb)",
+				"  unreachable",
+				"__bb_malformed:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_malformed)",
+				"  unreachable",
+				"__bb_nonnull:",
+				f"  %neg = icmp slt {word} %len, 0",
+				"  br i1 %neg, label %__bb_neg, label %__bb_flags",
+				"__bb_neg:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_neg)",
+				"  unreachable",
+				# Illegal-flag states fail closed at OBSERVATION too (the
+				# pinned unconditional failures): reserved bits,
+				# STATIC+IMMORTAL, HAS_INTERIOR_NUL without NUL_SCANNED.
+				# Flags word: u64 at storage offset 8 (this guard is part
+				# of the codegen layout authority); relaxed atomic load.
+				"__bb_flags:",
+				"  %flags_ptr = getelementptr i8, ptr %storage, i64 8",
+				"  %flags = load atomic i64, ptr %flags_ptr monotonic, align 8",
+				"  %rsv = and i64 %flags, -16",
+				"  %rsv_set = icmp ne i64 %rsv, 0",
+				"  br i1 %rsv_set, label %__bb_rsv, label %__bb_si_chk",
+				"__bb_rsv:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_rsv)",
+				"  unreachable",
+				"__bb_si_chk:",
+				"  %si = and i64 %flags, 3",
+				"  %si_both = icmp eq i64 %si, 3",
+				"  br i1 %si_both, label %__bb_si, label %__bb_nul_chk",
+				"__bb_si:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_si)",
+				"  unreachable",
+				"__bb_nul_chk:",
+				"  %nc = and i64 %flags, 12",
+				"  %nc_orphan = icmp eq i64 %nc, 8",
+				"  br i1 %nc_orphan, label %__bb_orphan, label %__bb_ok",
+				"__bb_orphan:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_orphan)",
+				"  unreachable",
+				"__bb_ok:",
+				"  ret void",
+				"}",
+			])
 		if self.needs_string_from_int64:
 			lines.append(f"declare {DRIFT_STRING_TYPE} @drift_string_from_int64(i64)")
 		if self.needs_string_from_uint64:
@@ -2961,7 +3047,10 @@ class _FuncBuilder:
 			dest = self._map_value(instr.dest)
 			val = self._map_value(instr.value)
 			# StringLen is reused for strings and arrays at HIR level; here we assume string.
+			storage_tmp = self._fresh("storage")
 			self.lines.append(f"  {dest} = extractvalue {DRIFT_STRING_TYPE} {val}, 0")
+			self.lines.append(f"  {storage_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 1")
+			self._emit_string_observe_guard(dest, storage_tmp)
 			self.value_types[dest] = DRIFT_INT_TYPE
 		elif isinstance(instr, StringByteAt):
 			dest = self._map_value(instr.dest)
@@ -2973,19 +3062,41 @@ class _FuncBuilder:
 					f"LLVM codegen v1: string byte index must be Int, got {idx_ty}"
 				)
 			len_tmp = self._fresh("len")
-			data_tmp = self._fresh("data")
+			storage_tmp = self._fresh("storage")
 			self.lines.append(f"  {len_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 0")
-			self.lines.append(f"  {data_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 1")
+			self.lines.append(f"  {storage_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 1")
+			self._emit_string_observe_guard(len_tmp, storage_tmp)
 			self.module.needs_array_helpers = True
 			container_id = self._emit_string_literal_value(STRING_CONTAINER_ID)
 			self.lines.append(
 				f"  call void @drift_bounds_check({DRIFT_STRING_TYPE} {container_id}, {self._llty(DRIFT_INT_TYPE)} {index}, {self._llty(DRIFT_INT_TYPE)} {len_tmp})"
 			)
+			# ABI 22 (B-repr/B5): field 1 is the DriftRcBytes HEADER
+			# pointer; bytes live at +16.  One of exactly three codegen
+			# layout-authority lowerings (with the literal emitters and
+			# the string_bytes_base intrinsic).
+			base_tmp = self._fresh("bytes_base")
 			ptr_tmp = self._fresh("ptr")
 			idx_llty = self._llty(DRIFT_INT_TYPE)
-			self.lines.append(f"  {ptr_tmp} = getelementptr i8, ptr {data_tmp}, {idx_llty} {index}")
+			self.lines.append(f"  {base_tmp} = getelementptr i8, ptr {storage_tmp}, {idx_llty} 16")
+			self.lines.append(f"  {ptr_tmp} = getelementptr i8, ptr {base_tmp}, {idx_llty} {index}")
 			self.lines.append(f"  {dest} = load i8, ptr {ptr_tmp}")
 			self.value_types[dest] = "i8"
+		elif isinstance(instr, StringBytesBase):
+			# B5 §3.3 layout-authority lowering (the third of exactly
+			# three): borrowed bytes base = storage + 16, NO retain and
+			# no stake — the enclosing std.ffi wrapper owns the borrow
+			# window.
+			dest = self._map_value(instr.dest)
+			val = self._map_value(instr.value)
+			len_tmp = self._fresh("len")
+			storage_tmp = self._fresh("storage")
+			idx_llty = self._llty(DRIFT_INT_TYPE)
+			self.lines.append(f"  {len_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 0")
+			self.lines.append(f"  {storage_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 1")
+			self._emit_string_observe_guard(len_tmp, storage_tmp)
+			self.lines.append(f"  {dest} = getelementptr i8, ptr {storage_tmp}, {idx_llty} 16")
+			self.value_types[dest] = "ptr"
 		elif isinstance(instr, StringConcat):
 			dest = self._map_value(instr.dest)
 			left = self._map_value(instr.left)
@@ -4009,11 +4120,51 @@ class _FuncBuilder:
 		else:
 			raise NotImplementedError(f"LLVM codegen v1: unsupported instr {type(instr).__name__}")
 
+	def _emit_string_observe_guard(self, len_val: str, storage_val: str) -> None:
+		"""§2.6 observation contract at the compiler's three layout-authority
+		observation lowerings: tombstone/malformed handles fail closed
+		BEFORE any length/storage use (mirrors the runtime accessors)."""
+		self.module.needs_string_observe_guard = True
+		self.lines.append(
+			f"  call void @__drift_string_observe_guard({self._llty(DRIFT_INT_TYPE)} {len_val}, ptr {storage_val})"
+		)
+
+	def _string_literal_flags(self, utf8_bytes: bytes) -> int:
+		"""ABI-22 literal flags, computed at COMPILE TIME from the bytes:
+		STATIC (compiler rodata) + NUL_SCANNED (the compiler knows the
+		bytes) + HAS_INTERIOR_NUL when applicable.  Values pinned by the
+		runtime header (DRIFT_RCBYTES_*); part of the codegen layout
+		authority."""
+		flags = 1 | 4  # STATIC | NUL_SCANNED
+		if b"\x00" in utf8_bytes:
+			flags |= 8  # HAS_INTERIOR_NUL
+		return flags
+
+	def _emit_empty_singleton_handle(self, dest: str) -> None:
+		"""Empty literals lower to {0, @__drift_rt_string_empty} — the ONE
+		runtime-owned immortal empty block (ABI-22 §2.6), not a
+		per-module constant."""
+		if not getattr(self.module, "_empty_string_declared", False):
+			self.module.consts.append(
+				"@__drift_rt_string_empty = external hidden constant { { i64, i64 }, [1 x i8] }"
+			)
+			self.module._empty_string_declared = True
+		tmp0 = self._fresh("str_a")
+		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} 0, 0")
+		self.lines.append(f"  {dest} = insertvalue {DRIFT_STRING_TYPE} {tmp0}, ptr @__drift_rt_string_empty, 1")
+		self.value_types[dest] = DRIFT_STRING_TYPE
+
 	def _lower_const_string(self, instr: ConstString) -> None:
 		"""
-		Lower a ConstString to a DriftString literal ({len: i64, data: i8*}).
-		We emit a private unnamed constant with a header+bytes payload and build
-		the struct inline; retain/release is a no-op for static literals.
+		Lower a ConstString to a DriftString literal ({len: i64, storage: ptr}).
+
+		ABI 22 (B-repr/B5): the constant is a DriftRcBytes block —
+		{strong, flags, [N+1 x i8]} with the header at OFFSET 0 — and the
+		handle's pointer targets the HEADER (field 0), not the bytes.
+		Flags are computed per literal at compile time (STATIC |
+		NUL_SCANNED | maybe HAS_INTERIOR_NUL); retain/release is a no-op
+		for static literals.  Empty literals resolve to the runtime empty
+		singleton.
 
 		Literals are encoded as UTF-8 and emitted with explicit escapes so that
 		non-ASCII and special characters are preserved exactly.
@@ -4021,16 +4172,20 @@ class _FuncBuilder:
 		dest = self._map_value(instr.dest)
 		utf8_bytes = instr.value.encode("utf-8")
 		size = len(utf8_bytes)
+		if size == 0:
+			self._emit_empty_singleton_handle(dest)
+			return
 		global_name = f"@.str{len(self.module.consts)}"
 		header_llty = f"{{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, [{size + 1} x i8] }}"
 		escaped = "".join(_escape_byte(b) for b in utf8_bytes) + "\\00"
+		flags = self._string_literal_flags(utf8_bytes)
 		self.module.consts.append(
 			f"{global_name} = private unnamed_addr constant {header_llty} "
-			f"{{ {self._llty(DRIFT_INT_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} 1, [{size + 1} x i8] c\"{escaped}\" }}"
+			f"{{ {self._llty(DRIFT_INT_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} {flags}, [{size + 1} x i8] c\"{escaped}\" }}"
 		)
 		ptr = self._fresh("strptr")
 		self.lines.append(
-			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 2, i32 0"
+			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 0"
 		)
 		tmp0 = self._fresh("str_a")
 		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {size}, 0")
@@ -4040,6 +4195,10 @@ class _FuncBuilder:
 	def _emit_string_literal_value(self, value: str, *, dest_name: str = "") -> str:
 		utf8_bytes = value.encode("utf-8")
 		size = len(utf8_bytes)
+		if size == 0:
+			dest = dest_name or self._fresh("str")
+			self._emit_empty_singleton_handle(dest)
+			return dest
 		cache = self.module.string_literal_cache
 		if value in cache:
 			global_name, header_llty, cached_size = cache[value]
@@ -4048,14 +4207,15 @@ class _FuncBuilder:
 			global_name = f"@.str{len(self.module.consts)}"
 			header_llty = f"{{ {self._llty(DRIFT_INT_TYPE)}, {self._llty(DRIFT_INT_TYPE)}, [{size + 1} x i8] }}"
 			escaped = "".join(_escape_byte(b) for b in utf8_bytes) + "\\00"
+			flags = self._string_literal_flags(utf8_bytes)
 			self.module.consts.append(
 				f"{global_name} = private unnamed_addr constant {header_llty} "
-				f"{{ {self._llty(DRIFT_INT_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} 1, [{size + 1} x i8] c\"{escaped}\" }}"
+				f"{{ {self._llty(DRIFT_INT_TYPE)} 1, {self._llty(DRIFT_INT_TYPE)} {flags}, [{size + 1} x i8] c\"{escaped}\" }}"
 			)
 			cache[value] = (global_name, header_llty, size)
 		ptr = self._fresh("strptr")
 		self.lines.append(
-			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 2, i32 0"
+			f"  {ptr} = getelementptr inbounds {header_llty}, ptr {global_name}, i32 0, i32 0"
 		)
 		tmp0 = self._fresh("str_a")
 		self.lines.append(f"  {tmp0} = insertvalue {DRIFT_STRING_TYPE} zeroinitializer, {self._llty(DRIFT_INT_TYPE)} {size}, 0")
@@ -4232,6 +4392,92 @@ class _FuncBuilder:
 				else:
 					self._emit_string_literal_value(payload, dest_name=dest)
 				return
+		if instr.fn_id.module == "std.ffi" and instr.fn_id.name in (
+			"ffi_interior_nul_index", "ffi_string_to_owned_cstr",
+			"ffi_string_to_owned_cstr_unchecked",
+			"ffi_string_to_owned_cbytes_ptr", "ffi_cstr_free",
+			"ffi_cbytes_free",
+		):
+			# std.ffi C-string bridge intrinsics (B-repr/B5 §3.3): pointer-
+			# taking runtime helpers over borrowed &String handles.  Plain
+			# std.ffi FUNCTIONS fall through to normal call lowering.
+			if instr.fn_id.name == "ffi_interior_nul_index":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_interior_nul_index expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: ffi_interior_nul_index result must be captured")
+				s_val = self._map_value(instr.args[0])
+				self.module.needs_string_ffi_bridge = True
+				self.lines.append(
+					f"  {dest} = call {self._llty(DRIFT_INT_TYPE)} @drift_string_interior_nul_index(ptr {s_val})"
+				)
+				self.value_types[dest] = DRIFT_INT_TYPE
+				return
+			if instr.fn_id.name == "ffi_string_to_owned_cstr":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_string_to_owned_cstr expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: ffi_string_to_owned_cstr result must be captured")
+				s_val = self._map_value(instr.args[0])
+				self.module.needs_string_ffi_bridge = True
+				self.lines.append(
+					f"  {dest} = call ptr @drift_string_to_owned_cstr(ptr {s_val}, ptr null)"
+				)
+				self.value_types[dest] = "ptr"
+				return
+			if instr.fn_id.name == "ffi_string_to_owned_cbytes_ptr":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_string_to_owned_cbytes_ptr expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: ffi_string_to_owned_cbytes_ptr result must be captured")
+				s_val = self._map_value(instr.args[0])
+				self.module.needs_string_ffi_bridge = True
+				cb_tmp = self._fresh("cbytes")
+				self.lines.append(
+					f"  {cb_tmp} = call {{ ptr, {self._llty(DRIFT_INT_TYPE)} }} @drift_string_to_owned_cbytes(ptr {s_val})"
+				)
+				self.lines.append(f"  {dest} = extractvalue {{ ptr, {self._llty(DRIFT_INT_TYPE)} }} {cb_tmp}, 0")
+				self.value_types[dest] = "ptr"
+				return
+			if instr.fn_id.name == "ffi_string_to_owned_cstr_unchecked":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_string_to_owned_cstr_unchecked expects 1 arg, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError("LLVM codegen v1: ffi_string_to_owned_cstr_unchecked result must be captured")
+				s_val = self._map_value(instr.args[0])
+				self.module.needs_string_ffi_bridge = True
+				self.lines.append(
+					f"  {dest} = call ptr @drift_string_to_owned_cstr_unchecked(ptr {s_val})"
+				)
+				self.value_types[dest] = "ptr"
+				return
+			if instr.fn_id.name == "ffi_cbytes_free":
+				if len(instr.args) != 2:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_cbytes_free expects 2 args, got {len(instr.args)}")
+				p_val = self._map_value(instr.args[0])
+				len_val = self._map_value(instr.args[1])
+				self.module.needs_string_ffi_bridge = True
+				cb0 = self._fresh("cbytes")
+				cb1 = self._fresh("cbytes")
+				cb_ty = f"{{ ptr, {self._llty(DRIFT_INT_TYPE)} }}"
+				self.lines.append(f"  {cb0} = insertvalue {cb_ty} zeroinitializer, ptr {p_val}, 0")
+				self.lines.append(f"  {cb1} = insertvalue {cb_ty} {cb0}, {self._llty(DRIFT_INT_TYPE)} {len_val}, 1")
+				self.lines.append(f"  call void @drift_cbytes_free({cb_ty} {cb1})")
+				if dest:
+					self.lines.append(f"  {dest} = add i8 0, 0")
+					self.value_types[dest] = "i8"
+				return
+			if instr.fn_id.name == "ffi_cstr_free":
+				if len(instr.args) != 1:
+					raise NotImplementedError(f"LLVM codegen v1: ffi_cstr_free expects 1 arg, got {len(instr.args)}")
+				p_val = self._map_value(instr.args[0])
+				self.module.needs_string_ffi_bridge = True
+				self.lines.append(f"  call void @drift_cstr_free(ptr {p_val})")
+				if dest:
+					self.lines.append(f"  {dest} = add i8 0, 0")
+					self.value_types[dest] = "i8"
+				return
+			raise AssertionError(f"unreachable: gated std.ffi intrinsic '{instr.fn_id.name}' fell through its arms")
 		if instr.fn_id.module == "lang.thread":
 			if instr.fn_id.name == "vt_spawn":
 				if callee_info is None or callee_info.signature is None or callee_info.signature.return_type_id is None:

@@ -5302,7 +5302,7 @@ def resolve_call_expr(
 		record_call_info(expr, param_types=param_types, return_type=ret_ty, can_throw=False, target=CallTarget.intrinsic(intrinsic_kind))
 		return record_expr(expr, ret_ty)
 
-	if isinstance(expr.fn, H.HVar) and expr.fn.name in ("byte_length", "string_byte_at", "string_eq", "string_concat"):
+	if isinstance(expr.fn, H.HVar) and expr.fn.name in ("byte_length", "string_byte_at", "string_bytes_base", "string_eq", "string_concat"):
 		if call_kwargs_issues(expr.fn.name, getattr(expr, "kwargs", None)):
 			first_kw = (getattr(expr, "kwargs", []) or [None])[0]
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} does not support keyword arguments", severity="error", span=getattr(first_kw, "loc", getattr(expr, "loc", Span()))))
@@ -5360,6 +5360,36 @@ def resolve_call_expr(
 				return record_expr(expr, ctx.unknown_ty)
 			record_call_info(expr, param_types=[arg0_ty, arg1_ty], return_type=ctx.byte_ty, can_throw=False, target=CallTarget.intrinsic(IntrinsicKind.STRING_BYTE_AT))
 			return record_expr(expr, ctx.byte_ty)
+		if expr.fn.name == "string_bytes_base":
+			# B5 §3.3: PRIVATE layout-authority intrinsic — a BORROWED
+			# bytes-base pointer (storage + 16) with NO retain and no
+			# stake materialization; the enclosing std.ffi helper holds
+			# the String live for the pointer's valid window.  std.ffi-
+			# internal only: the borrowed-window contract is carried by
+			# the with_* wrappers, never exposed raw.
+			if current_module_name != "std.ffi":
+				diagnostics.append(_tc_diag(message="string_bytes_base is std.ffi-internal (use std.ffi.with_bytes)", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
+			if len(arg_types_local) != 1:
+				diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects 1 argument", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
+			arg0_ty = arg_types_local[0]
+			if arg0_ty == ctx.string_ty:
+				place_expr = place_expr_from_lvalue_expr(expr.args[0])
+				if place_expr is None:
+					expr.args[0] = H.HBorrow(subject=expr.args[0], is_mut=False, allow_rvalue=True)
+				else:
+					expr.args[0] = H.HBorrow(subject=place_expr, is_mut=False)
+				arg0_ty = ctx.type_table.ensure_ref(ctx.string_ty)
+			if arg0_ty is None:
+				return record_expr(expr, ctx.unknown_ty)
+			td0 = ctx.type_table.get(arg0_ty)
+			if td0.kind is not TypeKind.REF or not td0.param_types or td0.param_types[0] != ctx.string_ty:
+				diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types_local)}", severity="error", span=getattr(expr, "loc", Span())))
+				return record_expr(expr, ctx.unknown_ty)
+			_bytes_ret = ctx.type_table.new_ptr(ctx.byte_ty, module_id="std.mem")
+			record_call_info(expr, param_types=[arg0_ty], return_type=_bytes_ret, can_throw=False, target=CallTarget.intrinsic(IntrinsicKind.STRING_BYTES_BASE))
+			return record_expr(expr, _bytes_ret)
 		if expr.fn.name in ("string_eq", "string_concat"):
 			if len(arg_types_local) != 2:
 				diagnostics.append(_tc_diag(message=f"{expr.fn.name} expects 2 arguments", severity="error", span=getattr(expr, "loc", Span())))

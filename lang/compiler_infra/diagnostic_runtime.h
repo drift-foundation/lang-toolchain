@@ -22,12 +22,12 @@ typedef size_t drift_usize;
 _Static_assert(sizeof(drift_isize) == sizeof(void*), "drift_isize must be pointer-sized");
 _Static_assert(sizeof(drift_usize) == sizeof(void*), "drift_usize must be pointer-sized");
 
-#ifndef DRIFT_STRING_RUNTIME_H
-struct DriftString {
-    drift_isize len;
-    char* data;
-};
-#endif
+/* B-repr/B5 (ABI 22): the guarded duplicate old-shape `DriftString`
+ * definition that lived here is RETIRED — a second layout definition is
+ * exactly how a stale-shape consumer slips past the audit (error_dummy
+ * did, reading header bytes as data).  The real runtime header is the
+ * single authority. */
+#include "../language_runtime/string_runtime.h"
 
 // Slice 7c-3 (ABI 14, 2026-05-06): the `DriftDiagnosticValue` /
 // `DriftDiagnosticEntry` / `DriftDiagnosticField` /

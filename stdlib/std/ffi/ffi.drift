@@ -1,0 +1,436 @@
+module std.ffi;
+
+export { CStringError, with_bytes, with_bytes_throw, with_cstr, with_cstr2, with_cstr3, with_cstr4, with_cstr_throw, with_cstr2_throw, with_cstr3_throw, with_cstr4_throw, with_cstr_unsafe, with_cstr2_unsafe, with_cstr3_unsafe, with_cstr4_unsafe, OwnedCStr, to_owned_cstr, cstr_free, OwnedCBytes, ReleasedCBytes, to_owned_cbytes, cbytes_free, CArgv, CStringScope, with_cstring_scope, with_cstring_scope_throw };
+
+import std.core as core;
+import std.mem as mem;
+
+/// C interop for `String` (B-repr/B5, ABI 22).
+///
+/// Borrowed access: `with_bytes` hands the callback the String's
+/// borrowed bytes-base pointer and byte length — zero-copy, no retain
+/// traffic, valid ONLY until the callback returns.  `with_cstr*` add
+/// the C-string contract: the String's hidden trailing NUL makes the
+/// same borrowed pointer a valid NUL-terminated C string, PROVIDED the
+/// content has no interior NUL — the checked variants scan (cached in
+/// the representation) and report `CStringError::InteriorNul` with the
+/// 1-based argument ordinal and byte index, validating LEFT-TO-RIGHT.
+///
+/// Escape semantics (no new lifetime feature): `mem.Ptr<T>` is Copy
+/// and storable, so a callback MAY syntactically store the pointer —
+/// but it becomes INVALID the moment the callback returns (the borrow
+/// of the String ends); any later use is undefined, exactly the
+/// `mem.ptr_from_ref` contract.
+///
+/// Owned handoff: `to_owned_cstr` / `to_owned_cbytes` allocate
+/// runtime-owned copies (`malloc`/`free`-compatible) whose lifetime the
+/// caller controls via `OwnedCStr` / `OwnedCBytes` (Destructible;
+/// `release()` transfers the allocation to C).
+///
+/// Scoped pinning: `with_cstring_scope` provides a `CStringScope` that
+/// owns NUL-terminated copies and argv vectors until the scope closes.
+
+/// Checked C-string conversion failure: the offending argument's
+/// 1-based ordinal and the byte index of its first interior NUL.
+pub variant CStringError {
+	InteriorNul(arg: Int, index: Int)
+}
+
+/* ── Runtime bridge intrinsics (std.ffi-internal) ─────────────────── */
+
+// First interior-NUL index in `s`, or -1.  Owns the representation's
+// monotonic NUL cache.
+@intrinsic fn ffi_interior_nul_index(s: &String) nothrow -> Int;
+// Owned NUL-terminated copy; NULL if `s` has an interior NUL (callers
+// check ffi_interior_nul_index first).  Free with ffi_cstr_free.
+@intrinsic fn ffi_string_to_owned_cstr(s: &String) nothrow -> mem.Ptr<Byte>;
+// Owned byte copy: exactly len bytes plus a hidden trailing NUL,
+// interior NULs preserved.  PAIRS WITH ffi_cbytes_free (allocator
+// pairing pinned: drift_string_to_owned_cbytes <-> drift_cbytes_free).
+@intrinsic fn ffi_string_to_owned_cbytes_ptr(s: &String) nothrow -> mem.Ptr<Byte>;
+// UNCHECKED owned NUL-terminated copy (interior NULs preserved; C sees
+// truncation at the first one).  PAIRS WITH ffi_cstr_free.
+@intrinsic fn ffi_string_to_owned_cstr_unchecked(s: &String) nothrow -> mem.Ptr<Byte>;
+// drift_cstr_free: pairs with ffi_string_to_owned_cstr(_unchecked).
+@intrinsic fn ffi_cstr_free(p: mem.Ptr<Byte>) nothrow -> Void;
+// drift_cbytes_free: pairs with ffi_string_to_owned_cbytes_ptr.
+@intrinsic fn ffi_cbytes_free(p: mem.Ptr<Byte>, len: Int) nothrow -> Void;
+
+fn null_byte_ptr() nothrow -> mem.Ptr<Byte> {
+	var drained = mem.rawbuffer_empty<type Byte>();
+	return mem.rawbuffer_ptr<type Byte>(&drained);
+}
+
+/* ── Borrowed bulk byte access ────────────────────────────────────── */
+
+/// Calls `body(bytes_base, byte_length)` over `s`'s borrowed bytes.
+/// Zero-copy: the base pointer is computed once; the pointer is invalid
+/// after `body` returns.
+pub fn with_bytes<T, F>(s: &String, body: F) nothrow -> T require F is core.Fn2<mem.Ptr<Byte>, Int, T> {
+	val p = string_bytes_base(s);
+	return body.call(p, s.byte_length());
+}
+
+/// Throwing-callback form of `with_bytes`.
+pub fn with_bytes_throw<T, F>(s: &String, body: F) -> T require F is core.FnThrow2<mem.Ptr<Byte>, Int, T> {
+	val p = string_bytes_base(s);
+	return body.call(p, s.byte_length());
+}
+
+/* ── Checked borrowed C strings (zero-copy via the hidden NUL) ───── */
+
+fn cstr_pin(s: &String, arg: Int) nothrow -> core.Result<mem.Ptr<Byte>, CStringError> {
+	val nul = ffi_interior_nul_index(s);
+	if nul >= 0 {
+		return core.Result::Err(CStringError::InteriorNul(arg = arg, index = nul));
+	}
+	// No interior NUL: the hidden trailing NUL makes the borrowed bytes
+	// base a valid C string — no allocation, no copy.
+	return core.Result::Ok(string_bytes_base(s));
+}
+
+pub fn with_cstr<T, F>(a: &String, body: F) nothrow -> core.Result<T, CStringError> require F is core.Fn1<mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { core.Result::Ok(body.call(pa)) },
+	};
+}
+
+pub fn with_cstr2<T, F>(a: &String, b: &String, body: F) nothrow -> core.Result<T, CStringError> require F is core.Fn2<mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { core.Result::Ok(body.call(pa, pb)) },
+		} },
+	};
+}
+
+pub fn with_cstr3<T, F>(a: &String, b: &String, c: &String, body: F) nothrow -> core.Result<T, CStringError> require F is core.Fn3<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { match cstr_pin(c, 3) {
+				core.Result::Err(e) => { core.Result::Err(move e) },
+				core.Result::Ok(pc) => { core.Result::Ok(body.call(pa, pb, pc)) },
+			} },
+		} },
+	};
+}
+
+pub fn with_cstr4<T, F>(a: &String, b: &String, c: &String, d: &String, body: F) nothrow -> core.Result<T, CStringError> require F is core.Fn4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { match cstr_pin(c, 3) {
+				core.Result::Err(e) => { core.Result::Err(move e) },
+				core.Result::Ok(pc) => { match cstr_pin(d, 4) {
+					core.Result::Err(e) => { core.Result::Err(move e) },
+					core.Result::Ok(pd) => { core.Result::Ok(body.call(pa, pb, pc, pd)) },
+				} },
+			} },
+		} },
+	};
+}
+
+pub fn with_cstr_throw<T, F>(a: &String, body: F) -> core.Result<T, CStringError> require F is core.FnThrow1<mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { core.Result::Ok(body.call(pa)) },
+	};
+}
+
+pub fn with_cstr2_throw<T, F>(a: &String, b: &String, body: F) -> core.Result<T, CStringError> require F is core.FnThrow2<mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { core.Result::Ok(body.call(pa, pb)) },
+		} },
+	};
+}
+
+pub fn with_cstr3_throw<T, F>(a: &String, b: &String, c: &String, body: F) -> core.Result<T, CStringError> require F is core.FnThrow3<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { match cstr_pin(c, 3) {
+				core.Result::Err(e) => { core.Result::Err(move e) },
+				core.Result::Ok(pc) => { core.Result::Ok(body.call(pa, pb, pc)) },
+			} },
+		} },
+	};
+}
+
+pub fn with_cstr4_throw<T, F>(a: &String, b: &String, c: &String, d: &String, body: F) -> core.Result<T, CStringError> require F is core.FnThrow4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return match cstr_pin(a, 1) {
+		core.Result::Err(e) => { core.Result::Err(move e) },
+		core.Result::Ok(pa) => { match cstr_pin(b, 2) {
+			core.Result::Err(e) => { core.Result::Err(move e) },
+			core.Result::Ok(pb) => { match cstr_pin(c, 3) {
+				core.Result::Err(e) => { core.Result::Err(move e) },
+				core.Result::Ok(pc) => { match cstr_pin(d, 4) {
+					core.Result::Err(e) => { core.Result::Err(move e) },
+					core.Result::Ok(pd) => { core.Result::Ok(body.call(pa, pb, pc, pd)) },
+				} },
+			} },
+		} },
+	};
+}
+
+/* ── Unsafe no-scan variants ─────────────────────────────────────── */
+// The borrowed pointer is handed over WITHOUT the interior-NUL scan:
+// if the String contains an interior NUL, C sees a truncated string.
+// Use only when the content is known clean or truncation is acceptable.
+
+pub fn with_cstr_unsafe<T, F>(a: &String, body: F) nothrow -> T require F is core.Fn1<mem.Ptr<Byte>, T> {
+	return body.call(string_bytes_base(a));
+}
+
+pub fn with_cstr2_unsafe<T, F>(a: &String, b: &String, body: F) nothrow -> T require F is core.Fn2<mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return body.call(string_bytes_base(a), string_bytes_base(b));
+}
+
+pub fn with_cstr3_unsafe<T, F>(a: &String, b: &String, c: &String, body: F) nothrow -> T require F is core.Fn3<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return body.call(string_bytes_base(a), string_bytes_base(b), string_bytes_base(c));
+}
+
+pub fn with_cstr4_unsafe<T, F>(a: &String, b: &String, c: &String, d: &String, body: F) nothrow -> T require F is core.Fn4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, T> {
+	return body.call(string_bytes_base(a), string_bytes_base(b), string_bytes_base(c), string_bytes_base(d));
+}
+
+/* ── Owned handoff: OwnedCStr / OwnedCBytes ──────────────────────── */
+
+/// Owned, runtime-allocated NUL-terminated C string.  Frees on drop;
+/// `release()` transfers the allocation to C (which must free it with
+/// a `free`-compatible deallocator, e.g. `drift_cstr_free`).
+pub struct OwnedCStr {
+	ptr: mem.Ptr<Byte>
+}
+
+implement core.Destructible for OwnedCStr {
+	pub fn destroy(var self: OwnedCStr) nothrow -> Void {
+		val is_null = mem.ptr_is_null<type Byte>(self.ptr);
+		if is_null {
+			return;
+		}
+		ffi_cstr_free(self.ptr);
+	}
+}
+
+implement OwnedCStr {
+	/// Borrowed view of the owned pointer; invalid after this value drops.
+	pub fn get(self: &OwnedCStr) nothrow -> mem.Ptr<Byte> {
+		return self.ptr;
+	}
+	/// Transfers the allocation out; drop becomes a no-op.
+	pub fn release(var self: OwnedCStr) nothrow -> mem.Ptr<Byte> {
+		val out = mem.replace<type mem.Ptr<Byte> >(&mut self.ptr, null_byte_ptr());
+		return out;
+	}
+}
+
+/// UNSAFE: frees a C-string allocation whose ownership was TRANSFERRED
+/// OUT of this module — exactly one call, on exactly a pointer obtained
+/// from `OwnedCStr.release()` (or handed back by C code that received
+/// such a transfer).  NEVER call it on a borrowed `with_cstr*` pointer,
+/// a live scope pin (`CStringScope` frees its own pins at scope exit —
+/// freeing one here double-frees), an already-freed pointer, or any
+/// pointer of other provenance.  The runtime's `drift_cstr_free`.
+pub unsafe fn cstr_free(p: mem.Ptr<Byte>) nothrow -> Void {
+	ffi_cstr_free(p);
+}
+
+/// Checked owned NUL-terminated copy of `s`.
+pub fn to_owned_cstr(s: &String) nothrow -> core.Result<OwnedCStr, CStringError> {
+	val nul = ffi_interior_nul_index(s);
+	if nul >= 0 {
+		return core.Result::Err(CStringError::InteriorNul(arg = 1, index = nul));
+	}
+	return core.Result::Ok(OwnedCStr(ptr = ffi_string_to_owned_cstr(s)));
+}
+
+/// Released {pointer, length} pair — a Copy VIEW of a transferred
+/// allocation; the receiver owns the block and frees it with the PAIRED
+/// deallocator (`cbytes_free` from Drift, `drift_cbytes_free` from C).
+pub struct ReleasedCBytes {
+	ptr: mem.Ptr<Byte>,
+	len: Int
+}
+
+implement core.Copy for ReleasedCBytes {
+}
+
+implement ReleasedCBytes {
+	pub fn data(self: &ReleasedCBytes) nothrow -> mem.Ptr<Byte> {
+		return self.ptr;
+	}
+	pub fn size(self: &ReleasedCBytes) nothrow -> Int {
+		return self.len;
+	}
+}
+
+/// Owned byte copy (interior NULs preserved; hidden trailing NUL after
+/// `len` bytes).  Frees on drop; `release()` transfers.
+pub struct OwnedCBytes {
+	ptr: mem.Ptr<Byte>,
+	len: Int
+}
+
+implement core.Destructible for OwnedCBytes {
+	pub fn destroy(var self: OwnedCBytes) nothrow -> Void {
+		val is_null = mem.ptr_is_null<type Byte>(self.ptr);
+		if is_null {
+			return;
+		}
+		// PAIRED deallocator: to_owned_cbytes <-> cbytes_free.
+		ffi_cbytes_free(self.ptr, self.len);
+	}
+}
+
+implement OwnedCBytes {
+	/// Borrowed {ptr, len} view; invalid after this value drops.
+	pub fn get(self: &OwnedCBytes) nothrow -> ReleasedCBytes {
+		return ReleasedCBytes(ptr = self.ptr, len = self.len);
+	}
+	/// Transfers the allocation out; drop becomes a no-op.
+	pub fn release(var self: OwnedCBytes) nothrow -> ReleasedCBytes {
+		val out = mem.replace<type mem.Ptr<Byte> >(&mut self.ptr, null_byte_ptr());
+		return ReleasedCBytes(ptr = out, len = self.len);
+	}
+}
+
+/// UNSAFE: frees a byte block whose ownership was TRANSFERRED OUT via
+/// `OwnedCBytes.release()` — exactly one call per released allocation.
+/// `ReleasedCBytes` is a Copy VIEW: copying the view does NOT duplicate
+/// the allocation, so freeing through more than one copy double-frees.
+/// Never call it on a view obtained from `OwnedCBytes.get()` (the
+/// owner still frees on drop) or on an already-freed block.  The
+/// runtime's `drift_cbytes_free` — the PAIRED deallocator for
+/// `to_owned_cbytes` allocations.
+pub unsafe fn cbytes_free(b: ReleasedCBytes) nothrow -> Void {
+	ffi_cbytes_free(b.ptr, b.len);
+}
+
+/// Infallible owned byte copy of `s`.
+pub fn to_owned_cbytes(s: &String) nothrow -> OwnedCBytes {
+	return OwnedCBytes(ptr = ffi_string_to_owned_cbytes_ptr(s), len = s.byte_length());
+}
+
+/* ── Scoped pinning: CStringScope / CArgv ────────────────────────── */
+
+/// NON-OWNING argv view: a NULL-terminated `char **` plus its count.
+/// The vector and its C strings belong to the producing scope and die
+/// with it; copies of `CArgv` copy the view only.
+pub struct CArgv {
+	argv: mem.Ptr<mem.Ptr<Byte> >,
+	argc: Int
+}
+
+implement core.Copy for CArgv {
+}
+
+implement CArgv {
+	pub fn vector(self: &CArgv) nothrow -> mem.Ptr<mem.Ptr<Byte> > {
+		return self.argv;
+	}
+	pub fn count(self: &CArgv) nothrow -> Int {
+		return self.argc;
+	}
+}
+
+/// Owns NUL-terminated C-string copies and argv vectors until the
+/// enclosing `with_cstring_scope` returns.  Every pointer/`CArgv`
+/// handed out is invalid after the scope's callback returns.
+pub struct CStringScope {
+	pins: Array<mem.Ptr<Byte> >,
+	vecs: Array<mem.RawBuffer<mem.Ptr<Byte> > >
+}
+
+implement core.Destructible for CStringScope {
+	pub fn destroy(var self: CStringScope) nothrow -> Void {
+		var i = 0;
+		val n = self.pins.len();
+		while i < n {
+			ffi_cstr_free(self.pins[i]);
+			i = i + 1;
+		}
+		var more = true;
+		while more {
+			match self.vecs.pop() {
+				Some(buf) => {
+					var owned = move buf;
+					mem.dealloc<type mem.Ptr<Byte> >(move owned);
+				},
+				None() => { more = false; },
+			}
+		}
+	}
+}
+
+implement CStringScope {
+	/// Checked scope-owned NUL-terminated copy of `s` (ordinal 1).
+	pub fn cstr(self: &mut CStringScope, s: &String) nothrow -> core.Result<mem.Ptr<Byte>, CStringError> {
+		val nul = ffi_interior_nul_index(s);
+		if nul >= 0 {
+			return core.Result::Err(CStringError::InteriorNul(arg = 1, index = nul));
+		}
+		val p = ffi_string_to_owned_cstr(s);
+		self.pins.push(p);
+		return core.Result::Ok(p);
+	}
+
+	/// Unchecked scope-owned copy: interior NULs are preserved in the
+	/// block, so C sees a truncated string at the first interior NUL.
+	/// (cstr-family allocation — freed with the cstr-paired deallocator
+	/// at scope exit.)
+	pub fn cstr_unsafe(self: &mut CStringScope, s: &String) nothrow -> mem.Ptr<Byte> {
+		val p = ffi_string_to_owned_cstr_unchecked(s);
+		self.pins.push(p);
+		return p;
+	}
+
+	/// Checked NULL-terminated argv vector over `xs`, validating
+	/// LEFT-TO-RIGHT; the failing element reports ordinal `index + 1`.
+	pub fn argv(self: &mut CStringScope, xs: &Array<String>) nothrow -> core.Result<CArgv, CStringError> {
+		val n = xs.len();
+		var buf = mem.alloc_uninit<type mem.Ptr<Byte> >(n + 1);
+		var i = 0;
+		while i < n {
+			val nul = ffi_interior_nul_index(&xs[i]);
+			if nul >= 0 {
+				mem.dealloc<type mem.Ptr<Byte> >(move buf);
+				return core.Result::Err(CStringError::InteriorNul(arg = i + 1, index = nul));
+			}
+			val p = ffi_string_to_owned_cstr(&xs[i]);
+			self.pins.push(p);
+			mem.write<type mem.Ptr<Byte> >(&mut buf, i, p);
+			i = i + 1;
+		}
+		mem.write<type mem.Ptr<Byte> >(&mut buf, n, null_byte_ptr());
+		val first = mem.ptr_at_ref<type mem.Ptr<Byte> >(&buf, 0);
+		val vec = mem.ptr_from_ref<type mem.Ptr<Byte> >(first);
+		self.vecs.push(move buf);
+		return core.Result::Ok(CArgv(argv = vec, argc = n));
+	}
+}
+
+/// Runs `body(&mut scope)`; the HELPER retains ownership of the scope,
+/// whose pinned blocks are freed after `body` returns.
+pub fn with_cstring_scope<T, F>(body: F) nothrow -> T require F is core.Fn1<&mut CStringScope, T> {
+	var pins0: Array<mem.Ptr<Byte> > = [];
+	var vecs0: Array<mem.RawBuffer<mem.Ptr<Byte> > > = [];
+	var s = CStringScope(pins = move pins0, vecs = move vecs0);
+	return body.call(&mut s);
+}
+
+/// Throwing-callback form of `with_cstring_scope`.
+pub fn with_cstring_scope_throw<T, F>(body: F) -> T require F is core.FnThrow1<&mut CStringScope, T> {
+	var pins0: Array<mem.Ptr<Byte> > = [];
+	var vecs0: Array<mem.RawBuffer<mem.Ptr<Byte> > > = [];
+	var s = CStringScope(pins = move pins0, vecs = move vecs0);
+	return body.call(&mut s);
+}

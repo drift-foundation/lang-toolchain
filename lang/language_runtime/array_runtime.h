@@ -37,7 +37,7 @@ void drift_bounds_check_fail(struct DriftString container_id, drift_isize idx, d
 // callers in the production runtime do not currently pass strings
 // with `"`, `\`, or control bytes, but the helper must be safe for
 // any UTF-8 input.  Caller owns `out_buf`; capacity must accommodate
-// 6× expansion of `container_id.len` (worst-case `\u00XX` per byte)
+// 6× expansion of the container-id length (worst-case `\u00XX` per byte)
 // plus a 24-char signed decimal int plus the literal scaffolding.
 drift_isize drift_bounds_check_params_json_build(
 	struct DriftString container_id,

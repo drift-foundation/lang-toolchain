@@ -19,8 +19,9 @@ DriftString drift_env_get(DriftString name_in) {
 	const char *val = getenv(cname);
 	free(cname);
 	if (val == NULL) {
-		DriftString s = {0, NULL};
-		return s;
+		/* absent (guarded by env_has on the stdlib side; only an unset
+		 * race reaches here) -> canonical empty, never the tombstone */
+		return drift_string_empty();
 	}
 	return drift_string_from_cstr(val);
 }

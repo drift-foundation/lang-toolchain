@@ -440,7 +440,8 @@ int64_t drift_fs_result_count(int64_t handle) {
 DriftString drift_fs_result_name(int64_t handle, int64_t idx) {
 	pthread_mutex_lock(&drift_fs_table_mu);
 	DriftReadDirJob *job = drift_fs_table_lookup_locked(handle);
-	DriftString s = {0, NULL};
+	/* out-of-range/absent -> canonical empty, never the tombstone */
+	DriftString s = drift_string_empty();
 	if (job != NULL && idx >= 0 && (size_t)idx < job->count) {
 		s = drift_string_from_utf8_bytes(job->entries[idx].name,
 		                                 (drift_isize)job->entries[idx].name_len);

@@ -27,10 +27,9 @@
 // ownership contract and `memory/project_dv_to_json_diagnostics.md` for
 // the multi-phase migration plan.
 
-// Include order matters: `string_runtime.h` first installs the
-// `DRIFT_STRING_RUNTIME_H` guard so `diagnostic_runtime.h` (pulled in
-// via `error_dummy.h`) skips its fallback `struct DriftString`
-// re-definition.
+// ABI 22: diagnostic_runtime.h now includes the REAL string_runtime.h
+// itself (the old fallback re-definition is retired); the explicit
+// include here is kept for direct accessor use.
 #include "string_runtime.h"
 #include "error_dummy.h"
 #include "diagnostic_runtime.h"
@@ -42,34 +41,28 @@
 #include <stdio.h>
 #include <string.h>
 
-// Replicate `DriftStringHeader` for refcount peeking.  Layout pinned by
-// `_Static_assert`s in `lang/language_runtime/string_runtime.c` —
-// `sizeof(DriftStringHeader) == 16`, `flags` at offset 8, static-flag
-// bit `1ULL << 0`.  If those asserts ever change, this struct must
-// follow.
-typedef struct {
-	_Atomic uint64_t refcount;
-	uint64_t flags;
-} DriftStringHeader_test;
-
+// ABI 22 (B-repr/B5): the header now sits at OFFSET 0 of `storage`
+// (`DriftRcBytes { strong; flags; }` — layout pinned by the
+// `_Static_assert` battery in string_runtime.h).  Refcount peeking is
+// deliberate WHITEBOX layout access for ownership pins; the STATIC and
+// IMMORTAL immortals both report the sentinel.
 static uint64_t peek_refcount(struct DriftString s) {
-	if (s.data == NULL) {
+	if (s.storage == NULL) {
 		return 0;
 	}
-	DriftStringHeader_test *hdr =
-		(DriftStringHeader_test *)((char *)s.data - sizeof(DriftStringHeader_test));
-	if (hdr->flags & 1ULL) {
-		return UINT64_MAX;  // static — sentinel
+	uint64_t flags = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
+	if (flags & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
+		return UINT64_MAX;  // immortal — sentinel
 	}
-	return atomic_load_explicit(&hdr->refcount, memory_order_relaxed);
+	return atomic_load_explicit(&s.storage->strong, memory_order_relaxed);
 }
 
 static int eq_str(struct DriftString s, const char *cstr) {
 	size_t clen = strlen(cstr);
-	if ((size_t)s.len != clen) {
+	if ((size_t)drift_string_len(s) != clen) {
 		return 0;
 	}
-	return memcmp(s.data, cstr, clen) == 0;
+	return memcmp(drift_string_data(s), cstr, clen) == 0;
 }
 
 // Per ABI spec §2.3 (post-2026-05-02 robustness fix): drift_error_new

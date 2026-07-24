@@ -974,3 +974,178 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   1 skipped, 0 leaks**, lane audit PASS — identical to the S5+S6
   gate.  Chunk complete.  (The then-next steps — S9 review and Phase D
   — are COMPLETE; see the Phase D combined sweep section below.)
+- B5 IMPLEMENTATION (2026-07-23, GO on string-brepr-b5-abi22; recovery
+  base 58d5a105+f9d653cb) — step log:
+  S1 RUNTIME REWRITE COMPLETE: string_runtime.{h,c} → DriftRcBytes
+  header-at-offset-0 (16B, _Static_assert battery), two-word handle
+  {len, storage}, flags STATIC/IMMORTAL/NUL_SCANNED/HAS_INTERIOR_NUL
+  (+reserved-mask), drift_contract_fail (unconditional both builds),
+  __drift_rt_string_empty hidden singleton (IMMORTAL|NUL_SCANNED),
+  validate() tombstone/malformed prologue in EVERY helper (observation
+  fails closed; release-family no-op on exact {0,NULL}), retain
+  fail-closed + >= DRIFT_RC_MAX_LIVE overflow guard, §2.5 constructor
+  edge table (NULL/negative/overflow abort; len==0 → singleton; concat
+  subtraction-form guard), accessors drift_string_len/data, §3.3 C
+  bridge (interior_nul_index with monotonic relaxed fetch_or cache /
+  to_owned_cstr / to_owned_cbytes / frees).  from_bool constants →
+  IMMORTAL.  Standalone smoke green in normal AND NDEBUG builds.
+  S2 CONSUMER MIGRATION COMPLETE: console/array/assert/thread member
+  reads → accessors (compiler-proof: full runtime C compiles clean);
+  env_get/fs_result_name absent-returns → empty singleton (stdlib
+  guards via has/count; {0,NULL} never returned to Drift);
+  array_runtime event-fqn handle fabrication → allocated.
+  S3 CODEGEN COMPLETE: literal emitters → {strong 1, flags 5|13,
+  bytes} with GEP-to-header field 0 + compile-time flag computation;
+  "" → {0, @__drift_rt_string_empty} (external hidden decl);
+  StringByteAt +16 bytes base; NEW StringBytesBase MIR op + lowering
+  (borrow, no retain) = third layout-authority lowering; codegen unit
+  goldens regenerated (flags 1→5), 69/69.
+  S4 VERSIONS STAMPED: 0.33.88 / ABI 22 (coherent tree; link stamp
+  auto-flips; first e2e binary linked against libdrift_rt_abi22.a).
+  S5 std.ffi COMPLETE (§10 SHIP set, nothing narrowed): CStringError,
+  with_bytes(+throw), with_cstr1-4(+throw, +unsafe 1-4) with
+  LEFT-TO-RIGHT (ordinal,index) reporting via zero-copy hidden-NUL
+  borrow, OwnedCStr/OwnedCBytes/ReleasedCBytes (+get/release/Drop),
+  CStringScope (cstr/cstr_unsafe/argv→CArgv) with helper-retained
+  &mut scope; string_bytes_base checker intercept (std.ffi-gated) +
+  IntrinsicKind + call_contract row + hir_to_mir + ownership-uses row;
+  4 bridge intrinsics via std.ffi-module codegen arms + declares.
+  END-TO-END SMOKE GREEN (ffi-ok): byte-scan sum, zero-copy cstr,
+  InteriorNul(1,1) on "a\x00b" literal (compile-time flags 13),
+  owned handoffs, scope argv.  Findings: multi-line export block with
+  trailing comma parses as expr-block (worked around, single-line);
+  expr-form match arms can't return (nested-match form used);
+  inline callback2 under explicit-generic call infers R=Void
+  (pre-existing inference shape — typed-binding style used, as the
+  probes always did).
+  S6 TEETH COMPLETE (all green):
+  - test_b5_string_representation.py: C-level battery compiled in BOTH
+    normal and NDEBUG runtimes — positives (singleton identity across
+    ""/empty-concat, hidden NUL for every ctor, bool-immortals,
+    NUL-cache monotonic publish + cached re-query, owned copies,
+    tombstone drop-only no-op) + 21 abort teeth (all tombstone
+    observations incl. retain, malformed {len!=0,NULL}/negative even
+    in release, STATIC+IMMORTAL / orphan HAS_INTERIOR_NUL / reserved
+    bit, NULL/negative/overflow ctor edges, concat overflow, refcount
+    overflow, release underflow) with [drift:contract] message pins.
+  - test_string_layout_audit.py (4): layout knowledge confined to
+    string_runtime.{h,c} + exactly three codegen lowerings (+16 GEP
+    count == 2, singleton refs == 3 in _emit_empty_singleton_handle,
+    centralized _string_literal_flags, retired field-2 GEP banned);
+    member-read audit (caught + fixed two stale comments);
+    lang/driftc representation-blindness pin.
+  - test_b5_ffi_api_teeth.py: left-to-right (arg,index) = 1101/1210/
+    1401 pins, zero-copy canonical-empty cstr, escape-compiles pin,
+    OwnedCStr release-then-drop, OwnedCBytes drop-only + interior-NUL
+    view, scope argv element-ordinal 1202 + pin counting.
+  - test_string_bytes_base_intrinsic.py (3): IR pin base-once +16 GEP
+    + NO drift_string_retain in with_bytes body; rejected outside
+    std.ffi; arity/type misuse rejected via stdlib-overlay mutation.
+  - test_abi_version_stamp.py::test_abi_mismatch_bidirectional_21_22:
+    ABI-21 object × ABI-22 runtime AND ABI-22 object × ABI-21 runtime
+    (stamp-swapped archive facsimile) both fail at link naming the
+    respective symbol; driver-hint predicate fires.
+  - IR-only e2e harness (test_driftc_codegen_e2e.py) now links the
+    string runtime — every module with an empty literal references
+    the singleton symbol (new hard runtime dependency, by design);
+    8/8.
+  - doc/history.md: 0.33.88/ABI-22 entry — representation-only, **no
+    valid-source semantic change**, with the approved invalid-state
+    hardening named in exactly those terms.
+  S7 UNACCOUNTED IN-TREE CONSUMER FOUND + MIGRATED (driver battery
+  16 failures): lang/compiler_infra/{error_dummy,diagnostic_runtime}
+  — OUTSIDE the checkpoint's §4 "15 runtime files" census —
+  diagnostic_runtime.h carried a GUARDED DUPLICATE old-shape
+  `DriftString {len, char* data}`; error_dummy.c (the real DriftError
+  runtime) compiled against it and read ABI-22 header bytes as string
+  data (exception event_fqn envelope corruption).  Fixed: the
+  duplicate definition RETIRED (header now includes the real
+  string_runtime.h — single layout authority), error_dummy.c migrated
+  to accessors + empty-singleton returns ({0,NULL} absent-returns
+  eliminated; post-release field zero-backs remain legal drop-only
+  tombstones), phase-1 C ownership test migrated (storage->strong
+  whitebox peek + accessor eq).  reactor whitebox stubs
+  drift_contract_fail.  IR-only harnesses (codegen_e2e, void_e2e)
+  link the string runtime; external-consumer harnesses link a
+  MINIMAL singleton shim built from the real header (their IR carries
+  own string stubs); IR symbol audit counts external GLOBAL
+  declarations.  string_runtime validate() got its owned-string-audit
+  read-only-borrow marker.
+  S8 GATES (in-tree candidate): e2e fixture corpus rc=0; driver+
+  codegen 2,163 passed/10 skipped (0 failed after S7); compiler-side
+  batteries 1,711 passed/3 skipped; om 51/51 + asan lane + pkgb lane
+  ok; phase-1 valgrind wrapper green.  PERF GATE (§2.8/§8.6): parser-
+  shaped byte-scan carrier (256KiB, 1500 passes, interleaved 7×) —
+  0.33.87 median 1.230s vs B5 median 1.170s = **-4.9% (faster);
+  min -9.8%**; outputs identical.  NO regression.
+  S9 RELEASE-BLOCKING HOLD (4 findings) — CORRECTED:
+  (1) COMPILER observation contract: new `__drift_string_observe_guard`
+  (internal alwaysinline IR fn, emitted once per module) wired into
+  ALL THREE layout-authority observation lowerings (StringLen /
+  StringByteAt / StringBytesBase) — tombstone, {len!=0,NULL}, and
+  negative-len handles fail closed BEFORE any length/storage use;
+  byte_length can no longer read a tombstone as 0 and with_bytes can
+  no longer receive NULL+16.  Teeth: link-driven observer battery
+  (Drift-compiled observers × C-fabricated handles × both runtime
+  builds) — 3 lowerings × {tombstone, malformed, negative} abort with
+  pinned messages; valid handles pass through — 2/2.
+  (2) Allocator pairing: new `drift_string_to_owned_cstr_unchecked`
+  (cstr-paired) for scope.cstr_unsafe; OwnedCBytes destroy/free now
+  via `ffi_cbytes_free(ptr, len)` -> `drift_cbytes_free` (the PAIRED
+  deallocator, struct rebuilt at the call); pub `cstr_free` /
+  `cbytes_free` added (SHIP-table "Drop/free/release" rows) so the
+  pairing holds end-to-end from Drift; all pairing comments corrected.
+  (3) Layout audit extended: production roots now language_runtime +
+  posix + compiler_infra (tests/ + lang-obsolete excluded explicitly);
+  duplicate `struct DriftString`/`DriftRcBytes` definitions forbidden
+  (exactly one, in string_runtime.h); member-read scan covers pointer
+  form (s->len/s->data); caught + fixed one stale comment — 5/5.
+  (4) API teeth de-overclaimed and strengthened: OwnedCStr release ->
+  REAL `cstr_free`; OwnedCBytes release path exercised + `cbytes_free`;
+  owned-copy isolation ACTUALLY MUTATES the released copy and proves
+  the source unchanged; NEW memcheck-lane
+  test_b5_owned_types_lifecycle.py (drop-only + release-then-free +
+  release-then-drop for both owned types + full scope pin/argv
+  lifecycle) — valgrind clean, 0 leaks/invalid accesses.
+  Informational corpus run during the fixes showed a 16-fixture
+  std_text universe mismatch — verified TRANSIENT (mid-edit
+  contamination; fixtures compile+run clean on the corrected tree);
+  the authoritative corpus rerun is gated on the static delta review.
+  Affected-gate rerun on the corrected tree: 89/89 (codegen units,
+  representation battery both builds, API teeth, layout audit 5/5,
+  bytes-base boundary, defer pins, probes, observation guards).
+  PERF GATE RERUN (guards active): 0.33.87 median 1.230s vs B5 median
+  1.240s = +0.81% median / -4.88% min — WITHIN NOISE (B5's own spread
+  ±6%); §8.6 PASS.  Corpus + run-all.sh + certification held for the
+  static delta review per maintainer instruction.
+  S10 HOLD (2 contract blockers + 2 guardrails) — CORRECTED:
+  (1) ILLEGAL FLAGS now fail closed at OBSERVATION in both paths:
+  C accessors share a `drift_string_observe_validate` prologue
+  (tombstone/malformed + reserved-bit + STATIC+IMMORTAL + orphan
+  HAS_INTERIOR_NUL, relaxed flags load); the IR observe guard gained
+  the same three flag checks (flags word loaded atomically at storage
+  +8 — recorded as part of the codegen layout authority and pinned by
+  the audit's exactly-one (+8) count).  Teeth: representation battery
+  +3 accessor flag cases; observation-guard battery +3 flag handles ×
+  3 lowerings × both builds — 6/6.
+  (2) Free APIs re-marked `pub unsafe fn` with strict exactly-once
+  transferred-allocation provenance docs (never borrowed pointers,
+  never live scope pins — the scope frees its own; ReleasedCBytes is
+  a Copy VIEW, freeing through >1 copy double-frees); the misleading
+  scope-pin mention removed.
+  (3) Layout audit hardened: EXACT-path allowlist (basename shadowing
+  caught by a negative tooth), TYPE-level `DriftRcBytes` ban (catches
+  aliased ->flags), member scan covers len/data/STORAGE in value AND
+  pointer form, duplicate-definition pin is authoritative-PATH-based;
+  4 negative self-teeth prove the scanners bite — 9/9.
+  (4) `drift_string_to_owned_cstr_unchecked` recorded as an
+  implementation-time bridge amendment in checkpoint §3.3 and the
+  history entry (with the pairing rationale).
+  PERF RERUN (flag-validating guards active): 0.33.87 median 1.230s
+  vs B5 median 1.240s = +0.81% median / +1.72% min, distributions
+  overlapping (0.33.87 spans 1.16-1.29, B5 1.18-1.25) — WITHIN NOISE,
+  §8.6 PASS.  Affected-gate sweep on corrected tree: 117/117 (codegen
+  units, representation battery, API teeth, hardened audit, bytes-base
+  boundary, defer pins, probes, observation guards, lifecycle+phase1
+  memcheck, ABI-stamp suite incl. bidirectional mismatch).
+  Corpus + run-all.sh + certification awaiting static delta clearance.
