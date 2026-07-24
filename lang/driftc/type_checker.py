@@ -191,6 +191,353 @@ from lang.driftc.traits.solver import (
 )
 from lang.driftc.traits.world import type_key_from_expr
 
+
+def _stable_state_repr(val: object, _depth: int = 0, _seen: set | None = None) -> str:
+	"""Stable structural repr for state fingerprinting (invariant tooth).
+
+	Deterministic (sorted dict/set traversal), identity-free (objects are
+	dumped by type name + attribute structure, never by id), cycle-guarded.
+	Test/verification helper — not on any production path.
+	"""
+	if _seen is None:
+		_seen = set()
+	if isinstance(val, dict):
+		items = sorted(val.items(), key=lambda kv: repr(kv[0]))
+		return "{" + ",".join(f"{k!r}:{_stable_state_repr(v, _depth + 1, _seen)}" for k, v in items) + "}"
+	if isinstance(val, (list, tuple)):
+		return "[" + ",".join(_stable_state_repr(v, _depth + 1, _seen) for v in val) + "]"
+	if isinstance(val, (set, frozenset)):
+		return "{" + ",".join(sorted(_stable_state_repr(v, _depth + 1, _seen) for v in val)) + "}"
+	if isinstance(val, (int, float, bool, str, bytes, type(None))):
+		return repr(val)
+	if callable(val) and not hasattr(val, "__dict__"):
+		return f"<fn {getattr(val, '__name__', '?')}>"
+	if id(val) in _seen:
+		return f"<cycle {type(val).__name__}>"
+	_seen.add(id(val))
+	try:
+		d = getattr(val, "__dict__", None)
+		if d is None:
+			return type(val).__name__
+		if callable(val):
+			return f"<fn {getattr(val, '__name__', '?')}>"
+		inner = ",".join(f"{k}={_stable_state_repr(v, _depth + 1, _seen)}" for k, v in sorted(d.items()))
+		return f"{type(val).__name__}({inner})"
+	finally:
+		_seen.discard(id(val))
+
+
+class _TxnDict(dict):
+	"""Dict OWNED by an FnCheckState.  While a probe transaction is open
+	(`owner._undo is not None`), every mutation records a reversible undo
+	entry; otherwise the only overhead is one attribute load + None check
+	per write.  Rollback replays entries in reverse (see CheckerStateTxn)."""
+
+	__slots__ = ("_owner",)
+
+	def __init__(self, owner: "FnCheckState") -> None:
+		super().__init__()
+		self._owner = owner
+
+	def _log_key(self, key: object) -> None:
+		undo = self._owner._undo
+		if undo is not None:
+			undo.append((self._restore_key, (key, key in self, dict.get(self, key))))
+
+	def _restore_key(self, entry) -> None:
+		key, had, old = entry
+		if had:
+			dict.__setitem__(self, key, old)
+		else:
+			dict.pop(self, key, None)
+
+	def __setitem__(self, key, value) -> None:
+		self._log_key(key)
+		dict.__setitem__(self, key, value)
+
+	def __delitem__(self, key) -> None:
+		self._log_key(key)
+		dict.__delitem__(self, key)
+
+	def setdefault(self, key, default=None):
+		if key not in self:
+			self._log_key(key)
+		return dict.setdefault(self, key, default)
+
+	def pop(self, key, *default):
+		if key in self:
+			self._log_key(key)
+		return dict.pop(self, key, *default)
+
+	def update(self, *args, **kwargs) -> None:
+		if self._owner._undo is not None:
+			incoming = dict(*args, **kwargs)
+			for key in incoming:
+				self._log_key(key)
+			dict.update(self, incoming)
+			return
+		dict.update(self, *args, **kwargs)
+
+	def __ior__(self, other):
+		self.update(other)
+		return self
+
+	def popitem(self):
+		undo = self._owner._undo
+		if undo is not None:
+			undo.append((self._restore_all, dict(self)))
+		return dict.popitem(self)
+
+	def clear(self) -> None:
+		undo = self._owner._undo
+		if undo is not None:
+			snapshot = dict(self)
+			undo.append((self._restore_all, snapshot))
+		dict.clear(self)
+
+	def _restore_all(self, snapshot) -> None:
+		dict.clear(self)
+		dict.update(self, snapshot)
+
+
+class _TxnList(list):
+	"""List OWNED by an FnCheckState (the diagnostics sink).  EVERY list
+	mutator is undo-logged while a probe transaction is open: appends and
+	extends get cheap pop-based entries (the hot path); every other
+	mutator — slice/index deletes (`del diagnostics[start:]` is a real
+	production pattern), item/slice assignment, insert/pop/remove/clear/
+	sort/reverse/`*=` — records a full-list snapshot restore entry, so a
+	rollback across any interleaving of appends and deletes restores the
+	exact original contents."""
+
+	__slots__ = ("_owner",)
+
+	def __init__(self, owner: "FnCheckState") -> None:
+		super().__init__()
+		self._owner = owner
+
+	def _undo_append(self, _entry) -> None:
+		list.pop(self)
+
+	def _restore_all(self, snapshot) -> None:
+		list.__delitem__(self, slice(None))
+		list.extend(self, snapshot)
+
+	def _log_snapshot(self) -> None:
+		undo = self._owner._undo
+		if undo is not None:
+			undo.append((self._restore_all, list(self)))
+
+	def append(self, item) -> None:
+		undo = self._owner._undo
+		if undo is not None:
+			undo.append((self._undo_append, None))
+		list.append(self, item)
+
+	def extend(self, items) -> None:
+		items = list(items)
+		undo = self._owner._undo
+		if undo is not None:
+			for _ in items:
+				undo.append((self._undo_append, None))
+		list.extend(self, items)
+
+	def __iadd__(self, items):
+		self.extend(items)
+		return self
+
+	def __imul__(self, n):
+		self._log_snapshot()
+		return list.__imul__(self, n)
+
+	def __delitem__(self, key) -> None:
+		self._log_snapshot()
+		list.__delitem__(self, key)
+
+	def __setitem__(self, key, value) -> None:
+		self._log_snapshot()
+		list.__setitem__(self, key, value)
+
+	def insert(self, index, item) -> None:
+		self._log_snapshot()
+		list.insert(self, index, item)
+
+	def pop(self, index=-1):
+		self._log_snapshot()
+		return list.pop(self, index)
+
+	def remove(self, item) -> None:
+		self._log_snapshot()
+		list.remove(self, item)
+
+	def clear(self) -> None:
+		self._log_snapshot()
+		list.__delitem__(self, slice(None))
+
+	def sort(self, *args, **kwargs) -> None:
+		self._log_snapshot()
+		list.sort(self, *args, **kwargs)
+
+	def reverse(self) -> None:
+		self._log_snapshot()
+		list.reverse(self)
+
+
+class FnCheckState:
+	"""EXPLICIT owner of the per-function checker state that the deferred-
+	call probe must be able to roll back (B5 review ruling: "replace frame
+	introspection with an explicit per-function checker-state owner
+	containing the mutable side tables and allocator cells").
+
+	`check_function` creates one instance and aliases the owner's table
+	objects into its existing locals, so every code path keeps writing
+	through the SAME objects — but the objects are transaction-aware
+	(`_TxnDict`/`_TxnList` undo-log overlays) and the allocators are owner
+	cells rather than closure cells.
+
+	Scope contract: a probe transaction may only be opened for subtrees
+	that pass the fail-closed shape gate in `call_resolver`
+	(`_defer_probe_shape_safe`) — expression shapes whose typing writes
+	exclusively through (a) the OWNED_TABLES below, (b) the three
+	allocator cells, and (c) attributes of the probed HIR subtree itself
+	(undo-logged per node by CheckerStateTxn).  Scope/binding tables are
+	deliberately NOT owned: shapes that could write them (lambdas, match
+	expressions, blocks, statements) are gated out and take the legacy
+	silent deferral instead.  TypeTable interning is excluded by design
+	(canonical, idempotent, content-addressed — inert if unused).
+	"""
+
+	OWNED_TABLES = (
+		"expr_types",
+		"iface_coercions",
+		"borrowed_iface_coercions",
+		"ptr_to_ref_coercions",
+		"call_resolutions",
+		"call_info_by_callsite_id",
+		"callsite_owner_node_id",
+		"instantiations_by_callsite_id",
+		"instantiations_by_node_id",
+		"fnptr_consts_by_node_id",
+		"diagnostics",
+	)
+
+	def __init__(self, checker) -> None:
+		self._checker = checker
+		self._undo = None  # None ⇔ no open transaction
+		self._txn_depth = 0
+		# Allocator cells (owner-held, not closure cells).
+		self.next_node_id: int = 0
+		self.next_callsite_id: int | None = None
+		# Owned side tables.
+		self.expr_types = _TxnDict(self)
+		self.iface_coercions = _TxnDict(self)
+		self.borrowed_iface_coercions = _TxnDict(self)
+		self.ptr_to_ref_coercions = _TxnDict(self)
+		self.call_resolutions = _TxnDict(self)
+		self.call_info_by_callsite_id = _TxnDict(self)
+		self.callsite_owner_node_id = _TxnDict(self)
+		self.instantiations_by_callsite_id = _TxnDict(self)
+		self.instantiations_by_node_id = _TxnDict(self)
+		self.fnptr_consts_by_node_id = _TxnDict(self)
+		self.diagnostics = _TxnList(self)
+
+	def begin_txn(self, probe_expr: object) -> "CheckerStateTxn":
+		return CheckerStateTxn(self, probe_expr)
+
+	def state_fingerprint(self) -> str:
+		"""Full-value structural digest of the owned state + allocator
+		cells.  Independent of the undo-log mechanism (it dumps table
+		CONTENTS, so a buggy or missing undo entry shows up as a diff);
+		used by the invariant tooth."""
+		parts = [f"{name}={_stable_state_repr(getattr(self, name))}" for name in self.OWNED_TABLES]
+		parts.append(f"next_node_id={self.next_node_id!r}")
+		parts.append(f"next_callsite_id={self.next_callsite_id!r}")
+		parts.append(f"next_binding_id={self._checker._next_binding_id!r}")
+		return "\n".join(parts)
+
+
+class CheckerStateTxn:
+	"""One probe transaction over an FnCheckState: an undo-log overlay for
+	the owned tables, saved allocator cells, and an explicit per-node
+	mutation log for the probed HIR subtree.
+
+	* Table mutations while open are recorded by the `_TxnDict`/`_TxnList`
+	  wrappers into the owner's shared undo list; this transaction holds a
+	  watermark and rollback replays entries in reverse down to it.
+	  Nested probes are watermark-scoped: an inner commit leaves its
+	  entries in place so an outer rollback still reverts them.
+	* Allocator cells (`next_node_id`, `next_callsite_id`, the checker's
+	  `_next_binding_id`) are saved at begin and restored on rollback —
+	  nothing else scalar is touched.
+	* HIR: every dataclass node in the probed subtree gets an attribute
+	  snapshot (list/dict/set attribute values copied one level).
+	  Rollback restores each ORIGINAL node's attributes in place, so
+	  descendant node identities are preserved — resolver frames holding
+	  references to subtree nodes keep seeing the restored originals.
+	  Nodes spliced in during the probe are dropped when the restored
+	  attribute lists no longer reference them.
+	"""
+
+	def __init__(self, state: FnCheckState, probe_expr: object) -> None:
+		self._state = state
+		if state._undo is None:
+			state._undo = []
+		self._mark = len(state._undo)
+		state._txn_depth += 1
+		self._closed = False
+		self._next_node_id = state.next_node_id
+		self._next_callsite_id = state.next_callsite_id
+		self._next_binding_id = state._checker._next_binding_id
+		self._hir_log: list = []
+		for node in iter_hir_walk(probe_expr):
+			if not is_dataclass(node):
+				continue
+			d = getattr(node, "__dict__", None)
+			if d is None:
+				continue
+			snap = {}
+			for k, v in d.items():
+				if isinstance(v, list):
+					snap[k] = list(v)
+				elif isinstance(v, dict):
+					snap[k] = dict(v)
+				elif isinstance(v, set):
+					snap[k] = set(v)
+				else:
+					snap[k] = v
+			self._hir_log.append((node, snap))
+
+	def commit(self) -> None:
+		"""COMPLETE / HARD_ERROR: the live state stands.  Undo entries are
+		retained for any enclosing transaction's rollback."""
+		self._close()
+
+	def rollback(self) -> None:
+		"""NEEDS_EXPECTED / exception: restore owned tables (reverse undo
+		replay), allocator cells, and the probed HIR subtree in place."""
+		st = self._state
+		undo = st._undo
+		while len(undo) > self._mark:
+			fn, entry = undo.pop()
+			fn(entry)
+		st.next_node_id = self._next_node_id
+		st.next_callsite_id = self._next_callsite_id
+		st._checker._next_binding_id = self._next_binding_id
+		for node, snap in self._hir_log:
+			node.__dict__.clear()
+			node.__dict__.update(snap)
+		self._close()
+
+	def _close(self) -> None:
+		if self._closed:
+			return
+		self._closed = True
+		st = self._state
+		st._txn_depth -= 1
+		if st._txn_depth == 0:
+			st._undo = None
+
+
 # Identifier aliases for clarity.
 ParamId = int
 LocalId = int
@@ -2064,7 +2411,15 @@ class TypeChecker:
 			# nothing.
 			assign_missing_callsite_ids(body)
 
-		next_callsite_id: int | None = None
+		# EXPLICIT owner of the per-function mutable checker state that the
+		# deferred-call probe can roll back: the recorder side tables, the
+		# diagnostics list, and the allocator cells.  The locals declared
+		# below ALIAS the owner's objects, so all existing writers go
+		# through the transaction-aware tables.  See FnCheckState.
+		fn_state = FnCheckState(self)
+
+		def _begin_defer_probe_txn(probe_expr: object) -> CheckerStateTxn:
+			return fn_state.begin_txn(probe_expr)
 
 		def _max_callsite_id(block: H.HBlock) -> int:
 			# Must use the SAME complete HIR traversal as
@@ -2088,11 +2443,12 @@ class TypeChecker:
 			return highest
 
 		def _alloc_callsite_id() -> int:
-			nonlocal next_callsite_id
-			if next_callsite_id is None:
-				next_callsite_id = _max_callsite_id(body) + 1
-			csid = next_callsite_id
-			next_callsite_id += 1
+			# Allocator cell lives on the owner so probe transactions can
+			# save/restore it (no stray callsite ids from rolled-back probes).
+			if fn_state.next_callsite_id is None:
+				fn_state.next_callsite_id = _max_callsite_id(body) + 1
+			csid = fn_state.next_callsite_id
+			fn_state.next_callsite_id += 1
 			return csid
 
 		def _format_visibility_chain(chain: tuple[str, ...], max_hops: int = 4) -> str:
@@ -2232,16 +2588,17 @@ class TypeChecker:
 				modules.append(prelude_module_id)
 			return tuple(modules)
 
-		next_node_id = assign_node_ids(body)
+		fn_state.next_node_id = assign_node_ids(body)
 		def _assign_node_id(node: H.HNode) -> None:
-			nonlocal next_node_id
+			# Allocator cell lives on the owner so probe transactions can
+			# save/restore it (no node-id movement from rolled-back probes).
 			if getattr(node, "node_id", 0):
 				return
 			if is_dataclass(node) and getattr(node, "__dataclass_params__", None) and node.__dataclass_params__.frozen:
-				object.__setattr__(node, "node_id", next_node_id)
+				object.__setattr__(node, "node_id", fn_state.next_node_id)
 			else:
-				node.node_id = next_node_id
-			next_node_id += 1
+				node.node_id = fn_state.next_node_id
+			fn_state.next_node_id += 1
 
 		def _assign_place_expr_ids(place_expr: H.HPlaceExpr) -> None:
 			_assign_node_id(place_expr)
@@ -2249,10 +2606,13 @@ class TypeChecker:
 				_assign_node_id(proj)
 		scope_env: List[Dict[str, TypeId]] = [dict()]
 		scope_bindings: List[Dict[str, int]] = [dict()]
-		expr_types: Dict[int, TypeId] = {}
-		iface_coercions: Dict[int, TypeId] = {}
-		borrowed_iface_coercions: Dict[int, TypeId] = {}
-		ptr_to_ref_coercions: Dict[int, TypeId] = {}
+		# Recorder side tables: aliases of the OWNER's transaction-aware
+		# tables (FnCheckState) — same objects, undo-logged while a
+		# deferred-call probe transaction is open.
+		expr_types = fn_state.expr_types
+		iface_coercions = fn_state.iface_coercions
+		borrowed_iface_coercions = fn_state.borrowed_iface_coercions
+		ptr_to_ref_coercions = fn_state.ptr_to_ref_coercions
 		binding_for_var: Dict[int, int] = {}
 		binding_types: Dict[int, TypeId] = {}
 		binding_names: Dict[int, str] = {}
@@ -2987,15 +3347,16 @@ class TypeChecker:
 				if kind is not None:
 					return kind
 			return None
-		diagnostics: List[Diagnostic] = []
+		# Owner-aliased (transaction-aware) sinks — see FnCheckState above.
+		diagnostics = fn_state.diagnostics
 		deferred_guard_diags: Dict[DeferredGuardKey, List[Diagnostic]] = {}
 		guard_outcomes: Dict[GuardKey, ProofStatus] = {}
-		call_resolutions: Dict[int, CallableDecl | MethodResolution] = {}
-		call_info_by_callsite_id: Dict[int, CallInfo] = {}
-		callsite_owner_node_id: Dict[int, int] = {}
-		fnptr_consts_by_node_id: Dict[int, tuple[FunctionRefId, CallSig]] = {}
-		instantiations_by_callsite_id: Dict[int, CallInstantiation] = {}
-		instantiations_by_node_id: Dict[int, CallInstantiation] = {}
+		call_resolutions = fn_state.call_resolutions
+		call_info_by_callsite_id = fn_state.call_info_by_callsite_id
+		callsite_owner_node_id = fn_state.callsite_owner_node_id
+		fnptr_consts_by_node_id = fn_state.fnptr_consts_by_node_id
+		instantiations_by_callsite_id = fn_state.instantiations_by_callsite_id
+		instantiations_by_node_id = fn_state.instantiations_by_node_id
 		trait_worlds = getattr(self.type_table, "trait_worlds", {}) or {}
 		def _world_has_trait_data(world: TraitWorld) -> bool:
 			return bool(
@@ -7790,7 +8151,7 @@ class TypeChecker:
 					return record_expr(expr, self._unknown)
 				if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 					preseed = preseed_type_params or {}
-					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders))
+					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
 					ctor_res = resolve_qualified_member_call(
 						make_resolver_ctx(call_ctx),
 						expr.fn,
@@ -9257,7 +9618,7 @@ class TypeChecker:
 						binding_types[expr.fn.binding_id] = typed if typed is not None else self._unknown
 						pending_lambda_by_binding.pop(expr.fn.binding_id, None)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders))
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
 				return resolve_call_expr(call_ctx, expr, expected_type, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
 			if isinstance(expr, getattr(H, "HInvoke", ())):
 				if drift_debug.enabled("call"):
@@ -9513,7 +9874,7 @@ class TypeChecker:
 										)
 										return record_expr(expr, self._unknown)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders))
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
 				method_ctx = make_method_ctx(call_ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
 				method_res = resolve_method_call(method_ctx, expr, expected_type=expected_type)
 				if method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
@@ -10944,6 +11305,7 @@ class TypeChecker:
 					diagnostics.append(
 						_tc_diag(
 							message="cannot infer element type for array literal; add a type annotation",
+							code="E-INFER-EXPECTED-LITERAL",
 							severity="error",
 							span=getattr(expr, "loc", Span()),
 						)
@@ -11024,6 +11386,7 @@ class TypeChecker:
 					diagnostics.append(
 						_tc_diag(
 							message="cannot infer target type for empty map literal; add a type annotation",
+							code="E-INFER-EXPECTED-LITERAL",
 							severity="error",
 							span=getattr(expr, "loc", Span()),
 						)
@@ -11097,6 +11460,7 @@ class TypeChecker:
 				diagnostics.append(
 					_tc_diag(
 						message="cannot infer target type for map literal; add a type annotation",
+						code="E-INFER-EXPECTED-LITERAL",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
 					)
@@ -12866,19 +13230,24 @@ class TypeChecker:
 			param_bindings=param_bindings,
 			locals=locals,
 			body=body,
+			# Owned (_TxnDict) tables are DETACHED into plain dicts here:
+			# result objects must not retain the transaction wrappers
+			# (each wrapper holds the FnCheckState owner, which holds
+			# every table and the checker).  Pinned by the invariant
+			# tooth's output-type test.
 			expr_types={ref: ty for ref, ty in expr_types.items()},
 			binding_for_var=binding_for_var,
 			binding_types=binding_types,
 			binding_names=binding_names,
 			binding_mutable=binding_mutable,
 			binding_place_kind=binding_place_kind,
-			call_resolutions=call_resolutions,
-			call_info_by_callsite_id=call_info_by_callsite_id,
-			instantiations_by_callsite_id=instantiations_by_callsite_id,
-			instantiations_by_node_id=instantiations_by_node_id,
-			iface_coercions=iface_coercions,
-			borrowed_iface_coercions=borrowed_iface_coercions,
-			ptr_to_ref_coercions=ptr_to_ref_coercions,
+			call_resolutions=dict(call_resolutions),
+			call_info_by_callsite_id=dict(call_info_by_callsite_id),
+			instantiations_by_callsite_id=dict(instantiations_by_callsite_id),
+			instantiations_by_node_id=dict(instantiations_by_node_id),
+			iface_coercions=dict(iface_coercions),
+			borrowed_iface_coercions=dict(borrowed_iface_coercions),
+			ptr_to_ref_coercions=dict(ptr_to_ref_coercions),
 			preseed_type_params=dict(preseed_type_params or {}),
 		)
 		if self.type_table is not None and self.type_table.type_provenance_enabled():
@@ -14029,7 +14398,10 @@ class TypeChecker:
 			self._stamp_diag_phase(d)
 		return TypeCheckResult(
 			typed_fn=typed,
-			diagnostics=diagnostics,
+			# Detach the owned (_TxnList) sink into a plain list — the
+			# result must not retain the transaction wrapper (see the
+			# TypedFn detach note above).
+			diagnostics=list(diagnostics),
 			deferred_guard_diags=deferred_guard_diags,
 			guard_outcomes=guard_outcomes,
 		)

@@ -30,6 +30,7 @@ from lang.driftc.traits.world import normalize_type_key, trait_key_from_expr, ty
 from lang.driftc.method_resolver import MethodResolution, ResolutionError
 from lang.driftc.parser import ast as parser_ast
 from lang.driftc.stage1 import hir_nodes as H
+from lang.driftc.stage1.node_ids import default_should_descend, iter_hir_walk
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang.driftc.core.span import Span
 from lang.driftc.call_contract import CtorFieldSpec, ctor_call_issues, call_kwargs_issues, ARRAY_METHOD_ARITY_TABLE
@@ -862,6 +863,16 @@ class CallResolverContext:
 	# the checker side (reset at check_function entry) so binding-id reuse across
 	# functions cannot leak catch provenance.
 	typed_catch_binder_ids: frozenset[int] | None = None
+	# Checker-state transaction factory for the deferred-call probe (see
+	# the `defer_infer_diag` block in `resolve_call_expr`).  Provided by
+	# `TypeChecker.check_function`, whose EXPLICIT `FnCheckState` owner
+	# holds the recorder side tables (undo-logged overlay containers), the
+	# diagnostics sink, and the node/callsite/binding allocator cells —
+	# the resolver never enumerates state channels itself.  Called as
+	# `begin_state_txn(probe_expr)`; returns an object with `commit()` /
+	# `rollback()`.  None → the deferral falls back to the legacy silent
+	# bail (no probe).
+	begin_state_txn: Callable[[object], object] | None = None
 
 
 def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
@@ -1043,6 +1054,7 @@ def resolve_nonvariant_qualified_static_call(
 				severity="error",
 				span=call_type_args_span or getattr(qm, "loc", Span()),
 				notes=[msg] + list(notes),
+				code=_infer_failure_code(infer_error),
 			)
 		)
 		return MethodCallResult(ctx.unknown_ty, None)
@@ -1468,6 +1480,7 @@ def resolve_variant_ctor(
 				severity="error",
 				span=call_type_args_span or getattr(qm, "loc", Span()),
 				notes=[msg] + list(notes),
+				code=_infer_failure_code(inst_res),
 			)
 		)
 		return None
@@ -1727,7 +1740,7 @@ def resolve_struct_ctor(
 		if inst_res.error:
 			msg, notes = ctx.format_infer_failure(inst_res.context, inst_res)
 			field_notes = [f"field '{n}'" for n in field_names]
-			ctx.diagnostics.append(ctx.tc_diag(message=f"cannot infer type arguments for struct '{struct_name}'", severity="error", span=call_type_args_span or span, notes=[msg] + list(notes) + field_notes))
+			ctx.diagnostics.append(ctx.tc_diag(message=f"cannot infer type arguments for struct '{struct_name}'", severity="error", span=call_type_args_span or span, notes=[msg] + list(notes) + field_notes, code=_infer_failure_code(inst_res)))
 			return None
 		if inst_res.inst_params is None or inst_res.inst_return is None:
 			return None
@@ -2036,6 +2049,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if idx >= len(expected_args):
 				break
 			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
+				continue
+			if getattr(arg, "_defer_probe_hard_error", False):
+				# HARD_ERROR probe outcome: the argument's real diagnostics
+				# are already committed; retrying with an expected type
+				# would only duplicate them.
 				continue
 			exp_ty = expected_args[idx]
 			arg.defer_infer_diag = False
@@ -4377,6 +4395,81 @@ def _is_std_core_module(mod_name: object | None, module_ids_by_name: dict[str, i
 	return "std.core" in chain or chain[-1] == "std.core"
 
 
+# STRUCTURED outcome classification for the deferred-call probe: a failed
+# probe is NEEDS_EXPECTED only when every new error diagnostic carries one
+# of these codes — set at the emission sites, never inferred from message
+# text.  UNDERDETERMINED = generic type parameters with no constraints (an
+# expected type can supply them); EXPECTED-LITERAL = array/map literals
+# whose element type an expected type would fix; E-CTOR-EXPECTED-TYPE =
+# unqualified variant-ctor sugar, defined only under an expected type.
+# Inference CONFLICTS are deliberately NOT here — conflicting constraints
+# are a HARD error regardless of expected type.
+_DEFER_NEEDS_EXPECTED_CODES = frozenset({
+	"E-CTOR-EXPECTED-TYPE",
+	"E-INFER-UNDERDETERMINED",
+	"E-INFER-EXPECTED-LITERAL",
+})
+
+
+def _infer_failure_code(res: "InferResult") -> str | None:
+	"""Structured code for an inference failure: UNDERDETERMINED (missing
+	constraints — an expected type may supply them) vs CONFLICT (hard)."""
+	err = getattr(res, "error", None)
+	kind = getattr(err, "kind", None)
+	if kind is InferErrorKind.CANNOT_INFER or err is None:
+		return "E-INFER-UNDERDETERMINED"
+	if kind is InferErrorKind.CONFLICT:
+		return "E-INFER-CONFLICT"
+	return None
+
+
+# Fail-closed shape gate for the deferred-call probe: a subtree may be
+# probed only when EVERY HIR node in it is of a kind whose typing writes
+# exclusively through the FnCheckState-owned recorder tables, the allocator
+# cells, and the probed subtree's own attributes.  Shapes that can create
+# bindings or scopes (lambdas, match expressions, blocks, let/statements,
+# try) — or any node kind not explicitly listed here, including future
+# ones — take the legacy silent deferral instead.  This is what makes the
+# owner's table enumeration COMPLETE for probed shapes by construction.
+_DEFER_PROBE_SAFE_NODES = (
+	H.HCall, H.HInvoke, H.HMethodCall, H.HVar, H.HQualifiedMember,
+	H.HBorrow, H.HMove, H.HCopy, H.HField, H.HIndex, H.HUnary, H.HBinary,
+	H.HCast, H.HTernary, H.HKwArg, H.HSelfRef, H.HFnPtrConst,
+	H.HLiteralBool, H.HLiteralFloat, H.HLiteralInt, H.HLiteralString,
+	H.HLiteralUint, H.HLiteralUint64,
+	H.HPlaceExpr, H.HPlaceField, H.HPlaceIndex, H.HPlaceDeref, H.HPlaceProj,
+	H.HTypeApp, H.HTypeNameRef, H.HFString, H.HFStringHole,
+	H.HMapLiteral, H.HMapEntry, H.HArrayLiteral, H.HResultOk, H.HUnsafeExpr,
+)
+
+# Probe frequency / outcome counters (perf + behavior measurement; read by
+# tools and the corpus timing harness — cheap unconditional increments).
+_DEFER_PROBE_STATS = {
+	"probes": 0,
+	"commits_complete": 0,
+	"commits_hard_error": 0,
+	"rollbacks_needs_expected": 0,
+	"rollbacks_exception": 0,
+	"gated_shape": 0,
+	"legacy_no_txn": 0,
+}
+
+
+def _defer_probe_shape_safe(expr: object) -> bool:
+	# Uses the CANONICAL HIR recognition predicate (`default_should_descend`
+	# — any H.HNode plus any dataclass from a recognized HIR module,
+	# including stage1.closures capture metadata) as the ONLY filter, so
+	# EVERY canonically recognized but unapproved HIR shape is rejected —
+	# including non-dataclass HNode subclasses, which an is_dataclass
+	# prefilter would silently accept.
+	for node in iter_hir_walk(expr):
+		if not default_should_descend(node):
+			continue
+		if not isinstance(node, _DEFER_PROBE_SAFE_NODES):
+			return False
+	return True
+
+
 def resolve_call_expr(
 	ctx: CallResolverContext,
 	expr: object,
@@ -4521,6 +4614,11 @@ def resolve_call_expr(
 			if idx >= len(expected_args):
 				break
 			if not isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
+				continue
+			if getattr(arg, "_defer_probe_hard_error", False):
+				# HARD_ERROR probe outcome: the argument's real diagnostics
+				# are already committed; retrying with an expected type
+				# would only duplicate them.
 				continue
 			exp_ty = expected_args[idx]
 			if ctx.type_table.has_typevar(exp_ty):
@@ -5844,6 +5942,87 @@ def resolve_call_expr(
 		if resolved_ctor_return is not None:
 			return record_expr(expr, resolved_ctor_return)
 		if expected_type is None and getattr(expr, "defer_infer_diag", False):
+			# Argument-position deferral (LANGUAGE_BUG fix, 2026-07-23; review
+			# round 7: explicit-owner transaction).  The old early bail
+			# returned Unknown UNCONDITIONALLY, silently un-typing nested
+			# calls whose callee needs NO inference at all.  The deferral
+			# exists only to let calls that genuinely need an expected type
+			# wait for the enclosing call to retry them with the parameter
+			# type.
+			#
+			# The probe models THREE outcomes explicitly, classified by
+			# STRUCTURED diagnostic codes (never message text):
+			#   COMPLETE       — resolves fully without an expected type
+			#                    (non-Unknown result, no new error diags):
+			#                    the live resolution stands; commit.
+			#   NEEDS_EXPECTED — every new error carries a code from
+			#                    _DEFER_NEEDS_EXPECTED_CODES (or resolution
+			#                    returned Unknown silently): ROLLBACK — no
+			#                    diagnostics, HIR rewrites, callsite metadata,
+			#                    expression types, coercions, instantiations,
+			#                    or allocator movement remain — then Unknown
+			#                    is recorded and the enclosing call retries
+			#                    with the parameter type exactly as pre-fix.
+			#   HARD_ERROR     — errors regardless of expected type (incl.
+			#                    inference CONFLICTS): the live resolution
+			#                    with its REAL diagnostics is committed; the
+			#                    node is marked so the expected-type retry
+			#                    cannot re-resolve and duplicate them.
+			# UNEXPECTED EXCEPTIONS roll back and RE-RAISE (normal ICE
+			# containment — a probe must never convert a compiler defect
+			# into a silent retry).
+			#
+			# The transaction is the CHECKER-owned `CheckerStateTxn`
+			# (type_checker.py): an undo-log overlay on the explicit
+			# `FnCheckState` owner (recorder side tables + diagnostics +
+			# allocator cells) plus a per-node attribute log for the probed
+			# HIR subtree (descendant node identities preserved).  The
+			# fail-closed `_defer_probe_shape_safe` gate admits only subtree
+			# shapes whose typing writes exclusively through that owned
+			# state; anything else — lambdas, match/block expressions,
+			# statements, unknown future node kinds — takes the legacy
+			# silent deferral.  Pinned by
+			# test_nested_call_arg_defer_infer_regression.py and the
+			# invariant tooth test_defer_probe_state_transaction.py.
+			if getattr(expr, "_defer_probe_hard_error", False):
+				# Probed and diagnosed on an earlier pass; never re-emit.
+				return record_expr(expr, ctx.unknown_ty)
+			_begin_txn = getattr(ctx, "begin_state_txn", None)
+			if _begin_txn is None:
+				_DEFER_PROBE_STATS["legacy_no_txn"] += 1
+				return record_expr(expr, ctx.unknown_ty)
+			if not _defer_probe_shape_safe(expr):
+				_DEFER_PROBE_STATS["gated_shape"] += 1
+				return record_expr(expr, ctx.unknown_ty)
+			_DEFER_PROBE_STATS["probes"] += 1
+			_txn = _begin_txn(expr)
+			_diag_base = len(ctx.diagnostics)
+			expr.defer_infer_diag = False
+			try:
+				_probe_result = resolve_call_expr(ctx, expr, None, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
+			except BaseException:
+				_DEFER_PROBE_STATS["rollbacks_exception"] += 1
+				_txn.rollback()
+				raise
+			_new_errors = [d for d in ctx.diagnostics[_diag_base:] if getattr(d, "severity", "error") == "error"]
+			if _probe_result != ctx.unknown_ty and not _new_errors:
+				_DEFER_PROBE_STATS["commits_complete"] += 1
+				_txn.commit()  # COMPLETE
+				return _probe_result
+			if _new_errors and not all(getattr(d, "code", None) in _DEFER_NEEDS_EXPECTED_CODES for d in _new_errors):
+				# HARD_ERROR: keep the live state and its REAL diagnostics.
+				# This is the STATED contract exactly: NEEDS_EXPECTED only
+				# when EVERY new error carries an expected-dependent code —
+				# a MIXED failure (expected-dependent plus hard) is HARD and
+				# commits all of its diagnostics.  Pinned by the tooth's
+				# mixed-outcome test.
+				_DEFER_PROBE_STATS["commits_hard_error"] += 1
+				_txn.commit()
+				expr._defer_probe_hard_error = True
+				expr.defer_infer_diag = True  # keep enclosing overload wildcard matching
+				return _probe_result
+			_DEFER_PROBE_STATS["rollbacks_needs_expected"] += 1
+			_txn.rollback()  # NEEDS_EXPECTED (or silent Unknown)
 			return record_expr(expr, ctx.unknown_ty)
 		if debug_call_resolve and expr.fn.name == "Next":
 			_debug_call_resolve(
@@ -5998,7 +6177,7 @@ def resolve_call_expr(
 				if getattr(schema, "module_id", None) not in (current_module_name, "lang.core"):
 					continue
 				if any(getattr(arm, "name", None) == expr.fn.name for arm in getattr(schema, "arms", []) or []):
-					diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1", severity="error", span=getattr(expr, "loc", Span())))
+					diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1", severity="error", span=getattr(expr, "loc", Span()), code="E-CTOR-EXPECTED-TYPE"))
 					return record_expr(expr, ctx.unknown_ty)
 		struct_base = ctx.type_table.get_struct_base(module_id=expr.fn.module_id or current_module_name, name=expr.fn.name)
 		if struct_base is None:
@@ -6289,12 +6468,12 @@ def resolve_call_expr(
 					failure = infer_failures[0]
 					ctx_fail = failure.context or InferContext(call_kind="free", call_name=name, span=call_type_args_span or Span(), type_param_ids=[], type_param_names={}, param_types=[], param_names=None, return_type=None, arg_types=[])
 					msg, notes = _format_infer_failure(ctx_fail, failure)
-					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
+					raise ResolutionError(msg, span=call_type_args_span, notes=notes, code=_infer_failure_code(failure))
 				if saw_infer_incomplete:
 					ctx_fail = InferContext(call_kind="free", call_name=name, span=call_type_args_span or Span(), type_param_ids=[], type_param_names={}, param_types=[], param_names=None, return_type=None, arg_types=[])
 					res = InferResult(ok=False, subst=None, inst_params=None, inst_return=None, error=InferError(kind=InferErrorKind.CANNOT_INFER), context=ctx_fail)
 					msg, notes = _format_infer_failure(ctx_fail, res)
-					raise ResolutionError(msg, span=call_type_args_span, notes=notes)
+					raise ResolutionError(msg, span=call_type_args_span, notes=notes, code=_infer_failure_code(res))
 					raise ResolutionError(f"no matching overload for function '{name}' with args {_fmt_overload_args(ctx, arg_types)}{_iface_ref_widen_hint(ctx, candidates, arg_types)}")
 			world = None
 			applicable: list[tuple[CallableDecl, CallableSignature, Subst | None]] = []

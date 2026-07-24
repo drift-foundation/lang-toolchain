@@ -666,9 +666,305 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   `build/tmp/run-all-phase-d.log`; memcheck-mode driver lane 2,135
   passed / 1 skipped; ASAN-mode driver lane 2,095 passed / 41
   mode-selected skips; matrix-check + all shards green).
-  **COMMIT-CLEAR with the certification gate GREEN — certification +
-  deploy of 0.33.87/ABI-21 are maintainer-owned; then B-repr(B5)
-  opens as a separate design-first ABI-22 boundary.**
+  **COMMIT-CLEAR with the certification gate GREEN.**
+- **0.33.87 / ABI 21 CERTIFIED AND DEPLOYED (2026-07-23**, pool run
+  `20260723-120948-drift-lang-3d48b7f`; 8 pkgs + 2 apps at abi 21**).
+  The string_arc endgame is CLOSED end to end.**
+- **B-repr(B5) OPENED (design-first, ABI 21→22)**: report-only
+  checkpoint at `B5-ABI22-DESIGN-CHECKPOINT.md` — exact
+  native/LLVM/runtime-C/static-literal/empty layouts; RcBytes header/
+  flags/byte-tail/hidden-NUL/retain-release/allocation/overflow rules;
+  borrowed/owned C interop + checked/unsafe C-string APIs; full
+  consumer inventory (incl. the StringByteAt inline byte-GEP and the
+  zero-storage tombstone contract); atomic 21→22 migration sequence w/
+  versioning + mismatch regression; pool/DriftQuery/external-FFI plan;
+  acceptance matrix; STOP conditions.  ONE coordinated branch, ONE
+  ABI-22 certification.  STOPPED for design review; no implementation.
+- B5 design review rounds (2026-07-23): ten binding decisions folded in
+  (0.33.88/ABI-22; two-word handle; atomic flags + pinned state
+  machine; corrected DROP-ONLY tombstone w/ fail-closed observation +
+  armed-trap retain/reachability gates; singleton `__drift_rt_string_
+  empty` (IMMORTAL, mutually exclusive w/ STATIC); accessors + layout
+  audit; to_cstr preserved owned; probe-proven std.ffi APIs; no-UTF-8-
+  validation + ctor edge table; scope-closure table).  External FFI
+  audit PERFORMED pre-GO: zero downstream C sees DriftString; zero
+  by-value String externs downstream; recompile-only impact; DriftQuery
+  sign-off BLOCKS cert.  Call boundary CHOSEN: private
+  `string_bytes_base` intrinsic + pointer-taking C helpers (&String);
+  owned/scope types completed (ReleasedCBytes, nullable-field release —
+  no forget intrinsic needed; CArgv = Copy non-owning view).  ALL §3
+  signatures COMPILE-PROVEN by the permanent regression
+  `lang/tests/driver/test_b5_ffi_signature_probes.py` (green), which
+  also recorded a checker finding: helper-returned `mem.Ptr<T>` fails
+  require-bound unification (inline works) — [SUPERSEDED by round 4:
+  reclassified LANGUAGE_BUG and fixed regression-first on this branch
+  per repository policy; no separate slice].  Exact-tombstone validation,
+  `>=` refcount threshold, unconditional flag/malformed contract path
+  pinned.  Representation arm selection CLOSED per reviewer.
+- B5 review round 4 (2026-07-23, four blockers) — CLOSED:
+  (1) **LANGUAGE_BUG fixed regression-first** (probe discovery was a
+  checker defect, not API debt): `call_resolver.py` argument-position
+  `defer_infer_diag` deferral returned Unknown BEFORE attempting
+  resolution, silently un-typing any nested call in method-arg
+  position.  Protocol: minimal failing regression
+  `test_nested_call_arg_defer_infer_regression.py` (confirmed FAIL
+  pre-fix), subsystem recorded (checker call-resolution),
+  refactor_triggers.md scanned (no trigger), root-cause fix (deferral
+  now sandboxes a real resolution attempt; commits clean successes;
+  genuine inference failures still defer), regression PASSES.  Rides
+  the 0.33.88/ABI-22 branch, shares its single cert.  Post-fix
+  batteries: type_checker/checker/traits/method_registry/borrow/
+  stage1/parser 585 green; stage2/core/stage3/stage4/modules/packages
+  1,107 green; driver+codegen battery running.
+  (2) with_cstring_scope corrected: helper RETAINS ownership, body
+  gets `&mut CStringScope` (move-out impossible → callback-bound
+  cleanup guaranteed); both forms compile-proven.
+  (3) probe v2: EVERY promised family probed (throwing 1..4, unsafe
+  1..4, both scope forms, ReleasedCBytes data()/size() + CArgv
+  vector()/count() getters) — compiles/links/runs exit 0; baked into
+  the permanent probe regression.
+  (4) residuals fixed: banner decision 6 names the three-lowering
+  layout authority; flag illegality unconditional contract-fail (not
+  debug assert); StringByteAt = one of three layout lowerings;
+  validate() returns (state, flags) — no stale local.
+  Awaiting implementation GO.
+- B5 review round 5 (2026-07-23, HOLD + maintainer override) — CLOSED:
+  (1) **Deferred call resolution is now a TRANSACTION** (maintainer
+  override: no non-generic-only shortcut, no narrow eager gate).  The
+  `defer_infer_diag` attempt in `resolve_call_expr` snapshots the HIR
+  node states (call, callee, args, kwarg values), journals every
+  record channel (expression types, CallInfo, invoke-CallInfo, iface/
+  ptr-to-ref coercions, instantiations, call resolutions) and buffers
+  diagnostics; a successful COMPLETE resolution (non-Unknown, zero
+  error diags) COMMITS by replaying all journals; an incomplete or
+  failed attempt ROLLS BACK completely — no diagnostics, HIR rewrites,
+  callsite metadata, expression types, coercions, or instantiations
+  left behind — and the enclosing call retries with the parameter type
+  exactly as pre-fix.  Journal wrappers forward *args/**kwargs
+  verbatim (recorders are invoked with keyword args).  All four
+  mandated pins in `test_nested_call_arg_defer_infer_regression.py`:
+  non-generic success (FAILS pre-fix), argument-inferable generic
+  success (`ident<T>` nested in interface-call args — FAILS pre-fix),
+  expected-return-dependent generic retry (`take_opt(Optional::
+  Some(3))`, qualified generic ctor — worked pre-fix, preserved),
+  invalid-call diagnostic preservation on BOTH the free-call path
+  (real `make_ptr` overload diag named, identical pre/post) and the
+  interface-argument path (arg-mismatch diag preserved, compile always
+  fails).  Pre/post-fix behavior verified empirically against a HEAD
+  copy of call_resolver.py.  Note: the interface-method arg path has
+  NO expected-type retry (pre-existing v1 gap, unchanged); unqualified
+  `Some(3)` in free-call args is a deliberate v1 E-CTOR-EXPECTED-TYPE
+  rejection (defer flag is HQualifiedMember-only there, pre-existing).
+  (2) checkpoint §3.3.1 second moved-scope occurrence fixed: both
+  with_cstring_scope signatures now `core.Fn(Throw)1<&mut
+  CStringScope, T>`, helper-retains-ownership comment.
+  (3) probe regression completed: header rewritten (transactional fix,
+  &mut scope forms, no stale workaround note), `OwnedCBytesProbe.get()`
+  added + exercised, checked-nothrow arities 2..4 instantiated in
+  main; checkpoint §3.2 arity claim now "ALL arities 1..4" for both
+  checked families; §3.2 fix paragraph rewritten to the transactional
+  design.  Probe test green (compile+link+run exit 0).
+  (4) round-3 PROGRESS statement annotated SUPERSEDED (checker finding
+  reclassified LANGUAGE_BUG, fixed on-branch; no separate slice).
+  [Record correction (round 6): "5/5" = the regression file's FOUR
+  pytest tests plus the separate B5 probe regression, run together.]
+  [SUPERSEDED (round 6): the snapshot/journal implementation described
+  in item (1) above was rejected as not a real transaction — replaced
+  by the owner-level design below.]
+- B5 review round 6 (2026-07-23, HOLD on checker fix only) — CLOSED:
+  the manual snapshot/journal transaction was replaced per the binding
+  correction ("put the transaction boundary where the complete checker
+  state is owned … model three outcomes explicitly").
+  **Design:** `CheckerStateTransaction` (type_checker.py) — the
+  transaction boundary lives in `check_function`, which OWNS all
+  per-function checker state as frame locals.  It captures the owner
+  frame GENERICALLY (no manual channel list in the resolver): every
+  dict/list/set local snapshotted by value (scope-stack List[Dict]
+  copied one level deeper), every scalar local — including the
+  `next_node_id`/`next_callsite_id` allocators (closure cells) —
+  restored through the live PEP-667 `frame.f_locals` proxy (Python
+  3.13), rebound container locals re-bound to the original object, and
+  the probed HIR subtree deep-copied at begin with rollback swapping
+  the pristine twin's state into the live root (same node_ids, so
+  side-table keys keep matching).  Excluded by design: TypeTable
+  interning (canonical/idempotent/content-addressed — inert if
+  unused).  `check_function` hands the factory to the resolver via
+  `CallResolverContext.begin_state_txn` (all three make_call_ctx
+  sites; None → legacy silent bail).
+  **Three outcomes, modeled explicitly** in the `defer_infer_diag`
+  block of `resolve_call_expr`: COMPLETE (non-Unknown result, zero new
+  error diags → live resolution stands, commit); NEEDS_EXPECTED (every
+  new error matches the needs-expected class — prefix table
+  `_DEFER_NEEDS_EXPECTED_PREFIXES` ("cannot infer ",
+  "E-CTOR-EXPECTED-TYPE") — or silent Unknown, or an exception →
+  ROLLBACK, defer, enclosing retry with the parameter type exactly as
+  pre-fix); HARD_ERROR (errors regardless of expected type → live
+  resolution + REAL diagnostics COMMITTED, node marked
+  `_defer_probe_hard_error` so both `_propagate_arg_expected_types`
+  retry sites skip it — diagnostic appears exactly once).
+  Misclassification is safe one-way by construction: hard-as-needs
+  merely rolls back and the retry re-emits with expected known.
+  Diagnostic IMPROVEMENT: invalid nested calls in interface-method
+  argument position now surface their real diagnostic (pre-fix: only
+  the outer arg-mismatch); driver pin 4b strengthened to assert the
+  real diag exactly once plus the mismatch.
+  **Invariant tooth** `lang/tests/checker/test_defer_probe_state_
+  transaction.py` (4 tests, in-process compiles with the transaction
+  class monkeypatch-audited): (a) NEEDS_EXPECTED rollback restores
+  EXACT frame-state fingerprint + whole-body HIR structural identity,
+  and the retry emits the single real diagnostic (probe copy rolled
+  back — no duplicate, no swallow); (b) fingerprint scope guard —
+  must contain next_node_id/next_callsite_id/expr_types/diagnostics/
+  iface_coercions (catches state hoisting out of the owner frame);
+  (c) forced RuntimeError inside the probe recursion → exception
+  rollback with identity + compile continues via retry, no ICE;
+  (d) HARD_ERROR commits, diag exactly once.  Probe shape verified
+  against pre-fix HEAD: `h.put(dflt())` (struct-method arg, T
+  uninferable in v1) produces the IDENTICAL single diagnostic pre/post
+  — and `h.take(Some(3))` unqualified-in-method-arg is a pre-existing
+  v1 rejection on both, unchanged.
+  **Verification:** regression 4/4 + probe 1/1; invariant tooth 4/4;
+  checker-adjacent battery 589 green; stage2/core/stage3/stage4/
+  modules/packages 1,107 green (3 skipped); driver+codegen battery
+  RUNNING at return time (stale narrow-gate run stopped per
+  maintainer).  Checkpoint §3.2 rewritten to the owner-level design.
+  [SUPERSEDED (round 7): the frame-introspection transaction above was
+  rejected — replaced by the explicit-owner design below.]
+- B5 review round 7 (2026-07-23, HOLD on checker transaction) — CLOSED
+  per the binding direction (explicit owner, overlay/undo log, staged
+  HIR mutation log, structured outcomes, re-raise, corpus measurement):
+  (1) **Explicit per-function checker-state owner**: `FnCheckState`
+  (type_checker.py) owns the ELEVEN recorder side tables (expr_types,
+  iface/borrowed-iface/ptr-to-ref coercions, call_resolutions,
+  call_info_by_callsite_id, callsite_owner_node_id, instantiations_by_
+  callsite_id/_node_id, fnptr_consts_by_node_id, diagnostics) as
+  transaction-aware `_TxnDict`/`_TxnList` undo-log overlays ALIASED
+  into check_function's locals, plus the three allocator cells
+  (next_node_id, next_callsite_id — converted from closure cells —
+  and the checker's _next_binding_id).  NO frame introspection in
+  production.  `CheckerStateTxn` = watermark-scoped undo log (nested
+  probes safe: inner commit retains entries for outer rollback) +
+  saved allocator cells + an EXPLICIT per-node HIR mutation log for
+  the probed subtree (attribute snapshots restored IN PLACE —
+  descendant node identities preserved; no deep-copy root swap).
+  (2) **Fail-closed shape gate** `_defer_probe_shape_safe`: explicit
+  HIR-node allowlist; lambdas, match/block exprs, statements, and ANY
+  unlisted (incl. future) node kind take the legacy silent deferral —
+  this is what makes the owner's enumeration complete for probed
+  shapes by construction (binding/scope tables deliberately not
+  owned).
+  (3) **Structured outcome classification** — no message parsing:
+  diagnostic CODES set at emission (`E-CTOR-EXPECTED-TYPE`;
+  `E-INFER-UNDERDETERMINED` from InferErrorKind.CANNOT_INFER at the
+  free-call/struct/variant/assoc-fn sites; `E-INFER-EXPECTED-LITERAL`
+  on the array/map-literal diags); inference CONFLICTS carry
+  `E-INFER-CONFLICT` and are HARD.  Mixed needs-expected+hard rolls
+  back (retry re-emits hard diags with expected known — no noise).
+  (4) **Unexpected exceptions ROLL BACK AND RE-RAISE** (ICE
+  containment); the tooth's exception test INVERTED to pin
+  propagation after an identity-verified rollback.
+  (5) **Invariant tooth rewritten** (5 tests): owner-fingerprint
+  identity (full-VALUE dump — independent of the undo-log mechanism)
+  + an INDEPENDENT raw frame-locals auditor + whole-body HIR dump
+  across every rollback; fingerprint-scope guard (allocator cells +
+  core tables must appear); exception rollback-then-reraise;
+  hard-error commit with diag exactly once; direct fail-closed gate
+  unit test (lambda / match-expr subtrees rejected).
+  (6) **Corpus measurement (mandated)**: identical universe (924/1268)
+  and ALL 14 counters +0 vs certified phase-d-final on BOTH branch
+  runs (1,107,693 fns / 2,772,976 events).  Frequency: 102 probes per
+  full stdlib compile, all COMPLETE (0 gated, 0 rollbacks in stdlib).
+  Compile time, clean isolated runs: pre-fix HEAD 1503.9s wall /
+  23,230.1s user vs owner-txn 1518.1s wall / 23,437.3s user =
+  **+0.9% wall / +0.9% CPU** (an earlier +58% reading was concurrent-
+  battery contention, not overhead; re-measured cleanly).
+  **Process note:** the first driver+codegen battery of this round
+  (2 failures) was INVALIDATED by the timing script swapping checker
+  files to HEAD mid-run; the script was rewritten to run HEAD timing
+  in an ISOLATED tree copy with a trap-based restore (live tree never
+  swapped), the owner delta was restored and re-verified, and the
+  clean battery passed 2,159 (1 skipped).
+  **Verification (final, all against the committed-candidate tree):**
+  defer regression 4/4 + B5 probe 1/1 + tooth 5/5; checker-adjacent
+  590; stage2→packages 1,107 (3 skipped); driver+codegen 2,159
+  (1 skipped, uncontaminated rerun).  Checkpoint §3.2 and both test
+  docstrings rewritten to the explicit-owner design.
+- B5 review round 8 (2026-07-23, four corrections before timing) —
+  CLOSED:
+  (1) **_TxnList transaction-complete**: every list mutator covered —
+  append/extend keep cheap pop-based undo entries (hot path);
+  slice/index deletes (`del diagnostics[start:]` at call_resolver
+  for-in retargeting + two checker sites), item/slice assignment,
+  insert/pop/remove/clear/sort/reverse record full-list snapshot
+  restore entries.  Tooth: production slice-delete pattern interleaved
+  with appends/inserts/pops rolls back to exact contents; nested inner
+  commit + outer rollback reverts inner mutations.
+  (2) **Shape gate on the canonical HIR predicate**: gate now uses
+  `node_ids.default_should_descend` (H.HNode + every recognized HIR
+  module incl. stage1.closures) instead of an hir_nodes-only module
+  check — recognized-but-unapproved shapes are REJECTED, never
+  skipped.  Tooth: HCapture closure metadata in a probed subtree is
+  rejected.
+  (3) **No wrapper escape into results**: TypedFn detaches all seven
+  remaining owned _TxnDict tables via dict(...) (expr_types was
+  already detached) and TypeCheckResult detaches diagnostics via
+  list(...) — result objects no longer retain FnCheckState (which
+  retains every table and the checker).  Tooth: constructor spies pin
+  exact plain dict/list types during a real compile.
+  (4) **Mixed policy = the STATED rule**: NEEDS_EXPECTED only when
+  EVERY new error carries an expected-dependent code; a mixed
+  expected-dependent + hard failure is HARD_ERROR and commits all its
+  diagnostics (classifier flipped any→all; contract comment updated).
+  Tooth: synthesized mixed probe (real E-INFER-UNDERDETERMINED +
+  injected hard companion) takes the HARD commit, both diagnostics
+  survive exactly once, no retry duplication.
+  Cleanups: unused `copy` import removed (deepcopy died with the
+  frame-based design); CallResolverContext.begin_state_txn comment
+  rewritten from "frame locals" to the explicit-owner wording.
+  **Verification (post-corrections, final):** tooth 9/9; defer
+  regression 4/4 + B5 probe 1/1 + discard drop-timing 1/1; combined
+  checker+stage batteries 1,701 (3 skipped); driver+codegen 2,159
+  (1 skipped).  **Final corpus (corrected code, clean/isolated,
+  sequential):** identical universe (924/1268), ALL 14 counters +0 vs
+  certified phase-d-final; timing 1510.7s wall / 23,314.2s user vs
+  pre-fix HEAD 1503.9s / 23,230.1s = **+0.45% wall / +0.36% CPU**.
+- B5 review round 9 (2026-07-23, guardrail HOLD, contract-only) —
+  CLOSED: (1) `_defer_probe_shape_safe` dropped its `is_dataclass`
+  prefilter — `default_should_descend` is now the ONLY filter, so a
+  NON-dataclass H.HNode subclass (canonically recognized) is rejected
+  instead of silently accepted; tooth constructs a synthetic
+  non-dataclass HExpr (with honest is_dataclass/predicate
+  preconditions) and pins rejection.  (2) Inherited-mutator gaps
+  closed: `_TxnList.__imul__` (snapshot-logged), `_TxnDict.__ior__`
+  (routes through logged update) and `_TxnDict.popitem`
+  (snapshot-logged); tooth pins exact rollback for `*=`, `|=`, and
+  popitem.  Per maintainer: focused teeth only — no corpus/timing/
+  broad-battery rerun; work stays on the combined 0.33.88/ABI-22
+  branch, no standalone certification.  Tooth 11/11; defer regression
+  4/4 re-verified.
+- Examples/style sweep (2026-07-23, maintainer directive, folded in):
+  `examples/tcp_echo/main.drift` rewritten idiomatic one-shot
+  (echo_once helper, bare-statement discards, no or_throw in throws
+  code, SIGIL-FREE call sites for &T and &mut T per signatures,
+  nothrow main boundary, one-client naming/comments, `return
+  server.join()` propagating server status) — compiles+links+runs
+  exit 0, every idiomatic form works, NO LANGUAGE_BUG.  16 clear
+  `val _ =` call-discard sites → bare call statements across
+  examples/ (logging×3, blocking_ffi×2, tcp_client_server write,
+  runtime_registry, udp_ping×2, cli×5, file_io×2); all touched
+  examples recompiled, runnable ones re-run clean.  Rule-4 keeps:
+  `val _ = conc.spawn_cb(...)` (ownership-bearing VT handle),
+  `val _ = self`, `val _ = move guard`.  doc/effective-drift.md:
+  discard sites updated, UDP snippet synced, duplicate TCP example
+  replaced with the new source, NEW "Discarding call results" section
+  (bare-call idiom + immediate-drop vs scope-exit lifetime caveat),
+  and the stale "&mut needs an explicit sigil" paragraph corrected
+  (contradicted by the directive and the compiling example);
+  doc/design/drift-concurrency.md sleep-loop snippet updated;
+  doc/history.md untouched (frozen).  NEW focused regression
+  `lang/tests/driver/test_bare_statement_discard_drop_timing.py`
+  (immediate-drop contract had no coverage): pins destroy:bare →
+  after-bare → after-bound → destroy:bound — green.
 - **GATES PASS (2026-07-22)**: 924 corpus audit `build/tmp/s7s8` vs
   accepted baseline `build/tmp/s5s6` — exit 0, universe identical
   (924/1268, same partition), **all 14 counters +0** (incl.
