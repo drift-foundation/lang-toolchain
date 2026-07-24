@@ -138,7 +138,7 @@ handle.
 
 ```drift
 while !vt.is_complete() {
-    val _ = conc.sleep(conc.Duration(millis = 1));
+    conc.sleep(conc.Duration(millis = 1));
 }
 match vt.join() {
     Ok(v)  => { /* completed normally */ },

@@ -16,8 +16,8 @@ fn run_main() throws -> Int {
 	io.buffer_write(&mut buf, 2, cast<Byte>(108));
 	io.buffer_write(&mut buf, 3, cast<Byte>(108));
 	io.buffer_write(&mut buf, 4, cast<Byte>(111));
-	val _ = f.write(&buf).or_throw();
-	val _ = f.read(&mut buf).or_throw();
+	f.write(&buf).or_throw();
+	f.read(&mut buf).or_throw();
 	f.close().or_throw();
 	return 0;
 }

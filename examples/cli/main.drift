@@ -7,11 +7,11 @@ import std.format as format;
 
 pub fn main(argv: Array<String>) nothrow -> Int {
 	var p = cli.parser("backup-tool", "0.1.0", "Create backups for a target directory.");
-	val _ = p.flag("verbose", "v", "Enable verbose output.");
-	val _ = p.option_int("port", "p", "PORT", "Control plane port.", true);
-	val _ = p.option_string("mode", "m", "MODE", "Backup mode: full or diff.", false);
-	val _ = p.positional("target", "Target directory.", true, false);
-	val _ = p.positional("paths", "Additional relative paths.", false, true);
+	p.flag("verbose", "v", "Enable verbose output.");
+	p.option_int("port", "p", "PORT", "Control plane port.", true);
+	p.option_string("mode", "m", "MODE", "Backup mode: full or diff.", false);
+	p.positional("target", "Target directory.", true, false);
+	p.positional("paths", "Additional relative paths.", false, true);
 	match p.parse(&argv) {
 		core.Result::Ok(parsed) => {
 			var target = "";

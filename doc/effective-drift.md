@@ -81,7 +81,7 @@ without consuming the outer binding:
 val app: conc.Arc<AppHandle> = conc.arc(make_handle());
 
 try {
-    val _ = serve(share app, port);   // adds an owner, app stays usable
+    serve(share app, port);           // adds an owner, app stays usable
     return 0;
 } catch e {
     val r = app.get();                 // app is still LIVE here
@@ -391,7 +391,7 @@ fn write_current_thread_slot() nothrow -> Bool {
             var g = conc.lock(shared);
             val slots = g.get_mut();
             val tid = thread.vt_current();
-            val _ = slots.insert(tid, 1);
+            slots.insert(tid, 1);
             return true;
         },
         None => { return false; }
@@ -414,9 +414,9 @@ import std.core as core;
 
 pub fn main(argv: Array<String>) nothrow -> Int {
     var p = cli.parser("backup-tool", "0.1.0", "Create backups.");
-    val _ = p.flag("verbose", "v", "verbose mode");
-    val _ = p.option_int("port", "p", "PORT", "control plane port", true);
-    val _ = p.positional("target", "target directory", true, false);
+    p.flag("verbose", "v", "verbose mode");
+    p.option_int("port", "p", "PORT", "control plane port", true);
+    p.positional("target", "target directory", true, false);
 
     match p.parse(&argv) {
         core.Result::Ok(parsed) => {
@@ -579,7 +579,7 @@ implement log.ContextResolver for AppResolver {
 
 fn install_logger() nothrow -> log.Logger {
     val reg = rt.thread_registry();
-    val _ = reg.set<type RequestContextState>(request_context_state());
+    reg.set<type RequestContextState>(request_context_state());
 
     // Allocate the concrete resolver once, then create the
     // `log.ContextResolver` face over the same allocation.  The fat
@@ -1671,9 +1671,9 @@ fn run_main() throws -> Int {
 	io.buffer_write(&mut buf, 1, cast<Byte>(73));
 	io.buffer_write(&mut buf, 2, cast<Byte>(78));
 	io.buffer_write(&mut buf, 3, cast<Byte>(71));
-	val _ = sock.send_to(&to, &buf, t).or_throw();
+	sock.send_to(&to, &buf, t).or_throw();
 	var from = net.socket_addr("127.0.0.1", 0);
-	val _ = sock.recv_from(&mut from, &mut buf, t).or_throw();
+	sock.recv_from(&mut from, &mut buf, t).or_throw();
 	sock.close(t).or_throw();
 	return 0;
 }
@@ -1683,43 +1683,52 @@ fn run_main() throws -> Int {
 
 ```drift
 import std.concurrent as conc;
-import std.core as core;
 import std.io as io;
 import std.net as net;
+
+// One-shot TCP echo: listen, accept ONE client, echo its bytes back,
+// close, and exit.  There is deliberately no accept loop.
 
 pub fn main() nothrow -> Int {
 	return try run_main() catch { 1 };
 }
 
-fn run_main() throws -> Int {
-	val t = conc.Duration(millis = 5000);
-	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, t).or_throw();
-	val port = listener.local_port();
-	var server = conc.spawn(| | captures(move listener, copy t) => {
-		return try (| | => {
-			val s = net.accept(&listener, t).or_throw();
-			var buf = io.buffer(16);
-			val _ = s.read(&mut buf, t).or_throw();
-			val _ = s.write(&buf, t).or_throw();
-			s.close(t).or_throw();
-			return 0;
-		})() catch { 1 };
-	});
-	var caddr = net.socket_addr("127.0.0.1", port);
-	val c = net.connect(&caddr, t).or_throw();
-	var wbuf = io.buffer(5);
-	io.buffer_write(&mut wbuf, 0, cast<Byte>(72));
-	io.buffer_write(&mut wbuf, 1, cast<Byte>(101));
-	io.buffer_write(&mut wbuf, 2, cast<Byte>(108));
-	io.buffer_write(&mut wbuf, 3, cast<Byte>(108));
-	io.buffer_write(&mut wbuf, 4, cast<Byte>(111));
-	val _ = c.write(&wbuf, t).or_throw();
-	var rbuf = io.buffer(5);
-	val _ = c.read(&mut rbuf, t).or_throw();
-	c.close(t).or_throw();
-	val _ = server.join().or_throw();
+// Serve exactly one client on `listener`, then return.  The listener
+// drops when the server task's captured value goes out of scope.
+fn echo_once(listener: &net.TcpListener, timeout: conc.Duration) throws -> Int {
+	val stream = listener.accept(timeout);
+	var buffer = io.buffer(16);
+	stream.read(buffer, timeout);
+	stream.write(buffer, timeout);
+	stream.close(timeout);
 	return 0;
+}
+
+fn run_main() throws -> Int {
+	val timeout = conc.Duration(millis = 5000);
+	val address = net.socket_addr("127.0.0.1", 0);
+	val listener = net.listen(address, timeout);
+	val port = listener.local_port();
+
+	// The server task serves ONE client and returns; server.join() below
+	// only waits for that completion — it does not stop the listener.
+	var server = conc.spawn(| | captures(move listener, copy timeout) => {
+		return try echo_once(listener, timeout) catch { 1 };
+	});
+
+	val client_address = net.socket_addr("127.0.0.1", port);
+	val client = net.connect(client_address, timeout);
+
+	var outgoing = io.buffer(5);
+	io.buffer_write_string(outgoing, "Hello");
+	client.write(outgoing, timeout);
+
+	var incoming = io.buffer(5);
+	client.read(incoming, timeout);
+	client.close(timeout);
+
+	// Propagate the server task's own status instead of discarding it.
+	return server.join();
 }
 ```
 
@@ -2071,8 +2080,35 @@ b.pick("hello")    // preferred
 b.pick(&"hello")   // also valid
 ```
 
-This applies only to shared borrows. `&mut T` parameters still need an
-explicit `&mut` at the call site so mutation is visible at the use site.
+The same applies to `&mut T` parameters: a `var` binding passed where the
+parameter is declared `&mut T` auto-borrows mutably, and the bare form is
+preferred — the parameter declaration, not the call site, is what spells
+the borrow:
+
+```drift
+fn fill(buf: &mut io.Buffer) nothrow -> Void { ... }
+
+var buf = io.buffer(16);
+fill(buf)          // preferred — auto-borrow (mutably, per the signature)
+fill(&mut buf)     // also valid — explicit borrow
+```
+
+## Discarding call results
+
+Use a bare call statement when intentionally discarding a call result.
+`val _ =` is not the normal call-discard idiom:
+
+```drift
+logger.flush(timeout);          // preferred — result intentionally ignored
+val _ = logger.flush(timeout);  // not the idiom for call discards
+```
+
+Note the lifetime difference for non-`Copy` results: a bare expression
+statement drops the result immediately, while a `val _ =` binding keeps it
+alive until scope exit.  When the result is ownership-bearing and the
+end-of-scope lifetime is load-bearing (a guard, a spawned task handle),
+that is not a discard — keep the binding (`val _ = move guard;` and
+similar forms are deliberate lifetime extensions, not style violations).
 
 ## Call-site auto-dup for value parameters from `&T` / `&mut T`
 

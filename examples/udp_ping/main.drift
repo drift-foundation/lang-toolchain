@@ -19,9 +19,9 @@ fn run_main() throws -> Int {
 	io.buffer_write(&mut buf, 1, cast<Byte>(73));
 	io.buffer_write(&mut buf, 2, cast<Byte>(78));
 	io.buffer_write(&mut buf, 3, cast<Byte>(71));
-	val _ = sock.send_to(&to, &buf, t).or_throw();
+	sock.send_to(&to, &buf, t).or_throw();
 	var from = net.socket_addr("127.0.0.1", 0);
-	val _ = sock.recv_from(&mut from, &mut buf, t).or_throw();
+	sock.recv_from(&mut from, &mut buf, t).or_throw();
 	sock.close(t).or_throw();
 	return 0;
 }

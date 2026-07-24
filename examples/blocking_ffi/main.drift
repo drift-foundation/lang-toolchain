@@ -30,7 +30,7 @@ extern "C" fn usleep(usec: Uint32) nothrow -> Int32;
 /// here whenever a worker is inside the call.
 fn slow_add_ffi(a: Int, b: Int, hold_ms: Int) nothrow -> Int {
 	unsafe {
-		val _ = usleep(cast<Uint32>(hold_ms * 1000));
+		usleep(cast<Uint32>(hold_ms * 1000));
 	}
 	return a + b;
 }
@@ -67,7 +67,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 			return 0;
 		});
 		console.println("stuck mode: send `kill -USR2 <pid>` and read the liveness output");
-		val _ = conc.sleep(conc.Duration(millis = 600000));
+		conc.sleep(conc.Duration(millis = 600000));
 		return 0;
 	}
 

@@ -22,7 +22,7 @@ fn write_current_thread_slot() nothrow -> Int {
 			var g = conc.lock(shared);
 			val slots = g.get_mut();
 			val tid = thread.vt_current();
-			val _ = slots.insert(tid, 1);
+			slots.insert(tid, 1);
 			return 0;
 		},
 		None => { return 1; }

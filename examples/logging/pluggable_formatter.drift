@@ -16,6 +16,6 @@ pub fn main() nothrow -> Int {
 	val logger = log.create_logger("main", move cfg);
 	logger.info("startup", {"component": "worker"});
 	logger.error("job-failed", {"job_id": "42", "retryable": "false"});
-	val _ = logger.flush(conc.Duration(millis = 1000));
+	logger.flush(conc.Duration(millis = 1000));
 	return 0;
 }

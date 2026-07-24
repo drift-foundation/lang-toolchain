@@ -7,7 +7,7 @@ import std.net as net;
 fn handle_client(var s: net.TcpStream, timeout: conc.Duration) -> Int {
 	var buf = io.buffer(1024);
 	val _n = s.read(&mut buf, timeout).or_throw();
-	val _ = s.write(&buf, timeout).or_throw();
+	s.write(&buf, timeout).or_throw();
 	s.close(timeout).or_throw();
 	return 0;
 }
