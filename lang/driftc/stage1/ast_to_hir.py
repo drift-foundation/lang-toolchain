@@ -371,13 +371,26 @@ class AstToHIR:
 		msg = self.lower_expr(stmt.msg) if stmt.msg is not None else None
 		return H.HAssert(cond=cond, msg=msg, loc=self._as_span(stmt.loc))
 
+	def _lower_expr_stmt(self, stmt: ast.ExprStmt, *, value_context: bool) -> H.HStmt:
+		"""The ONE authority for lowering an ExprStmt.  `value_context`
+		is the POSITION classification: False for ordinary statement
+		position (value discarded), True when the statement is a value
+		position — a lambda's trailing statement, whose value is the
+		lambda's result.  A `match`/`try` payload inherits the position
+		so its arm results land in `HMatchArm.result` /
+		`HTryExprArm.result` exactly when the position produces a value;
+		every other expression lowers identically in both positions."""
+		if isinstance(stmt.expr, ast.MatchExpr):
+			expr = self._lower_match_expr(stmt.expr, value_context=value_context)
+		elif isinstance(stmt.expr, ast.TryCatchExpr):
+			expr = self._lower_try_expr(stmt.expr, value_context=value_context)
+		else:
+			expr = self.lower_expr(stmt.expr)
+		return H.HExprStmt(expr=expr, loc=self._as_span(getattr(stmt, "loc", None)))
+
 	def _visit_stmt_ExprStmt(self, stmt: ast.ExprStmt) -> H.HStmt:
 		"""Expression as statement (value discarded)."""
-		if isinstance(stmt.expr, ast.MatchExpr):
-			return H.HExprStmt(expr=self._lower_match_expr(stmt.expr, value_context=False), loc=self._as_span(getattr(stmt, "loc", None)))
-		if isinstance(stmt.expr, ast.TryCatchExpr):
-			return H.HExprStmt(expr=self._lower_try_expr(stmt.expr, value_context=False), loc=self._as_span(getattr(stmt, "loc", None)))
-		return H.HExprStmt(expr=self.lower_expr(stmt.expr), loc=self._as_span(getattr(stmt, "loc", None)))
+		return self._lower_expr_stmt(stmt, value_context=False)
 
 	# --- stubs for remaining nodes ---
 
@@ -825,7 +838,26 @@ class AstToHIR:
 			body_expr = self.lower_expr(expr.body_expr) if expr.body_expr is not None else None
 			body_block = None
 			if expr.body_block is not None:
-				body_block = H.HBlock(statements=[self.lower_stmt(s) for s in expr.body_block.statements])
+				# A lambda's TRAILING ExprStmt is a VALUE position (the
+				# lambda's result) — the parser parses it via the
+				# EXPRESSION-form productions — so it goes through the
+				# ExprStmt authority with value_context=True.  Routing it
+				# through ordinary statement position (value_context=False)
+				# left match/try arm results inside the arm blocks and
+				# ICE'd MIR lowering ("value-producing match arm must yield
+				# a value or terminate") for ALL match-tailed lambdas.
+				# Void lambdas are unaffected: HIR->MIR's lambda-block tail
+				# lowers with want_value=False, which evaluates-and-discards
+				# arm results (side effects preserved).
+				_body_stmts = list(expr.body_block.statements)
+				lowered_stmts: list[H.HStmt] = []
+				for _i, _s in enumerate(_body_stmts):
+					_is_last = _i == len(_body_stmts) - 1
+					if _is_last and isinstance(_s, ast.ExprStmt):
+						lowered_stmts.append(self._lower_expr_stmt(_s, value_context=True))
+					else:
+						lowered_stmts.append(self.lower_stmt(_s))
+				body_block = H.HBlock(statements=lowered_stmts)
 			return H.HLambda(
 				params=params,
 				ret_type=getattr(expr, "ret_type", None),

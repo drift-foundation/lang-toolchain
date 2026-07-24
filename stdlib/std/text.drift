@@ -293,6 +293,14 @@ pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow 
 
 /// Extracts a substring by byte offset and length.
 ///
+/// ALLOCATES: the result is a fresh String with its own storage (there
+/// are no zero-copy substring views).  Performance-sensitive parsers
+/// and scanners should keep ONE backing `&String` and work with byte
+/// offsets/spans (`byte_length()` + `core.string_byte_at`, or
+/// `TokenSpan`-style `{start, end}` ranges), reaching for
+/// `std.ffi.with_bytes` for bulk byte access — materializing an owned
+/// substring only when it must escape.
+///
 /// Returns `Result::Err(TextError)` if `start` or `len` is out of bounds.
 pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String, TextError> {
 	val n = s.byte_length();

@@ -2140,6 +2140,108 @@ required where `Share` semantics differ from `Copy` / `ConstShare`.
 Mirrors the existing field-projection auto-dup that already lets you
 read a `Copy` / `ConstShare` field through a borrowed struct.
 
+## C interop for `String` (`std.ffi`)
+
+C libraries want `char *` / byte pointers; Drift `String`s are
+refcounted immutable values.  `std.ffi` bridges the two without
+guesswork about lifetimes.
+
+**Borrowed bulk bytes** — zero-copy, valid only inside the callback:
+
+```drift
+import std.core as core;
+import std.ffi as ffi;
+import std.mem as mem;
+
+val s = "GET /index.html";
+val scan: core.Callback2<mem.Ptr<Byte>, Int, Int> =
+    core.callback2(|p: mem.Ptr<Byte>, len: Int| => {
+        var spaces = 0;
+        var i = 0;
+        while i < len {
+            val b = mem.ptr_read<type Byte>(mem.ptr_offset<type Byte>(p, i));
+            if cast<Int>(b) == 32 { spaces = spaces + 1; }
+            i = i + 1;
+        }
+        spaces
+    });
+val n = ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&s, scan);
+```
+
+The base pointer is computed once and there is no retain traffic
+inside the borrow; the pointer becomes INVALID the moment the callback
+returns (`mem.Ptr` is Copy, so storing it compiles — using it
+afterward is undefined, exactly the `ptr_from_ref` contract).
+
+**Borrowed C strings** — every `String` carries a hidden trailing NUL,
+so `with_cstr*` hands C a valid NUL-terminated pointer with NO copy,
+after checking for interior NULs (content is unrestricted, so a NUL
+mid-string would silently truncate what C sees):
+
+```drift
+val call_c: core.Callback1<mem.Ptr<Byte>, Int> =
+    core.callback1(|p: mem.Ptr<Byte>| => { /* call C with p */ 0 });
+val r = ffi.with_cstr<type Int, core.Callback1<mem.Ptr<Byte>, Int> >(&path, call_c);
+match r {
+    core.Result::Ok(v) => { /* C ran */ },
+    core.Result::Err(e) => {
+        match e { ffi.CStringError::InteriorNul(arg, index) => {
+            // argument `arg` (1-based) has a NUL at byte `index`;
+            // multi-arg variants (with_cstr2..4) validate left-to-right
+        }, }
+    },
+}
+```
+
+`with_cstr_unsafe*` skips the scan when you know the content is clean
+(or truncation is acceptable).
+
+**Owned handoff** — when C keeps the bytes past the call:
+
+```drift
+match ffi.to_owned_cstr(&name) {
+    core.Result::Ok(o) => {
+        var owned = move o;              // frees on drop, or:
+        val raw = owned.release();       // transfer to C
+        // ... hand `raw` to a C API that takes ownership ...
+        unsafe { ffi.cstr_free(raw) };   // EXACTLY ONCE, the paired free
+    },
+    core.Result::Err(e) => { /* interior NUL */ },
+}
+```
+
+Released allocations are freed exactly once through the PAIRED
+deallocators — `cstr_free`/`drift_cstr_free` for C strings,
+`cbytes_free`/`drift_cbytes_free` for `to_owned_cbytes` blocks — never
+a raw `free()`.  Both Drift-side frees are `unsafe` because provenance
+and exactly-once are on you.
+
+**Scoped pinning** — several strings (or an argv vector) alive for the
+duration of one C interaction:
+
+```drift
+val run: core.Callback1<&mut ffi.CStringScope, Int> =
+    core.callback1(|sc: &mut ffi.CStringScope| captures(copy input) => {
+        // argv.vector() is a NULL-terminated char**, argv.count() its
+        // argc; everything lives until the callback returns
+        match sc.argv(&["prog", "--fast", input]) {
+            core.Result::Ok(argv) => { argv.count() },
+            core.Result::Err(e) => { -1 },
+        }
+    });
+val rc = ffi.with_cstring_scope<type Int, core.Callback1<&mut ffi.CStringScope, Int> >(run);
+```
+
+The scope owns every pin and frees them when the callback returns —
+never free a scope pin yourself.
+
+**Performance posture.**  There are no zero-copy substring views:
+`text.substring` and friends ALLOCATE.  Parsers and scanners should
+keep one backing `&String` and track byte offsets/spans
+(`byte_length()` + `core.string_byte_at`, `TokenSpan`-style ranges —
+the regex API's `RegexMatch` works this way), using `with_bytes` for
+bulk scans, and materialize owned substrings only when they escape.
+
 ## Cheap `String` clone
 
 `String` is ARC-backed. To produce an owned `String` from a borrowed

@@ -23,8 +23,8 @@ import std.mem as mem;
 /// `mem.ptr_from_ref` contract.
 ///
 /// Owned handoff: `to_owned_cstr` / `to_owned_cbytes` allocate
-/// runtime-owned copies (`malloc`/`free`-compatible) whose lifetime the
-/// caller controls via `OwnedCStr` / `OwnedCBytes` (Destructible;
+/// runtime-owned copies — freed ONLY through their PAIRED deallocators
+/// (`cstr_free` / `cbytes_free`) — whose lifetime the caller controls via `OwnedCStr` / `OwnedCBytes` (Destructible;
 /// `release()` transfers the allocation to C).
 ///
 /// Scoped pinning: `with_cstring_scope` provides a `CStringScope` that
@@ -205,8 +205,9 @@ pub fn with_cstr4_unsafe<T, F>(a: &String, b: &String, c: &String, d: &String, b
 /* ── Owned handoff: OwnedCStr / OwnedCBytes ──────────────────────── */
 
 /// Owned, runtime-allocated NUL-terminated C string.  Frees on drop;
-/// `release()` transfers the allocation to C (which must free it with
-/// a `free`-compatible deallocator, e.g. `drift_cstr_free`).
+/// `release()` transfers the allocation out — the receiver must free
+/// it with the PAIRED deallocator (`drift_cstr_free` from C,
+/// `cstr_free` from Drift), never a direct `free()`.
 pub struct OwnedCStr {
 	ptr: mem.Ptr<Byte>
 }

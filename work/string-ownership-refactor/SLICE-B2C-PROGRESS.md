@@ -1186,3 +1186,94 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   test; matrix stays in test).  Existing tool tests unaffected (tools
   battery 22/22).  Awaiting static review; per directive the expensive
   corpus was NOT rerun for synthetic cases.
+- Docs-only release closure (2026-07-24, maintainer review of
+  user-facing documentation; NO code/ABI change):
+  (1) README String-runtime link fixed (was pointing at a nonexistent
+  doc/design/drift-string-impl.md; now the real
+  spec-change-requests/ path, retitled to the RcBytes representation).
+  (2) doc/design/spec-change-requests/drift-string-impl.md REPLACED:
+  the retired unique-owned {len, char* data}/direct-free()/per-literal
+  -data-pointer page is now the ABI-22 narrative companion to
+  string_runtime.h (layout, flags, ownership protocol, canonical
+  empty, access rules, PAIRED C-string bridge, literals) — tombstone
+  material confined to the C-integrator section, explicitly marked
+  unreachable from Drift source.
+  (3) doc/design/drift-lang-abi.md: new "String ABI (current)" section
+  (two-word handle + pointer to the design page/header + link-stamp
+  gating) and a currency note marking the ABI-14 DV-migration block as
+  historical.
+  (4) doc/effective-drift.md: NEW "C interop for String (std.ffi)"
+  section — worked examples for with_bytes (borrowed window +
+  escape-is-invalid), checked with_cstr + InteriorNul(arg,index)
+  handling, owned handoff with release + exactly-once PAIRED unsafe
+  frees, CStringScope argv, and the no-view/spans/offsets performance
+  posture.  No tombstone mention (not a user-visible state).  Example
+  shapes COMPILE-VERIFIED end-to-end (scratch adaptation runs exit 0).
+  (5) Allocator-pairing language corrected everywhere "free-
+  compatible" appeared (ffi.drift module doc + OwnedCStr doc,
+  string_runtime.h §3.3 comment): pairing is CONTRACTUAL —
+  drift_cstr_free/drift_cbytes_free only, never raw free().
+  (6) std.text.substring: ALLOCATES disclosure + spans/offsets/
+  with_bytes guidance for performance-sensitive parsers.
+  FINDING escalated to LANGUAGE_BUG and FIXED in the follow-on slice
+  below (the doc keeps the direct trailing-match form; no workaround
+  ships): match/try expressions as lambda trailing bodies ICE'd in
+  MIR lowering.
+
+## 2026-07-24 — LANGUAGE_BUG slice: match/try as lambda trailing expression (regression-first, rides 0.33.88/ABI-22 candidate)
+
+- CLASSIFICATION: LANGUAGE_BUG (maintainer directive). Regression-first
+  contained slice on the stamped 0.33.88 candidate; NO separate
+  certification; ABI stays 22 (pure compiler-internal AST→HIR fix).
+- SYMPTOM: a value-producing `match` (or `try..catch`) used DIRECTLY as
+  a lambda's trailing expression ICE'd in HIR→MIR for EVERY lambda:
+  "MIR lowering contract failure (value-producing [Bool] match arm must
+  yield a value or terminate (checker bug))" — variant E-AUTO-a16b07f1,
+  Bool E-AUTO-23cd2496.  Two prior sightings: Bool match in the B5
+  observation-guard teeth, variant match in the effective-drift
+  CStringScope example (temporarily worked around with bind-then-yield;
+  workaround now REMOVED per directive).
+- ROOT CAUSE (subsystem: stage1 AST→HIR, `ast_to_hir.py::
+  _visit_expr_Lambda`): the parser classifies a lambda-tail match/try
+  via the EXPRESSION-form productions (arms must end with a value), but
+  the lambda body conversion routed every body statement through the
+  generic statement visitor, whose ExprStmt arm lowers match with
+  `value_context=False` → `HMatchArm.result=None` → HIR→MIR value path
+  asserts.  Named-fn tails never hit it (return/val forms take the
+  value-context path).  doc/refactor_triggers.md scanned: NO registered
+  trigger matches this failure family.
+- FIX (one authority): ExprStmt lowering unified into
+  `_lower_expr_stmt(stmt, *, value_context)` — the ordinary statement
+  visitor calls it with False, the lambda-tail conversion calls it with
+  True for EVERY trailing ExprStmt (no per-shape branches at call
+  sites); the authority routes match/try payloads to their expression
+  lowerings with the position's value_context.  Void lambdas
+  unaffected — HIR→MIR's lambda tail statement path
+  evaluates-and-discards arm results.
+- REGRESSION: lang/tests/driver/test_lambda_trailing_match_value.py
+  (3 tests — the positive program is full compile-AND-run; the two
+  negatives are compile-and-REJECT): 6 positive pins (Bool sole-tail,
+  Bool after statements, variant call-result scrutinee, variant param
+  scrutinee, try/catch tail, named-fn behavior parity) + negative
+  companions with EXACT-diagnostic pins: `return` in an
+  expression-form arm rejects with EXACTLY E_EXPECTED_SEMICOLON (the
+  match-as-value message; never the ICE), and the PRE-EXISTING
+  unannotated-lambda Void inference is unchanged, surfacing as EXACTLY
+  the use-site arithmetic mismatch E-AUTO-5a90687a (Void vs Int) —
+  separate, deliberately untouched limitation.
+- DOCS: doc/effective-drift.md CStringScope example restored to the
+  direct trailing-match form; that EXACT example compile-proven and run
+  (scratch adaptation exit 0).
+- STATUS: fix + regression + doc restoration DONE; focused gates next,
+  then full pre-mainline `just test` (production lowering changed).
+- REVIEW ROUND 1 (3 blocking corrections, all applied): (1) ExprStmt
+  lowering refactored into the single `_lower_expr_stmt` authority
+  (the earlier duplicated MatchExpr/TryCatchExpr branches in the
+  lambda path removed); (2) both negative tests now pin their EXACT
+  diagnostics (E_EXPECTED_SEMICOLON + "no implicit return" guidance;
+  E-AUTO-5a90687a "Void vs Int"), not either-of-two codes / bare
+  "Void" containment; (3) compile-and-run overclaim corrected here and
+  in the test header — only the positive program runs; negatives are
+  compile-and-reject.  In-flight full suite STOPPED (invalidated by
+  the authority refactor); focused regression rerun, then the full
+  suite ONCE.

@@ -182,8 +182,9 @@ drift_isize drift_string_interior_nul_index(const DriftString *s);
 /* Owned NUL-terminated copy of *s: interior NUL -> returns NULL and
  * writes the first interior-NUL index to *nul_index_out; else returns
  * a malloc'd cstring (free with drift_cstr_free) and writes -1.
- * Allocator identity stays inside the runtime (malloc/free); C code
- * taking ownership must be malloc/free-compatible. */
+ * Allocator pairing is CONTRACTUAL: code taking ownership frees ONLY
+ * through drift_cstr_free — never a direct free(), even though the
+ * current implementation is malloc-backed. */
 char *drift_string_to_owned_cstr(const DriftString *s, drift_isize *nul_index_out);
 /* UNCHECKED owned NUL-terminated copy: interior NULs are preserved in
  * the block (C sees a truncated string at the first interior NUL — the

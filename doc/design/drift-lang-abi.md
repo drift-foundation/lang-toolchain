@@ -51,6 +51,30 @@ Fixed-width primitives are ABI-defined but **reserved in v1 surface code**; they
 
 ---
 
+# 1a. String ABI (current)
+
+`String` crosses the C boundary as a two-word by-value handle:
+
+```c
+typedef struct DriftString {
+    drift_isize   len;        /* byte length (hidden trailing NUL excluded) */
+    DriftRcBytes *storage;    /* refcounted block: 16-byte header at
+                                 offset 0, then EXACTLY len+1 bytes */
+} DriftString;
+```
+
+The storage block, flags word, canonical empty singleton, the
+compiler-internal drop-only tombstone, ownership conventions
+(Convention A/B, `DRIFT_OWNED_STRING`), the accessor-only access rule,
+and the paired C-string bridge (`drift_string_to_owned_cstr*` /
+`drift_cstr_free`, `drift_string_to_owned_cbytes` /
+`drift_cbytes_free` — pairing is contractual, never plain `free()`)
+are specified in
+[drift-string-impl.md](spec-change-requests/drift-string-impl.md) and
+authoritatively in `lang/language_runtime/string_runtime.h`.
+Compatibility is gated by the link-time ABI stamp: an object compiled
+against the previous representation fails to link in both directions.
+
 # 2. Error ABI
 
 `Error` is a structured error object capturing:
@@ -63,7 +87,12 @@ Fixed-width primitives are ABI-defined but **reserved in v1 surface code**; they
 
 The ABI defines only the **stable public layout**. Internal payload structures remain opaque.
 
-> **Migration state (Slice 7c-3, 0.31.65, 2026-05-06).** Current runtime is **ABI 14**.  The public DV surface is removed (Slice 7a), the runtime DV exports are deleted (Slice 7c-1), the dead compiler-internal HIR/MIR/codegen substrate is deleted (Slice 7c-2), and the residual DV type identity is now also deleted (Slice 7c-3).  Throw-side params projection is owned by `core.Diagnostic for E`'s `to_json_text(&E)` impl; captured-locals frame JSON is built by direct per-scalar dispatch to the `core.diagnostic_json_*` helpers.  No DV-attachment, no DV intermediate, no dead HIR / MIR / codegen substrate, and no `TypeKind.DIAGNOSTICVALUE` carrying cost.
+> **Currency note.** The DV-migration record below is HISTORICAL
+> (written at ABI 14).  The ABI has since advanced — see the
+> version-trajectory list and `doc/history.md` for each bump; the
+> String contract above reflects the current representation.
+>
+> **Migration state (Slice 7c-3, 0.31.65, 2026-05-06).** Runtime at the time of writing was **ABI 14**.  The public DV surface is removed (Slice 7a), the runtime DV exports are deleted (Slice 7c-1), the dead compiler-internal HIR/MIR/codegen substrate is deleted (Slice 7c-2), and the residual DV type identity is now also deleted (Slice 7c-3).  Throw-side params projection is owned by `core.Diagnostic for E`'s `to_json_text(&E)` impl; captured-locals frame JSON is built by direct per-scalar dispatch to the `core.diagnostic_json_*` helpers.  No DV-attachment, no DV intermediate, no dead HIR / MIR / codegen substrate, and no `TypeKind.DIAGNOSTICVALUE` carrying cost.
 >
 > **Deleted in Slice 7c-2:** the HIR `H.HDVInit` node + `DVInitRewriter` + `_visit_expr_HDVInit` lowering and every isinstance handler across `stage1/`, `borrow_checker_pass.py`, `type_checker.py`, `checker/__init__.py`, `driftc.py`, and `stage2/hir_to_mir.py`; the 12 dead MIR op classes (`M.ConstructDV`, `M.ErrorAddAttrDV`, `M.ErrorAddLocalDV`, `M.ErrorAttrsGetDV`, `M.ErrorCapturesGetDV`, `M.DVAs{Int,Bool,Float,String,Object}`, `M.DVKind`, `M.DVIndex`, `M.DVLen`, `M.DVEntries`, `M.DVGetField`) + their codegen + their `string_arc.py` passthrough; the codegen carrying-cost helpers `_construct_dv_temps`, `_release_construct_dv_temp`, `_ensure_dv_drop_helper`, `dv_drop_helper`, `needs_dv_runtime`; and the DV-intrinsic method dispatch in HIR→MIR (the `as_int` / `as_bool` / `kind` / `len` / `entries` / `index` / `get` / `as_object` / `as_string` / `as_float` arm that recognized `DiagnosticValue` receivers — now ICEs on contact rather than calling deleted MIR ops).
 >

@@ -44,7 +44,7 @@ Drift is a systems programming language focused on deterministic resource manage
 - Virtual threads/concurrency spec change: [doc/design/spec-change-requests/virtual_threads_concurrency_spec.md](doc/design/spec-change-requests/virtual_threads_concurrency_spec.md) — proposal for lightweight threads, schedulers, and structured scopes.
 - Module merge/artifact generation: [doc/design/spec-change-requests/module_merge_and_artifact_generation.md](doc/design/spec-change-requests/module_merge_and_artifact_generation.md) — design for merging multi-file modules, enforcing duplicate rules, and emitting executables vs signed modules.
 - Iteration model: [doc/design/drift-loops-and-iterators.md](doc/design/drift-loops-and-iterators.md)
-- String runtime plan: [doc/design/drift-string-impl.md](doc/design/drift-string-impl.md)
+- String runtime (refcounted RcBytes representation): [doc/design/spec-change-requests/drift-string-impl.md](doc/design/spec-change-requests/drift-string-impl.md)
 - Tuple destructuring notes: [doc/design/drift-tuple-destructuring.md](doc/design/drift-tuple-destructuring.md)
 - Driver/runtime notes: [doc/articles/driver-notes.md](doc/articles/driver-notes.md)
 - Compiler architecture overview: [doc/articles/drift-compiler-architecture.md](doc/articles/drift-compiler-architecture.md)
