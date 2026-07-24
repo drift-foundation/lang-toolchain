@@ -412,22 +412,43 @@ def main(argv: list[str] | None = None) -> int:
 	compiled_ok: list[str] = []
 	failed: list[str] = []
 	total = len(fixtures)
-	# Progress cadence: every ~5% (min 10 fixtures) plus the final one, so
-	# a 924-fixture run reports ~20 lines instead of silence-then-summary.
+	# Progress output doubles as a LIVENESS HEARTBEAT: the certification
+	# watchdog treats prolonged silence as a stuck job.  Emit a line on
+	# whichever comes first — every ~5% of completions (min 10) or every
+	# HEARTBEAT_S seconds even when nothing completed in the window (a
+	# single in-flight fixture may legitimately hold its 600s subprocess
+	# timeout) — plus a guaranteed final line.
 	step = max(10, total // 20)
+	heartbeat_s = 30.0
+	def _emit_progress() -> None:
+		done = len(compiled_ok) + len(failed)
+		elapsed = time.time() - started
+		rate = done / elapsed if elapsed > 0 else 0.0
+		eta = (total - done) / rate if rate > 0 else 0.0
+		print(f"progress: {done}/{total} fixtures "
+		      f"({len(failed)} failed) elapsed {elapsed:.0f}s "
+		      f"eta {eta:.0f}s", file=sys.stderr, flush=True)
 	with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-		futures = [pool.submit(_compile_one, f, run_dir, extra) for f in fixtures]
-		for fut in concurrent.futures.as_completed(futures):
-			name, ok = fut.result()
-			(compiled_ok if ok else failed).append(name)
+		pending = {pool.submit(_compile_one, f, run_dir, extra) for f in fixtures}
+		emitted_at = started
+		emitted_done = 0
+		while pending:
+			# Sleep only until the NEXT heartbeat deadline (not a full
+			# window) so the max silent gap is ~heartbeat_s, never ~2x it.
+			done_set, pending = concurrent.futures.wait(
+				pending,
+				timeout=max(1.0, heartbeat_s - (time.time() - emitted_at)),
+				return_when=concurrent.futures.FIRST_COMPLETED)
+			for fut in done_set:
+				name, ok = fut.result()
+				(compiled_ok if ok else failed).append(name)
 			done = len(compiled_ok) + len(failed)
-			if done % step == 0 or done == total:
-				elapsed = time.time() - started
-				rate = done / elapsed if elapsed > 0 else 0.0
-				eta = (total - done) / rate if rate > 0 else 0.0
-				print(f"progress: {done}/{total} fixtures "
-				      f"({len(failed)} failed) elapsed {elapsed:.0f}s "
-				      f"eta {eta:.0f}s", file=sys.stderr, flush=True)
+			now = time.time()
+			if (done == total or done - emitted_done >= step
+					or now - emitted_at >= heartbeat_s):
+				_emit_progress()
+				emitted_at = now
+				emitted_done = done
 
 	counters = _aggregate(run_dir, sorted(compiled_ok))
 	_write_run(run_dir, fixtures, excluded, compiled_ok, failed, counters,

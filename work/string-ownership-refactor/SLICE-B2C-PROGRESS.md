@@ -1277,3 +1277,24 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   compile-and-reject.  In-flight full suite STOPPED (invalidated by
   the authority refactor); focused regression rerun, then the full
   suite ONCE.
+
+## 2026-07-24 — Corpus gate on candidate: EXPECTED failure, delta fully attributed (NOT a regression)
+
+- run-all-tests.sh corpus stage (run dir ownership-corpus-20260724-083631-1146539,
+  retained) failed --require-zero-delta vs the certified-0.33.87 baseline:
+  fns +24024, events/c3_moveout_owned/site_class:moveout_expansion +18480.
+  Universe IDENTICAL (924/344/49 partition + hashes), all hard gates zero,
+  every other counter +0.
+- ATTRIBUTION (verified via DRIFT_STRING_ARC_AUDIT_VERBOSE on a minimal
+  main): the NEW std.ffi module — absent from the certified 0.33.87
+  baseline tree by construction — contributes exactly 26 fns and
+  20 events (all c3_moveout_owned/moveout_expansion) per compile;
+  26×924=24024, 20×924=18480.  Residual after attribution: ZERO on
+  every counter.  The lambda-tail LANGUAGE_BUG fix contributes nothing.
+- PROCESS: baseline is NEVER auto-blessed.  Pre-mainline verification
+  proceeds with the two-mode full suite directly (corpus already ran
+  once, outcome attributed).  Baseline re-bless happens ONLY at
+  certification of the combined String phase: regenerate from the
+  newly certified tree, update BASELINE.md provenance, deliberate
+  check-in.  Until then candidate corpus runs are expected to fail
+  with EXACTLY this delta; any different delta needs fresh attribution.
