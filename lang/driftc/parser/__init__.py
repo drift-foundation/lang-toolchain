@@ -650,6 +650,7 @@ def _convert_expr(expr: parser_ast.Expr) -> s0.Expr:
 			scrutinee=_convert_expr(expr.scrutinee),
 			arms=arms,
 			loc=Span.from_loc(getattr(expr, "loc", None)),
+			statement_form=expr.statement_form,
 		)
 	if isinstance(expr, parser_ast.ExceptionCtor):
 		return s0.ExceptionCtor(

@@ -379,9 +379,19 @@ class AstToHIR:
 		lambda's result.  A `match`/`try` payload inherits the position
 		so its arm results land in `HMatchArm.result` /
 		`HTryExprArm.result` exactly when the position produces a value;
-		every other expression lowers identically in both positions."""
+		every other expression lowers identically in both positions.
+
+		A STATEMENT-FORM match (parsed via `match_stmt` — plain block
+		arms, typically exiting via `return`) never becomes value-form,
+		even in a value position: its arms carry no trailing value
+		expressions, so value-context lowering would misread arm-final
+		statements as results (E-MATCH-NO-VALUE regressions).  The
+		parser's `statement_form` classification is authoritative.
+		Statement-form `try` needs no such guard — it is a distinct
+		`TryStmt` node and never reaches this ExprStmt path."""
 		if isinstance(stmt.expr, ast.MatchExpr):
-			expr = self._lower_match_expr(stmt.expr, value_context=value_context)
+			vc = value_context and not stmt.expr.statement_form
+			expr = self._lower_match_expr(stmt.expr, value_context=vc)
 		elif isinstance(stmt.expr, ast.TryCatchExpr):
 			expr = self._lower_try_expr(stmt.expr, value_context=value_context)
 		else:

@@ -433,11 +433,14 @@ class MatchArm:
 
 @dataclass
 class MatchExpr(Expr):
-	"""Expression-form `match` (expression-only in v1)."""
+	"""A `match` construct.  `statement_form` carries the parser's
+	production classification (match_stmt block arms vs match_expr
+	value_block arms) — see the parser AST docstring."""
 
 	scrutinee: Expr
 	arms: List[MatchArm]
 	loc: Optional[object] = None
+	statement_form: bool = False
 
 
 @dataclass

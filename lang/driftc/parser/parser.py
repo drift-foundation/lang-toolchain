@@ -2274,8 +2274,7 @@ def _build_stmt(tree: Tree):
 	if kind == "if_stmt":
 		return _build_if_stmt(tree)
 	if kind == "match_stmt":
-		match_expr = _build_match_expr(tree, arm_node_names=("match_stmt_arm",))
-		return ExprStmt(loc=_loc(tree), value=match_expr)
+		return ExprStmt(loc=_loc(tree), value=_build_match_expr(tree))
 	if kind == "while_stmt":
 		return _build_while_stmt(tree)
 	if kind == "for_stmt":
@@ -3095,7 +3094,7 @@ def _build_expr(node) -> Expr:
             raise ValueError("unsafe_expr missing value_block")
         return UnsafeExpr(loc=_loc(node), block=_build_value_block(vb_node))
     if name == "match_expr":
-        return _build_match_expr(node, arm_node_names=("match_expr_arm",))
+        return _build_match_expr(node)
     if name == "ternary":
         return _build_ternary(node)
     if name == "pipeline":
@@ -3454,14 +3453,27 @@ def _build_try_catch_expr(tree: Tree) -> TryCatchExpr:
     return TryCatchExpr(loc=_loc(tree), attempt=attempt, catch_arms=arms)
 
 
-def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_expr_arm",)) -> MatchExpr:
+def _build_match_expr(tree: Tree) -> MatchExpr:
 	"""
-	Build a match expression.
+	Build a match node from either grammar production.  The production
+	name is the SOLE authority for the form classification:
 
-	Grammar:
-	  match_expr: MATCH expr "{" match_expr_arms? "}"
+	  match_expr: MATCH expr "{" match_expr_arms? "}"   (value_block arms)
+	  match_stmt: MATCH expr "{" match_stmt_arms? "}"   (block arms)
+
+	Any other production is a parser bug and fails loudly.
 	"""
-	# The scrutinee is the first expression subtree directly under `match_expr`.
+	kind = _name(tree)
+	if kind == "match_expr":
+		arm_node_names: tuple[str, ...] = ("match_expr_arm",)
+		statement_form = False
+	elif kind == "match_stmt":
+		arm_node_names = ("match_stmt_arm",)
+		statement_form = True
+	else:
+		raise ValueError(f"_build_match_expr: unexpected production {kind!r}")
+	# The scrutinee is the first expression subtree directly under the
+	# match node.
 	#
 	# Note: because `expr` is an inlined rule (`?expr`), Lark does not always
 	# materialize it as a distinct `Tree("expr")`. The first child that is a
@@ -3769,7 +3781,8 @@ def _build_match_expr(tree: Tree, *, arm_node_names: tuple[str, ...] = ("match_e
 
 	if not arms:
 		raise ValueError("match_expr requires at least one arm")
-	return MatchExpr(loc=_loc(tree), scrutinee=scrutinee, arms=arms)
+	return MatchExpr(loc=_loc(tree), scrutinee=scrutinee, arms=arms,
+	                 statement_form=statement_form)
 
 
 def _build_ternary(tree: Tree) -> Ternary:

@@ -1298,3 +1298,41 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   newly certified tree, update BASELINE.md provenance, deliberate
   check-in.  Until then candidate corpus runs are expected to fail
   with EXACTLY this delta; any different delta needs fresh attribution.
+
+## 2026-07-24 — Full-suite catch: statement-form lambda-tail match regression, fixed at the parser classification
+
+- test_reload_coordinator (full suite, maintainer run) FAILED post-fix:
+  E-MATCH-NO-VALUE on a lambda whose TRAILING statement is a
+  STATEMENT-form match (plain block arms, all exiting via `return`,
+  with a nested statement-form match).  The lambda-tail authority was
+  forcing value_context=True onto it, misreading statement arms as
+  valueless results.
+- ROOT CAUSE (one level deeper than the original bug): the grammar has
+  TWO productions — match_expr (value_block arms) vs match_stmt (block
+  arms) — but parser.py's match_stmt builder wrapped BOTH into the
+  same ExprStmt(MatchExpr), ERASING the classification the original
+  fix claimed to align with.
+- FIX: `MatchExpr.statement_form` recorded by the parser
+  (parser/ast.py + _build_match_expr + match_stmt builder), carried
+  through the stage0 conversion (parser/__init__.py, stage0/ast.py),
+  and honored by `_lower_expr_stmt`: a statement-form match NEVER
+  takes value context, even at a lambda tail.  Statement-form `try`
+  is a distinct TryStmt node — no flag needed, verified.
+- REGRESSION: positive pin 7 added to
+  test_lambda_trailing_match_value.py — statement-form tail match
+  (arms return) incl. nested statement-form inner, full
+  compile-and-run on three inputs; test_reload_coordinator green.
+- Focused gates rerun next; the full suite remains the maintainer's.
+- REVIEW ROUND 2 (3 corrections, all applied): (1) the grammar
+  production is now the SOLE authority — `_build_match_expr` derives
+  statement_form (and arm node names) from `_name(tree)` and raises on
+  any unexpected production; the caller-supplied boolean with a
+  silently-misclassifying default is gone.  (2) compatibility
+  fallbacks removed: parser/__init__.py conversion and
+  ast_to_hir._lower_expr_stmt read `.statement_form` directly — a
+  missing classification now fails loudly (AttributeError), never
+  silently becomes expression-form.  (3) NEW boundary pin
+  lang/tests/parser/test_parser_match_statement_form.py: match_expr →
+  False, match_stmt → True, stage0 conversion preserves both;
+  coordinator-shaped compile/run pin retained as the e2e companion.
+  Focused gates: parser+stage1+lambda/match battery 296/296.

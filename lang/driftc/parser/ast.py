@@ -993,8 +993,14 @@ class MatchArm:
 
 @dataclass
 class MatchExpr(Expr):
-	"""Expression-form match."""
+	"""A `match` construct.  The grammar has TWO productions sharing this
+	node: `match_expr` (arms are value_blocks — every arm ends with a
+	bare trailing expression) and `match_stmt` (arms are plain statement
+	blocks).  `statement_form` records which production parsed it, so
+	downstream position classification (e.g. a lambda's trailing
+	statement) never has to guess from block shape."""
 
 	loc: Located
 	scrutinee: Expr
 	arms: List[MatchArm]
+	statement_form: bool = False
