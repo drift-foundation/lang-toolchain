@@ -1,4 +1,4 @@
-# Certified ownership-corpus baseline
+# Reviewed ownership-corpus baseline
 
 The checked-in reference for `just ownership-corpus-check` (the
 924-fixture ownership-audit corpus certification gate).
@@ -7,11 +7,11 @@ The checked-in reference for `just ownership-corpus-check` (the
 
 | field | value |
 |---|---|
-| origin run | the Phase D final acceptance run (`build/tmp/phase-d-final`), the corpus result certified with toolchain 0.33.87 |
-| toolchain | driftc **0.33.87**, runtime **ABI 21** |
-| source commit | `3d48b7f0` (tests/records: Phase D closure) |
-| corpus tool | `tools/drift_corpus_audit.py` v1.6.0 |
-| run date | 2026-07-22T20:12:28Z (started_unix 1784751148) |
+| origin run | maintainer run-all-tests.sh corpus stage, retained run dir `build/tmp/ownership-corpus-20260724-144528-1377082`; promoted from the RETAINED artifacts without a rerun |
+| toolchain | driftc **0.33.88**, runtime **ABI 22** (reviewed mainline candidate) |
+| source commit | `b2caeb44` (parser/stage1 statement-form match classification) |
+| corpus tool | `tools/drift_corpus_audit.py` v1.7.1 |
+| run date | 2026-07-24T20:45:28Z (started_unix 1784925928) |
 | universe | 924 compiled / 1268 discovered (344 compile-failed partition, 49 rule-excluded), 14 counters, all hard gates 0 |
 
 Checked-in artifacts: `aggregate.json` (counters), `manifest.json`
@@ -21,14 +21,41 @@ whole-directory content hashes, compile partition), and
 python — kept as provenance RECORD only).  Only aggregate + manifest
 participate in comparison.
 
+## Promotion record (2026-07-24)
+
+Predecessor baseline: certified **0.33.87** / **ABI 21**, commit
+`3d48b7f0`, tool v1.6.0, run 2026-07-22T20:12:28Z.  The maintainer
+explicitly reviewed and approved promotion of EXACTLY this delta from
+the predecessor — verified byte-exact against the retained run before
+copying:
+
+| counter | approved delta |
+|---|---|
+| `fns` | +24024 |
+| `events` | +18480 |
+| `c3_moveout_owned` | +18480 |
+| `site_class:moveout_expansion` | +18480 |
+| every other counter | +0 |
+
+with the universe IDENTICAL to the predecessor (same 924/344/49
+partition, same fixture hashes, same inclusion rule) and all hard
+gates zero.  Attribution: the `std.ffi` module (new in the 0.33.88
+candidate, absent from the 0.33.87 tree) contributes exactly 26 fns
+and 20 `c3_moveout_owned`/`moveout_expansion` events per fixture
+compile (26/20 x 924); residual after attribution is zero on every
+counter.
+
 ## Generation command
 
-Produced on the certified 0.33.87/ABI-21 tree (commit `3d48b7f0`) —
-NEVER from an uncertified candidate — via:
+The underlying run was produced by the standard recipe on the reviewed
+0.33.88/ABI-22 tree (commit `b2caeb44`) — promotion copied the
+retained artifacts; the corpus was NOT rerun for the promotion:
 
 ```
-.venv/bin/python tools/drift_corpus_audit.py \
-    --out build/tmp/phase-d-final -j16
+just ownership-corpus-check
+# → tools/drift_corpus_audit.py --out build/tmp/ownership-corpus-<ts> -j16 \
+#       --baseline lang/tests/ownership_corpus/reviewed-baseline \
+#       --require-zero-delta
 ```
 
 then copying `aggregate.json`, `manifest.json`, `metadata.json` here.

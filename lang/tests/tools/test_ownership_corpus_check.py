@@ -6,7 +6,7 @@
 The 51-fixture ownership MATRIX (`just ownership-matrix-check`, part of
 `just test`) and the 924-fixture ownership CORPUS (this gate, run
 exactly once from `just certify`) are DISTINCT certification gates —
-see lang/tests/ownership_corpus/certified-baseline/BASELINE.md.
+see lang/tests/ownership_corpus/reviewed-baseline/BASELINE.md.
 
 These teeth run the tool's COMPARISON stage against synthetic run
 directories (no fixture compiles — cheap), proving the recipe fails
@@ -21,7 +21,7 @@ closed on every mandated divergence class:
   * hard-gate counter nonzero                  → exit 1
   * missing / corrupt baseline data            → exit 2
 
-plus sanity pins on the checked-in certified baseline itself and on
+plus sanity pins on the checked-in reviewed baseline itself and on
 the justfile wiring (corpus in `certify` exactly once, never in
 `test`).
 """
@@ -32,7 +32,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-BASELINE = ROOT / "lang" / "tests" / "ownership_corpus" / "certified-baseline"
+BASELINE = ROOT / "lang" / "tests" / "ownership_corpus" / "reviewed-baseline"
 
 _spec = importlib.util.spec_from_file_location(
 	"drift_corpus_audit", ROOT / "tools" / "drift_corpus_audit.py")
@@ -145,19 +145,21 @@ def test_zero_delta_requires_baseline_flagging() -> None:
 # ── Checked-in baseline sanity + wiring pins ─────────────────────────
 
 
-def test_certified_baseline_is_complete_and_clean() -> None:
+def test_reviewed_baseline_is_complete_and_clean() -> None:
 	agg = json.loads((BASELINE / "aggregate.json").read_text())
 	man = json.loads((BASELINE / "manifest.json").read_text())
 	assert isinstance(agg["counters"], dict) and agg["counters"], "counters present"
 	assert not _tool._hard_gate_failures(agg["counters"]), (
-		"the certified baseline must have every hard gate at zero"
+		"the reviewed baseline must have every hard gate at zero"
 	)
 	uni = man["universe"]
 	assert uni["inclusion_rule"], "verbatim inclusion rule recorded"
-	assert len(uni["compiled_ok"]) == 924, "the certified 924-fixture universe"
+	assert len(uni["compiled_ok"]) == 924, "the reviewed 924-fixture universe"
 	assert (BASELINE / "metadata.json").is_file(), "provenance metadata checked in"
 	readme = (BASELINE / "BASELINE.md").read_text()
-	for needle in ("0.33.87", "ABI 21", "3d48b7f0", "drift_corpus_audit.py",
+	for needle in ("0.33.88", "ABI 22", "b2caeb44",          # promoted baseline
+	               "0.33.87", "ABI 21", "3d48b7f0",          # historical predecessor
+	               "drift_corpus_audit.py",
 	               "Generation command", "NEVER regenerates"):
 		assert needle in readme, f"BASELINE.md must record provenance: {needle!r}"
 
@@ -167,7 +169,7 @@ def test_justfile_wiring_corpus_once_in_certify_never_in_test() -> None:
 	# recipe exists and points at the checked-in baseline in zero-delta mode
 	assert "ownership-corpus-check:" in justfile
 	assert "--require-zero-delta" in justfile
-	assert "lang/tests/ownership_corpus/certified-baseline" in justfile
+	assert "lang/tests/ownership_corpus/reviewed-baseline" in justfile
 	# certify: exactly one independent corpus dependency, and the recipe
 	# never references the private pre-handoff runner
 	# (run-all-tests.sh — a separate entrypoint).

@@ -34,7 +34,7 @@ Certification comparison (v1.7.1):
       does not match the comparison schema, exits 2.  This is the
       `just ownership-corpus-check` certification mode against the
       checked-in baseline
-      (lang/tests/ownership_corpus/certified-baseline/).
+      (lang/tests/ownership_corpus/reviewed-baseline/).
 
 Usage:
   tools/drift_corpus_audit.py --out DIR [-j N] [--only a,b,c]

@@ -1,8 +1,8 @@
 {
   "environment": {
-    "abi": "21",
-    "driftc_version": "0.33.87",
-    "tool_version": "1.6.0"
+    "abi": "22",
+    "driftc_version": "0.33.88",
+    "tool_version": "1.7.1"
   },
   "universe": {
     "compiled_ok": [

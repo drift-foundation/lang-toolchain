@@ -1336,3 +1336,39 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   False, match_stmt → True, stage0 conversion preserves both;
   coordinator-shaped compile/run pin retained as the e2e companion.
   Focused gates: parser+stage1+lambda/match battery 296/296.
+
+## 2026-07-24 — Baseline PROMOTION (maintainer-approved) + runner order reverted
+
+- run-all-tests.sh REVERTED to the original fail-fast order (corpus →
+  memcheck → ASAN) per maintainer directive; the earlier reorder was
+  not authorized.  No failure-tolerance anywhere: a matching tree now
+  yields genuine exit 0 at every stage.
+- BASELINE PROMOTED per explicit maintainer approval of EXACTLY the
+  2026-07-24 14:45 run's output: retained artifacts from
+  build/tmp/ownership-corpus-20260724-144528-1377082 copied into
+  lang/tests/ownership_corpus/certified-baseline/ WITHOUT a corpus
+  rerun, after byte-exact validation against the approved figures
+  (fns +24024; events/c3_moveout_owned/moveout_expansion +18480; all
+  other counters +0; universe identical 924/344/49; hard gates zero).
+- BASELINE.md rewritten: new provenance (0.33.88/ABI 22, commit
+  b2caeb44, tool 1.7.1, 2026-07-24T20:45:28Z) + a Promotion record
+  documenting the predecessor (certified 0.33.87/ABI 21/3d48b7f0) and
+  the approved delta with its std.ffi attribution.  Update policy and
+  matrix-vs-corpus sections unchanged; strict zero-delta gate
+  UNCHANGED against the new baseline.
+- VERIFIED: corpus teeth 16/16; _compare(promoted baseline, retained
+  run, require_zero_delta) exits 0 — the next run-all-tests.sh corpus
+  stage passes genuinely on a matching tree.
+- RENAME (pre-commit cleanup, maintainer directive): the baseline dir
+  is an uncertified reviewed mainline candidate now, so
+  lang/tests/ownership_corpus/certified-baseline/ →
+  lang/tests/ownership_corpus/reviewed-baseline/.  Updated: justfile
+  (recipe path + comments), tools/drift_corpus_audit.py docstring,
+  test_ownership_corpus_check.py (BASELINE path, docstrings,
+  test_certified_baseline_is_complete_and_clean →
+  test_reviewed_baseline_is_complete_and_clean, needle list now pins
+  BOTH the promoted 0.33.88/ABI 22/b2caeb44 provenance AND the
+  historical 0.33.87/ABI 21/3d48b7f0 predecessor), BASELINE.md
+  generation-command example.  Repo sweep: "certified baseline"
+  survives only in the BASELINE.md predecessor/promotion record and
+  this ledger's historical entries.  Teeth 16/16 post-rename.

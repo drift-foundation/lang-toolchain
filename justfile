@@ -64,8 +64,8 @@ test: review-cleanup ownership-matrix-check lang-uniform-pytest lang-llvm-test l
 # guard, runs inside `just test`); THIS is the full 924-fixture
 # compile-audit corpus compared EXACTLY (identical universe, every
 # counter delta +0, hard gates zero — --require-zero-delta fails closed
-# on any divergence) against the checked-in certified baseline
-# (lang/tests/ownership_corpus/certified-baseline/, provenance in its
+# on any divergence) against the checked-in reviewed baseline
+# (lang/tests/ownership_corpus/reviewed-baseline/, provenance in its
 # BASELINE.md).  Deliberately NOT part of `just test`: run-all-tests.sh runs
 # `just test` under BOTH memcheck and ASAN, and the corpus must run
 # exactly once per certification — it is wired into `just certify`.
@@ -78,13 +78,13 @@ ownership-corpus-check:
 	echo "ownership-corpus-check: run dir $out (retained on failure)"
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
 		--out "$out" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" \
-		--baseline lang/tests/ownership_corpus/certified-baseline \
+		--baseline lang/tests/ownership_corpus/reviewed-baseline \
 		--require-zero-delta
 	echo "ownership-corpus-check: Success."
 
 # ── Certification entrypoint ─────────────────────────────────────────
 # An INDEPENDENT certification workflow: the ownership corpus EXACTLY
-# ONCE against the checked-in certified baseline.  It never invokes
+# ONCE against the checked-in reviewed baseline.  It never invokes
 # run-all-tests.sh (the maintainer's private pre-handoff runner, which
 # itself runs the corpus once before its memcheck/ASAN `just test`
 # passes).  Pool rebuild / deploy remain separate maintainer-driven
