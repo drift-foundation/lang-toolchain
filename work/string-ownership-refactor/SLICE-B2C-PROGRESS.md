@@ -1149,3 +1149,40 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   boundary, defer pins, probes, observation guards, lifecycle+phase1
   memcheck, ABI-stamp suite incl. bidirectional mismatch).
   Corpus + run-all.sh + certification awaiting static delta clearance.
+- Ownership-corpus certification infrastructure (2026-07-24, maintainer
+  directive; TEST INFRA ONLY — no compiler-version/ABI change):
+  (1) `tools/drift_corpus_audit.py` gains `--require-zero-delta`
+  (needs --baseline): certification mode failing closed on missing
+  counter keys, unexpected new keys, and ANY nonzero delta, on top of
+  the existing identical-universe (exit 2) and hard-gate (exit 1)
+  checks; missing/corrupt baseline or run data now exits 2 with a
+  BASELINE/RUN DATA ERROR instead of a traceback.
+  (2) Checked-in certified baseline
+  `lang/tests/ownership_corpus/certified-baseline/` — aggregate.json +
+  manifest.json + metadata.json copied from the phase-d-final run
+  produced ON CERTIFIED 0.33.87/ABI-21 (commit 3d48b7f0, tool v1.6.0,
+  run 2026-07-22T20:12:28Z; NEVER from the B5 candidate), with BASELINE.md pinning
+  provenance, the generation command, the reviewed-update-only policy
+  (certification never regenerates/blesses automatically), and the
+  matrix-vs-corpus distinction.
+  (3) justfile: `ownership-corpus-check` (fresh timestamped
+  build/tmp run dir, retained on failure; compares against the
+  checked-in baseline in zero-delta mode) — kept OUT of `just test`
+  (run-all.sh runs test twice; corpus runs exactly once) — and the NEW
+  `certify` entrypoint = ownership-corpus-check once.  [AMENDED per
+  maintainer wiring correction: certify is an INDEPENDENT workflow
+  that never invokes run-all.sh; run-all.sh (the private pre-handoff
+  runner) itself runs the corpus once before its memcheck/ASAN `just
+  test` passes; wiring teeth prove one-corpus-in-run-all,
+  one-corpus-in-certify, no-run-all-in-certify, no-corpus-in-test.]
+  (4) Negative teeth `lang/tests/tools/test_ownership_corpus_check.py`
+  (15, incl. the S-review malformed-universe/non-integer-counter/
+  baseline-side-schema/inclusion-rule+excluded-record additions): synthetic-run comparisons proving universe drift (2), nonzero
+  delta (1, and that plain --baseline alone does NOT fail it — the
+  documented policy gap), missing/unexpected counter keys (1), hard
+  gates (1), corrupt/missing baseline (2), flag-requires-baseline; plus
+  checked-in-baseline sanity (gates zero, 924 universe, provenance
+  strings) and justfile wiring pins (corpus once in certify, never in
+  test; matrix stays in test).  Existing tool tests unaffected (tools
+  battery 22/22).  Awaiting static review; per directive the expensive
+  corpus was NOT rerun for synthetic cases.

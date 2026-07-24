@@ -58,6 +58,40 @@ git-reset BRANCH:
 test: review-cleanup ownership-matrix-check lang-uniform-pytest lang-llvm-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
 	@echo "lang tests: Success."
 
+# ── Ownership CORPUS certification gate ──────────────────────────────
+# DISTINCT from `ownership-matrix-check` above: the matrix is the 51
+# curated generated ownership-transfer fixtures (generator-freshness
+# guard, runs inside `just test`); THIS is the full 924-fixture
+# compile-audit corpus compared EXACTLY (identical universe, every
+# counter delta +0, hard gates zero — --require-zero-delta fails closed
+# on any divergence) against the checked-in certified baseline
+# (lang/tests/ownership_corpus/certified-baseline/, provenance in its
+# BASELINE.md).  Deliberately NOT part of `just test`: run-all-tests.sh runs
+# `just test` under BOTH memcheck and ASAN, and the corpus must run
+# exactly once per certification — it is wired into `just certify`.
+# Results land in a fresh repo-local build/tmp dir, retained on failure
+# for diagnosis.
+ownership-corpus-check:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	out="build/tmp/ownership-corpus-$(date +%Y%m%d-%H%M%S)-$$"
+	echo "ownership-corpus-check: run dir $out (retained on failure)"
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
+		--out "$out" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" \
+		--baseline lang/tests/ownership_corpus/certified-baseline \
+		--require-zero-delta
+	echo "ownership-corpus-check: Success."
+
+# ── Certification entrypoint ─────────────────────────────────────────
+# An INDEPENDENT certification workflow: the ownership corpus EXACTLY
+# ONCE against the checked-in certified baseline.  It never invokes
+# run-all-tests.sh (the maintainer's private pre-handoff runner, which
+# itself runs the corpus once before its memcheck/ASAN `just test`
+# passes).  Pool rebuild / deploy remain separate maintainer-driven
+# steps.
+certify: ownership-corpus-check
+	@echo "lang certify: Success."
+
 # Shard 1: everything test runs except codegen.
 test-shard-1: review-cleanup lang-uniform-pytest lang-llvm-test lang-driver-test lang-gdb-test
 	@echo "lang test-shard-1: Success."

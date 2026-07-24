@@ -22,13 +22,24 @@ Per-run outputs (strictly separated by volatility):
 
 Baseline comparison:
   tools/drift_corpus_audit.py --out RUN2 --baseline RUN1
-asserts universe equality (exit 2 on mismatch — the deltas would be
-meaningless), prints the sorted per-counter exact-delta table, and
-FAILS (exit 1) if any hard gate is nonzero in the new run.
+      Prints the per-counter delta table; fails on universe mismatch
+      (exit 2) or a nonzero hard gate in the new run (exit 1).
+      Nonzero deltas on non-gate counters DO NOT fail in this mode.
+
+Certification comparison (v1.7.0):
+  tools/drift_corpus_audit.py --out RUN2 --baseline BASE --require-zero-delta
+      Everything above PLUS fail-closed exact equality: the counter
+      key sets must be identical and every delta exactly 0 (exit 1
+      otherwise).  Missing or corrupt baseline/run data, or data that
+      does not match the comparison schema, exits 2.  This is the
+      `just ownership-corpus-check` certification mode against the
+      checked-in baseline
+      (lang/tests/ownership_corpus/certified-baseline/).
 
 Usage:
   tools/drift_corpus_audit.py --out DIR [-j N] [--only a,b,c]
-                              [--baseline DIR] [--driftc-args "..."]
+                              [--baseline DIR] [--require-zero-delta]
+                              [--driftc-args "..."]
 """
 from __future__ import annotations
 
@@ -45,7 +56,7 @@ import tempfile
 import time
 from pathlib import Path
 
-TOOL_VERSION = "1.6.0"
+TOOL_VERSION = "1.7.0"
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 
@@ -246,14 +257,74 @@ def _write_run(run_dir: Path, fixtures: list[Path], excluded: list[dict],
 	}))
 
 
-def _compare(baseline_dir: Path, run_dir: Path) -> int:
-	base_manifest = json.loads((baseline_dir / "manifest.json").read_text())
-	new_manifest = json.loads((run_dir / "manifest.json").read_text())
-	if base_manifest["universe"] != new_manifest["universe"]:
+def _validate_universe_schema(side: str, universe: object) -> None:
+	"""The complete universe shape the comparison relies on — validated
+	BEFORE use so malformed manifests fail closed (exit 2), never
+	traceback."""
+	if not isinstance(universe, dict):
+		raise ValueError(f"{side} universe must be an object")
+	for key in ("compiled_ok", "excluded", "failed", "fixtures", "inclusion_rule"):
+		if key not in universe:
+			raise ValueError(f"{side} universe missing key {key!r}")
+	for key in ("compiled_ok", "failed"):
+		val = universe[key]
+		if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
+			raise ValueError(f"{side} universe[{key!r}] must be a list of strings")
+	if not isinstance(universe["inclusion_rule"], str):
+		raise ValueError(f"{side} universe['inclusion_rule'] must be a string")
+	excluded = universe["excluded"]
+	if not isinstance(excluded, list):
+		raise ValueError(f"{side} universe['excluded'] must be a list")
+	for entry in excluded:
+		if (not isinstance(entry, dict) or not isinstance(entry.get("name"), str)
+				or not isinstance(entry.get("reason"), str)):
+			raise ValueError(f"{side} universe excluded entries must carry "
+			                 f"string 'name' and 'reason'")
+	fixtures = universe["fixtures"]
+	if not isinstance(fixtures, list):
+		raise ValueError(f"{side} universe['fixtures'] must be a list")
+	for fx in fixtures:
+		if (not isinstance(fx, dict) or not isinstance(fx.get("name"), str)
+				or not isinstance(fx.get("sha256"), str)):
+			raise ValueError(f"{side} universe fixture entries must carry "
+			                 f"string 'name' and 'sha256'")
+
+
+def _validate_counters_schema(side: str, counters: object) -> None:
+	if not isinstance(counters, dict):
+		raise ValueError(f"{side} counters must be an object")
+	for key, val in counters.items():
+		if not isinstance(key, str):
+			raise ValueError(f"{side} counters key {key!r} must be a string")
+		if not isinstance(val, int) or isinstance(val, bool):
+			raise ValueError(f"{side} counter {key!r} must be an integer, "
+			                 f"got {type(val).__name__}")
+
+
+def _compare(baseline_dir: Path, run_dir: Path,
+             *, require_zero_delta: bool = False) -> int:
+	# Fail closed on missing/corrupt baseline or run data: a comparison
+	# that cannot read both sides completely must never pass.
+	try:
+		base_manifest = json.loads((baseline_dir / "manifest.json").read_text())
+		new_manifest = json.loads((run_dir / "manifest.json").read_text())
+		base_universe = base_manifest["universe"]
+		new_universe = new_manifest["universe"]
+		base_counters = json.loads((baseline_dir / "aggregate.json").read_text())["counters"]
+		new_counters = json.loads((run_dir / "aggregate.json").read_text())["counters"]
+		for side, universe in (("baseline", base_universe), ("new", new_universe)):
+			_validate_universe_schema(side, universe)
+		for side, counters in (("baseline", base_counters), ("new", new_counters)):
+			_validate_counters_schema(side, counters)
+	except (OSError, ValueError, KeyError, TypeError) as e:
+		print(f"BASELINE/RUN DATA ERROR: cannot load comparison inputs "
+		      f"({type(e).__name__}: {e}) — failing closed.", file=sys.stderr)
+		return 2
+	if base_universe != new_universe:
 		print("UNIVERSE MISMATCH: baseline and new run do not cover the "
 		      "identical fixture universe — deltas would be meaningless.",
 		      file=sys.stderr)
-		bu, nu = base_manifest["universe"], new_manifest["universe"]
+		bu, nu = base_universe, new_universe
 		for key in ("compiled_ok", "failed"):
 			b, n = set(bu[key]), set(nu[key])
 			if b != n:
@@ -266,8 +337,8 @@ def _compare(baseline_dir: Path, run_dir: Path) -> int:
 			print(f"  fixtures with changed sources: {sorted(changed)}", file=sys.stderr)
 		return 2
 
-	base = json.loads((baseline_dir / "aggregate.json").read_text())["counters"]
-	new = json.loads((run_dir / "aggregate.json").read_text())["counters"]
+	base = base_counters
+	new = new_counters
 	keys = sorted(set(base) | set(new))
 	width = max(len(k) for k in keys) if keys else 10
 	print(f"{'counter':<{width}}  {'baseline':>12}  {'new':>12}  {'delta':>12}")
@@ -280,6 +351,27 @@ def _compare(baseline_dir: Path, run_dir: Path) -> int:
 		print(f"HARD GATE FAILURE: nonzero in new run: {gate_failures}",
 		      file=sys.stderr)
 		return 1
+	if require_zero_delta:
+		# Certification policy: EXACT equality.  The plain --baseline
+		# comparison prints deltas but does not fail on them; the
+		# zero-delta mode fails closed on ANY divergence — missing
+		# counter keys, unexpected new keys, or a nonzero delta.
+		problems: list[str] = []
+		missing = sorted(set(base) - set(new))
+		unexpected = sorted(set(new) - set(base))
+		nonzero = {k: new[k] - base[k]
+		           for k in sorted(set(base) & set(new)) if new[k] != base[k]}
+		if missing:
+			problems.append(f"counter keys missing from the new run: {missing}")
+		if unexpected:
+			problems.append(f"unexpected new counter keys: {unexpected}")
+		if nonzero:
+			problems.append(f"nonzero counter deltas: {nonzero}")
+		if problems:
+			print("EXACT-DELTA FAILURE (--require-zero-delta):", file=sys.stderr)
+			for prob in problems:
+				print(f"  {prob}", file=sys.stderr)
+			return 1
 	return 0
 
 
@@ -290,9 +382,17 @@ def main(argv: list[str] | None = None) -> int:
 	ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
 	ap.add_argument("--only", help="comma-separated fixture-name subset")
 	ap.add_argument("--baseline", help="prior run dir to compare against")
+	ap.add_argument("--require-zero-delta", action="store_true",
+	                help="certification mode: with --baseline, require the "
+	                     "IDENTICAL counter key set and every delta exactly 0 "
+	                     "(plus the usual identical-universe and hard-gate "
+	                     "checks); any divergence fails")
 	ap.add_argument("--driftc-args", default="",
 	                help="extra args passed to every driftc invocation")
 	args = ap.parse_args(argv)
+	if args.require_zero_delta and not args.baseline:
+		print("--require-zero-delta needs --baseline", file=sys.stderr)
+		return 2
 
 	run_dir = Path(args.out)
 	if run_dir.exists() and any(run_dir.iterdir()):
@@ -330,7 +430,8 @@ def main(argv: list[str] | None = None) -> int:
 		# are meaningless, and a coincident gate failure must not mask
 		# that), then the delta table, then the new-side hard gates
 		# (exit 1).
-		return _compare(Path(args.baseline), run_dir)
+		return _compare(Path(args.baseline), run_dir,
+		                require_zero_delta=args.require_zero_delta)
 	gate_failures = _hard_gate_failures(counters)
 	if gate_failures:
 		print(f"HARD GATE FAILURE: nonzero in this run: {gate_failures}",

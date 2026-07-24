@@ -7,7 +7,6 @@ build
 staged
 .claude
 test_all.sh
-run-all.sh
 work/ownership-ledger
 # Defense-in-depth: transient ownership-ledger scratch must live
 # under `build/ownership-ledger/triage/`, not under source trees.
