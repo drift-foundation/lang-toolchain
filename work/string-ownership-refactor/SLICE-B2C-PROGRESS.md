@@ -2047,3 +2047,15 @@ authority, unrelated) — scan recorded.
   raw-shape guidance was conservative-safe, not wrong).
 - Maintainer runs run-all-tests.sh next (corpus stage → genuine exit
   0 → memcheck just test → ASAN just test).
+- run-all-tests.sh 2026-07-25: corpus stage PASSED live (924/344/49,
+  all 14 counters delta +0, "OWNERSHIP CORPUS OK") — the promoted
+  baseline validated on a genuinely fresh run.  Mid-run the "(N
+  failed)" heartbeat count was misread as an error report; maintainer
+  approved removing it while the remaining stages run: _emit_progress
+  now prints done/total + elapsed/eta only (liveness+ETA is the
+  heartbeat's whole job; the partition stays exactly-checked at the
+  end and reported in the final summary line).  stderr-only output
+  change, no comparable artifact touched, TOOL_VERSION unchanged; no
+  test pins the progress format (checked); py_compile OK.  Functional
+  smoke of the tool deferred until the battery finishes (no compile
+  load alongside perf-protocols/suite stages).

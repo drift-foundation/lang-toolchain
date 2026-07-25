@@ -417,7 +417,10 @@ def main(argv: list[str] | None = None) -> int:
 	# whichever comes first — every ~5% of completions (min 10) or every
 	# HEARTBEAT_S seconds even when nothing completed in the window (a
 	# single in-flight fixture may legitimately hold its 600s subprocess
-	# timeout) — plus a guaranteed final line.
+	# timeout) — plus a guaranteed final line.  Deliberately NO
+	# compile-failed count here: the expected-fail partition is part of
+	# the universe (checked exactly at the end), so a mid-run "N failed"
+	# reads as an error report when nothing is wrong.
 	step = max(10, total // 20)
 	heartbeat_s = 30.0
 	def _emit_progress() -> None:
@@ -426,8 +429,8 @@ def main(argv: list[str] | None = None) -> int:
 		rate = done / elapsed if elapsed > 0 else 0.0
 		eta = (total - done) / rate if rate > 0 else 0.0
 		print(f"progress: {done}/{total} fixtures "
-		      f"({len(failed)} failed) elapsed {elapsed:.0f}s "
-		      f"eta {eta:.0f}s", file=sys.stderr, flush=True)
+		      f"elapsed {elapsed:.0f}s eta {eta:.0f}s",
+		      file=sys.stderr, flush=True)
 	with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
 		pending = {pool.submit(_compile_one, f, run_dir, extra) for f in fixtures}
 		emitted_at = started
