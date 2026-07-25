@@ -3,6 +3,8 @@ module std.text;
 import std.core as core;
 import std.io as io;
 import std.mem as mem;
+import std.err as err;
+import std.ffi as ffi;
 
 export {
 	TokenizeAction,
@@ -52,7 +54,18 @@ export {
 	is_lowercase,
 	is_uppercase,
 	equals_ignore_case,
-	compare_ignore_case
+	compare_ignore_case,
+	StringByteView,
+	STRING_BYTE_VIEW_CONTAINER_ID,
+	byte_view,
+	byte_view_all,
+	_StringByteSource,
+	_byte_source,
+	_byte_source_all,
+	ViewBytesIter,
+	with_view_bytes,
+	with_view_bytes_throw,
+	split_views
 };
 
 // ── Tokenizer types ─────────────────────────────────────────────────
@@ -293,13 +306,14 @@ pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow 
 
 /// Extracts a substring by byte offset and length.
 ///
-/// ALLOCATES: the result is a fresh String with its own storage (there
-/// are no zero-copy substring views).  Performance-sensitive parsers
-/// and scanners should keep ONE backing `&String` and work with byte
-/// offsets/spans (`byte_length()` + `core.string_byte_at`, or
-/// `TokenSpan`-style `{start, end}` ranges), reaching for
-/// `std.ffi.with_bytes` for bulk byte access — materializing an owned
-/// substring only when it must escape.
+/// ALLOCATES: the result is a fresh String with its own storage.  For
+/// a zero-copy alternative, `StringByteView` (`byte_view`) is the
+/// STANDARD answer for performance-sensitive parsers and scanners: an
+/// O(1), safely storable view that keeps the backing alive — scan
+/// with offsets/`subview`, search/compare without materializing, and
+/// call `to_string()` only when a slice must escape as an owned
+/// String.  For bulk pointer access over a view, `with_view_bytes`
+/// (scan-sized windows only — see its doc comment).
 ///
 /// Returns `Result::Err(TextError)` if `start` or `len` is out of bounds.
 pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String, TextError> {
@@ -1231,4 +1245,461 @@ fn _to_lower_byte(b: Byte) nothrow -> Byte {
 		return cast<Byte>(cast<Int>(b) + 32);
 	}
 	return b;
+}
+
+// ── StringByteView — safe, storable, zero-copy byte view ───────────
+//
+// A retained view over a byte range of a backing `String`: the view
+// KEEPS THE STORAGE ALIVE via its retained handle (an ARC refcount
+// stake, never a byte copy), so it can be stored, moved, and returned
+// freely with no lifetime syntax and no raw pointer.
+//
+// Semantics are BYTE-oriented (arbitrary byte ranges are valid, like
+// `substring`); a UTF-8-boundary-validated `StringView` is reserved
+// for the future and is NOT this type.
+//
+// Performance tiers (measured; see the string-view-performance design
+// record):
+//   * `byte_at` — safe, bounds-checked reads at approximately the
+//     guarded `string_byte_at` cost;
+//   * `with_view_bytes` — base-once bulk pointer window (~2x faster
+//     per byte), but the pointer reads inside the callback remain
+//     unsafe and callback-scoped.  Per-token windows are an
+//     ANTIPATTERN: the shipped-API sweep measures the break-even at
+//     ~64-96 bytes — reach for bulk windows from roughly 128 bytes
+//     up; below that, use byte reads;
+//   * `to_string` — the explicit, allocating escape hatch.
+//
+// The view is NOT `Copy` (its String field makes it move-only);
+// duplication is explicit via `dup()` so retain traffic stays visible
+// in source.
+
+/// Canonical container id reported in `std.err:IndexError` when view
+/// reads bounds-check.
+pub const STRING_BYTE_VIEW_CONTAINER_ID: String = "std.text:StringByteView";
+
+/// Safe, storable, zero-copy view of a byte range of a `String`.
+///
+/// Construct with `byte_view` / `byte_view_all`, or derive with
+/// `subview` / `dup`.  Fields are private: construction is the only
+/// bounds gate, so every live view's range is in-bounds by invariant.
+pub struct StringByteView {
+	backing: String,
+	start: Int,
+	len: Int
+}
+
+/// Creates a view of bytes `[start, start + len)` of `s`.
+///
+/// **Returns** `Err(TextError)` with `tag = "out-of-bounds"` and
+/// `offset = start` if the range does not lie within `s`
+/// (overflow-safe subtraction-form check, exactly `substring`'s).
+/// Performs exactly ONE retain of `s`'s storage; copies no bytes.
+pub fn byte_view(s: &String, start: Int, len: Int) nothrow -> core.Result<StringByteView, TextError> {
+	val n = s.byte_length();
+	if start < 0 or len < 0 or start > n or len > n - start {
+		return core.Result::Err(TextError(tag = "out-of-bounds", offset = start));
+	}
+	return core.Result::Ok(StringByteView(backing = s.clone(), start = start, len = len));
+}
+
+/// Creates a view of ALL of `s`.  Infallible; one retain, no copies.
+pub fn byte_view_all(s: &String) nothrow -> StringByteView {
+	return StringByteView(backing = s.clone(), start = 0, len = s.byte_length());
+}
+
+implement StringByteView {
+	/// Returns the view's length in bytes.
+	pub fn byte_length(self: &StringByteView) nothrow -> Int {
+		return self.len;
+	}
+
+	/// Returns `true` if the view is empty (`byte_length() == 0`).
+	pub fn is_empty(self: &StringByteView) nothrow -> Bool {
+		return self.len == 0;
+	}
+
+	/// Returns the byte at VIEW-RELATIVE index `i` as `Ok(byte)`, or
+	/// `Err(std.err:IndexError)` (container id
+	/// `std.text:StringByteView`, `index = i` — VIEW-relative) when
+	/// out of the view's bounds.
+	///
+	/// NOTHROW: bounds failure is explicit data.  Never retains,
+	/// never allocates on the Ok path.
+	pub fn byte_at(self: &StringByteView, i: Int) nothrow -> core.Result<Byte, err.IndexError> {
+		if i < 0 or i >= self.len {
+			return core.Result::Err(err.IndexError(container_id = STRING_BYTE_VIEW_CONTAINER_ID, index = i));
+		}
+		return core.Result::Ok(core.string_byte_at(&self.backing, self.start + i));
+	}
+
+	/// Returns an O(1) view of bytes `[start, start + len)` OF THIS
+	/// VIEW (offsets compose onto the same backing).
+	///
+	/// **Returns** `Err(TextError)` (`tag = "out-of-bounds"`,
+	/// `offset = start`) when the range does not lie within this view.
+	/// Exactly one retain; no byte copies.
+	pub fn subview(self: &StringByteView, start: Int, len: Int) nothrow -> core.Result<StringByteView, TextError> {
+		if start < 0 or len < 0 or start > self.len or len > self.len - start {
+			return core.Result::Err(TextError(tag = "out-of-bounds", offset = start));
+		}
+		return core.Result::Ok(StringByteView(
+			backing = self.backing.clone(),
+			start = self.start + start,
+			len = len));
+	}
+
+	/// Returns a duplicate of this view (the EXPLICIT copy affordance —
+	/// the view is move-only).  Exactly one retain; no byte copies.
+	pub fn dup(self: &StringByteView) nothrow -> StringByteView {
+		return StringByteView(backing = self.backing.clone(), start = self.start, len = self.len);
+	}
+
+	/// Byte equality with another view.  Never retains or allocates.
+	pub fn eq_view(self: &StringByteView, other: &StringByteView) nothrow -> Bool {
+		if self.len != other.len {
+			return false;
+		}
+		var i = 0;
+		while i < self.len {
+			if core.string_byte_at(&self.backing, self.start + i)
+					!= core.string_byte_at(&other.backing, other.start + i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Byte equality with a `String`.  Never retains or allocates.
+	pub fn eq_string(self: &StringByteView, s: &String) nothrow -> Bool {
+		if self.len != s.byte_length() {
+			return false;
+		}
+		var i = 0;
+		while i < self.len {
+			if core.string_byte_at(&self.backing, self.start + i) != core.string_byte_at(s, i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Returns `true` if the view starts with `prefix` (empty prefix:
+	/// `true` — the existing text semantics).
+	pub fn starts_with_view(self: &StringByteView, prefix: &StringByteView) nothrow -> Bool {
+		if prefix.len > self.len {
+			return false;
+		}
+		var i = 0;
+		while i < prefix.len {
+			if core.string_byte_at(&self.backing, self.start + i)
+					!= core.string_byte_at(&prefix.backing, prefix.start + i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Returns `true` if the view starts with `prefix`.
+	pub fn starts_with(self: &StringByteView, prefix: &String) nothrow -> Bool {
+		val pn = prefix.byte_length();
+		if pn > self.len {
+			return false;
+		}
+		var i = 0;
+		while i < pn {
+			if core.string_byte_at(&self.backing, self.start + i) != core.string_byte_at(prefix, i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Returns `true` if the view ends with `suffix` (empty suffix:
+	/// `true`).
+	pub fn ends_with_view(self: &StringByteView, suffix: &StringByteView) nothrow -> Bool {
+		if suffix.len > self.len {
+			return false;
+		}
+		val base = self.start + self.len - suffix.len;
+		var i = 0;
+		while i < suffix.len {
+			if core.string_byte_at(&self.backing, base + i)
+					!= core.string_byte_at(&suffix.backing, suffix.start + i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Returns `true` if the view ends with `suffix`.
+	pub fn ends_with(self: &StringByteView, suffix: &String) nothrow -> Bool {
+		val sn = suffix.byte_length();
+		if sn > self.len {
+			return false;
+		}
+		val base = self.start + self.len - sn;
+		var i = 0;
+		while i < sn {
+			if core.string_byte_at(&self.backing, base + i) != core.string_byte_at(suffix, i) {
+				return false;
+			}
+			i = i + 1;
+		}
+		return true;
+	}
+
+	/// Returns the VIEW-RELATIVE index of the first occurrence of
+	/// `needle` within the view, or `-1` if absent.  Empty needle
+	/// returns `0` (the existing `index_of` semantics).
+	pub fn index_of_view(self: &StringByteView, needle: &StringByteView) nothrow -> Int {
+		if needle.len > self.len {
+			return 0 - 1;
+		}
+		val limit = self.len - needle.len;
+		var i = 0;
+		while i <= limit {
+			var matched = true;
+			var j = 0;
+			while j < needle.len {
+				if core.string_byte_at(&self.backing, self.start + i + j)
+						!= core.string_byte_at(&needle.backing, needle.start + j) {
+					matched = false;
+					j = needle.len;
+				} else {
+					j = j + 1;
+				}
+			}
+			if matched {
+				return i;
+			}
+			i = i + 1;
+		}
+		return 0 - 1;
+	}
+
+	/// Returns the VIEW-RELATIVE index of the first occurrence of
+	/// `needle`, or `-1` if absent.  Empty needle returns `0`.
+	pub fn index_of(self: &StringByteView, needle: &String) nothrow -> Int {
+		val nn = needle.byte_length();
+		if nn > self.len {
+			return 0 - 1;
+		}
+		val limit = self.len - nn;
+		var i = 0;
+		while i <= limit {
+			var matched = true;
+			var j = 0;
+			while j < nn {
+				if core.string_byte_at(&self.backing, self.start + i + j)
+						!= core.string_byte_at(needle, j) {
+					matched = false;
+					j = nn;
+				} else {
+					j = j + 1;
+				}
+			}
+			if matched {
+				return i;
+			}
+			i = i + 1;
+		}
+		return 0 - 1;
+	}
+
+	/// Materializes the viewed bytes as a fresh owned `String`.
+	///
+	/// ALLOCATES (the only String-storage-allocating view operation);
+	/// byte-exact `substring` semantics, no UTF-8 validation.  An
+	/// empty view yields `""` (the runtime singleton — no allocation).
+	pub fn to_string(self: &StringByteView) nothrow -> String {
+		if self.len == 0 {
+			return "";
+		}
+		var b = io.buffer(self.len);
+		var i = 0;
+		while i < self.len {
+			io.buffer_write(&mut b, i, core.string_byte_at(&self.backing, self.start + i));
+			i = i + 1;
+		}
+		return core.string_from_utf8_bytes(io.buffer_ptr(&b), self.len);
+	}
+
+	/// Consumes the view into a byte iterator.  Consumption (rather
+	/// than borrowing) means iteration adds NO hidden retain; callers
+	/// needing the view afterward write `v.dup().bytes()`.
+	pub fn bytes(var self: StringByteView) nothrow -> ViewBytesIter {
+		return ViewBytesIter(v = move self, idx = 0);
+	}
+}
+
+/// Byte iterator over a consumed `StringByteView` (see
+/// `StringByteView.bytes`).  Yields `Optional<Byte>`.
+pub struct ViewBytesIter {
+	v: StringByteView,
+	idx: Int
+}
+
+implement ViewBytesIter {
+	/// Returns the next byte, or `None` past the end.  Steps never
+	/// retain or allocate.
+	pub fn next(self: &mut ViewBytesIter) nothrow -> Optional<Byte> {
+		if self.idx >= self.v.len {
+			return Optional<Byte>::None();
+		}
+		val b = core.string_byte_at(&self.v.backing, self.v.start + self.idx);
+		self.idx = self.idx + 1;
+		return Optional::Some(b);
+	}
+}
+
+// ── _StringByteSource — EXPORTED-INTERNAL byte-source plumbing ─────
+//
+// Underscore-internal (repository convention, cf. std.regex's
+// _NfaProg/_find_from): NOT a promised user API — user code stores
+// and reads through StringByteView; this window exists so
+// range-parameterized stdlib engines share ONE matcher/parser
+// authority without a public backing accessor.
+//
+// A BORROWED window used as the single matcher/parser authority
+// parameter: range-parameterized engines (std.regex, std.parse view
+// entries) read through it instead of decomposing a view.  Fields
+// are private — unlike a public backing accessor, a source built
+// from a NARROW view cannot be used to read outside that view's
+// range (`read` is range-guarded and fail-closed), so handing a view
+// to an engine never leaks the rest of the backing string.
+//
+// Borrow semantics: the source BORROWS (never retains) its subject —
+// construction from a `&String` or `&StringByteView` is free of
+// refcount traffic, which is what keeps String-entry matching
+// zero-retain.  It is a transient window, not a storable view: for
+// storage, use `StringByteView`.
+
+/// Borrowed, range-guarded byte window over a `String` or
+/// `StringByteView` (see the module comment above).  Construct with
+/// `_byte_source` / `_byte_source_all`.
+pub struct _StringByteSource {
+	bytes: &String,
+	base: Int,
+	len: Int
+}
+
+/// A source over the VIEW's range (borrows; never retains).
+pub fn _byte_source(v: &StringByteView) nothrow -> _StringByteSource {
+	return _StringByteSource(bytes = &v.backing, base = v.start, len = v.len);
+}
+
+/// A source over ALL of `s` (borrows; never retains).
+pub fn _byte_source_all(s: &String) nothrow -> _StringByteSource {
+	return _StringByteSource(bytes = s, base = 0, len = s.byte_length());
+}
+
+implement _StringByteSource {
+	/// The window's length in bytes.
+	pub fn size(self: &_StringByteSource) nothrow -> Int {
+		return self.len;
+	}
+
+	/// Reads the byte at window-relative index `i`.  Range-guarded and
+	/// FAIL-CLOSED: an out-of-range read is an internal-contract abort
+	/// (engines iterate within `size()`; there is no recoverable
+	/// out-of-range read on this type).
+	pub fn read(self: &_StringByteSource, i: Int) nothrow -> Byte {
+		assert(i >= 0 and i < self.len, "_StringByteSource.read out of range");
+		return core.string_byte_at(self.bytes, self.base + i);
+	}
+}
+
+/// Calls `body(bytes_base, byte_length)` over the VIEW's borrowed
+/// bytes — the base pointer is `backing bytes + start_offset`, the
+/// length is the view's length.  Zero-copy; composes through
+/// `std.ffi.with_bytes`, so the window contract is verbatim: the
+/// pointer is INVALID after `body` returns.
+///
+/// Reach for this only for scan-sized windows (roughly 128 bytes and
+/// up — the shipped-API sweep measures the break-even at ~64-96
+/// bytes): the fixed per-window cost (boxed callback environment +
+/// window entry + per-window subview) makes PER-TOKEN bulk windows
+/// measurably slower than the byte-read tier below that.
+pub fn with_view_bytes<T, F>(v: &StringByteView, var body: F) nothrow -> T require F is core.Fn2<mem.Ptr<Byte>, Int, T> {
+	val start = v.start;
+	val vlen = v.len;
+	val inner: core.Callback2<mem.Ptr<Byte>, Int, T> =
+		core.callback2(|p: mem.Ptr<Byte>, n: Int| captures(move body, copy start, copy vlen) => {
+			body.call(mem.ptr_offset<type Byte>(p, start), vlen)
+		});
+	return ffi.with_bytes<type T, core.Callback2<mem.Ptr<Byte>, Int, T> >(&v.backing, inner);
+}
+
+/// Throwing-callback form of `with_view_bytes` (same window
+/// contract).
+pub fn with_view_bytes_throw<T, F>(v: &StringByteView, var body: F) -> T require F is core.FnThrow2<mem.Ptr<Byte>, Int, T> {
+	val start = v.start;
+	val vlen = v.len;
+	val inner: core.CallbackThrow2<mem.Ptr<Byte>, Int, T> =
+		core.callback_throw2(|p: mem.Ptr<Byte>, n: Int| captures(move body, copy start, copy vlen) => {
+			body.call(mem.ptr_offset<type Byte>(p, start), vlen)
+		});
+	return ffi.with_bytes_throw<type T, core.CallbackThrow2<mem.Ptr<Byte>, Int, T> >(&v.backing, inner);
+}
+
+/// Splits `s` on `delimiter` into VIEWS — field structure EXACTLY as
+/// `split` (empty delimiter: one single-byte view per input byte;
+/// absent delimiter: one whole-input view; empty input: one empty
+/// view; empty fields preserved, including a trailing one).
+///
+/// ZERO substring allocations and ZERO byte copies — but NOT
+/// allocation-free in the literal sense: it allocates the output
+/// ARRAY and performs one backing retain per element.
+pub fn split_views(s: &String, delimiter: &String) nothrow -> Array<StringByteView> {
+	val sn = s.byte_length();
+	val dn = delimiter.byte_length();
+
+	if dn == 0 {
+		var per_byte: Array<StringByteView> = [];
+		var i = 0;
+		while i < sn {
+			per_byte.push(StringByteView(backing = s.clone(), start = i, len = 1));
+			i = i + 1;
+		}
+		return move per_byte;
+	}
+
+	var arr: Array<StringByteView> = [];
+	var start = 0;
+	while start <= sn {
+		val pos = _index_of_from(s, sn, delimiter, dn, start);
+		if pos < 0 {
+			arr.push(StringByteView(backing = s.clone(), start = start, len = sn - start));
+			return move arr;
+		}
+		arr.push(StringByteView(backing = s.clone(), start = start, len = pos - start));
+		start = pos + dn;
+	}
+	return move arr;
+}
+
+// ── Public byte access: bounds failure is DATA, not an exception ───
+
+implement String {
+	/// Returns the byte at `index` as `Ok(byte)`, or
+	/// `Err(std.err:IndexError)` (container id `std.core:String`,
+	/// `index` = the requested index) when out of range.
+	///
+	/// NOTHROW: bounds failure is explicit data — match on the Result
+	/// (or use the ordinary Result affordances to propagate).  The
+	/// low-level `core.string_byte_at` primitive is
+	/// documented-internal and FAIL-CLOSED (aborts) out of range;
+	/// this method is the public surface.
+	pub fn byte_at(self: &String, index: Int) nothrow -> core.Result<Byte, err.IndexError> {
+		if index < 0 or index >= self.byte_length() {
+			return core.Result::Err(err.IndexError(container_id = "std.core:String", index = index));
+		}
+		return core.Result::Ok(core.string_byte_at(self, index));
+	}
 }

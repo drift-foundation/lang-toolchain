@@ -207,7 +207,7 @@ def test_lowering_drop_value_emits_moveout_for_non_copy_local(tmp_path: Path) ->
 	assert res.returncode == 0, f"compile failed: {res.stderr[:500]}"
 	ir = ir_path.read_text()
 	import re
-	main_match = re.search(r"define i64 @drift_main\(\) \{(.*?)^}", ir, re.DOTALL | re.MULTILINE)
+	main_match = re.search(r"define i64 @drift_main\(\)[^{]*\{(.*?)^}", ir, re.DOTALL | re.MULTILINE)
 	assert main_match, "could not locate drift_main body"
 	body = main_match.group(1)
 	destroy_calls = re.findall(

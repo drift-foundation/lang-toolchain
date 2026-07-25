@@ -1372,3 +1372,678 @@ rerun per reviewer; the accepted 924 +0 + memcheck gates remain valid)
   generation-command example.  Repo sweep: "certified baseline"
   survives only in the BASELINE.md predecessor/promotion record and
   this ledger's historical entries.  Teeth 16/16 post-rename.
+
+## 2026-07-24 — string-view-performance phase OPENED: design checkpoint written, at STOP
+
+- Branch string-view-performance from mainlined B5 (base 1d92e0b6);
+  extends the 0.33.88/ABI-22 candidate; ONE combined certification at
+  phase end.
+- REPORT-ONLY checkpoint written:
+  work/string-ownership-refactor/STRING-VIEW-PERFORMANCE-CHECKPOINT.md
+  (ends at STOP).  Inputs: full surface/consumer re-audit
+  (string_byte_at, with_bytes, SourceCursor, std.json spans +
+  allocation hot spots, parse_*_bytes, StringBytesIter, substring's 3
+  production callers, regex/codec) + a MEASURED 5-variant
+  parser-shaped benchmark (2MB / 279,653 tokens, medians):
+  byte_at scan 2199us; with_bytes base-once 419us (5.2x); substring
+  materialization 28987us (~96ns/token); per-token view prototype
+  13947us (~42ns/token construct+destroy, 2.1x better than substring,
+  zero alloc); reused-view reads 2350us (byte_at+7% — reads don't
+  retain).  Copy probe: String-bearing struct is NOT Copy
+  (E-AUTO-e8f17b8b) → views are move-only, dup() explicit.
+- Headline design: std.text StringByteView {backing String, start,
+  len} (honest byte-range name; StringView reserved for future
+  UTF-8-validated views); reads via composed string_byte_at (no new
+  intrinsic); bulk ffi.with_view_bytes for the 5.2x path; to_string()
+  the only allocator; C interop copies (no zero-copy C-string
+  promise); ABI stays 22 — pure stdlib value, no compiler boundary
+  change.  Adoption in-chunk: json _parse_string/_parse_number,
+  SourceCursor.slice_view, split_views, parse_int/uint_view,
+  json-pointer segmentation.
+- NEXT: maintainer review of the checkpoint; implementation only
+  after clearance.
+- CHECKPOINT REV 2 (8 blocking review corrections folded in, still at
+  STOP): (1) bulk window moved to std.text composing through
+  ffi.with_bytes — PROBED: generic signature compiles+runs
+  (captures(move body, copy start, copy vlen)), and measured w6 =
+  405us vs w2 419us — base-once tier survives composition; (2) three
+  performance tiers stated honestly (safe byte_at ≈ guarded path;
+  bulk window = base-once but unsafe+callback-scoped; view solves
+  storage/lifetime, not safe max speed); (3) public API CLOSED:
+  TextError reused, methods-on-view style, both view/view and
+  view/String search forms with view-relative indexes + existing
+  empty-needle semantics, iteration CONSUMES the view (dup() for
+  both), subtraction-form bounds, offset=start on construction
+  failures, container id std.text:StringByteView; (4) allocation
+  claims corrected (split_views allocates its array + one retain per
+  element; to_string qualified); (5) adoption list corrected:
+  _parse_string reclassified as adjacent non-view work (owned String
+  required), _parse_number = validation + one REQUIRED
+  materialization, JSON-pointer migration DROPPED (HashMap
+  heterogeneous lookup out of scope), JsonDoc.span_view added as the
+  flagship genuine adoption; (6) parse_int_bytes offset discrepancy
+  VERIFIED in code (doc says relative-to-start, impl returns
+  absolute) — pinned: documented contract wins, regression-first fix
+  before parse_*_view; (7) acceptance now requires EXACT
+  retain/alloc-count proofs via -Wl,--wrap counting shim (B5
+  custom-link technique) + IR call accounting; (8) corpus wording
+  aligned with the promotion policy (measure→attribute→review→
+  approve→promote BEFORE final runner/cert).
+- CHECKPOINT REV 3 (second review round, 5 corrections, still at
+  STOP): (1) window-size sweep MEASURED (bench2: safe reads vs
+  composed-bulk-per-window at 8B..2MB): per-window fixed cost ~54ns,
+  crossover ~64B — per-token bulk is 7.1x WORSE at 8B, 2-10x better
+  >=128B; pinned API guidance: per-token bulk windows are an
+  antipattern, safe byte_at for token-sized work; (2) counting shim
+  corrected to REAL wrappable symbols — drift_string_new_copy is
+  static/unwrappable (string_runtime.c:150); wrap exported
+  drift_string_retain/release + drift_string_from_utf8_bytes
+  (to_string path) + drift_alloc_array (boxed-callback env; paired
+  with drift_cb_env_free; marker-window discipline since arrays share
+  it); forced-throw with_view_bytes_throw obligation added (no leaked
+  retain/env across unwind); (3) search names reuse text vocabulary:
+  index_of/index_of_view (text has index_of at :534, no `find`);
+  shipping signatures for split_views / SourceCursor.slice_view /
+  LocatedCursor.raw_view / JsonDoc.byte_range_view / parse_*_view
+  pinned in §5 incl. split_views parity table (empty delimiter →
+  per-byte views; absent → [whole]; empty input → [empty view];
+  empty fields preserved); (4) JSON flagship = provenance-safe
+  LocatedCursor.raw_view() (JsonByteSpan has no source identity —
+  span_view rejected); byte_range_view explicitly numeric, delegates
+  to text.byte_view with TextError (not JsonErrorData); (5) exact
+  §6a offset table pinned (invalid-range → offset 0 positionless;
+  syntax/sign/digit/overflow/underflow/invalid-datatype rows all
+  relative) + REQUIRED 0.33.88 history record since callers may
+  observe today's absolute offsets.
+- CHECKPOINT §11 ADDED (regex integration, maintainer review
+  addition; still at STOP): RegexMatch stays a cheap Copy span
+  ({pub start, pub end}, no source identity) — every conversion is
+  bounds-CHECKED, no provenance claim (fabricable by construction).
+  Pinned: match_view(m, &String) and match_subview(m, &StringByteView)
+  -> Result<StringByteView, text.TextError> (out-of-bounds
+  offset=m.start; malformed end<start rejected); DECISION SHIP
+  is_match_view/find_first_view — value is avoiding SUBJECT-substring
+  materialization, offsets VIEW-RELATIVE, anchors bind to view
+  boundaries; regex-shaped benchmark MEASURED (bench3): DFA proxy
+  indexed 2519us vs one-bulk-window 744us (3.4x = read-bound ceiling)
+  vs real engine 172703us (69x slower — per-byte NFA bookkeeping incl.
+  a per-byte seeds Array alloc in _try_match_at; read path ~1.5% of
+  engine time) → engine bulk conversion explicitly OUT OF SCOPE,
+  engine per-byte alloc noted as future-phase opportunity; counting
+  obligations extended (existing matching zero-retain regression;
+  *_view matching zero-retain; match_view/match_subview exactly one
+  retain); pins: lifetime beyond haystack binding, fabricated-match
+  negative matrix (never panic/UB/ICE), empty match -> valid empty
+  view/singleton, nested-view offset composition + byte-equality.
+  std.regex already imports std.text — no new dependency.
+- §11 CORRECTION ROUND CLOSED (rev 4) → IMPLEMENTATION GO: (1) real-
+  engine bulk-read variant BUILT+MEASURED (bench4: verbatim NFA
+  executor replica from exported Regex.root; stock 171.3ms, replica-
+  byteat 169.0ms fidelity ±1.4%, replica-bulk 165.8ms → bulk reads
+  worth 1.9%; engine conversion out of scope ON EVIDENCE; per-byte
+  seeds alloc = separate unmeasured future opportunity); (2) ONE
+  matcher authority pinned + compile-proven: range triple (s,&base,
+  len) engine core; view entries via NEW std.text read-only accessors
+  incl. borrow-returning backing_ref(&self)->&String — probe runs, IR
+  shows ZERO retain/release/alloc in core/entry/accessor; STOP-not-
+  clone contingency recorded; (3) signatures compile-real:
+  text.StringByteView alias forms probe-verified (Result<text.T,
+  text.E> runs), all four fns added to regex export block; (4) §1/§9
+  contradictions fixed (zero-copy span results but NO retained
+  backing / view input; regex IS integrated via §11); (5) lifetime/
+  retain-count fixtures pinned HEAP-BACKED non-static (literals are
+  STATIC/immortal — vacuous-pass hazard) — applies to all §10 count
+  fixtures.  Maintainer disposition: conversions/offsets/anchors/
+  fabricated-checks/RegexMatch-stays-Copy APPROVED; after these
+  closures proceed to consolidated implementation, no further
+  arm-selection review, one final certification.
+
+## 2026-07-24 — IMPLEMENTATION step 1: std.text StringByteView foundation LANDED (tree, untested-by-suite)
+
+- stdlib/std/text.drift: StringByteView {backing,start,len} private
+  fields + STRING_BYTE_VIEW_CONTAINER_ID + byte_view/byte_view_all +
+  implement block (byte_length/is_empty/byte_at[IndexError,
+  view-relative]/subview/dup/eq_view/eq_string/starts_with(_view)/
+  ends_with(_view)/index_of(_view)/to_string/backing_ref/start_offset/
+  bytes) + ViewBytesIter + with_view_bytes(_throw) (composed through
+  ffi.with_bytes, probed shape) + split_views (split field-structure
+  parity, reuses _index_of_from).  Imports += std.err, std.ffi;
+  exports += 8 entries.  Doc comments carry the measured tier guidance
+  (per-token bulk antipattern, ~54ns/window, ~100B threshold).
+- 31-check scratch smoke compile+run PASSES (bounds, throwing
+  byte_at, subview/dup/eq/search, to_string+empty singleton,
+  consuming iterator, authority accessors, bulk window, split_views
+  parity x4, lifetime-beyond-binding) on heap-backed strings.
+- Note: smoke initially hit E_EXPR_BLOCK_MISSING_VALUE on mixed
+  value/return match arms — the EXISTING clear diagnostic working as
+  designed (statement-form rewrite applied in the test; no compiler
+  issue).
+- NEXT: §6a parse offset contract fix + parse_*_view.
+
+## 2026-07-24 — IMPLEMENTATION steps 2-5: §6a fix + parse/source/json/regex adoption LANDED (tree)
+
+- §6a: parse_int_bytes/parse_uint_bytes offsets now RELATIVE per the
+  pinned table (invalid-range→0 positionless; misleading `val len =
+  end` renamed `limit`); contract note in doc comments records the
+  pre-0.33.88 absolute-offset behavior correction.  parse_int_view/
+  parse_uint_view added (view-relative offsets; empty view =
+  invalid-syntax@0); parse imports std.text; exports updated.
+- std.source: SourceCursor.slice_view(start, end) ->
+  Result<text.StringByteView, SourceError> — checks and error codes
+  IDENTICAL to slice (signature is Int offsets, mirroring the real
+  slice, not the checkpoint's SourcePos sketch — recorded deviation).
+- std.json: import std.text as txt (alias `text` collides with the
+  ubiquitous `text` param name — first compile caught E-AUTO-a6cf269d
+  x30); JsonDoc.byte_range_view (explicit numeric, delegates verbatim
+  to txt.byte_view) + LocatedCursor.raw_view (provenance-safe,
+  parser-span invariant, fail-safe empty view on the unreachable
+  arm); _parse_string ESCAPE-FREE FAST PATH: scan-ahead + one
+  _slice_string range copy for clean strings, identical limit
+  trip-point (scan-count stands in for decoded length), legacy
+  control-byte semantics preserved, escape falls back to the general
+  loop seeded with the clean prefix.  _parse_number: NO change needed
+  — already validates over the span and materializes exactly once
+  (checkpoint's honest description matches existing code).
+- std.regex: matcher authority = range triple — _try_match_at_range/
+  _find_from_range private internals (range-relative positions,
+  anchors at range boundaries, reads at base+pos); exported
+  _try_match_at/_find_from now one-line delegators (String behavior
+  bit-identical); is_match_view/find_first_view (view-relative,
+  zero-retain via backing_ref/start_offset) + checked match_view/
+  match_subview (end<start pre-check, then byte_view/subview);
+  4 exports added.
+- 51-check adoption smoke compile+run PASSES: §6a offsets both
+  families, slice_view ok+error, raw_view/byte_range_view,
+  fast-path + escaped-string equivalence via json.parse, regex
+  view-relative offsets, match_subview/match_view round-trips,
+  fabricated-match matrix (inverted/negative/oob → checked errors),
+  empty-match → empty view, anchors bind to view boundaries (^$
+  matches the view, fails the whole string).
+- NEXT: existing-suite regression runs, committed test files,
+  counting harness, benchmark gate, docs, history.
+
+## 2026-07-24 — IMPLEMENTATION steps 6-9: evidence gates + docs + history COMPLETE; focused gates 45/45
+
+- lang/tests/driver/test_string_byte_view.py (4 fixtures, all
+  compile+run): SEMANTICS (31 checks), ADOPTION (51 checks), OFFSET
+  TABLE (every §6a row, both families; overflow trips at rel 18 for
+  20 nines — guard fires BEFORE the 19th digit consumes — table
+  wording "where the scan stopped" holds), FORCED THROW (100 unwinds,
+  view+backing usable after).
+- lang/tests/driver/test_string_byte_view_counts.py — the §10
+  count-exact wrap harness (retain/release/from_utf8_bytes/
+  alloc_array/free_array; B5 custom-link + @main rename).  PINNED
+  from observation: construct 100 retains/100 ops; dup+subview 201;
+  reads (2100 guarded byte_at + 200 searches) retain=1 alloc=0
+  release=7 CONSTANT (needles hoisted — literal temps add counted
+  no-op releases); to_string nonempty from_utf8=100 (+100 io-buffer
+  alloc/free); empty from_utf8=0/alloc=0 (singleton); bulk alloc=1
+  (capture-less body does NOT box; only the capturing inner does);
+  throw x100 retains stay 1 (no leaked retain; envs freed via
+  same-TU drift_cb_env_free — invisible to wrap, delegated to
+  memcheck); regex String matching retain DELTA vs compile-only = 0,
+  view matching delta = +1 (SUBTRACTION method — compile noise
+  cancels).  KEY wrap caveat documented: --wrap sees cross-TU
+  (program-level IR) calls only.
+- lang/tests/memcheck/test_string_byte_view_lifetime.py — valgrind-
+  clean: views outlive bindings (Array + dropped scopes), dup/subview
+  single-retain balance, 50 forced-throw window unwinds (THE env
+  alloc/free balance proof), split_views + match_view survivors; all
+  heap-backed.
+- lang/tests/driver/test_string_view_perf_tiers.py — guard-band tier
+  gate (NOT a benchmark; contention-safe ratios): bulk(direct+
+  composed) >=2x faster than indexed; view reads within 3x of
+  byte_at; substring >1.3x the view shape; checksums equal.
+- Docs: text.drift substring guidance now points at StringByteView as
+  the standard answer; Effective Drift "String views for parsers"
+  section added (three tiers, per-token-window antipattern, adopter
+  list, C-interop honesty) with its example COMPILE-PROVEN
+  (docex2 run exit 0).
+- doc/history.md: new 0.33.88 string-view entry incl. the §6a
+  BEHAVIOR CORRECTION record (documented relative-offset contract now
+  holds; callers may have observed absolute offsets before).
+- FOCUSED GATES: 45/45 — all four new files + json/source/text/parse
+  existing suites + string layout audit + B5 representation/guards/
+  ffi/bytes-base/memcheck batteries.
+- REMAINING before mainline of the combined phase: full pre-mainline
+  suite (maintainer-run), corpus run with EXPECTED attributable
+  stdlib delta (measure→attribute→review→approve→promote), combined
+  certification at phase end per the standing plan.
+
+## 2026-07-24 — Static-delta review round: 4 release blockers + amendments CLOSED
+
+- (1) match_view/match_subview now FULLY validate (start>=0, end>=start,
+  end<=len) BEFORE the length subtraction — INT_MIN/INT_MAX fabricated
+  spans can no longer overflow; EXTREMES fixture pins all four extreme
+  combinations for both conversions.
+- (2) LocatedCursor.raw_view() FAILS CLOSED: corruption of the parser-
+  span invariant is a contract ABORT (assert), never substituted
+  content; enforcement lives in exported-internal
+  json._span_view_or_abort (the invariant is unreachable from safe
+  Drift through raw_view itself) with a tooth proving the abort +
+  message.
+- (3) perf tier gate rewritten onto the SHIPPED API: w4 = production
+  byte_view per token, w5 = StringByteSource.read whole-scan (the
+  range-guarded engine/parser read path), w6 = text.with_view_bytes;
+  prototype SView/wvb removed from the gate.  Green.
+- (4) backing_ref()/start_offset() REMOVED (capability leak: a narrow
+  view could expose its entire backing).  Replaced with the reviewer-
+  preferred zero-overhead byte-source abstraction:
+  text.StringByteSource {bytes: &String, base, len} — PRIVATE borrow
+  fields (LocatedCursor precedent, probe-verified zero
+  retain/release/alloc in IR), range-guarded fail-closed read();
+  byte_source(v) bounds the window to the VIEW, byte_source_all(s)
+  keeps String-entry matching zero-retain.  regex authority + parse
+  views rewired; checkpoint §11 amended with the revision record.
+- Amendments: EXTREMES fixture also pins negative byte_at's EXACT
+  IndexError (container id std.text:StringByteView + index) for both
+  underflow and overflow indexes; move-only pin (use-twice →
+  E-AUTO-e8f17b8b); private-field forgery rejection pin; counting
+  harness extended — match conversions retain delta EXACTLY 201
+  (100+100+1 whole-view) vs compile+find baseline with no
+  materialization, split_views EXACTLY one retain per element (3);
+  is_match doc comment restored to is_match; Effective Drift example
+  now idiomatic (no & at call sites; auto-borrow) and re-proven
+  (docex2 exit 0); "one direct range copy" replaced with the accurate
+  range-copy-helper (temp buffer + final storage) wording in
+  json.drift + history.
+- NEW PRE-EXISTING COMPILER DEFECT FOUND (not view-related, needs
+  LANGUAGE_BUG classification): two sequential try/catch statements
+  whose TYPED catch binders share a name (`catch std.err:IndexError(e)`
+  twice) fail with spanless "use of uninitialized 'e'"
+  [E-AUTO-77978427]; each alone compiles; renaming the second binder
+  compiles+runs.  Reproduces WITHOUT any view code (plain
+  string_byte_at) — minimal repros preserved in scratch
+  (svperf/mre3.drift byte_at-free variant mre5).  Binder-scope/alpha-
+  renaming family (cf. 0.33.36 nested-try binder, hidden-lambda binder
+  collisions).  Worked around in the EXTREMES fixture with a marked
+  comment (binder e2); NOT silently absorbed.
+
+## 2026-07-24 — LANGUAGE_BUG slice: sibling catch-binder identity (STOP gate work) + static items
+
+- CLASSIFICATION (maintainer): LANGUAGE_BUG in checker catch-binder
+  scope/binding identity — lexical identity/alpha-renaming family.
+  TRIGGER SCAN RECORDED: the creation-site lifetime-registration
+  trigger in doc/refactor_triggers.md does NOT fire (this is not
+  drop, unwind cleanup, or lifetime authority).
+- ROOT CAUSE (instrumented pre-fix): HCatchArm carried only the
+  binder NAME; the borrow checker's catch-entry initialization used
+  the name-keyed _binding_id_by_name fallback (EARLIEST binding per
+  name), so with sibling arms both named `e`, BOTH entries marked
+  arm 1's bid (bc-debug: entries marked [5]; the failing use carried
+  bid 6) → spanless "use of uninitialized 'e'" in arm 2.
+- FIX AT THE IDENTITY OWNER (mirrors HMatchArm.binder_ids /
+  0.33.4+0.33.36 family; NO local rename workaround):
+  hir_nodes.HCatchArm gains binder_id; type_checker records the
+  arm-scoped bid on the arm at BOTH allocation sites (statement HTry
+  + expression-form arms); borrow_checker catch-entry marking now
+  keys (name, binder_id) and marks THE ARM'S OWN binding first
+  (name-based collection retained as fallback only).
+- REGRESSION: lang/tests/driver/test_catch_binder_sibling_name_reuse.py
+  — pre-fix failure recorded in the docstring (exact diagnostic +
+  bc-debug bids); two sequential typed catches BOTH named `e` with
+  DISTINCT payloads (AlphaErr{code,tag} vs BetaErr{level}),
+  compile-AND-run proving each use reads ITS OWN arm's payload;
+  three-arm chains reusing `e` twice; NEGATIVE scope pin (binder not
+  visible after its arm).  2/2 green.  e2 workaround in the view
+  EXTREMES fixture REPLACED with `e` (no temporary workaround
+  remains).  ABI unchanged (compiler-internal; rides 0.33.88).
+- STATIC ITEMS: (1) perf gate safe-read tier now PRIMARY
+  StringByteView.byte_at (within 4x band; landing pads never fire
+  in-bounds) with the _StringByteSource path as SECONDARY (3x);
+  (2) byte source renamed to repository internal convention
+  (_StringByteSource/_byte_source/_byte_source_all, cf. _NfaProg) —
+  exported-internal plumbing, NOT promised user API; range guard +
+  zero-retain proof retained; (3) Effective Drift prose
+  with_view_bytes(&v, cb) → (v, cb).
+- FINDING #2 (separate, pre-existing, runtime — NOT the binder bug,
+  NOT introduced by this phase): runtime-thrown IndexError from the
+  string_byte_at INTRINSIC bounds path aborts (silent SIGABRT) for
+  (a) a single POSITIVE-OOB index (mre8: 9999 → abort) and (b) any
+  SECOND runtime-thrown IndexError in one fn regardless of binder
+  names (mre7/mre9), while a single NEGATIVE index is catchable
+  (mre6 clean) and Drift-CONSTRUCTED IndexErrors (view byte_at)
+  catch cleanly repeatedly (EXTREMES fixture).  Repro matrix in
+  scratch svperf/mre6-9.drift.  Awaiting routing.
+
+## 2026-07-25 — Second LANGUAGE_BUG round: binder corrections + string OOB abort fix
+
+FIRST BUG (sibling catch binders) — three review corrections closed:
+- (1) Expression-form: PROBED — sibling-name expr-form arms compile+
+  run correctly WITHOUT identity plumbing (no statement-style
+  catch-entry marking path exists for HTryExpr); the ineffective
+  hasattr assignment REMOVED from the checker with the claim
+  documented in place; a real expr-form compile/run sibling-name pin
+  added to the regression (guards the property).
+- (2) Marking now uses the arm's binder_id EXCLUSIVELY when present
+  (name lookup only when absent); mechanism tooth added:
+  lang/tests/borrow_checker/test_catch_entry_marks_own_binding.py —
+  burst-grouped VALID marks (fixpoint-revisit safe): every entry
+  visit marks exactly ONE binding, union == both sibling ids, and
+  the name-keyed lookup is never consulted for the binder name.
+- (3) Scope negative pins the EXACT diagnostic: E-UNKNOWN-NAME
+  "unknown name 'e'" and explicitly NOT use-of-uninitialized.
+
+SECOND BUG — CLASSIFIED per maintainer: LANGUAGE_BUG in the
+intrinsic/runtime exception-construction path; no matching
+refactor-trigger uplift (catch-lifetime trigger is cleanup/drop
+authority, unrelated) — scan recorded.
+- CORRECTED PRE-FIX MATRIX: the earlier "single negative catches" was
+  a PIPE-SWALLOWED exit code (`| head` ate $?); re-measurement showed
+  EVERY intrinsic OOB aborted (mre5-mre9 all SIGABRT), while
+  Drift-constructed IndexErrors caught fine.
+- ROOT CAUSE: StringByteAt lowering delegated bounds to C-side
+  drift_bounds_check whose failure path is drift_error_raise — the
+  error_dummy abort() stub (no C→Drift throw channel exists).  Array
+  indexing was never affected: hir_to_mir expands xs[i] into an
+  IR-level bounds compare + the unified _emit_index_error_throw
+  (synthesized IndexError + params JSON + normal dispatch edges).
+- FIX AT THE COMMON AUTHORITY: STRING_BYTE_AT MIR lowering now emits
+  the SAME guarded-index expansion, and _emit_index_error_throw is
+  parameterized by container id (STRING_CONTAINER_ID
+  "std.core:String" added to core/container_ids.py, matching
+  std.core).  Codegen's C-side check retained as unreachable defense
+  in depth.  Lowering-internal only → 0.33.88/ABI 22 unchanged (no
+  exported helper signature/layout/convention moved).
+- REGRESSION: lang/tests/driver/test_string_byte_at_oob_catchable.py
+  — full compile/run pins with EXACT caught indexes (9999 w/
+  container id std.core:String; -4; sequential distinct binders;
+  sequential SAME binder composing with the identity fix; explicit-
+  construction + in-bounds controls) and the nothrow-uncaught abort
+  contract preserved.  2/2 green; whole mre matrix now exits 0.
+
+## 2026-07-25 — string_byte_at HOLD corrections closed (3/3)
+
+- (1) PUBLIC METHOD surface: String.byte_at was `nothrow` while
+  documenting IndexError — the nothrow frame was a throw WALL, so
+  `try { s.byte_at(oob) } catch` aborted INSIDE the wrapper (probe
+  confirmed 134 pre-change).  `nothrow` REMOVED (core.drift wrapper;
+  doc comment records why); zero stdlib callers of `.byte_at(`
+  affected; compile/run pin added (s.byte_at(9999) caught with exact
+  index + container id).  Drift-level signature change only — no
+  C-boundary change, ABI 22 stands.
+- (2) Uncaught control now EXACT: returncode == -6 (SIGABRT, matching
+  nothrow_oob_aborts) and stderr PINNED EXACTLY EMPTY (the current
+  uncaught channel is the silent raise-stub abort; any future
+  uncaught-error diagnostic must be a deliberate reviewed change).
+- (3) Valid-read regression MEASURED pre/post using the preserved
+  pre-fix binary (same source/flags/machine): checked-everywhere
+  first cut was +18% (2135→2518us, 2MB scan).  Introduced
+  StringByteAt(unchecked=True) — emitted ONLY by the guarded
+  expansion (StringLen already ran the observation guard on the same
+  handle; bounds proven by the branch); codegen skips the second
+  guard + the C bounds call for it; the fully CHECKED form remains
+  the default for any other MIR producer.  RESULT: 2MB scan 2138 →
+  846us — ~2.5x FASTER than pre-fix (the per-byte C call dominated);
+  view reads 2334→1120us.  Emitted-IR growth +8.4% pre-opt lines
+  (113,487→123,026), binary +4.6% (677,192→708,560 B) on the bench
+  unit — recorded.
+- Perf tier gate REBANDED on fresh evidence (bulk-vs-indexed gap
+  narrowed ~5.2x→~2.0x because indexed got faster): bulk>=1.4x,
+  read tiers within 4x, substring>1.3x view — all measured with
+  headroom.  Live doc claims retimed (text.drift ~2x;
+  effective-drift "roughly halves"); checkpoint gains a
+  post-checkpoint retiming ADDENDUM (§2 tables stay as the honest
+  pre-fix record; tier order and all decisions unchanged; per-token
+  bulk antipattern stands — crossover only moves upward).
+- history.md updated (String.byte_at can-throw + retiming noted in
+  the LANGUAGE_BUG entry).
+
+## 2026-07-25 — Byte-access HOLD rework: binding Result API + validator + perf/records
+
+- BINDING API landed: String.byte_at + StringByteView.byte_at nothrow
+  -> Result<Byte, std.err:IndexError>.  PLACEMENT DEVIATION (recorded):
+  the String method lives in std.text via foreign `implement String`
+  (probe-verified) because std.core cannot import std.err (cycle);
+  callers import std.text.  core's old wrapper REMOVED.
+- PRIMITIVE realigned: core.string_byte_at declared NOTHROW,
+  documented-internal, FAIL-CLOSED — MIR expansion now assert-shaped
+  (AssertLoc diagnostic "string byte access out of range..." +
+  Unreachable on the fail edge; no throw machinery), unchecked load
+  on the proven edge.  Three authorities agree (decl/CallInfo/
+  lowering).  GATING the primitive from user code judged INFEASIBLE:
+  71 e2e fixtures call it (frozen corpus) — documented-internal
+  instead (deviation recorded).
+- MIR VALIDATOR: stage2/unchecked_load_validator.py wired at
+  lower_module_to_llvm entry (FINAL post-mutation boundary): proves
+  single-pred THEN-edge reachability, AND(GE(i,0-const),
+  LT(i,StringLen(SAME value))) over the load's OWN value+index,
+  AssertLoc-on-same-cond + Unreachable fail edge.  9 stage2 teeth:
+  canonical passes; unguarded / wrong string / wrong index / reversed
+  branch / missing observation / mutated cond / assert-less fail edge
+  all rejected; checked loads unconstrained.
+- CONSUMERS: 4 e2e fixtures updated (3 digit-readers -> primitive;
+  string_byte_at_method -> Result API incl. Err pin) — fixture-hash
+  universe delta EXPECTED, for corpus attribution/promotion review.
+  Embedded fixtures (semantics/extremes/counts/perf-gate) reworked to
+  Result; counts op_reads (2100 Result reads) still retain=1 alloc=0
+  → "Result reads do not retain/allocate" PROVEN count-exactly.
+- REGRESSION REWRITTEN: test_string_byte_access_result.py (replaces
+  the catchability file): exact Ok/Err both surfaces both OOB signs
+  in a NOTHROW caller; no-exception pin (deliberate try/catch never
+  fires — Err-as-data inside); primitive valid reads + FAIL-CLOSED
+  OOB pinned EXACTLY (SIGABRT -6 + "string byte access out of range"
+  + "assertion failed" on stderr — no more silent-abort pin);
+  internal source path nothrow+correct.
+- PERF (co-equal gate): CURRENT-TREE ONE-TABLE (512KiB, medians):
+  raw 212us | bulk 101/113us (0.5x) | source reads 448us (2.1x) |
+  PUBLIC Result byte_at 2211us (10.4x) | view/token 3361 | substring
+  6224.  TARGET MISS FLAGGED: <=2x for the public Result path NOT
+  met — w5-vs-w5b delta (identical reads) = Result ENUM machinery
+  (~3.4ns/byte: construction+match+outlined enum-drop of the
+  String-bearing Err temp), NOT duplicated range checks; optimizing
+  enum/match cleanup lowering collides with the ownership-lattice
+  change bar → maintainer decision required.  Gate: separate view
+  (14x TRIPWIRE, explicitly not an endorsement) and source (3x)
+  assertions + the table in-file.
+- COMPILE IMPACT (representative full-stdlib-closure build, legacy
+  lowering flip x3 runs): wall 22.73->22.92s (+0.8%), pre-opt IR
+  +3.7%, optimized binary IDENTICAL (716,128 B) — NOT material.
+- CROSSOVER remeasured (final impl): break-even ~216 B; ONE
+  recommendation everywhere = bulk from ~256 B up (text.drift,
+  effective-drift, checkpoint addendum 2, history all aligned).
+
+## 2026-07-25 — Enum/match cleanup optimization round: <=2x target MET; validator hardened; docs reconciled
+
+- OPTIMIZATION (general, authority-level, per directive — no byte_at
+  special case): (1) by-value alwaysinline __drift_variant_drop_
+  single-value helpers (arrays keep the loop helper); (2) observe
+  guard: branch-lean hot path + cold noinline __drift_string_observe_fail
+  dispatch (six messages EXACT; the old inlined fail arms cost
+  byte_length 260 vs threshold 225 → NOTHING in stdlib ever inlined);
+  (3) emit_func hoists static allocas to entry blocks (non-entry
+  alloca = LLVM "never inline: dynamic alloca" — this alone took the
+  Result tier 2211→874us); (4) size-based inlinehint (MIR<=64).
+  Chain of measured causes: PLT/cost→guard bulk; never-inline→
+  mid-block allocas; final 10 points of cost→inlinehint.
+- RESULT: public accessors 2211→250us (view, 1.16x) / 358us (String,
+  1.66x) — BOTH under the HARD <=2x band; iterator MEASURED 1.59x
+  (docs updated from "raw byte speed"); source 1.15x; bulk 0.5x.
+  Full 9-tier table in the gate + checkpoint addendum 3.
+- PROOF SET (directive item 1): test_variant_drop_inline.py (Ok-heavy
+  loop, Err loop w/ retained String payloads, EARLY RETURN with live
+  Err Result, loop-carried+break, non-Result control; IR-shape teeth:
+  by-value alwaysinline helper, call-by-value, NO len=1 array-helper
+  Result drops) + valgrind twin (exactly-once under memcheck);
+  counters: CODEGEN-only change, MIR untouched → ownership counters
+  structurally identical (corpus enforces end-to-end).
+- VALIDATOR hardened: unchecked load must be FIRST instruction of its
+  block; negative tooth inserts DropValue before the load (10/10).
+- DOCS: effective-drift no longer recommends core.string_byte_at to
+  users (documented-internal note instead); std.text import
+  requirement explicit; iterator claim = measured 1.6x; history 64B
+  crossover remnant reconciled to 216B/256B.
+- WHOLE-WORKLOAD REPEAT: wall 22.91s (+0.8% vs legacy, unchanged);
+  binary 716,128→766,232 (+7.0%) — the inlining trade, REPORTED for
+  review (pre-opt IR +3.3%).
+
+## 2026-07-25 — Four soundness/footprint closures (review round) COMPLETE
+
+- (1) ALLOCA PLACEMENT: textual global hoist REMOVED; replaced by
+  owning-site registration (_scratch_alloca in _FuncBuilder + the
+  drop-helper closure; 9 builder sites + drop-helper arm allocas +
+  iface helper converted — each a transient slot fully re-stored
+  before use, address never escaping its lowering → entry placement
+  is semantics-preserving by construction).  Teeth: module-wide
+  no-non-entry-static-alloca scan + escaping-loop-local address
+  CONTROL (ptr_from_ref per iteration, values per-iteration correct).
+- (2) INLINEHINT narrowed STRUCTURALLY: hot-path MIR (outside
+  Unreachable-terminated arms) <= 48, threshold-swept (0/28/40/48/56;
+  56 was bimodal-at-2.0x on String.byte_at; 48 stable, same size);
+  positive/negative eligibility teeth (small accessor w/ cold assert
+  arm hinted; 70-instr hot function not).  Blanket +7% REJECTED and
+  replaced: final binary 758,320 (+2.2% over no-hint; -1.0% vs
+  blanket) with BOTH accessors under the hard 2x band.
+- (3) GUARD ORDER: negative len rejected BEFORE the storage+8 flags
+  deref (fault risk on {neg len, garbage non-NULL ptr});
+  negative_badptr subprocess tooth (storage=0x8) added to the
+  observation-guard battery, both builds — message pinned, no
+  SIGSEGV.
+- (4) VARIANT CONTROLS added: user variant (Tag(String)/Plain) +
+  Optional<String> with RUNTIME-UNKNOWN parity-driven tags, both
+  arms, exactly-once (valgrind twin); Array<String> control pins the
+  loop-shaped array helper WITH RUNTIME LEN in IR; Shape drops pinned
+  to the by-value helper.
+- ABLATION TABLE recorded (checkpoint addendum 4): each optimization
+  dimension's removal costs 2-6x on an accessor tier for <=1.1% size;
+  final whole-workload wall +0.2%, binary +5.9% total / hint +2.2%.
+- Tier gate now asserts on per-run MINIMA (String.byte_at is bimodal
+  ~352/~440us across launches — ASLR/alignment; minima are the
+  demonstrated capability; interference only inflates).  3/3 stable
+  gate runs.  FINAL: view 1.9x, String 1.6x, iter 1.4x, source
+  1.03x, bulk 0.47x.
+
+## 2026-07-25 — Honest-gate + shape-hint round (4 corrections) CLOSED
+
+- (1) TIER GATE: minima selection REMOVED — compile once, 5 fresh
+  launches, SAME-LAUNCH median/median ratios, EVERY launch must meet
+  the hard bands.  The String.byte_at bimodality (352/440us)
+  DISAPPEARED under the final shape-narrowed hint (8/8 probe launches
+  1.66-1.70x) — no tuning or band relaxation needed.
+- (2) INLINEHINT now structurally SMALL + SHAPE: _inline_hint_eligible
+  (extracted, unit-testable) requires hot<=48 AND (variant return OR
+  Unreachable-cold failure block).  Ordinary small hot fns NOT hinted
+  (byte_length correctly unhinted, inlines on cost).  Teeth: exact
+  48/49 boundary x both shapes, ordinary-small negative, cold-
+  discount positive (unit, stage2) + IR-level category
+  positives/negatives (small_accessor cold-arm, small_variant Result;
+  small_plain + big_hot negatives).
+- (3) SIZE both baselines pinned everywhere: FINAL binary 746,040 B =
+  +0.5% vs no-hint (742,136) and +4.2% vs legacy (716,128); wall at
+  PARITY (22.63-22.74 vs 22.73).  The <=1.1% ablation claim corrected
+  (no-hint saves ~2.1% from the interim point).  The final
+  small+shape predicate reclaimed most of the interim +5.9%.
+- (4) Loop-local control RENAMED address-taken (claim narrowed: Drift
+  borrow rules forbid a true iteration-escaping address from source);
+  STATIC SOURCE INVENTORY tooth added — every alloca-emitting
+  lowering family must route through the scratch registries (found
+  and converted 5 more sites: clone-helper idx/vptr/vtmp/optr +
+  array-drop loop idx_ptr; allowlist holds only entry-position
+  prologue emissions).
+- Gate green 2/2 multi-launch; policy teeth 4/4; predicate teeth 7/7.
+
+## 2026-07-25 — AST inventory + prose closures (test/prose-only round)
+
+- INVENTORY replaced with an AST-BASED exhaustive scan
+  (_scan_alloca_emissions): every string literal or f-string
+  containing "= alloca" anywhere in llvm_codegen.py — independent of
+  append/insert/extend/list-literal emission form — classified
+  against _ALLOCA_AUTHORITIES (each with its entry-placement
+  justification: the two scratch registries; four
+  entry-insertion-index authorities — local storage, shared iface
+  slot, fresh iface slot, dbg keepalive; two entry-prologue literal
+  authorities — argv thunk, iface drop helper; docstrings excluded).
+  Unclassified occurrence = failure.  NEGATIVE TEETH: synthetic
+  append-form AND list-literal/extend-form sources both detected
+  (the replaced grep missed non-append forms by construction).
+- PROSE: history — "small functions get inlinehint" → small ELIGIBLE
+  accessor-shaped functions; alloca sentence rewritten to owning-site
+  registration of known-nonescaping scratch temporaries (no global
+  static-alloca hoist implication).  Checkpoint addendum 4 — the
+  size-only hot<=48 description and the 758,320-byte ablation table
+  marked SUPERSEDED INTERIM EVIDENCE (final small+shape config =
+  746,040 B, closing section); "escaping-loop-local" wording renamed
+  to the accurate ADDRESS-TAKEN control with the narrowed claim.
+- Per directive: no corpus, performance, or broad-suite rerun in this
+  round (test/prose only); the policy test file rerun locally.
+
+## 2026-07-25 — Corpus measurement + attribution COMPLETE (residual zero); splice regression caught & fixed; perf-protocols recipe added
+
+- WHITESPACE blocker cleared (llvm_codegen.py:10748); git diff --check
+  clean.
+- CORPUS RUN 1 caught a REAL REGRESSION the focused suites missed
+  (they excluded the e2e lane): the clone-helper entry-alloca splice
+  was LABEL-BLIND — that generator emits an explicit __bb_entry:
+  (unlike the drop helpers), so recursive-variant/struct clone
+  helpers got allocas BEFORE the label → invalid IR → exactly
+  variant_recursive_borrow_copy + array_recursive_struct_borrow_copy
+  flipped compiled→failed.  All three splice sites made label-aware;
+  both fixtures compile and exit with their expected codes; targeted
+  gates 20/20.
+- CORPUS RUN 2 (fixed tree, run dir ownership-corpus-20260725-070420-
+  2045579, retained): partition IDENTICAL 924/344/49; universe delta
+  = EXACTLY the 4 intentionally API-migrated fixtures (hash-only).
+  PER-FIXTURE ATTRIBUTION vs the retained promoted-baseline audit
+  data: 923/924 fixtures carry the IDENTICAL modal delta {fns +35,
+  events +22, c1_agree +20, c3_moveout_owned +21, moveout_expansion
+  +21, overwrite_release +1} — the uniform stdlib contribution,
+  matching the single-compile probe module-by-module (text +24 fns,
+  regex +6, json +3, parse +2, source +1, core -1 = +35 exactly).
+  ONE outlier: string_byte_at_method (its body became 4 Result
+  matches): beyond-modal {+28 events, +27 moveout_owned/expansion,
+  +5 c1_agree, +1 materialized_lastuse_release} — fully explained.
+  TOTALS: fns +32,340; events +20,356; c1_agree +18,485;
+  moveout_owned/expansion +19,431; overwrite_release +924;
+  materialized_lastuse_release +1.  RECONCILIATION: per-fixture sums
+  == totals on EVERY counter — RESIDUAL ZERO.  Hard gates all zero.
+- PERF-PROTOCOLS RECIPE (maintainer-approved): `just perf-protocols`
+  — read-only: tier bench (compile once, 3 fresh launches),
+  crossover sweep, whole-workload compile timing + binary size;
+  sources committed under tools/perf/ with provenance headers;
+  explicitly NOT part of test/certify; ablations remain a documented
+  manual procedure.  Smoke: parses + runs (workload 746,032 B, wall
+  22.6-22.8s — matches the recorded finals).
+- AWAITING: maintainer review of this attribution → reviewed-baseline
+  promotion from the retained run dir → the one full suite →
+  combined B5 + string-view certification.
+- perf-protocols recipe HARDENED (maintainer-directed): refuses to run
+  with DRIFT_MEMCHECK/DRIFT_ASAN set (exit 2 + rationale to stderr —
+  sanitized figures are invalid as references; sanitizer coverage of
+  the feature surface lives in the test suites).  Both refusals
+  proven; native run unchanged.
+- perf-protocols LIVENESS: 20s compile heartbeat added (compiling.../
+  still compiling (Ns)/compiled banners + per-run step lines) — no
+  silent stretch exceeds the watchdog window on any host speed.
+- crossover_bench.drift MIGRATED to the SHIPPED APIs (maintainer
+  blocker): safe tier = StringByteView.byte_at Result match-unwrap;
+  bulk tier = per-window SUBVIEW (one retain+drop per window) +
+  text.with_view_bytes with a per-window boxed callback — per-window
+  construction/drop behavior preserved.  Prototype SView/wvb and the
+  raw core.string_byte_at removed from the protocol.  Header notes
+  the reference-figure shift.  SMOKE (recipe-only, per directive):
+  production curve — safe ~1.8-1.9ms flat; bulk 12.9ms@8B / 3.2ms@32B
+  / 0.92ms@128B / 372us@512B / 186us@64K → production break-even
+  ≈ 64-96B (lower than the raw-shape 216B, as the safe tier now
+  prices the Result accessor).  The docs' "~256B and up" guidance
+  remains CONSERVATIVE-SAFE (bulk strictly wins above it); tightening
+  it is a maintainer call, not taken unilaterally.
+- Maintainer will run run-all-tests.sh directly.
+
+## 2026-07-25 — Baseline promotion 2 + shipped-API guidance (maintainer-approved; artifact/doc-only)
+
+- PROMOTED build/tmp/ownership-corpus-20260725-070420-2045579 into
+  reviewed-baseline EXACTLY (no rerun, semantics untouched):
+  validated byte-exact vs the attribution report first (partition
+  924/344/49, totals, gates zero, env 0.33.88/ABI22/tool 1.7.1);
+  BASELINE.md rewritten with the full promotion chain (3d48b7f0
+  certified → b2caeb44 promotion → this) + the residual-zero
+  attribution record.  Zero-delta proven against the promoted
+  artifacts; corpus teeth 16/16.  run-all-tests.sh stage 1 now passes
+  genuinely on this tree.
+- GUIDANCE updated to shipped-API evidence (maintainer-approved):
+  break-even ~64-96 B, recommend bulk from ~128 B — text.drift (both
+  comments), effective-drift, history, crossover bench header;
+  checkpoint addendum 5 records the supersession (the 216 B/256 B
+  raw-shape guidance was conservative-safe, not wrong).
+- Maintainer runs run-all-tests.sh next (corpus stage → genuine exit
+  0 → memcheck just test → ASAN just test).

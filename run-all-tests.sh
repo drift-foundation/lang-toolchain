@@ -16,6 +16,9 @@ trap report_total EXIT
 just ownership-corpus-check
 echo "OWNERSHIP CORPUS OK"
 sleep 5
+just perf-protocols
+echo "PERF PROTOCOLS OK"
+sleep 5
 DRIFT_MEMCHECK=1 just test
 echo "MEMCHECK suite OK"
 sleep 5

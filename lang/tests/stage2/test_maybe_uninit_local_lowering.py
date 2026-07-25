@@ -75,7 +75,7 @@ def _compile_to_ir(tmp_path: Path, source: str) -> str:
 	return ir_path.read_text()
 
 
-_DRIFT_MAIN_RE = re.compile(r"define i64 @drift_main\(\) \{(.*?)^}", re.DOTALL | re.MULTILINE)
+_DRIFT_MAIN_RE = re.compile(r"define i64 @drift_main\(\)[^{]*\{(.*?)^}", re.DOTALL | re.MULTILINE)
 
 
 def _drift_main_body(ir: str) -> str:

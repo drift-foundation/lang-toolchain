@@ -8,6 +8,7 @@ import std.iter as iter;
 import std.io as io;
 import std.mem as mem;
 import std.concurrent as concurrent;
+import std.text as txt;
 
 use trait iter.SinglePassIterator;
 
@@ -53,7 +54,8 @@ export {
 	JsonByteSpan,
 	_SpanTree,
 	_KeyOccurrence,
-	encode_canonical
+	encode_canonical,
+	_span_view_or_abort
 };
 
 pub error JsonError {
@@ -634,6 +636,18 @@ implement JsonDoc {
 		return LocatedCursor(node = &self.root, span = &self.spans, text = &self.text, pointer = "");
 	}
 
+	/// A zero-copy view of an EXPLICIT NUMERIC byte range of the
+	/// document's retained text.  This is a plain byte-range
+	/// operation: it neither takes nor implies span provenance
+	/// (`JsonByteSpan` carries no source identity, so a span-taking
+	/// form could silently interpret a span from another document —
+	/// use `LocatedCursor.raw_view()` for provenance-safe access).
+	/// Delegates verbatim to `txt.byte_view(&self.text, start, len)`
+	/// — same `TextError`, same bounds, `offset = start` on failure.
+	pub fn byte_range_view(self: &JsonDoc, start: Int, len: Int) nothrow -> core.Result<txt.StringByteView, txt.TextError> {
+		return txt.byte_view(&self.text, start, len);
+	}
+
 	/// Resolve an ABSOLUTE JSON Pointer (RFC 6901) from the document root.
 	pub fn at_pointer(self: &JsonDoc, ptr: &String) nothrow -> core.Result<LocatedCursor, JsonErrorData> {
 		val n = ptr.byte_length();
@@ -685,6 +699,20 @@ fn _navigate_segment(cur: &LocatedCursor, seg: &String, raw_seg: &String) nothro
 implement LocatedCursor {
 	pub fn span(self: &LocatedCursor) nothrow -> JsonByteSpan {
 		return _span_of(self.span);
+	}
+
+	/// A zero-copy `txt.StringByteView` of the raw document bytes
+	/// this cursor's node was parsed from (provenance-safe: the span
+	/// was produced by the parser over THIS document's retained text,
+	/// so it is in-bounds by construction).  One retain, no copies;
+	/// materialize with `to_string()` only when the slice must escape.
+	///
+	/// The API is infallible; if the parser-span invariant is ever
+	/// violated (corruption), this FAILS CLOSED with a contract abort
+	/// — it never substitutes content.
+	pub fn raw_view(self: &LocatedCursor) nothrow -> txt.StringByteView {
+		val sp = _span_of(self.span);
+		return _span_view_or_abort(self.text, sp.start, sp.end);
 	}
 
 	pub fn pointer(self: &LocatedCursor) nothrow -> String {
@@ -1666,6 +1694,23 @@ fn _byte_to_string(b: Byte) nothrow -> String {
 	}
 }
 
+/// Internal (exported for its fail-closed tooth): the raw_view span
+/// invariant enforcer.  Parser-produced spans are in-bounds by
+/// construction; anything else is CORRUPTION and must abort — never
+/// be masked as valid (empty or otherwise) content.
+pub fn _span_view_or_abort(text: &String, start: Int, end: Int) nothrow -> txt.StringByteView {
+	val n = text.byte_length();
+	assert(start >= 0 and end >= start and end <= n,
+		"JSON span invariant violated: raw_view over a corrupted span");
+	match txt.byte_view(text, start, end - start) {
+		core.Result::Ok(v) => { return move v; },
+		core.Result::Err(_) => {
+			assert(false, "JSON span invariant violated: raw_view over a corrupted span");
+			return txt.byte_view_all(text);
+		}
+	}
+}
+
 fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
 	if end <= start {
 		return "";
@@ -1880,7 +1925,53 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
 	*idx = *idx + 1;
-	var out = "";
+	// Escape-free fast path: most JSON strings contain no escapes, so
+	// scan ahead first — a clean run decodes as ONE materialization
+	// through the range-copy helper (_slice_string: a temporary byte
+	// buffer plus the final String storage), replacing the per-byte
+	// `out = out + _byte_to_string(b)` reallocation growth of the
+	// general loop for the clean case.  Error and limit semantics are IDENTICAL to
+	// the general loop: the incremental limit trips at the same byte
+	// (scan-consumed count stands in for the decoded length, which
+	// are equal while no escape has been seen), control bytes honor
+	// ctx.legacy, and an escape falls back to the general loop with
+	// the clean prefix pre-copied.
+	val content_start = *idx;
+	var scan = content_start;
+	var matched_quote = false;
+	var scanning = true;
+	while scan < n and scanning {
+		if _over_limit(&ctx.cfg.limits.max_string_bytes, scan - content_start) {
+			*idx = scan;
+			return core.Result::Err(_err_parse(text, "limit-string-bytes", str_start));
+		}
+		val fb = core.string_byte_at(text, scan);
+		if fb == cast<Byte>(34) {
+			matched_quote = true;
+			scanning = false;
+		} else { if fb == cast<Byte>(92) {
+			scanning = false;
+		} else {
+			var fub = cast<Int>(fb);
+			if fub < 0 {
+				fub = fub + 256;
+			}
+			if not ctx.legacy and fub < 32 {
+				*idx = scan;
+				return core.Result::Err(_err_parse(text, "unescaped-control", scan));
+			}
+			scan = scan + 1;
+		} }
+	}
+	if matched_quote {
+		val fast = _slice_string(text, content_start, scan);
+		*idx = scan + 1;
+		return core.Result::Ok(move fast);
+	}
+	// Escape hit (or unterminated): seed the general loop with the
+	// clean prefix, positioned at the first non-clean byte.
+	var out = _slice_string(text, content_start, scan);
+	*idx = scan;
 	while *idx < n {
 		// Incremental string-byte limit: reject as soon as the decoded length
 		// exceeds the cap (do not consume the remainder of the string).

@@ -12,13 +12,13 @@ use trait core.Diagnostic;
 // asserts the same Slice 1/2/3 ABI-stable numeric tags.
 fn _str_to_int(s: &String) nothrow -> Optional<Int> {
 	if s.byte_length() == 0 { return Optional::None(); }
-	val c0 = s.byte_at(0);
+	val c0 = core.string_byte_at(s, 0);
 	if c0 < cast<Byte>(48) or c0 > cast<Byte>(57) { return Optional::None(); }
 	var n: Int = 0;
 	var i: Int = 0;
 	val len = s.byte_length();
 	while i < len {
-		val b = s.byte_at(i);
+		val b = core.string_byte_at(s, i);
 		if b < cast<Byte>(48) or b > cast<Byte>(57) { return Optional::None(); }
 		n = n * 10 + (cast<Int>(b) - 48);
 		i = i + 1;

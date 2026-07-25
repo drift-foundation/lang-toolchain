@@ -671,9 +671,13 @@ implement Diagnostic for String {
 /// `IndexError.container_id` when string operations bounds-check.
 pub const STRING_CONTAINER_ID: String = "std.core:String";
 
-/// Returns the byte at index `i`.  Throws `std.err:IndexError` on
-/// out-of-range access.
-@intrinsic pub fn string_byte_at(s: &String, i: Int) -> Byte;
+/// LOW-LEVEL byte-load primitive (documented-internal: stdlib and
+/// compiler plumbing; user code should prefer the Result-returning
+/// `byte_at` methods on `String` / `text.StringByteView`).  NOTHROW
+/// and FAIL-CLOSED: an out-of-range index is a contract ABORT with a
+/// diagnostic, never an exception and never a wild read.  Bounds
+/// failure as DATA is the public methods' job.
+@intrinsic pub fn string_byte_at(s: &String, i: Int) nothrow -> Byte;
 
 /// Constructs a `String` from `len` UTF-8 bytes starting at `ptr`.
 ///
@@ -711,12 +715,6 @@ implement String {
 	/// Returns the string's length in bytes (not characters).
 	pub fn byte_length(self: &String) nothrow -> Int {
 		return byte_length(self);
-	}
-
-	/// Returns the byte at `index`.  Throws `std.err:IndexError` on
-	/// out-of-range access.
-	pub fn byte_at(self: &String, index: Int) nothrow -> Byte {
-		return string_byte_at(self, index);
 	}
 
 	/// Returns an owned copy of this string.

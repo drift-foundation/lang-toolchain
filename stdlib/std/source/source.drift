@@ -450,6 +450,29 @@ implement SourceCursor {
 		}
 	}
 
+	/// Slice the source by byte offsets `[start, end)` into a
+	/// zero-copy `text.StringByteView` over the cursor's retained
+	/// source (the ALLOCATING form is `slice`).
+	///
+	/// Range/order/boundary checks are IDENTICAL to `slice` — same
+	/// `SourceError` codes (`"invalid-slice-range"`,
+	/// `"slice-not-char-boundary"`).  One retain, no byte copies;
+	/// materialize later with `StringByteView.to_string()`.
+	pub fn slice_view(self: &SourceCursor, start: Int, end: Int) nothrow -> core.Result<text.StringByteView, SourceError> {
+		if start < 0 or end < start or end > self.len {
+			val at = (start < 0 or start > self.len) ? start : end;
+			return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, at));
+		}
+		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, end)))) {
+			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) ? start : end;
+			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, &self.src, at));
+		}
+		match text.byte_view(&self.src, start, end - start) {
+			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, start)); },
+			core.Result::Ok(v) => { return core.Result::Ok(move v); }
+		}
+	}
+
 	/// Slice the source covered by a span.  In addition to `slice`'s
 	/// range + boundary checks, rejects a span whose `source_id` differs
 	/// from this cursor's (`"span-source-mismatch"`) — a span from a

@@ -29,7 +29,11 @@ export {
 	_byte_matches,
 	_try_match_at,
 	_find_from,
-	_substr
+	_substr,
+	is_match_view,
+	find_first_view,
+	match_view,
+	match_subview
 };
 
 // ---------------------------------------------------------------------------
@@ -919,7 +923,21 @@ pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
 /// Internal: attempts a single anchored match starting at `start`,
 /// returning the matched byte-length or `-1` on no match.
 pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int {
-	val input_len = input.byte_length();
+	val src = text._byte_source_all(input);
+	return _try_match_at_range(nfa, &src, start);
+}
+
+// THE matcher authority: every entry point (String or view) funnels
+// here.  The subject is a borrowed `text._StringByteSource` window:
+// positions (`start`, returned end, anchor semantics) are
+// WINDOW-RELATIVE — `^` asserts position 0 OF THE WINDOW, `$` asserts
+// its size — and reads go through the source's range-guarded `read`.
+// String entries build `_byte_source_all` (borrow, zero retains), view
+// entries `_byte_source`; String-form behavior is bit-identical to the
+// pre-source implementation, and the source's private fields mean a
+// narrow view's window can never read the rest of its backing.
+fn _try_match_at_range(nfa: &_NfaProg, src: &text._StringByteSource, start: Int) nothrow -> Int {
+	val input_len = src.size();
 	val prog_len = nfa.ops.len;
 	val accept_pc = prog_len - 1;
 
@@ -934,7 +952,7 @@ pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int 
 
 	var pos = start;
 	while pos < input_len and clist.len > 0 {
-		val b = core.string_byte_at(input, pos);
+		val b = src.read(pos);
 
 		// Step: advance each consuming state that matches this byte.
 		var seeds = Array<type Int>::with_capacity(clist.len);
@@ -971,12 +989,68 @@ pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int 
 // find_first: returns leftmost match (greedy — longest at that start).
 // ---------------------------------------------------------------------------
 
+/// Returns `true` if `re` matches anywhere in the VIEW's bytes.
+///
+/// The view IS the subject string: `^`/`$` anchor at the view's
+/// boundaries.  Reads through the borrowed view — never retains,
+/// never materializes the subject.
+pub fn is_match_view(re: &Regex, v: &text.StringByteView) nothrow -> Bool {
+	match find_first_view(re, v) {
+		Optional::Some(_) => { return true; },
+		Optional::None() => { return false; }
+	}
+}
+
+/// Returns the leftmost match of `re` in the VIEW's bytes (greedy —
+/// longest at that start), or `None`.
+///
+/// Match offsets are VIEW-RELATIVE (compose directly with
+/// `match_subview`); `^`/`$` anchor at the view's boundaries.  Never
+/// retains, never materializes the subject.
+pub fn find_first_view(re: &Regex, v: &text.StringByteView) nothrow -> Optional<RegexMatch> {
+	val src = text._byte_source(v);
+	return _find_from_range(&re.nfa, &src, 0);
+}
+
+/// Checked, OPT-IN conversion: a `RegexMatch` over `s` into a
+/// retained view of `s`.
+///
+/// `RegexMatch` is a cheap `Copy` span with public fields and NO
+/// source identity, so this is bounds-CHECKED against the `s` it is
+/// GIVEN and carries no provenance claim beyond that: malformed
+/// (`start < 0`, `end < start`) and out-of-range spans return
+/// `Err(text.TextError(tag = "out-of-bounds", offset = m.start))`.
+/// The FULL validation happens BEFORE any arithmetic, so fabricated
+/// extreme spans (e.g. `start = INT_MIN, end = INT_MAX`) cannot
+/// overflow the length subtraction.  On success: exactly one retain,
+/// no byte copies.
+pub fn match_view(m: RegexMatch, s: &String) nothrow -> core.Result<text.StringByteView, text.TextError> {
+	if m.start < 0 or m.end < m.start or m.end > s.byte_length() {
+		return core.Result::Err(text.TextError(tag = "out-of-bounds", offset = m.start));
+	}
+	// 0 <= start <= end <= len: the subtraction cannot overflow.
+	return text.byte_view(s, m.start, m.end - m.start);
+}
+
+/// Checked conversion: a VIEW-RELATIVE `RegexMatch` (as returned by
+/// `find_first_view`) over `v` into a subview of `v`.
+///
+/// Same checked, provenance-free contract as `match_view`; offsets
+/// compose onto `v`'s backing.  Exactly one retain on success.
+pub fn match_subview(m: RegexMatch, v: &text.StringByteView) nothrow -> core.Result<text.StringByteView, text.TextError> {
+	if m.start < 0 or m.end < m.start or m.end > v.byte_length() {
+		return core.Result::Err(text.TextError(tag = "out-of-bounds", offset = m.start));
+	}
+	// 0 <= start <= end <= view len: the subtraction cannot overflow.
+	return v.subview(m.start, m.end - m.start);
+}
+
 /// Returns `true` if `re` matches anywhere in `input`.
 ///
 /// Equivalent to `find_first(re, input).is_some()` but skips
 /// allocating the `RegexMatch` value.
 ///
-/// **See also:** `find_first`.
+/// **See also:** `find_first`, `is_match_view`.
 pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 	val input_len = input.byte_length();
 	var start = 0;
@@ -1001,10 +1075,17 @@ pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
 /// Internal: like `find_first` but starting search from `from`
 /// (used by `replace_all` to advance past previous matches).
 pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
-	val input_len = input.byte_length();
+	val src = text._byte_source_all(input);
+	return _find_from_range(&re.nfa, &src, from);
+}
+
+// Windowed search loop (see _try_match_at_range).  Returned match
+// offsets are WINDOW-RELATIVE.
+fn _find_from_range(nfa: &_NfaProg, src: &text._StringByteSource, from: Int) nothrow -> Optional<RegexMatch> {
+	val sublen = src.size();
 	var start = from;
-	while start <= input_len {
-		val end = _try_match_at(&re.nfa, input, start);
+	while start <= sublen {
+		val end = _try_match_at_range(nfa, src, start);
 		if end >= 0 {
 			return Optional::Some(RegexMatch(start = start, end = end));
 		}

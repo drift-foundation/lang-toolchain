@@ -1,5 +1,109 @@
 # Drift development history
 
+## 2026-07-25 (0.33.88: two LANGUAGE_BUG fixes — sibling catch-binder identity; string_byte_at OOB now throws; ABI 22 unchanged)
+
+Sibling catch-binder identity: sequential typed catches reusing one
+source binder name (`catch A(e) {} … catch B(e) {}`) failed with a
+spanless "use of uninitialized" — the borrow checker's catch-entry
+initialization was name-keyed (earliest binding per name) and marked
+the WRONG arm's binding.  `HCatchArm.binder_id` now carries the
+binder's binding identity (recorded by the type checker at
+statement-form arm allocation; expression-form arms are demonstrably
+unaffected and carry none), and the catch-entry marking uses it
+EXCLUSIVELY when present.  Mirrors the HMatchArm.binder_ids design.
+
+String byte access redesigned (binding review decision): bounds
+failure is DATA, not an exception.  `String.byte_at` and
+`StringByteView.byte_at` are NOTHROW and return
+`Result<Byte, std.err:IndexError>` (exact container id + requested
+index in the Err).  The String method lives in std.text
+(`implement String` — std.core cannot import std.err), so callers
+import std.text for method visibility.  The `core.string_byte_at`
+intrinsic is pinned as the documented-internal FAIL-CLOSED primitive:
+nothrow, and an out-of-range read aborts with an AssertLoc diagnostic
+("string byte access out of range …") — the pre-existing silent-abort
+defect is fixed by alignment, not by throwing (the earlier in-slice
+throwing design was superseded by this review decision).  The
+declaration, CallInfo, and MIR lowering now agree; the lowering's
+proven-in-bounds path emits an UNCHECKED load whose provenance is
+mechanically validated at the MIR→codegen boundary
+(`unchecked_load_validator`).  Valid-read scans are ~2.5x faster than
+the pre-phase lowering (the per-byte C bounds call dominated).
+A companion AUTHORITY-LEVEL enum/match cleanup optimization ships in
+the same candidate (general, not byte_at-specific): single-value
+variant drops use a by-value `alwaysinline` helper (tag-dominated
+Result::Ok(Copy) paths pay nothing for the inactive destructible Err
+arm), the String observation guard is branch-lean with one cold
+outlined fail dispatch (same six messages), codegen's KNOWN
+NONESCAPING scratch temporaries (variant/struct pack-unpack slots,
+loop counters, callback slots) are registered by their owning
+lowering sites for entry-block placement (non-entry allocas made
+LLVM refuse to inline; this is owning-site registration, not a
+global hoist of all static allocas), and small ELIGIBLE
+accessor-shaped functions (variant return or cold-failure arm) get
+`inlinehint` — which finally lets stdlib accessors inline into
+caller loops.  Measured:
+BOTH public Result accessors within the 2x-of-raw target
+(StringByteView.byte_at 1.16x, String.byte_at 1.66x; iterator 1.59x;
+internal source path 1.15x; bulk ~0.5x); bulk-window break-even
+measured at ~64-96 bytes on the SHIPPED APIs (recommendation: ~128
+bytes and up; an earlier raw-primitive-shaped sweep measured ~216 B
+and the interim guidance said 256 B).  Whole-workload
+compile impact: wall at parity; optimized binary +0.5% vs the
+no-hint candidate and +4.2% vs the legacy-lowering artifact (both
+baselines recorded; ablation-attributed — single-dimension removals
+save at most ~2% while costing 2-6x on an accessor tier).  The observation guard
+rejects negative lengths BEFORE dereferencing storage.  ABI 22
+unchanged.
+
+## 2026-07-24 (0.33.88: string-view-performance — StringByteView + parser adoption; rides the same candidate, ABI 22 unchanged)
+
+`std.text.StringByteView` — a safe, storable, O(1) byte view
+(`{backing String, start, len}`, private fields, move-only with
+explicit `dup()`): construction (`byte_view`/`byte_view_all`) and
+`subview` retain exactly once and copy no bytes; reads (`byte_at` with
+`std.text:StringByteView` IndexError, `eq_*`, `starts_with*`,
+`ends_with*`, `index_of*`, `ViewBytesIter`) never retain; `to_string()`
+is the one allocating escape (empty → the runtime singleton);
+`with_view_bytes(_throw)` composes through `std.ffi.with_bytes` for
+scan-sized bulk windows (per-token windows are an antipattern —
+measured ~54 ns fixed cost; final measured break-even ≈ 216 B —
+recommendation: bulk from ~256 B up); `split_views` gives
+split's exact field structure with zero byte copies.  Adoption in the
+same slice: `SourceCursor.slice_view`, JSON `LocatedCursor.raw_view()`
+(provenance-safe) + `JsonDoc.byte_range_view` (explicitly numeric),
+`std.parse.parse_int_view`/`parse_uint_view`, and std.regex —
+matcher refactored to ONE windowed authority over the borrowed,
+range-guarded exported-internal `text._StringByteSource` (private fields: a narrow
+view's window can never read the rest of its backing; String entries
+borrow via `_byte_source_all`, keeping String matching zero-retain;
+String forms bit-identical), plus
+`is_match_view`/`find_first_view` (view-relative offsets, `^`/`$`
+anchor at view boundaries) and checked `match_view`/`match_subview`
+(fabricable `RegexMatch` spans are bounds-checked, never trusted).
+std.json `_parse_string` gains the escape-free fast path (one
+materialization through the range-copy helper — a temporary buffer
+plus the final String storage — instead of per-byte concatenation;
+identical limit and legacy-control semantics).  Everything is an ordinary stdlib value on
+existing primitives — ABI 22 unchanged.
+
+BEHAVIOR CORRECTION (documented-contract fix): `parse_int_bytes` /
+`parse_uint_bytes` documented `ParseError.offset` as relative to
+`start` but RETURNED ABSOLUTE input offsets.  The documented contract
+now holds: offsets are relative to `start` (`invalid-range`: 0 by
+definition — positionless); the full per-tag table is pinned by
+regression tests across the String, byte-range, and view families.
+Callers that compensated for absolute offsets must drop the
+compensation.
+
+Evidence gates added: count-exact `--wrap` harness
+(retain/from_utf8_bytes/alloc_array — construction ops exactly one
+retain, reads zero, nonempty to_string exactly one materialization,
+regex matching zero retains by subtraction), valgrind lifetime pins
+(views outlive bindings; forced-throw window balance), performance
+tier guard-bands, and the compile-proven Effective Drift "String
+views for parsers" section.
+
 ## 2026-07-23 (0.33.88: B-repr/B5 — ABI 22 RcBytes String representation)
 
 The String storage block moves from the ABI-21 "header behind the data

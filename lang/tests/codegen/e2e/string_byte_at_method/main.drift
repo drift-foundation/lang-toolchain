@@ -1,15 +1,30 @@
-module m;
+module main;
+
+import std.core as core;
+import std.text as text;
+import std.err;
 
 pub fn main() nothrow -> Int {
 	val s = "Hello";
-
-	// byte_at method access
-	if s.byte_at(0) != cast<Byte>(72) { return 1; }
-	if s.byte_at(1) != cast<Byte>(101) { return 2; }
-	if s.byte_at(4) != cast<Byte>(111) { return 3; }
-
-	// byte_length still works
-	if s.byte_length() != 5 { return 4; }
-
+	// byte_at method access — Result API: bounds failure is data.
+	match s.byte_at(0) {
+		Ok(b) => { if b != cast<Byte>(72) { return 1; } },
+		Err(e) => { return 10; }
+	}
+	match s.byte_at(1) {
+		Ok(b) => { if b != cast<Byte>(101) { return 2; } },
+		Err(e) => { return 11; }
+	}
+	match s.byte_at(4) {
+		Ok(b) => { if b != cast<Byte>(111) { return 3; } },
+		Err(e) => { return 12; }
+	}
+	match s.byte_at(5) {
+		Ok(b) => { return 4; },
+		Err(e) => {
+			if e.index != 5 { return 5; }
+			if e.container_id != "std.core:String" { return 6; }
+		}
+	}
 	return 0;
 }

@@ -62,7 +62,7 @@ _CALLBACK_THROW_INTRINSIC_KINDS = frozenset(
 )
 from lang.driftc.checker import FnSignature
 from lang.driftc.core.function_id import FunctionId, FunctionRefId, FunctionRefKind, function_symbol
-from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID
+from lang.driftc.core.container_ids import ARRAY_CONTAINER_ID, STRING_CONTAINER_ID
 from lang.driftc.core.span import Span
 from lang.driftc.core.types_core import (
 	TypeKind,
@@ -4081,8 +4081,11 @@ class HIRToMIR:
 			raise NotImplementedError("array index read requires Copy element type; borrow not supported in v1")
 		return loaded
 
-	def _emit_index_error_throw(self, *, index_val: M.ValueId) -> None:
-		"""Compiler-synthesized inline throw for the array bounds-check.
+	def _emit_index_error_throw(self, *, index_val: M.ValueId, container_id: str = ARRAY_CONTAINER_ID) -> None:
+		"""Compiler-synthesized inline throw for a container bounds-check
+		(arrays by default; String byte access passes
+		STRING_CONTAINER_ID — ONE throw-construction authority for
+		every bounds-guarded read).
 
 		Slice 7b (2026-05-05): routed through the same unified
 		Diagnostic owning-throw path as user-source `throw E(...)` —
@@ -4119,7 +4122,7 @@ class HIRToMIR:
 		self.b.emit(M.ConstString(dest=event_fqn_val, value=event_fqn))
 
 		container_const = self.b.new_temp()
-		self.b.emit(M.ConstString(dest=container_const, value=ARRAY_CONTAINER_ID))
+		self.b.emit(M.ConstString(dest=container_const, value=container_id))
 		self._local_types[container_const] = self._string_type
 
 		# Build positional MIR values in declaration order.
@@ -4707,8 +4710,57 @@ class HIRToMIR:
 				self._local_types[load] = inner_ty
 				str_val = load
 			idx_val = self.lower_expr(expr.args[1])
+			# FAIL-CLOSED primitive (nothrow): an IR-level range guard in
+			# assert shape — in-bounds falls through to an UNCHECKED load,
+			# out-of-range hits AssertLoc (prints a diagnostic, aborts).
+			# The former C-side drift_bounds_check delegated the check to
+			# a call whose failure path could only abort SILENTLY and
+			# cost a per-byte function call (removing it measured ~2.5x
+			# faster valid-read scans); bounds-failure-as-DATA lives in
+			# the public Result-returning byte_at methods, not here.
+			# The unchecked load's provenance is mechanically validated
+			# at the MIR->codegen boundary (unchecked_load_validator).
+			len_val = self.b.new_temp()
+			self.b.emit(M.StringLen(dest=len_val, value=str_val))
+			self._local_types[len_val] = self._int_type
+			zero_val = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=zero_val, value=0))
+			self._local_types[zero_val] = self._int_type
+			ge_zero = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=ge_zero, op=M.BinaryOp.GE, left=idx_val, right=zero_val))
+			lt_len = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=lt_len, op=M.BinaryOp.LT, left=idx_val, right=len_val))
+			in_bounds = self.b.new_temp()
+			self.b.emit(M.BinaryOpInstr(dest=in_bounds, op=M.BinaryOp.AND, left=ge_zero, right=lt_len))
+
+			ok_block = self.b.new_block("sbidx_ok")
+			fail_block = self.b.new_block("sbidx_fail")
+			self.b.set_terminator(M.IfTerminator(cond=in_bounds, then_target=ok_block.name, else_target=fail_block.name))
+
+			self.b.set_block(fail_block)
+			file_val = self.b.new_temp()
+			span = getattr(expr, "loc", Span())
+			file_str = span.file or "<unknown>"
+			if file_str != "<unknown>" and self._current_fn_id is not None:
+				file_str = f"{self._current_fn_id.module}@{os.path.basename(file_str)}"
+			self.b.emit(M.ConstString(dest=file_val, value=file_str))
+			line_val = self.b.new_temp()
+			self.b.emit(M.ConstInt(dest=line_val, value=span.line or 0))
+			expr_val = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=expr_val, value="string_byte_at(s, i)"))
+			msg_val = self.b.new_temp()
+			self.b.emit(M.ConstString(dest=msg_val, value=(
+				"string byte access out of range (fail-closed internal "
+				"primitive; use String.byte_at / StringByteView.byte_at "
+				"for Result-returning bounds handling)")))
+			fail_instr = M.AssertLoc(cond=in_bounds, file=file_val, line=line_val, expr=expr_val, msg=msg_val)
+			fail_instr.span = span
+			self.b.emit(fail_instr)
+			self.b.set_terminator(M.Unreachable())
+
+			self.b.set_block(ok_block)
 			dest = self.b.new_temp()
-			self.b.emit(M.StringByteAt(dest=dest, value=str_val, index=idx_val))
+			self.b.emit(M.StringByteAt(dest=dest, value=str_val, index=idx_val, unchecked=True))
 			self._local_types[dest] = self._byte_type
 			return dest
 		if intrinsic is IntrinsicKind.STRING_BYTES_BASE:

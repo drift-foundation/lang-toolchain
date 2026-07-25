@@ -4,6 +4,7 @@ import std.core as core;
 import std.core.cmp as cmp;
 import std.containers as containers;
 import std.source as source;
+import std.text as text;
 
 export {
 	ParseError,
@@ -13,6 +14,8 @@ export {
 	parse_float,
 	parse_int_bytes,
 	parse_uint_bytes,
+	parse_int_view,
+	parse_uint_view,
 	TokenKind,
 	Token,
 	TokenStream,
@@ -508,16 +511,23 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 /// Same semantics as `parse_int` but operates on a byte-range view
 /// — useful when the input is part of a larger buffer (e.g. a JSON
 /// or HTTP parser).  `offset` in any returned `ParseError` is
-/// relative to `start`.
+/// RELATIVE to `start` — except `invalid-range`, where no content
+/// position exists and `offset` is `0` by definition.
+///
+/// (Contract note: before 0.33.88 the implementation returned
+/// ABSOLUTE input offsets, contradicting this documented contract;
+/// the documented relative form is authoritative and is pinned by
+/// regression tests across the String, byte-range, and view
+/// families.)
 ///
 /// **See also:** `parse_int`.
 pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Int, ParseError> {
-	val len = end;
+	val limit = end;
 	if start < 0 or end < start or end > bytes.len {
-		return core.Result::Err(ParseError(tag = "invalid-range", offset = start));
+		return core.Result::Err(ParseError(tag = "invalid-range", offset = 0));
 	}
-	if start >= len {
-		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = start));
+	if start >= limit {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}
 	var i = start;
 	var neg = false;
@@ -530,12 +540,105 @@ pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> cor
 			i = i + 1;
 		}
 	}
-	if i >= len {
+	if i >= limit {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i - start));
+	}
+	var acc = 0;
+	while i < limit {
+		val b = bytes[i];
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i - start));
+		}
+		val d = _digit_to_int(b);
+		if neg {
+			if acc < (INT_MIN + d) / 10 {
+				return core.Result::Err(ParseError(tag = "underflow", offset = i - start));
+			}
+			acc = acc * 10 - d;
+		} else {
+			if acc > (INT_MAX - d) / 10 {
+				return core.Result::Err(ParseError(tag = "overflow", offset = i - start));
+			}
+			acc = acc * 10 + d;
+		}
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
+}
+
+/// Parses bytes `[start, end)` of `bytes` as a base-10 unsigned
+/// integer.  Byte-range form of `parse_uint`; `ParseError.offset` is
+/// RELATIVE to `start` (`invalid-range`: 0 — see `parse_int_bytes`'s
+/// contract note, which applies verbatim).
+///
+/// **See also:** `parse_uint`.
+pub fn parse_uint_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Uint, ParseError> {
+	val limit = end;
+	if start < 0 or end < start or end > bytes.len {
+		return core.Result::Err(ParseError(tag = "invalid-range", offset = 0));
+	}
+	if start >= limit {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
+	}
+	var i = start;
+	val first = bytes[i];
+	if first == cast<Byte>(43) {
+		i = i + 1;
+	}
+	if i >= limit {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i - start));
+	}
+	if first == cast<Byte>(45) {
+		return core.Result::Err(ParseError(tag = "invalid-datatype", offset = 0));
+	}
+	val uint_max: Uint = cast<Uint>(18446744073709551615);
+	var acc: Uint = cast<Uint>(0);
+	while i < limit {
+		val b = bytes[i];
+		if not _is_digit(b) {
+			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i - start));
+		}
+		val d = _digit_to_uint(b);
+		if acc > (uint_max - d) / cast<Uint>(10) {
+			return core.Result::Err(ParseError(tag = "overflow", offset = i - start));
+		}
+		acc = acc * cast<Uint>(10) + d;
+		i = i + 1;
+	}
+	return core.Result::Ok(acc);
+}
+
+/// Parses the bytes of `v` as a base-10 signed integer.
+///
+/// View form of `parse_int_bytes`: same digit/sign/overflow
+/// semantics; `ParseError.offset` is VIEW-RELATIVE (the whole view is
+/// the range, so `invalid-range` cannot occur; an empty view is
+/// `invalid-syntax` at offset 0).  Never retains or allocates.
+///
+/// **See also:** `parse_int_bytes`, `parse_uint_view`.
+pub fn parse_int_view(v: &text.StringByteView) nothrow -> core.Result<Int, ParseError> {
+	val n = v.byte_length();
+	if n == 0 {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
+	}
+	val src = text._byte_source(v);
+	var i = 0;
+	var neg = false;
+	val first = src.read(0);
+	if first == cast<Byte>(45) {
+		neg = true;
+		i = 1;
+	} else {
+		if first == cast<Byte>(43) {
+			i = 1;
+		}
+	}
+	if i >= n {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
 	}
 	var acc = 0;
-	while i < len {
-		val b = bytes[i];
+	while i < n {
+		val b = src.read(i);
 		if not _is_digit(b) {
 			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
 		}
@@ -556,33 +659,33 @@ pub fn parse_int_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> cor
 	return core.Result::Ok(acc);
 }
 
-/// Parses bytes `[start, end)` of `bytes` as a base-10 unsigned
-/// integer.  Byte-range form of `parse_uint`.
+/// Parses the bytes of `v` as a base-10 unsigned integer.
 ///
-/// **See also:** `parse_uint`.
-pub fn parse_uint_bytes(bytes: &Array<Byte>, start: Int, end: Int) nothrow -> core.Result<Uint, ParseError> {
-	val len = end;
-	if start < 0 or end < start or end > bytes.len {
-		return core.Result::Err(ParseError(tag = "invalid-range", offset = start));
+/// View form of `parse_uint_bytes` — see `parse_int_view` for the
+/// offset contract.  A leading `-` is `invalid-datatype` at offset 0.
+///
+/// **See also:** `parse_uint_bytes`, `parse_int_view`.
+pub fn parse_uint_view(v: &text.StringByteView) nothrow -> core.Result<Uint, ParseError> {
+	val n = v.byte_length();
+	if n == 0 {
+		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}
-	if start >= len {
-		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = start));
-	}
-	var i = start;
-	val first = bytes[i];
+	val src = text._byte_source(v);
+	var i = 0;
+	val first = src.read(0);
 	if first == cast<Byte>(43) {
-		i = i + 1;
+		i = 1;
 	}
-	if i >= len {
+	if i >= n {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
 	}
 	if first == cast<Byte>(45) {
-		return core.Result::Err(ParseError(tag = "invalid-datatype", offset = start));
+		return core.Result::Err(ParseError(tag = "invalid-datatype", offset = 0));
 	}
 	val uint_max: Uint = cast<Uint>(18446744073709551615);
 	var acc: Uint = cast<Uint>(0);
-	while i < len {
-		val b = bytes[i];
+	while i < n {
+		val b = src.read(i);
 		if not _is_digit(b) {
 			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
 		}

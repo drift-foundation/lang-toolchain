@@ -9788,6 +9788,18 @@ class TypeChecker:
 							binding_types[bid] = self._error
 							binding_names[bid] = arm.binder
 							binding_mutable[bid] = False
+							# NOTE: no binder_id recording here — HTryExprArm
+							# deliberately carries none.  Expression-form
+							# arms are DEMONSTRABLY UNAFFECTED by the
+							# sibling-name identity defect: the borrow
+							# checker's name-keyed catch-entry marking is a
+							# STATEMENT-form (HTry CFG) path only, and the
+							# expression-form sibling-name pin in
+							# test_catch_binder_sibling_name_reuse.py
+							# compiles and runs green without any identity
+							# plumbing.  If expression-form arms ever grow a
+							# catch-entry marking path, extend HTryExprArm
+							# with binder_id THEN.
 							binding_place_kind[bid] = PlaceKind.LOCAL
 							# Slice 7a (0.31.62, 2026-05-05): expression-form
 							# `try expr catch X(e) { ... e.field ... }` must
@@ -12586,6 +12598,12 @@ class TypeChecker:
 							binding_names[bid] = arm.binder
 							binding_mutable[bid] = False
 							binding_place_kind[bid] = PlaceKind.LOCAL
+							# Record the binder's binding identity ON THE ARM:
+							# sibling arms may reuse the same source name, and
+							# downstream name-keyed lookups would resolve to the
+							# wrong arm's binding (spanless "uninitialized"
+							# false positives in the borrow checker).
+							arm.binder_id = bid
 							if arm.event_fqn is not None:
 								self._typed_catch_binders[bid] = self._canonical_pub_error_fqn(arm.event_fqn)
 						type_block(arm.block)

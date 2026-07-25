@@ -166,7 +166,7 @@ class BorrowChecker:
 	_ref_no_use_ids: Optional[Set[int]] = field(init=False, default=None, repr=False)
 	_synthetic_ref_binding_ids: Set[int] = field(init=False, default_factory=set, repr=False)
 	_block_facts_in: Optional[Dict[int, Set[Tuple[int, int]]]] = field(init=False, default=None, repr=False)
-	_catch_binders_by_block: Dict[int, str] = field(init=False, default_factory=dict, repr=False)
+	_catch_binders_by_block: Dict[int, Tuple[str, Optional[int]]] = field(init=False, default_factory=dict, repr=False)
 	local_const_binding_ids: Set[int] = field(default_factory=set)
 
 	def __post_init__(self) -> None:
@@ -2755,10 +2755,20 @@ class BorrowChecker:
 				place_states=dict(in_state.place_states),
 				loans=self._filter_live_loans(in_state.loans, block.id),
 			)
-			catch_binder = self._catch_binders_by_block.get(block.id)
-			if catch_binder is not None:
-				shadow_block = H.HBlock(statements=list(block.statements))
-				bids = self._binding_ids_for_name_in_block(shadow_block, catch_binder)
+			catch_entry = self._catch_binders_by_block.get(block.id)
+			if catch_entry is not None:
+				catch_binder, catch_binder_id = catch_entry
+				# THE ARM'S OWN BINDING IDENTITY, EXCLUSIVELY, when present:
+				# sibling catch arms may reuse the same source name, and any
+				# name-keyed lookup can resolve to (and spuriously mark) a
+				# SIBLING arm's binding.  The name-based collection runs
+				# ONLY when no identity was recorded (arms produced before
+				# the checker ran, or synthetic HIR in unit harnesses).
+				if catch_binder_id is not None:
+					bids: Set[int] = {int(catch_binder_id)}
+				else:
+					shadow_block = H.HBlock(statements=list(block.statements))
+					bids = self._binding_ids_for_name_in_block(shadow_block, catch_binder)
 				self._set_state(state, Place(PlaceBase(PlaceKind.LOCAL, -1, catch_binder)), PlaceState.VALID)
 				for bid in sorted(bids):
 					base = self._base_for_binding(bid)
@@ -3039,7 +3049,8 @@ class BorrowChecker:
 						catch_entries.append(entry)
 						catch_ids.extend(ids_arm)
 						if arm.binder is not None:
-							self._catch_binders_by_block[entry] = arm.binder
+							self._catch_binders_by_block[entry] = (
+								arm.binder, getattr(arm, "binder_id", None))
 					targets = [body_entry] + catch_entries
 					bb.terminator = Terminator(kind="branch", targets=targets, cond=None)
 					ids.extend(body_ids + catch_ids + cont_ids)

@@ -94,6 +94,13 @@ int main(int argc, char **argv) {
 	} else if (strcmp(handle, "negative") == 0) {
 		s = drift_string_from_cstr("neg");
 		s.len = -1;
+	} else if (strcmp(handle, "negative_badptr") == 0) {
+		/* NEGATIVE length + deliberately INVALID non-NULL storage: the
+		 * guard must report the negative-length contract failure
+		 * BEFORE dereferencing storage (a flags load from this pointer
+		 * would fault). */
+		s.len = -7;
+		s.storage = (struct DriftRcBytes *)0x8;
 	} else if (strcmp(handle, "valid") == 0) {
 		s = drift_string_from_cstr("ok!");
 	} else if (strcmp(handle, "flags_reserved") == 0) {
@@ -194,6 +201,7 @@ def test_observation_guards_fail_closed_both_builds(observers_ll: Path, tmp_path
 			("tombstone", "String tombstone observed"),
 			("malformed", "nonzero len, NULL storage"),
 			("negative", "negative len"),
+			("negative_badptr", "negative len"),
 			("flags_reserved", "reserved bit set"),
 			("flags_static_immortal", "STATIC+IMMORTAL"),
 			("flags_orphan", "HAS_INTERIOR_NUL without NUL_SCANNED"),

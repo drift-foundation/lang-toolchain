@@ -1,0 +1,120 @@
+// tools/perf: bulk-window crossover sweep over the SHIPPED APIs —
+// StringByteView.byte_at (Result, match-unwrapped) as the safe tier
+// and text.with_view_bytes over a per-window SUBVIEW as the bulk
+// tier (per-window view construction/drop and per-window boxed
+// callback preserved: that fixed cost is exactly what the sweep
+// measures).  Prints WIN lines (8 B .. 2 MB windows; checksummed).
+// Maintainer-invoked via `just perf-protocols`; NOT part of `just
+// test` or `just certify`.  Reference figures (2026-07-25, shipped
+// APIs): break-even ~64-96 bytes; guidance is bulk from ~128 bytes.
+// (The pre-migration raw-primitive shape measured ~216 B — superseded.)
+module main;
+
+import std.core as core;
+import std.text as text;
+import std.mem as mem;
+import std.time as time;
+import std.console as cons;
+import std.format as fmt;
+
+fn build_input(target_bytes: Int) nothrow -> String {
+	val chunk = "alpha,bravo12,charlie345,dd,echo_echo_echo,f,";
+	var sb = text.string_builder(target_bytes + 64);
+	var total = 0;
+	val n = chunk.byte_length();
+	while total < target_bytes {
+		text.sb_append_string(&mut sb, &chunk);
+		total = total + n;
+	}
+	return text.sb_build(&mut sb);
+}
+
+// SAFE tier: the shipped Result-returning StringByteView.byte_at,
+// match-unwrapped per byte, over each window of one whole-input view.
+fn sweep_safe(v: &text.StringByteView, win: Int) nothrow -> Int {
+	val n = v.byte_length();
+	var sum = 0;
+	var base = 0;
+	while base < n {
+		var wl = win;
+		if base + wl > n { wl = n - base; }
+		var i = 0;
+		while i < wl {
+			match v.byte_at(base + i) {
+				Ok(b) => { sum = sum + cast<Int>(b); },
+				Err(e) => { return 0 - 1; }
+			}
+			i = i + 1;
+		}
+		base = base + win;
+	}
+	return sum;
+}
+
+// BULK tier: per window, a SUBVIEW (one retain + drop per window) and
+// a with_view_bytes window with a per-window boxed callback.
+fn sweep_bulk(v: &text.StringByteView, win: Int) nothrow -> Int {
+	val n = v.byte_length();
+	var sum = 0;
+	var base = 0;
+	while base < n {
+		var wl = win;
+		if base + wl > n { wl = n - base; }
+		match v.subview(base, wl) {
+			Ok(sub) => {
+				val body: core.Callback2<mem.Ptr<Byte>, Int, Int> =
+					core.callback2(|p: mem.Ptr<Byte>, m: Int| => {
+						var acc = 0;
+						var i = 0;
+						while i < m {
+							acc = acc + cast<Int>(mem.ptr_read<type Byte>(mem.ptr_offset<type Byte>(p, i)));
+							i = i + 1;
+						}
+						acc
+					});
+				sum = sum + text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&sub, move body);
+			},
+			Err(e) => { return 0 - 1; }
+		}
+		base = base + win;
+	}
+	return sum;
+}
+
+fn bench_one(v: &text.StringByteView, win: Int, iters: Int) nothrow -> Void {
+	val ref = sweep_safe(v, win);
+	var line = "WIN " + fmt.format_int(win) + " safe_us=";
+	var k = 0;
+	while k < iters {
+		val t0 = time.now_monotonic();
+		val r = sweep_safe(v, win);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != ref { cons.println("MISMATCH"); return; }
+		k = k + 1;
+	}
+	line = line + " bulk_us=";
+	k = 0;
+	while k < iters {
+		val t0 = time.now_monotonic();
+		val r = sweep_bulk(v, win);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != ref { cons.println("MISMATCH"); return; }
+		k = k + 1;
+	}
+	cons.println(line);
+}
+
+pub fn main() nothrow -> Int {
+	val input = build_input(2 * 1024 * 1024);
+	cons.println("input bytes: " + fmt.format_int(input.byte_length()));
+	val v = text.byte_view_all(&input);
+	val iters = 5;
+	bench_one(&v, 8, iters);
+	bench_one(&v, 32, iters);
+	bench_one(&v, 128, iters);
+	bench_one(&v, 512, iters);
+	bench_one(&v, 4096, iters);
+	bench_one(&v, 65536, iters);
+	bench_one(&v, 2 * 1024 * 1024, iters);
+	return 0;
+}

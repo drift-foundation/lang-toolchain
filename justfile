@@ -58,6 +58,67 @@ git-reset BRANCH:
 test: review-cleanup ownership-matrix-check lang-uniform-pytest lang-llvm-test lang-driver-test lang-codegen-test lang-gdb-test drift-deploy-test ext-e2e-smoke ext-e2e-boundary ownership-matrix-pkgb
 	@echo "lang tests: Success."
 
+# ── Heavyweight performance protocols (maintainer-invoked) ───────────
+# READ-ONLY measurement protocols from the string-view-performance
+# phase: the 9-tier byte-access benchmark (multi-launch), the
+# bulk-window crossover sweep, and the representative whole-workload
+# compile-time/binary-size measurement.  NOT part of `just test` or
+# `just certify`; reference figures live in the phase checkpoint.
+# (The ablation matrix is deliberately NOT a recipe — it requires
+# temporary compiler-source flips; see the checkpoint procedure.)
+perf-protocols:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# NATIVE-MODE ONLY: sanitized environments invalidate the figures
+	# (absolute cost, code layout, AND tier ratios/crossover shift), and
+	# a figure recorded from such a run would masquerade as a
+	# regression — or worse, as a new reference.  Sanitizer coverage of
+	# this feature surface lives in the memcheck/ASAN test suites, not
+	# here.
+	if [ -n "${DRIFT_MEMCHECK:-}" ] || [ -n "${DRIFT_ASAN:-}" ]; then
+		echo "perf-protocols: refusing to run with DRIFT_MEMCHECK/DRIFT_ASAN set" >&2
+		echo "  (native-mode-only measurement protocol; sanitized figures are invalid" >&2
+		echo "   as references — use the memcheck/ASAN test suites for correctness)" >&2
+		exit 2
+	fi
+	out="build/tmp/perf-protocols-$(date +%Y%m%d-%H%M%S)"
+	mkdir -p "$out"
+	# LIVENESS: CI watchdogs treat prolonged silence as a stuck job
+	# (same doctrine as the corpus runner's progress heartbeat) — every
+	# driftc compile (~25 s, longer on slow hosts) runs under a 20 s
+	# heartbeat so the output gap never exceeds it.
+	compile_hb() {
+		label="$1"; shift
+		echo "perf-protocols: compiling $label ..."
+		( "$@" ) & pid=$!
+		t=0
+		while kill -0 "$pid" 2>/dev/null; do
+			sleep 20
+			if kill -0 "$pid" 2>/dev/null; then
+				t=$((t + 20)); echo "perf-protocols: ... $label still compiling (${t}s)"
+			fi
+		done
+		wait "$pid"
+		echo "perf-protocols: $label compiled."
+	}
+	compile_hb "tier bench" env PYTHONPATH=. ./.venv/bin/python -m lang.driftc.driftc --dev --allow-unsafe \
+		--stdlib-root stdlib tools/perf/tier_bench.drift --entry main::main -o "$out/tier.bin"
+	echo "== tier bench (3 fresh launches) =="
+	for i in 1 2 3; do echo "-- launch $i"; "$out/tier.bin"; done
+	compile_hb "crossover sweep" env PYTHONPATH=. ./.venv/bin/python -m lang.driftc.driftc --dev --allow-unsafe \
+		--stdlib-root stdlib tools/perf/crossover_bench.drift --entry main::main -o "$out/crossover.bin"
+	echo "== crossover sweep =="
+	"$out/crossover.bin"
+	echo "== whole-workload compile (3 runs) + binary size =="
+	for i in 1 2 3; do
+		echo "-- workload compile run $i/3"
+		/usr/bin/time -f "wall=%es cpu=%Us+%Ss" \
+			./.venv/bin/python -m lang.driftc.driftc --dev --allow-unsafe \
+			--stdlib-root stdlib tools/perf/stdlib_workload.drift --entry main::main -o "$out/workload.bin" 2>&1 | tail -1
+	done
+	stat -c "workload binary: %s bytes" "$out/workload.bin"
+	echo "perf-protocols: outputs in $out"
+
 # ── Ownership CORPUS certification gate ──────────────────────────────
 # DISTINCT from `ownership-matrix-check` above: the matrix is the 51
 # curated generated ownership-transfer fixtures (generator-freshness

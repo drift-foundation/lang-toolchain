@@ -83,6 +83,7 @@ RAWBUF_PTR_IDX = 0
 RAWBUF_CAP_IDX = 1
 from lang.driftc.stage1 import BinaryOp, UnaryOp
 from lang.driftc.stage1.call_info import CallSig
+from lang.driftc.stage2.mir_nodes import Unreachable as MirUnreachable
 from lang.driftc.stage2 import (
 	ArrayCap,
 	ArrayIndexLoad,
@@ -201,6 +202,41 @@ from lang.driftc.core.xxhash64 import hash64
 # ABI type names
 DRIFT_ERROR_TYPE = "%DriftError"
 DRIFT_ERROR_PTR = "ptr"
+
+
+def _inline_hint_eligible(func, type_table, ret_type_id) -> bool:
+	"""STRUCTURAL inlinehint eligibility (2026-07-25 review round):
+	SMALL function AND an applicable ACCESSOR SHAPE — deliberately NOT
+	a compiler-wide "inline all small functions" policy.
+
+	  small:  hot-path MIR size (instructions outside blocks that
+	          terminate in Unreachable — assert/contract fail arms)
+	          <= 48 (threshold-swept);
+	  shape:  returns a VARIANT type (Result/Optional-style accessors
+	          whose error/None arms RETURN and are therefore not
+	          Unreachable-cold), OR contains a cold-failure block
+	          (an Unreachable-terminated assert/contract arm).
+
+	Ordinary small hot functions (no variant return, no cold arm) are
+	NOT hinted — tiny ones inline on LLVM's own cost model anyway.
+	The hint only nudges the cost model; LLVM still decides.
+	"""
+	hot_instrs = 0
+	has_cold_block = False
+	for b in func.blocks.values():
+		if isinstance(b.terminator, MirUnreachable):
+			has_cold_block = True
+		else:
+			hot_instrs += len(b.instructions)
+	if hot_instrs > 48:
+		return False
+	if has_cold_block:
+		return True
+	if type_table is not None and ret_type_id is not None:
+		td = type_table.get(ret_type_id)
+		if td is not None and getattr(td, "kind", None) is TypeKind.VARIANT:
+			return True
+	return False
 
 
 def _is_ptr_type(ty: str | None) -> bool:
@@ -431,6 +467,12 @@ def lower_module_to_llvm(
 	"""
 	if word_bits is None:
 		raise AssertionError("LLVM codegen requires explicit word_bits")
+	# FINAL MIR boundary: prove the provenance of every unchecked
+	# string byte load AFTER all mutating MIR passes — codegen skips
+	# its guards for these, so an unproven one must never get here.
+	from lang.driftc.stage2.unchecked_load_validator import validate_unchecked_string_loads
+	for _fn in funcs.values():
+		validate_unchecked_string_loads(_fn)
 	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
 	mod.emit_compiler_provenance(git_sha=provenance_git_sha, build_profile=provenance_build_profile)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
@@ -1480,52 +1522,78 @@ class LlvmModuleBuilder:
 			_obs_msg("__drift_obs_msg_orphan", "String flags: HAS_INTERIOR_NUL without NUL_SCANNED")
 			lines.extend([
 				"declare void @drift_contract_fail(ptr)",
+				# COLD, OUTLINED fail dispatch: keeps the six contract
+				# messages EXACT while keeping the hot guard's inline
+				# cost tiny — with the fail arms inlined into the guard,
+				# every small String accessor blew LLVM's inline
+				# threshold (cost 260 vs 225 measured on byte_length) and
+				# NOTHING in the stdlib inlined into callers.
+				"define internal void @__drift_string_observe_fail(i64 %code) noinline cold {",
+				"__bb_entry:",
+				"  switch i64 %code, label %__bb_c0 [ i64 1, label %__bb_c1 i64 2, label %__bb_c2 i64 3, label %__bb_c3 i64 4, label %__bb_c4 i64 5, label %__bb_c5 ]",
+				"__bb_c0:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_tomb)",
+				"  unreachable",
+				"__bb_c1:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_malformed)",
+				"  unreachable",
+				"__bb_c2:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_neg)",
+				"  unreachable",
+				"__bb_c3:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_rsv)",
+				"  unreachable",
+				"__bb_c4:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_si)",
+				"  unreachable",
+				"__bb_c5:",
+				"  call void @drift_contract_fail(ptr @__drift_obs_msg_orphan)",
+				"  unreachable",
+				"}",
+				# Hot guard: branch-lean predicates + ONE cold call site.
+				# Same checks, same order of precedence, same messages
+				# (via the dispatch codes), same fail-closed behavior in
+				# both builds.  Flags word: u64 at storage offset 8 (this
+				# guard is part of the codegen layout authority); relaxed
+				# atomic load.
 				f"define internal void @__drift_string_observe_guard({word} %len, ptr %storage) alwaysinline {{",
 				"__bb_entry:",
 				"  %isnull = icmp eq ptr %storage, null",
 				"  br i1 %isnull, label %__bb_null, label %__bb_nonnull",
 				"__bb_null:",
 				f"  %nz = icmp ne {word} %len, 0",
-				"  br i1 %nz, label %__bb_malformed, label %__bb_tomb",
-				"__bb_tomb:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_tomb)",
-				"  unreachable",
-				"__bb_malformed:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_malformed)",
+				"  %code0 = select i1 %nz, i64 1, i64 0",
+				"  call void @__drift_string_observe_fail(i64 %code0)",
 				"  unreachable",
 				"__bb_nonnull:",
+				# NEGATIVE length is rejected BEFORE any storage
+				# dereference: a malformed {negative len, invalid
+				# non-NULL storage} handle must produce the pinned
+				# negative-length contract failure, never a fault on
+				# the flags load.
 				f"  %neg = icmp slt {word} %len, 0",
-				"  br i1 %neg, label %__bb_neg, label %__bb_flags",
-				"__bb_neg:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_neg)",
+				"  br i1 %neg, label %__bb_negf, label %__bb_flags",
+				"__bb_negf:",
+				"  call void @__drift_string_observe_fail(i64 2)",
 				"  unreachable",
-				# Illegal-flag states fail closed at OBSERVATION too (the
-				# pinned unconditional failures): reserved bits,
-				# STATIC+IMMORTAL, HAS_INTERIOR_NUL without NUL_SCANNED.
-				# Flags word: u64 at storage offset 8 (this guard is part
-				# of the codegen layout authority); relaxed atomic load.
 				"__bb_flags:",
 				"  %flags_ptr = getelementptr i8, ptr %storage, i64 8",
 				"  %flags = load atomic i64, ptr %flags_ptr monotonic, align 8",
 				"  %rsv = and i64 %flags, -16",
 				"  %rsv_set = icmp ne i64 %rsv, 0",
-				"  br i1 %rsv_set, label %__bb_rsv, label %__bb_si_chk",
-				"__bb_rsv:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_rsv)",
-				"  unreachable",
-				"__bb_si_chk:",
 				"  %si = and i64 %flags, 3",
 				"  %si_both = icmp eq i64 %si, 3",
-				"  br i1 %si_both, label %__bb_si, label %__bb_nul_chk",
-				"__bb_si:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_si)",
-				"  unreachable",
-				"__bb_nul_chk:",
 				"  %nc = and i64 %flags, 12",
 				"  %nc_orphan = icmp eq i64 %nc, 8",
-				"  br i1 %nc_orphan, label %__bb_orphan, label %__bb_ok",
-				"__bb_orphan:",
-				"  call void @drift_contract_fail(ptr @__drift_obs_msg_orphan)",
+				"  %bad1 = or i1 %rsv_set, %si_both",
+				"  %bad = or i1 %bad1, %nc_orphan",
+				"  br i1 %bad, label %__bb_fail, label %__bb_ok",
+				"__bb_fail:",
+				# precedence mirrors the original chain: rsv > si > orphan
+				"  %c5 = select i1 %nc_orphan, i64 5, i64 0",
+				"  %c4 = select i1 %si_both, i64 4, i64 %c5",
+				"  %code = select i1 %rsv_set, i64 3, i64 %c4",
+				"  call void @__drift_string_observe_fail(i64 %code)",
 				"  unreachable",
 				"__bb_ok:",
 				"  ret void",
@@ -1927,7 +1995,23 @@ class _FuncBuilder:
 	# and `_release_construct_dv_temp` helper deleted along with
 	# `M.ConstructDV` and the DV runtime exports.
 
+	def _scratch_alloca(self, llty: str, prefix: str) -> str:
+		"""A NONESCAPING scratch stack slot, registered for ENTRY-block
+		placement (LLVM marks functions with non-entry allocas "never
+		inline: dynamic alloca").  Owning-site contract: every caller
+		of this helper materializes a transient value (variant/struct
+		pack-unpack, loop counter, callback slot) that is FULLY
+		re-initialized by explicit stores before each use and whose
+		address never outlives the emitting lowering — so a single
+		entry slot reused across loop iterations is
+		semantics-preserving by construction.  Allocas whose address
+		may escape must NOT use this helper."""
+		name = self._fresh(prefix)
+		self.entry_allocas.append(f"  {name} = alloca {llty}")
+		return name
+
 	def lower(self) -> str:
+		self.entry_allocas = []
 		self._assert_cfg_supported()
 		self._prime_type_ids()
 		self._scan_addr_taken_locals()
@@ -1953,6 +2037,18 @@ class _FuncBuilder:
 		# exit block for a MIR block, making PHI references stale.
 		self._fixup_phi_predecessors()
 		self.lines.append("}")
+		# Splice registered scratch allocas into the ENTRY block (right
+		# after the first label following the define line).
+		if self.entry_allocas:
+			define_idx = next(i for i, l in enumerate(self.lines) if l.startswith("define "))
+			insert_at = None
+			for i in range(define_idx + 1, len(self.lines)):
+				if self.lines[i].endswith(":") and not self.lines[i].startswith(" "):
+					insert_at = i + 1
+					break
+			if insert_at is None:
+				insert_at = define_idx + 1
+			self.lines[insert_at:insert_at] = self.entry_allocas
 		return "\n".join(self.lines)
 
 	def _collect_assign_aliases(self) -> None:
@@ -2031,7 +2127,11 @@ class _FuncBuilder:
 			self._dbg_subprogram_id = self.module.get_di_subprogram(func_name, func_name, span)
 			if self._dbg_subprogram_id is not None:
 				dbg_suffix = f" !dbg !{self._dbg_subprogram_id}"
-		self.lines.append(f"define{linkage} {emit_ret_ty} {_llvm_fn_sym(func_name)}({params_str}){comdat}{dbg_suffix} {{")
+		# Structural inlinehint: see _inline_hint_eligible (small +
+		# accessor/variant-return/cold-failure shape).
+		ret_ty_id = self.fn_info.signature.return_type_id if self.fn_info.signature is not None else None
+		hint = " inlinehint" if _inline_hint_eligible(self.func, self.type_table, ret_ty_id) else ""
+		self.lines.append(f"define{linkage} {emit_ret_ty} {_llvm_fn_sym(func_name)}({params_str}){hint}{comdat}{dbg_suffix} {{")
 
 	def _dbg_local_var(self, local: str, ty_id: TypeId, span: Span | None) -> int | None:
 		if not self.module.debug_enabled or self._dbg_subprogram_id is None:
@@ -3065,12 +3165,18 @@ class _FuncBuilder:
 			storage_tmp = self._fresh("storage")
 			self.lines.append(f"  {len_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 0")
 			self.lines.append(f"  {storage_tmp} = extractvalue {DRIFT_STRING_TYPE} {val}, 1")
-			self._emit_string_observe_guard(len_tmp, storage_tmp)
-			self.module.needs_array_helpers = True
-			container_id = self._emit_string_literal_value(STRING_CONTAINER_ID)
-			self.lines.append(
-				f"  call void @drift_bounds_check({DRIFT_STRING_TYPE} {container_id}, {self._llty(DRIFT_INT_TYPE)} {index}, {self._llty(DRIFT_INT_TYPE)} {len_tmp})"
-			)
+			if not getattr(instr, "unchecked", False):
+				# Fully checked form (any producer other than the
+				# hir_to_mir guarded-index expansion): observation
+				# guard + defense-in-depth C bounds check.  The
+				# unchecked form's producer already guarded (StringLen
+				# on the same handle) and proved the bounds.
+				self._emit_string_observe_guard(len_tmp, storage_tmp)
+				self.module.needs_array_helpers = True
+				container_id = self._emit_string_literal_value(STRING_CONTAINER_ID)
+				self.lines.append(
+					f"  call void @drift_bounds_check({DRIFT_STRING_TYPE} {container_id}, {self._llty(DRIFT_INT_TYPE)} {index}, {self._llty(DRIFT_INT_TYPE)} {len_tmp})"
+				)
 			# ABI 22 (B-repr/B5): field 1 is the DriftRcBytes HEADER
 			# pointer; bytes live at +16.  One of exactly three codegen
 			# layout-authority lowerings (with the literal emitters and
@@ -3428,8 +3534,7 @@ class _FuncBuilder:
 			if len(instr.args) != len(field_types):
 				raise AssertionError("ConstructStruct arg/field length mismatch (MIR bug)")
 			if not field_types:
-				tmp_ptr = self._fresh("struct_tmp")
-				self.lines.append(f"  {tmp_ptr} = alloca {struct_llty}")
+				tmp_ptr = self._scratch_alloca(struct_llty, "struct_tmp")
 				self.lines.append(f"  store {struct_llty} zeroinitializer, ptr {tmp_ptr}")
 				dest = self._map_value(instr.dest)
 				self.lines.append(f"  {dest} = load {struct_llty}, ptr {tmp_ptr}")
@@ -3483,8 +3588,7 @@ class _FuncBuilder:
 				self.value_types[dest] = variant_llty
 				return
 			# Materialize into a stack slot so we can write into the aligned payload.
-			tmp_ptr = self._fresh("variant")
-			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+			tmp_ptr = self._scratch_alloca(variant_llty, "variant")
 			self.lines.append(f"  store {variant_llty} zeroinitializer, ptr {tmp_ptr}")
 			tag_ptr = self._fresh("tagptr")
 			self.lines.append(
@@ -3622,8 +3726,7 @@ class _FuncBuilder:
 				raise NotImplementedError(
 					f"LLVM codegen v1: VariantGetField value type mismatch (have {have}, expected {variant_llty})"
 				)
-			tmp_ptr = self._fresh("variant")
-			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+			tmp_ptr = self._scratch_alloca(variant_llty, "variant")
 			self.lines.append(f"  store {variant_llty} {val}, ptr {tmp_ptr}")
 			payload_words_ptr = self._fresh("payload_words")
 			self.lines.append(
@@ -4493,8 +4596,7 @@ class _FuncBuilder:
 				cb_val = self._map_value(instr.args[0])
 				exec_val = self._map_value(instr.args[1])
 				self.module.needs_thread_runtime = True
-				cb_addr = self._fresh("cb_addr")
-				self.lines.append(f"  {cb_addr} = alloca {self._llty(cb_llty)}")
+				cb_addr = self._scratch_alloca(self._llty(cb_llty), "cb_addr")
 				self.lines.append(f"  store {self._llty(cb_llty)} {cb_val}, ptr {cb_addr}")
 				if instr.can_throw:
 					raw = self._fresh("spawn_raw")
@@ -8446,8 +8548,7 @@ class _FuncBuilder:
 			raise NotImplementedError(
 				f"LLVM codegen v1: unknown variant constructor '{ctor}' for TypeId {variant_ty}"
 			)
-		tmp_ptr = self._fresh("variant")
-		self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+		tmp_ptr = self._scratch_alloca(variant_llty, "variant")
 		self.lines.append(f"  store {variant_llty} zeroinitializer, ptr {tmp_ptr}")
 		tag_ptr = self._fresh("tagptr")
 		self.lines.append(
@@ -9123,8 +9224,7 @@ class _FuncBuilder:
 					raise AssertionError(f"internal: tombstone ctor '{ctor}' missing in variant instance")
 				layout = self._variant_layout(ty_id)
 				variant_llty = layout.llvm_ty
-				tmp_ptr = self._fresh("variant_tomb")
-				self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+				tmp_ptr = self._scratch_alloca(variant_llty, "variant_tomb")
 				self.lines.append(f"  store {variant_llty} zeroinitializer, ptr {tmp_ptr}")
 				tag = inst.internal_tombstone_tag
 				if tag is None:
@@ -9786,8 +9886,7 @@ class _FuncBuilder:
 				self._current_effective_block = after_block[1:]
 		else:
 			# Element-wise copy for non-bitcopy Copy types.
-			idx_ptr = self._fresh("idx_ptr")
-			self.lines.append(f"  {idx_ptr} = alloca {self._llty(DRIFT_INT_TYPE)}")
+			idx_ptr = self._scratch_alloca(self._llty(DRIFT_INT_TYPE), "idx_ptr")
 			self.lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} 0, ptr {idx_ptr}")
 			cond_block = self._fresh("arr_dup_cond")
 			body_block = self._fresh("arr_dup_body")
@@ -9882,8 +9981,7 @@ class _FuncBuilder:
 			variant_llty = layout.llvm_ty
 			tag_val = self._fresh("var_tag")
 			self.lines.append(f"  {tag_val} = extractvalue {variant_llty} {value}, 0")
-			result_ptr = self._fresh("var_copy")
-			self.lines.append(f"  {result_ptr} = alloca {variant_llty}")
+			result_ptr = self._scratch_alloca(variant_llty, "var_copy")
 			done_block = self._fresh("var_done")
 			arms = list(layout.arms)
 			default_block = self._fresh("var_bad")
@@ -9897,8 +9995,7 @@ class _FuncBuilder:
 			for (arm_block, arm_layout), (ctor_name, _arm_layout) in zip(arm_blocks, arms):
 				self.lines.append(f"{arm_block[1:]}:")
 				# Extract payload fields for this arm.
-				tmp_ptr = self._fresh("variant")
-				self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+				tmp_ptr = self._scratch_alloca(variant_llty, "variant")
 				self.lines.append(f"  store {variant_llty} {value}, ptr {tmp_ptr}")
 				args: list[str] = []
 				if arm_layout.payload_struct_llty:
@@ -9991,12 +10088,21 @@ class _FuncBuilder:
 		td = self.type_table.get(ty_id)
 
 		lines: list[str] = []
+		entry_allocas: list[str] = []
 		tmp_counter = 0
 
 		def fresh(prefix: str) -> str:
 			nonlocal tmp_counter
 			tmp_counter += 1
 			return f"%{prefix}{tmp_counter}"
+
+		def scratch_alloca(alloc_llty: str, prefix: str) -> str:
+			# Owning-site entry registration (same contract as
+			# _FuncBuilder._scratch_alloca): transient, fully re-stored
+			# before use, address never escapes the emitting sequence.
+			nm = fresh(prefix)
+			entry_allocas.append(f"  {nm} = alloca {alloc_llty}")
+			return nm
 
 		def emit_clone(inner_ty: TypeId, val: str) -> str:
 			"""Emit a clone of val, returning the cloned SSA value."""
@@ -10098,8 +10204,7 @@ class _FuncBuilder:
 				lines.append(f"  br label {done_lbl}")
 				lines.append(f"{done_lbl[1:]}:")
 			else:
-				idx_ptr = fresh("idx_ptr")
-				lines.append(f"  {idx_ptr} = alloca {self._llty(DRIFT_INT_TYPE)}")
+				idx_ptr = scratch_alloca(self._llty(DRIFT_INT_TYPE), "idx_ptr")
 				lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} 0, ptr {idx_ptr}")
 				cond_lbl = fresh("cond")
 				body_lbl = fresh("body")
@@ -10147,8 +10252,7 @@ class _FuncBuilder:
 			field_types_by_ctor = {arm.name: arm.field_types for arm in inst.arms}
 			tag_v = fresh("tag")
 			lines.append(f"  {tag_v} = extractvalue {variant_llty_str} {val}, 0")
-			result_ptr = fresh("vptr")
-			lines.append(f"  {result_ptr} = alloca {variant_llty_str}")
+			result_ptr = scratch_alloca(variant_llty_str, "vptr")
 			done_lbl = fresh("vdone")
 			default_lbl = fresh("vbad")
 			arm_info: list[tuple[str, str, object]] = []  # (label, ctor_name, arm_layout)
@@ -10161,8 +10265,7 @@ class _FuncBuilder:
 			lines.append(f"  switch i8 {tag_v}, label {default_lbl} [ {case_specs} ]")
 			for lbl, ctor_name, arm_layout in arm_info:
 				lines.append(f"{lbl[1:]}:")
-				tmp_ptr = fresh("vtmp")
-				lines.append(f"  {tmp_ptr} = alloca {variant_llty_str}")
+				tmp_ptr = scratch_alloca(variant_llty_str, "vtmp")
 				lines.append(f"  store {variant_llty_str} {val}, ptr {tmp_ptr}")
 				args: list[str] = []
 				if arm_layout.payload_struct_llty:
@@ -10196,8 +10299,7 @@ class _FuncBuilder:
 							args.append(copied)
 				# Reconstruct variant value for this arm.
 				# Use alloca + store approach (same as _emit_variant_value).
-				out_ptr = fresh("optr")
-				lines.append(f"  {out_ptr} = alloca {variant_llty_str}")
+				out_ptr = scratch_alloca(variant_llty_str, "optr")
 				lines.append(f"  store {variant_llty_str} zeroinitializer, ptr {out_ptr}")
 				tag_p = fresh("tp")
 				lines.append(f"  {tag_p} = getelementptr inbounds {variant_llty_str}, ptr {out_ptr}, i32 0, i32 0")
@@ -10241,6 +10343,15 @@ class _FuncBuilder:
 			)
 		lines.append(f"  ret {emit_llty} {result}")
 		lines.append("}")
+		if entry_allocas:
+			define_idx = next(i for i, l in enumerate(lines) if l.startswith("define "))
+			insert_at = define_idx + 1
+			# If the body opens with an explicit entry label (this
+			# generator emits __bb_entry:), allocas go AFTER it —
+			# instructions before the first label are invalid IR.
+			if insert_at < len(lines) and lines[insert_at].endswith(":") and not lines[insert_at].startswith(" "):
+				insert_at += 1
+			lines[insert_at:insert_at] = entry_allocas
 		self.module.emit_func("\n".join(lines))
 		return name
 
@@ -10368,31 +10479,57 @@ class _FuncBuilder:
 		if td.kind is TypeKind.VARIANT:
 			layout = self._variant_layout(ty_id)
 			variant_llty = layout.llvm_ty
-			tmp_ptr = self._fresh("drop_variant_ptr")
-			self.lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
-			self.lines.append(f"  store {variant_llty} {value}, ptr {tmp_ptr}")
-			helper = self._ensure_array_drop_helper(ty_id)
-			self.lines.append(f"  call void @{helper}({self._llty(DRIFT_INT_TYPE)} 1, ptr {tmp_ptr}){call_dbg_suffix}")
+			# Single-value drops go through the by-value alwaysinline
+			# variant helper (no caller alloca/store, no outlined loop):
+			# LLVM folds the tag switch wherever the tag is known, so
+			# inactive destructible arms cost nothing on the active path.
+			helper = self._ensure_variant_drop_helper(ty_id)
+			self.lines.append(f"  call void @{helper}({variant_llty} {value}){call_dbg_suffix}")
 			return
 
-	def _ensure_array_drop_helper(self, elem_ty: TypeId) -> str:
+	def _ensure_variant_drop_helper(self, ty_id: TypeId) -> str:
+		"""Single-VALUE variant drop: `define internal void
+		@__drift_variant_drop_<key>(<llty> %v) alwaysinline` — the same
+		per-arm release logic as the array element drop, WITHOUT the
+		element loop, the caller-side alloca/store, or an outlined call
+		boundary.  `alwaysinline` lets LLVM fold the tag switch on
+		paths where the tag is known (e.g. a match arm's own edge), so
+		a Result::Ok(Copy) drop costs NOTHING — the authority-level
+		enum/match cleanup optimization (2026-07-25 review directive):
+		inactive destructible arms (Err carrying a String) no longer
+		tax the active tag's path, while runtime-unknown tags keep the
+		exact same per-arm releases (drop exactly once)."""
+		return self._ensure_array_drop_helper(ty_id, single_value=True)
+
+	def _ensure_array_drop_helper(self, elem_ty: TypeId, single_value: bool = False) -> str:
 		if self.type_table is None:
 			raise AssertionError("array drop helper requires a TypeTable")
 		elem_ty = self._resolve_forward_nominal_typeid(elem_ty)
 		key = self._type_key(elem_ty)
-		name = f"__drift_array_drop_{key}"
+		name = f"__drift_variant_drop_{key}" if single_value else f"__drift_array_drop_{key}"
 		if name in self.module.array_drop_helpers:
 			return name
 		self.module.array_drop_helpers[name] = name
 		elem_llty = self._llvm_array_elem_type(elem_ty)
 		lines: list[str] = []
 		value_types: dict[str, str] = {}
+		entry_allocas: list[str] = []
 		tmp_counter = 0
 
 		def fresh(prefix: str) -> str:
 			nonlocal tmp_counter
 			tmp_counter += 1
 			return f"%{prefix}{tmp_counter}"
+
+		def scratch_alloca(llty: str, prefix: str) -> str:
+			# Same owning-site contract as _FuncBuilder._scratch_alloca:
+			# transient, fully re-stored before use, address never
+			# escapes the emitting sequence — placed in the helper's
+			# ENTRY so inlining never introduces dynamic allocas into
+			# callers.
+			name = fresh(prefix)
+			entry_allocas.append(f"  {name} = alloca {llty}")
+			return name
 
 		def emit_drop(ty_id: TypeId, val: str) -> None:
 			ty_id = self._resolve_forward_nominal_typeid(ty_id)
@@ -10487,8 +10624,7 @@ class _FuncBuilder:
 				for arm_block, arm_layout, ctor_name in arm_blocks:
 					lines.append(f"{arm_block[1:]}:")
 					if arm_layout.payload_struct_llty:
-						tmp_ptr = fresh("variant")
-						lines.append(f"  {tmp_ptr} = alloca {variant_llty}")
+						tmp_ptr = scratch_alloca(variant_llty, "variant")
 						lines.append(f"  store {variant_llty} {val}, ptr {tmp_ptr}")
 						payload_words_ptr = fresh("payload_words")
 						lines.append(
@@ -10526,14 +10662,29 @@ class _FuncBuilder:
 				lines.append(f"{done_block[1:]}:")
 				return
 
-		lines.append(f"define void @{name}({self._llty(DRIFT_INT_TYPE)} %len, ptr %data) {{")
+		if single_value:
+			sv_llty = self._llvm_type_for_typeid(elem_ty)
+			lines.append(f"define internal void @{name}({sv_llty} %v) alwaysinline {{")
+		else:
+			lines.append(f"define void @{name}({self._llty(DRIFT_INT_TYPE)} %len, ptr %data) {{")
 		if not self._type_needs_drop(elem_ty):
 			lines.append("  ret void")
 			lines.append("}")
 			self.module.emit_func("\n".join(lines))
 			return name
-		idx_ptr = fresh("idx_ptr")
-		lines.append(f"  {idx_ptr} = alloca {self._llty(DRIFT_INT_TYPE)}")
+		if single_value:
+			value_types["%v"] = self._llvm_type_for_typeid(elem_ty)
+			emit_drop(elem_ty, "%v")
+			lines.append("  ret void")
+			lines.append("}")
+			if entry_allocas:
+				insert_at = 1
+				if len(lines) > 1 and lines[1].endswith(":") and not lines[1].startswith(" "):
+					insert_at = 2
+				lines[insert_at:insert_at] = entry_allocas
+			self.module.emit_func("\n".join(lines))
+			return name
+		idx_ptr = scratch_alloca(self._llty(DRIFT_INT_TYPE), "idx_ptr")
 		lines.append(f"  store {self._llty(DRIFT_INT_TYPE)} 0, ptr {idx_ptr}")
 		cond_block = fresh("arr_drop_cond")
 		body_block = fresh("arr_drop_body")
@@ -10563,6 +10714,11 @@ class _FuncBuilder:
 		lines.append(f"{done_block[1:]}:")
 		lines.append("  ret void")
 		lines.append("}")
+		if entry_allocas:
+			insert_at = 1
+			if len(lines) > 1 and lines[1].endswith(":") and not lines[1].startswith(" "):
+				insert_at = 2
+			lines[insert_at:insert_at] = entry_allocas
 		self.module.emit_func("\n".join(lines))
 		return name
 
@@ -10582,6 +10738,7 @@ class _FuncBuilder:
 		lines = [
 			f"define void @{name}({iface_llty} %src) {{",
 			"__bb_entry:",
+			f"  %iface_tmp = alloca {iface_llty}",
 			f"  %iface_data = extractvalue {iface_llty} %src, {DRIFT_IFACE_DATA_IDX}",
 			f"  %iface_vtable = extractvalue {iface_llty} %src, {DRIFT_IFACE_VTABLE_IDX}",
 			"  %iface_vtable_null = icmp eq ptr %iface_vtable, null",
@@ -10600,7 +10757,7 @@ class _FuncBuilder:
 			"  %iface_inline_bit = and i8 %iface_inline, 1",
 			"  %iface_owns_bit = and i8 %iface_inline, 2",
 			"  %iface_is_inline = icmp ne i8 %iface_inline_bit, 0",
-			f"  %iface_tmp = alloca {iface_llty}",
+
 			f"  store {iface_llty} %src, ptr %iface_tmp",
 			f"  %iface_inline_field = getelementptr inbounds {iface_llty}, ptr %iface_tmp, i32 0, i32 {DRIFT_IFACE_INLINE_IDX}",
 			f"  %iface_inline_word = getelementptr inbounds {inline_storage}, ptr %iface_inline_field, i32 0, i32 0",

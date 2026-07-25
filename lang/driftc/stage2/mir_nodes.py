@@ -1221,10 +1221,18 @@ class StringLen(MInstr):
 
 @dataclass
 class StringByteAt(MInstr):
-	"""dest = string_byte_at(value, index) as Byte."""
+	"""dest = string_byte_at(value, index) as Byte.
+
+	`unchecked=True` is emitted ONLY by the guarded-index expansion in
+	hir_to_mir (observe guard already ran via the expansion's StringLen
+	on the SAME handle; bounds already proven by the expansion's branch)
+	— codegen then skips the redundant observation guard and the
+	defense-in-depth C bounds call on the hot path.  Any other producer
+	must leave it False and gets the fully checked lowering."""
 	dest: ValueId
 	value: ValueId
 	index: ValueId
+	unchecked: bool = False
 
 
 @dataclass

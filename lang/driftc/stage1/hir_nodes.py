@@ -624,6 +624,12 @@ class HCatchArm(HStmt):
 
 	event_fqn: canonical FQN of the exception/event to match (None = catch-all)
 	binder: local name to bind the Error to inside the arm (None = no binder)
+	binder_id: the binder's BINDING IDENTITY, set by the type checker
+	    when it allocates the arm-scoped binding.  Downstream passes
+	    (borrow checker catch-entry initialization) must use THIS, not
+	    the source name: sibling arms may reuse the same source name
+	    (`catch A(e) {} catch B(e) {}`), and name-keyed lookups resolve
+	    to the wrong arm's binding (the "uninitialized 'e'" defect).
 	block: handler body
 	"""
 
@@ -631,6 +637,7 @@ class HCatchArm(HStmt):
 	binder: Optional[str]
 	block: "HBlock"
 	loc: Span = field(default_factory=Span)
+	binder_id: Optional[BindingId] = None
 
 
 @dataclass

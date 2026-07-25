@@ -7,11 +7,10 @@ The checked-in reference for `just ownership-corpus-check` (the
 
 | field | value |
 |---|---|
-| origin run | maintainer run-all-tests.sh corpus stage, retained run dir `build/tmp/ownership-corpus-20260724-144528-1377082`; promoted from the RETAINED artifacts without a rerun |
-| toolchain | driftc **0.33.88**, runtime **ABI 22** (reviewed mainline candidate) |
-| source commit | `b2caeb44` (parser/stage1 statement-form match classification) |
+| origin run | corpus measurement run, retained run dir `build/tmp/ownership-corpus-20260725-070420-2045579`; promoted from the RETAINED artifacts without a rerun |
+| toolchain | driftc **0.33.88**, runtime **ABI 22** (string-view-performance candidate — the commit accompanying this promotion) |
 | corpus tool | `tools/drift_corpus_audit.py` v1.7.1 |
-| run date | 2026-07-24T20:45:28Z (started_unix 1784925928) |
+| run date | 2026-07-25T13:04:20Z (started_unix 1784984660) |
 | universe | 924 compiled / 1268 discovered (344 compile-failed partition, 49 rule-excluded), 14 counters, all hard gates 0 |
 
 Checked-in artifacts: `aggregate.json` (counters), `manifest.json`
@@ -21,35 +20,43 @@ whole-directory content hashes, compile partition), and
 python — kept as provenance RECORD only).  Only aggregate + manifest
 participate in comparison.
 
-## Promotion record (2026-07-24)
+## Promotion record (2026-07-25)
 
-Predecessor baseline: certified **0.33.87** / **ABI 21**, commit
-`3d48b7f0`, tool v1.6.0, run 2026-07-22T20:12:28Z.  The maintainer
-explicitly reviewed and approved promotion of EXACTLY this delta from
-the predecessor — verified byte-exact against the retained run before
+Predecessor baseline: the 2026-07-24 promotion (driftc 0.33.88 /
+ABI 22 at commit `b2caeb44`, itself promoted over the certified
+**0.33.87** / **ABI 21** baseline at commit `3d48b7f0`).  The
+maintainer explicitly reviewed and approved promotion of EXACTLY this
+run — verified byte-exact against the attribution report before
 copying:
 
-| counter | approved delta |
-|---|---|
-| `fns` | +24024 |
-| `events` | +18480 |
-| `c3_moveout_owned` | +18480 |
-| `site_class:moveout_expansion` | +18480 |
-| every other counter | +0 |
-
-with the universe IDENTICAL to the predecessor (same 924/344/49
-partition, same fixture hashes, same inclusion rule) and all hard
-gates zero.  Attribution: the `std.ffi` module (new in the 0.33.88
-candidate, absent from the 0.33.87 tree) contributes exactly 26 fns
-and 20 `c3_moveout_owned`/`moveout_expansion` events per fixture
-compile (26/20 x 924); residual after attribution is zero on every
-counter.
+* UNIVERSE: partition IDENTICAL (924/344/49); hash delta = exactly
+  the 4 fixtures intentionally migrated to the Result byte-access
+  API (`iterator_op_id_mapping`,
+  `pub_error_manual_diagnostic_redaction`,
+  `pub_error_manual_diagnostic_string_field`,
+  `string_byte_at_method`); no fixtures added or removed.
+* COUNTERS (vs the predecessor): fns +32,340; events +20,356;
+  c1_agree +18,485; c3_moveout_owned +19,431;
+  site_class:moveout_expansion +19,431;
+  site_class:overwrite_release +924;
+  site_class:materialized_lastuse_release +1; every other counter +0;
+  all hard gates zero.
+* PER-FIXTURE ATTRIBUTION (residual zero): 923/924 fixtures carry
+  the IDENTICAL modal delta {fns +35, events +22, c1_agree +20,
+  c3_moveout_owned +21, moveout_expansion +21, overwrite_release +1}
+  — the uniform stdlib contribution of the string-view-performance
+  phase (std.text +24 fns, std.regex +6, std.json +3, std.parse +2,
+  std.source +1, std.core −1 = exactly +35).  The single outlier is
+  `string_byte_at_method` (its body became four Result matches):
+  beyond-modal {events +28, moveout +27, c1_agree +5,
+  materialized_lastuse_release +1}.  Per-fixture sums reconcile to
+  the totals on EVERY counter.
 
 ## Generation command
 
-The underlying run was produced by the standard recipe on the reviewed
-0.33.88/ABI-22 tree (commit `b2caeb44`) — promotion copied the
-retained artifacts; the corpus was NOT rerun for the promotion:
+The underlying run was produced by the standard recipe on the
+reviewed string-view-performance tree — promotion copied the retained
+artifacts; the corpus was NOT rerun for the promotion:
 
 ```
 just ownership-corpus-check

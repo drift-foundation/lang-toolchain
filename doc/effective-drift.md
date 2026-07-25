@@ -2235,12 +2235,83 @@ val rc = ffi.with_cstring_scope<type Int, core.Callback1<&mut ffi.CStringScope, 
 The scope owns every pin and frees them when the callback returns —
 never free a scope pin yourself.
 
-**Performance posture.**  There are no zero-copy substring views:
-`text.substring` and friends ALLOCATE.  Parsers and scanners should
-keep one backing `&String` and track byte offsets/spans
-(`byte_length()` + `core.string_byte_at`, `TokenSpan`-style ranges —
-the regex API's `RegexMatch` works this way), using `with_bytes` for
-bulk scans, and materialize owned substrings only when they escape.
+**Performance posture.**  `text.substring` and friends ALLOCATE.
+For zero-copy slicing, use `text.StringByteView` (see "String views
+for parsers" below): keep one view over the input, track spans with
+`subview`, and materialize owned substrings only when they escape.
+(`core.string_byte_at` is a documented-internal, fail-closed
+primitive — user code reads through the Result-returning `byte_at`
+methods or the view APIs.)
+
+## String views for parsers (`StringByteView`)
+
+`std.text.substring` allocates.  When a parser or scanner needs to
+hold on to slices of a large input, the standard answer is
+`text.StringByteView` (import `std.text` — the view APIs AND the
+`String.byte_at` extension method both live there): a safe,
+storable, O(1) view — a retained
+handle to the backing `String` plus a byte range.  Construction and
+`subview` copy no bytes; the view keeps the storage alive with no
+lifetime annotations and no raw pointers; `to_string()` is the one
+explicit, allocating escape hatch.
+
+There are three performance tiers, and it pays to know which one a
+loop is in:
+
+1. **Safe reads** — `v.byte_at(i)` returns
+   `Result<Byte, std.err:IndexError>`: bounds failure is DATA, so
+   this is the correctness-first surface for spot reads and cold
+   paths — but the per-byte Result construction and match have real
+   cost: measured ~1.2-1.7x a raw scan for the two accessors after
+   the enum-cleanup optimization — fine for token-sized work.  The
+   built-in comparisons and searches (`eq_string`, `index_of`,
+   `starts_with`) run at raw byte speed internally, and the `bytes()`
+   iterator measures ~1.6x raw — all reasonable defaults; reach for
+   the bulk window only at scan sizes (~128 bytes and up).
+2. **Bulk pointer window** — `text.with_view_bytes(v, cb)`: the base
+   pointer is computed once, so per-byte cost roughly halves —
+   but the pointer reads inside the callback are `unsafe` and the
+   pointer dies when the callback returns.  Use it for scan-sized
+   windows — the shipped-API sweep measures the break-even at ~64–96
+   bytes, so reach for it from roughly 128 bytes up; constructing a
+   bulk window PER TOKEN is measurably slower than byte reads.
+3. **Materialization** — `v.to_string()`: reserve it for slices that
+   escape the parse.
+
+A CSV-ish scan that stores field views and materializes only the one
+field it needs:
+
+```drift
+import std.core as core;
+import std.text as text;
+
+fn third_field(line: &String) nothrow -> String {
+    val fields = text.split_views(line, ",");   // zero byte copies
+    if fields.len < 3 {
+        return "";
+    }
+    if fields[2].eq_string("-") {               // compare without allocating
+        return "";
+    }
+    return fields[2].to_string();               // allocate ONLY the escapee
+}
+```
+
+Views are move-only (duplication is the explicit `dup()`, one
+refcount increment), so retain traffic stays visible in source.
+Related adopters ship with the stdlib: `SourceCursor.slice_view`
+(zero-copy source slices), `JsonDoc`'s `LocatedCursor.raw_view()`
+(the raw bytes a JSON node was parsed from), `std.parse`'s
+`parse_int_view`/`parse_uint_view` (numeric parsing straight off a
+view), and `std.regex`'s `is_match_view`/`find_first_view` plus
+`match_view`/`match_subview` (match a substring without materializing
+it; match offsets are view-relative and `^`/`$` anchor at the view's
+boundaries).
+
+C interop note: an arbitrary view is not NUL-terminated, so
+C-string conversion goes through `to_string()` and the `std.ffi`
+surfaces — there is deliberately no zero-copy C-string promise for
+views.
 
 ## Cheap `String` clone
 
@@ -2323,8 +2394,11 @@ lifetime to, so the compiler rejects the return.
 Valid: the returned ref comes from a ref param.
 
 ```drift
-fn first_byte(s: &String) nothrow -> &Byte {
-    return s.byte_at(0);                // derived from `&s`
+fn shorter(a: &String, b: &String) nothrow -> &String {
+    if a.byte_length() <= b.byte_length() {
+        return a;                       // derived from a ref param
+    }
+    return b;                           // ...on every path
 }
 
 fn project(req: &Request) nothrow -> &String {

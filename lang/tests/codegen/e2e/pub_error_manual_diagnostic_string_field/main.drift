@@ -57,7 +57,7 @@ fn _str_contains(haystack: &String, needle: &String) nothrow -> Bool {
 		var j: Int = 0;
 		var matched = true;
 		while j < n {
-			if haystack.byte_at(i + j) != needle.byte_at(j) {
+			if core.string_byte_at(haystack, i + j) != core.string_byte_at(needle, j) {
 				matched = false;
 				j = n;
 			} else {

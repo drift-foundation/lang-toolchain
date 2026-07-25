@@ -113,7 +113,7 @@ pub fn main() nothrow -> Int {
 
 
 _DESTROY_RE = re.compile(r'call void @"Box::std.core.Destructible::destroy"')
-_DRIFT_MAIN_RE = re.compile(r"define i64 @drift_main\(\) \{(.*?)^}", re.DOTALL | re.MULTILINE)
+_DRIFT_MAIN_RE = re.compile(r"define i64 @drift_main\(\)[^{]*\{(.*?)^}", re.DOTALL | re.MULTILINE)
 
 
 def _compile_to_ir(tmp_path: Path, source: str, *, allow_unsafe: bool) -> str:
