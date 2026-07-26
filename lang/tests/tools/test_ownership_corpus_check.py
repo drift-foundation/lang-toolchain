@@ -184,17 +184,20 @@ def test_reviewed_baseline_matches_approved_promotion() -> None:
 	)
 	record = matches[0]
 
+	# Approval state is the EXACT FILENAME: approval.json = approved.
+	# Reviewer identity/date come from Git history (the commit that
+	# renamed approval-DRAFT.json); legacy records may carry inert
+	# status/approved_by fields, which are NOT consulted.
 	approval_path = record / "approval.json"
 	assert approval_path.is_file(), (
-		f"promotion record {record.name} lacks a finalized approval.json"
+		f"promotion record {record.name} lacks approval.json"
+	)
+	assert not (record / "approval-DRAFT.json").exists(), (
+		f"promotion record {record.name} has BOTH approval.json and "
+		f"approval-DRAFT.json — ambiguous state"
 	)
 	app = json.loads(approval_path.read_text())
-	assert app.get("status") == "approved", "approval must be approved"
-	assert app.get("approved_by") and not any(
-		m in app["approved_by"].upper()
-		for m in ("PENDING", "DRAFT", "TODO", "PLACEHOLDER", "REVIEW")), (
-		"approval must carry a real reviewer identity"
-	)
+	assert app.get("approval") == "ownership-corpus-promotion"
 
 	exp = app["expected_universe"]
 	assert len(uni["compiled_ok"]) == exp["compiled_count"], (

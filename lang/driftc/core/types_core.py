@@ -2671,8 +2671,8 @@ class TypeTable:
 					# String is STRUCTURALLY Copy (retain-copy: an ARC handle
 					# whose copy bumps the refcount) — the same fact the
 					# stdlib `implement Copy for String` proves through the
-					# trait query. Scope A decision (see
-					# work/string-ownership-refactor/): this used to return
+					# trait query. String Scope A decision
+					# (doc/history.md): this used to return
 					# False, making String's Copy-ness query-DEPENDENT while
 					# its needs-drop was structural — so `copy_status`,
 					# `DropPolicy.is_cheap_copy`, and `_should_copy_value`
@@ -2764,8 +2764,8 @@ class TypeTable:
 			would be a language change, and it flipped real production
 			behavior when tried (certified 0.33.74 rejects a later borrow
 			of a `mem.replace`-consumed `Box { x: String }`; the
-			unrestricted recursion accepted it — see
-			work/string-ownership-refactor/ and the 2026-07-07 composite
+			unrestricted recursion accepted it — see String Scope A in
+			doc/history.md and the 2026-07-07 composite
 			Copy-widening finding). String's structural True is for DIRECT
 			classification only (`copy_status(String)`, `is_cheap_copy`,
 			binder/array/ctor copy decisions); inside composites the legacy

@@ -29,9 +29,11 @@
 #     approval draft pins every evidence hash and carries the
 #     machine-computed attribution_facts (modal delta, outliers,
 #     new-fixture contributions); promotion later RE-PROVES residual
-#     zero from the checked-in evidence.  status "pending", EMPTY
-#     reviewer/date, baseline_md marked <<HUMAN REVIEW REQUIRED>>;
-#     --apply refuses pending/placeholder/unreviewed drafts.
+#     zero from the checked-in evidence.  The generated draft is
+#     COMPLETE — including baseline_md, composed mechanically from
+#     the recorded facts.  State is the FILENAME ONLY: the reviewer
+#     approves by renaming approval-DRAFT.json to approval.json (Git
+#     records identity/date); --apply refuses the DRAFT name.
 #
 #   * DRY-RUN BY DEFAULT: prints every check and what would be
 #     written; --apply is required to touch the baseline.
@@ -48,13 +50,18 @@
 #     run-all-tests.sh — promotion is a reviewed, manual act.
 #
 # Approval-file schema (JSON; every field required unless noted):
+# APPROVAL STATE IS THE EXACT FILENAME (reviewer identity and date
+# come from Git history — the commit that renames the file):
+#   approval-DRAFT.json  = pending  — dry-run allowed, --apply refused
+#   approval.json        = approved — --apply allowed
+#   any other filename, or BOTH files present in one directory,
+#   fails closed.
+# The reviewer's ONLY mutation is the rename; no JSON edits.
+# Legacy records may carry status/approved_by/date fields — they are
+# INERT historical data; authority comes only from the filename.
+#
 # {
 #   "approval": "ownership-corpus-promotion",
-#   "status": "approved" | "pending"  — dry-run accepts pending (with a
-#       warning); --apply REQUIRES "approved", a non-placeholder
-#       reviewer identity, and a filename without "DRAFT",
-#   "approved_by": "<reviewer>",
-#   "date": "<YYYY-MM-DD>",
 #   "predecessor": {"aggregate_sha256": ..., "manifest_sha256": ...,
 #                    "metadata_sha256": ...},
 #   "candidate": {"run_dir": "<exact path>", "aggregate_sha256": ...,
@@ -121,20 +128,31 @@ def require(cond: bool, msg: str) -> None:
 		fail(msg)
 
 
-PLACEHOLDER_MARKERS = ("PENDING", "DRAFT", "TODO", "PLACEHOLDER", "REVIEW")
+DRAFT_NAME = "approval-DRAFT.json"
+APPROVED_NAME = "approval.json"
+
+
+def approval_state(approval_path: Path) -> str:
+	"""Authority is the EXACT filename.  Both-present is ambiguous and
+	fails closed; any other name fails closed."""
+	name = approval_path.name
+	require(name in (DRAFT_NAME, APPROVED_NAME),
+	        f"approval filename must be exactly {DRAFT_NAME!r} (pending) or "
+	        f"{APPROVED_NAME!r} (approved); got {name!r}")
+	sibling = approval_path.parent / (
+		APPROVED_NAME if name == DRAFT_NAME else DRAFT_NAME)
+	require(not sibling.exists(),
+	        f"ambiguous approval state: both {DRAFT_NAME} and "
+	        f"{APPROVED_NAME} present in {approval_path.parent}")
+	return "approved" if name == APPROVED_NAME else "pending"
 
 
 def validate_approval(app: dict) -> None:
 	require(isinstance(app, dict) and app.get("approval") == "ownership-corpus-promotion",
 	        "approval file: wrong or missing 'approval' kind")
-	require(app.get("status") in ("approved", "pending"),
-	        "approval file: 'status' must be \"approved\" or \"pending\"")
-	for key in ("approved_by", "date"):
-		require(isinstance(app.get(key), str),
-		        f"approval file: '{key}' must be a string")
-		if app.get("status") == "approved":
-			require(app[key],
-			        f"approval file: '{key}' must be non-empty when approved")
+	# status/approved_by/date are NOT part of the schema: legacy
+	# records may carry them as inert historical data; authority is
+	# the filename, and reviewer identity/date come from Git history.
 	for side in ("predecessor", "candidate"):
 		blk = app.get(side)
 		require(isinstance(blk, dict), f"approval file: missing '{side}' block")
@@ -391,11 +409,44 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 		json.dumps(cand_fc, indent=1, sort_keys=True) + "\n")
 
 	cand_dir = record_dir / "candidate"
+	# COMPLETE baseline_md, mechanically composed from the recorded
+	# facts — the reviewer's only mutation is the rename.
+	env = new_man.get("environment", {})
+	pred_env = base_man.get("environment", {})
+	pred_meta = load_json(predecessor_run / "metadata.json",
+	                      "predecessor metadata")
+	if modal:
+		modal_txt = (", ".join(f"{k} {v:+d}" for k, v in sorted(modal.items()))
+		             + f" on all {len(shared) - len(outliers)} shared fixtures")
+	else:
+		modal_txt = f"no shared-fixture drift ({len(shared)} fixtures unchanged)"
+	outlier_txt = (f"{len(outliers)} outlier fixture(s): "
+	               + "; ".join(f"{n} {dict(d)}" for n, d in sorted(outliers.items()))
+	               if outliers else "zero outliers")
+	new_txt = ("; ".join(f"{n} contributes {d}" for n, d in
+	           sorted(new_contribs.items()))
+	           if new_contribs else "no new fixtures")
+	auto_md = {
+		"title": (f"The checked-in reference for `just ownership-corpus-check` "
+		          f"— candidate driftc {env.get('driftc_version', '?')} / "
+		          f"ABI {env.get('abi', '?')}: {len(n_ok)} compiled, "
+		          f"{len(n_f)} compile-failed, {len(nu['excluded'])} "
+		          f"rule-excluded."),
+		"predecessor_description": (
+			f"The prior reviewed baseline (driftc "
+			f"{pred_env.get('driftc_version', '?')} / ABI "
+			f"{pred_env.get('abi', '?')}; origin run started_unix "
+			f"{pred_meta.get('started_unix', '?')}), preserved verbatim in "
+			f"this record's predecessor/ directory; earlier chain in the Git "
+			f"history of reviewed-baseline/BASELINE.md."),
+		"attribution": (
+			f"Machine attribution_facts in this approval, re-proven from the "
+			f"record's fixture-counters on every dry-run and apply: modal "
+			f"delta {modal_txt}; {outlier_txt}; {new_txt}.  Residual zero on "
+			f"every counter; hard gates zero."),
+	}
 	draft = {
 		"approval": "ownership-corpus-promotion",
-		"status": "pending",
-		"approved_by": "",
-		"date": "",
 		"predecessor": {
 			"aggregate_sha256": sha256_file(record_dir / "predecessor" / "aggregate.json"),
 			"manifest_sha256": sha256_file(record_dir / "predecessor" / "manifest.json"),
@@ -431,24 +482,16 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 			"outliers": outliers,
 			"new_fixture_contributions": new_contribs,
 		},
-		"baseline_md": {
-			"title": "<<HUMAN REVIEW REQUIRED: one-line baseline title>>",
-			"predecessor_description":
-				"<<HUMAN REVIEW REQUIRED: describe the predecessor chain>>",
-			"attribution":
-				"<<HUMAN REVIEW REQUIRED: per-fixture attribution summary — "
-				"verify against attribution_facts and the reviewed analysis>>",
-		},
+		"baseline_md": auto_md,
 	}
-	(record_dir / "approval-DRAFT.json").write_text(
+	(record_dir / DRAFT_NAME).write_text(
 		json.dumps(draft, indent=2) + "\n")
-	print(f"PROMOTION RECORD written (facts only, status=pending): {record_dir}")
+	print(f"PROMOTION RECORD written (complete; pending by filename): {record_dir}")
 	print(f"  modal {modal} on {len(shared) - len(outliers)}/{len(shared)} "
 	      f"shared fixtures; {len(outliers)} outliers; "
 	      f"{len(new_contribs)} new fixtures")
-	print("Reviewer must: verify attribution_facts, write baseline_md, set "
-	      "approved_by/date, change status to \"approved\", and rename the "
-	      "approval without DRAFT before --apply will accept it.")
+	print(f"Reviewer approves by RENAMING {DRAFT_NAME} to {APPROVED_NAME} — "
+	      f"no JSON edits; identity/date are recorded by the Git commit.")
 	return 0
 
 
@@ -484,26 +527,21 @@ def main(argv=None) -> int:
 	app = load_json(approval_path, "approval file")
 	validate_approval(app)
 
-	# ── approval status gate (gap 1) ────────────────────────────────
-	is_placeholder = any(m in app["approved_by"].upper()
-	                     for m in PLACEHOLDER_MARKERS)
+	# ── approval state = EXACT FILENAME ─────────────────────────────
+	state = approval_state(approval_path)
 	if args.apply:
-		require(app.get("status") == "approved",
-		        f"--apply requires status \"approved\" (got "
-		        f"{app.get('status')!r})")
-		require(not is_placeholder,
-		        f"--apply requires a real reviewer identity; "
-		        f"approved_by={app['approved_by']!r} looks like a placeholder")
-		require("DRAFT" not in approval_path.name.upper(),
-		        f"--apply refuses a DRAFT-named approval file: "
-		        f"{approval_path.name}")
+		require(state == "approved",
+		        f"--apply requires the approved filename "
+		        f"({APPROVED_NAME!r}); {approval_path.name!r} is pending — "
+		        f"the reviewer approves by RENAMING it")
 		for k, v in app["baseline_md"].items():
-			require("HUMAN REVIEW REQUIRED" not in v and "<<" not in v,
-			        f"--apply refuses unreviewed baseline_md.{k} "
-			        f"(still carries the draft placeholder)")
-	elif app.get("status") == "pending" or is_placeholder:
-		print("NOTE: approval is PENDING/placeholder — dry-run only; "
-		      "--apply will refuse this file as-is")
+			require("<<" not in v,
+			        f"--apply refuses incomplete baseline_md.{k} "
+			        f"(draft placeholder present)")
+	elif state == "pending":
+		print(f"NOTE: {DRAFT_NAME} — pending; dry-run only.  The reviewer "
+		      f"approves by renaming to {APPROVED_NAME} (identity/date are "
+		      f"recorded by the Git commit)")
 
 	# ── the run dir is EXPLICIT and must match the approval ─────────
 	require(str(run_dir) == app["candidate"]["run_dir"],
@@ -673,7 +711,7 @@ def main(argv=None) -> int:
 | corpus tool | v{env.get('tool_version', '?')} |
 | run started_unix | {meta.get('started_unix', '?')} |
 | universe | {len(n_ok)} compiled / {len(n_ok) + len(n_f)} discovered ({len(n_f)} compile-failed, {len(nu['excluded'])} rule-excluded) |
-| promotion | drift_corpus_promote.py under approval `{approval_path.name}` (sha256 {sha256_file(approval_path)}), approved by {app['approved_by']} on {app['date']} |
+| promotion | drift_corpus_promote.py under approval `{approval_path.name}` (full sha256 {sha256_file(approval_path)}); reviewer identity and date are recorded by Git history — the commit that renamed approval-DRAFT.json to approval.json and landed this promotion |
 
 ## Predecessor
 

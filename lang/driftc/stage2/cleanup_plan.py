@@ -4,9 +4,9 @@
 The string-arc endgame's combined B2+C chunk computes ONE immutable
 per-function decision plan from the ORIGINAL MIR and the fresh
 `rebuild_after_cleanup_authoring` ledger (ledger A), BEFORE any B2/C
-mutation, then lets narrow emitters consume it. See
-`work/string-ownership-refactor/SLICE-B2-R6-ARCHITECTURAL-CHECKPOINT.md`
-§4.1 for the architecture.
+mutation, then lets narrow emitters consume it. Architecture decided
+in the B2+C R6 architectural review (0.33.86-0.33.87 series; see the
+string_arc-endgame entries in doc/history.md).
 
 This module is ONLY the anchor-lifecycle container + its fail-closed
 contract. Site-specific decision COMPUTATION (S2) and EMISSION

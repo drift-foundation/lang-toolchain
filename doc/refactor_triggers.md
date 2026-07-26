@@ -789,8 +789,10 @@ opportunistic uplifts)" for the full rule.
     defect).
   Only after that doc exists and is reviewed does this trigger's "Scope
   when triggered" (implementation) become actionable. Research doc:
-  `work/string-ownership-refactor/research-string-semantics-audit.md`
-  (commissioned 2026-07-05, research-only, no implementation).
+  the string-semantics audit commissioned 2026-07-05 (research-only,
+  no implementation; produced in the string-ownership-refactor phase —
+  its adopted conclusions are recorded across the 0.33.7x String
+  Scope A entries in doc/history.md).
 
 - **Triggers:**
 
@@ -925,8 +927,8 @@ opportunistic uplifts)" for the full rule.
 
 - **Why deferred (2026-07-20):** the string-arc endgame adopted Option
   A (relocate the structural site-3 sweep behind the coordinated
-  cleanup phase; see
-  `work/string-ownership-refactor/SLICE-B2-R6-ARCHITECTURAL-CHECKPOINT.md`).
+  cleanup phase; B2+C R6 architectural review, 0.33.86-0.33.87 series —
+  see the string_arc-endgame entries in doc/history.md).
   This creation-site model is the architecturally cleaner end-state
   (single cleanup authority) but **expands HIR→MIR catch/unwind
   ownership semantics** — historically this compiler's densest bug

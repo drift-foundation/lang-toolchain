@@ -30,8 +30,8 @@ Classification table (edits here are the reviewed decision point):
   own helpers (_emit_array_dup_value, _emit_copy_value_inner).
 Adding a NEW context to this table — especially an instruction-shaped
 one — requires the slice-1a STOP/REPORT protocol: a report and a
-heap-string valgrind probe BEFORE normalization (see
-work/string-ownership-refactor/CLEANUP-EXECUTION-PLAN.md).
+heap-string valgrind probe BEFORE normalization (cleanup-authoring
+consolidation, 0.33.85 series — doc/history.md).
 """
 from __future__ import annotations
 

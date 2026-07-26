@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """string-view-performance phase: StringByteView semantics, adoption,
-offset-contract, and unwind pins (design record:
-work/string-ownership-refactor/STRING-VIEW-PERFORMANCE-CHECKPOINT.md).
+offset-contract, and unwind pins (string-view-performance phase,
+0.33.88 — design record summarized in doc/history.md).
 
 Four full compile-AND-run fixtures:
 

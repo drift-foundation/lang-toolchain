@@ -345,7 +345,7 @@ def test_loop_and_break_continue():
 
 def test_constructor_noncopy_arg_moves_out_local() -> None:
 	# Non-Copy exemplar is Array<Int>: since String Scope A
-	# (work/string-ownership-refactor/) String is structurally Copy even
+	# (0.33.75 era; doc/history.md) String is structurally Copy even
 	# in an isolated TypeTable, so it no longer exercises the move-out
 	# path — see test_constructor_string_arg_copies below for the String
 	# contract.

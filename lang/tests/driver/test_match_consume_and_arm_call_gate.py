@@ -1,6 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Regression-first pins for the two E-population LANGUAGE_BUGs
-(work/string-ownership-refactor/E-POPULATION-TRIAGE.md, shapes 1 and 2).
+(E-population triage, fixed at the source in 0.33.83 — doc/history.md;
+shapes 1 and 2).
 
 Both bugs share one observable: a value silently reads as ZERO/empty
 because storage was zero-backed by an implicit consume the checker never

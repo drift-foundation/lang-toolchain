@@ -59,7 +59,7 @@ incidental coverage for that one type — not something this lowering path
 can rely on, and not true for the struct/variant case. So the downgrade
 is restricted to Copy-AND-BITCOPY fields (`type_table.is_bitcopy`, which
 have no refcount to double-own in the first place). String Scope A
-(work/string-ownership-refactor/) then lifted the 0.33.70 bitcopy-only
+(doc/history.md) then lifted the 0.33.70 bitcopy-only
 narrowing: Copy-but-NON-bitcopy fields — `String`, or a Copy struct
 CONTAINING one (`Tag { label: String }`) — are accepted too, because the
 root cause of the narrowing (the COPY-kind capture-slot read returning an

@@ -68,7 +68,8 @@ as every other family member.
 - The deletion condition of RELEASE-ARM-TRIPWIRE-DESIGN.md §8 ("one
   clean cert cycle with zero firings") is therefore MET, and the arm,
   its tripwire, and the 4a/4b dead-stake branches were DELETED
-  (work/string-ownership-refactor/TRIPWIRE-DELETION-PLAN.md).
+  (tripwire-deletion slice, 2026-07-19 — doc/history.md, 0.33.85
+  series).
   `SITE_CLASS_TEMP_LASTUSE_RELEASE` retired from the closed reporter
   enumeration (future notes count UNTAGGED — hard corpus gate).
 - The TLR-8 semantic regressions this issue produced remain pinned:

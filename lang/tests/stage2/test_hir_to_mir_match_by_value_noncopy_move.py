@@ -14,7 +14,7 @@ from lang.driftc.stage2 import CopyValue, DropValue, HIRToMIR, MoveOut, VariantG
 
 def test_match_by_value_noncopy_binder_moves_payload_and_zeros_source() -> None:
 	# Non-Copy payload exemplar is Array<Int>: since String Scope A
-	# (work/string-ownership-refactor/) String is structurally Copy even in
+	# (0.33.75 era; doc/history.md) String is structurally Copy even in
 	# an isolated TypeTable, so a String payload no longer takes the MOVE
 	# branch — see test_match_by_value_string_binder_copies_payload below
 	# for the String contract.

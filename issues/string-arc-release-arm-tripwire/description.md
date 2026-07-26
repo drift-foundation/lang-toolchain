@@ -34,5 +34,5 @@ Required repro info (all of it is in the diagnostic message)
 Triage
 - Do NOT work around in stdlib/app code; the fix belongs in
   string_releases/string_arc (or, for family=False, in a reviewed
-  family extension per the TLR ladder discipline:
-  work/string-ownership-refactor/RELEASE-ARM-TRIPWIRE-DESIGN.md).
+  family extension per the TLR ladder discipline — release-arm
+  tripwire design, recorded in the TLR entries of doc/history.md).

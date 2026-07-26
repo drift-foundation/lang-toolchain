@@ -156,7 +156,9 @@ def test_apply_writes_only_baseline_files_and_zero_delta(world, tmp_path):
 		assert sha(base / name) == sha(run / name)
 	md = (base / "BASELINE.md").read_text()
 	assert "test baseline" in md and "events +20" in md.replace("`", "")
-	assert "approved by tester" in md
+	# reviewer identity/date are NOT duplicated in the baseline —
+	# they come from Git history (stated in the provenance row)
+	assert "Git history" in md
 	assert unrelated.read_text() == "do not touch", "unrelated file touched"
 
 
@@ -249,37 +251,61 @@ def _edit_approval(approval: Path, mutate) -> None:
 	approval.write_text(json.dumps(app, indent=2))
 
 
-def test_apply_requires_approved_status(world):
+def test_legacy_status_fields_are_inert(world):
+	"""Authority is the FILENAME.  Legacy status/approved_by/date
+	fields (or their absence, or placeholder values) neither enable
+	nor block anything."""
 	base, run, approval = world
-	_edit_approval(approval, lambda a: a.update(status="pending"))
-	# dry-run tolerates pending...
-	assert run_tool(run, approval, base) == 0
-	# ...but --apply refuses it
-	assert run_tool(run, approval, base, apply=True) == 1
-
-
-def test_apply_rejects_placeholder_reviewer(world):
-	base, run, approval = world
+	# approval.json with status "pending" and a placeholder reviewer:
+	# STILL approved (filename wins); fields are inert history
 	_edit_approval(approval, lambda a: a.update(
-		approved_by="PENDING-REVIEW (someone)"))
-	assert run_tool(run, approval, base) == 0          # dry-run: warns only
-	assert run_tool(run, approval, base, apply=True) == 1
+		status="pending", approved_by="PENDING-REVIEW (someone)"))
+	assert run_tool(run, approval, base, apply=True) == 0
 
 
-def test_apply_rejects_draft_filename(world, tmp_path):
-	base, run, approval = world
-	draft = tmp_path / "approval-DRAFT.json"
-	draft.write_text(approval.read_text())
-	assert run_tool(run, draft, base) == 0             # dry-run fine
-	assert run_tool(run, draft, base, apply=True) == 1
-
-
-def test_missing_status_rejected(world):
+def test_missing_status_fields_fine(world):
 	base, run, approval = world
 	def drop(a):
-		del a["status"]
+		for k in ("status", "approved_by", "date"):
+			a.pop(k, None)
 	_edit_approval(approval, drop)
+	assert run_tool(run, approval, base) == 0
+
+
+def test_draft_filename_is_pending(world, tmp_path):
+	"""approval-DRAFT.json: dry-run allowed, --apply refused; the exact
+	rename to approval.json enables apply."""
+	base, run, approval = world
+	d = tmp_path / "state-dir"
+	d.mkdir()
+	draft = d / "approval-DRAFT.json"
+	draft.write_text(approval.read_text())
+	approval.unlink()  # keep exactly one approval file in play
+	assert run_tool(run, draft, base) == 0             # dry-run fine
+	assert run_tool(run, draft, base, apply=True) == 1  # pending by name
+	# the reviewer's ONLY mutation: the rename
+	final = d / "approval.json"
+	draft.rename(final)
+	assert run_tool(run, final, base, apply=True) == 0
+
+
+def test_alternate_filename_fails_closed(world, tmp_path):
+	base, run, approval = world
+	for name in ("approval-v2.json", "APPROVAL.json", "approval-final.json"):
+		alt = tmp_path / name
+		alt.write_text(approval.read_text())
+		assert run_tool(run, alt, base) == 1, name
+		assert run_tool(run, alt, base, apply=True) == 1, name
+		alt.unlink()
+
+
+def test_both_files_present_fails_closed(world):
+	base, run, approval = world
+	sibling = approval.parent / "approval-DRAFT.json"
+	sibling.write_text(approval.read_text())
 	assert run_tool(run, approval, base) == 1
+	assert run_tool(run, approval, base, apply=True) == 1
+	assert run_tool(run, sibling, base) == 1
 
 
 def test_zero_valued_counter_key_addition_rejected(world):
@@ -407,12 +433,18 @@ def test_draft_generation_records_facts(world, tmp_path):
 			assert (record / side / name).exists(), (side, name)
 	out = record / "approval-DRAFT.json"
 	draft = json.loads(out.read_text())
-	assert draft["status"] == "pending"
-	assert draft["approved_by"] == "" and draft["date"] == ""
+	# no status/identity fields: filename is the state; Git records
+	# the reviewer identity/date
+	for k in ("status", "approved_by", "date"):
+		assert k not in draft, f"draft must not carry {k}"
 	assert draft["expected_universe"]["compiled_added"] == ["newfix"]
 	assert draft["expected_counter_deltas"] == {"events": 20}
 	assert draft["counter_keys_added"] == []
-	assert "HUMAN REVIEW REQUIRED" in draft["baseline_md"]["attribution"]
+	# baseline_md must be COMPLETE — the reviewer's only mutation is
+	# the rename
+	for k, v in draft["baseline_md"].items():
+		assert v and "<<" not in v and "HUMAN REVIEW" not in v, (k, v)
+	assert "newfix" in draft["baseline_md"]["attribution"]
 	# machine attribution facts: unchanged modal, one new fixture
 	facts = draft["attribution_facts"]
 	assert facts["modal"] == {} and facts["modal_fixture_count"] == 1
@@ -422,9 +454,12 @@ def test_draft_generation_records_facts(world, tmp_path):
 	# dry-run RE-PROVES attribution from the checked-in evidence
 	cand = record / "candidate"
 	assert run_tool(cand, out, base) == 0
-	# ...but --apply refuses it (pending + empty reviewer + DRAFT name
-	# + unreviewed placeholders)
+	# --apply refused purely by the DRAFT filename...
 	assert run_tool(cand, out, base, apply=True) == 1
+	# ...and the exact rename enables it with no JSON edits
+	final = record / "approval.json"
+	out.rename(final)
+	assert run_tool(cand, final, base, apply=True) == 0
 
 
 def test_attribution_evidence_tamper_rejected(world, tmp_path):
@@ -452,13 +487,9 @@ def test_audit_mode_after_promotion(world, tmp_path):
 	assert run_tool_draft(run, record, base) == 0
 	out = record / "approval-DRAFT.json"
 	cand = record / "candidate"
-	# approve it properly (copy edited out of DRAFT name)
-	app = json.loads(out.read_text())
-	app.update(status="approved", approved_by="tester", date="2026-07-26")
-	app["baseline_md"] = {"title": "t", "predecessor_description": "p",
-	                      "attribution": "a"}
+	# approve by the RENAME alone — no JSON edits
 	final = record / "approval.json"
-	final.write_text(json.dumps(app, indent=2))
+	out.rename(final)
 	assert run_tool(cand, final, base, apply=True) == 0
 	# post-promotion checkout: dry-run runs in AUDIT MODE...
 	assert run_tool(cand, final, base) == 0
@@ -493,10 +524,10 @@ def test_draft_refuses_excluded_change(world):
 	assert not out.exists()
 
 
-def test_apply_refuses_unreviewed_placeholders(world):
+def test_apply_refuses_incomplete_baseline_md(world):
 	base, run, approval = world
 	_edit_approval(approval, lambda a: a["baseline_md"].update(
-		attribution="<<HUMAN REVIEW REQUIRED: fill me>>"))
+		attribution="<<placeholder left in an edited draft>>"))
 	assert run_tool(run, approval, base, apply=True) == 1
 
 

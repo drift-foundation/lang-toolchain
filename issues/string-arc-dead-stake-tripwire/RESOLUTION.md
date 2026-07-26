@@ -12,8 +12,8 @@ certification run across their lifetime.
   tripwire log matches.
 - Per the standing deletion schedule (one clean cert cycle,
   RELEASE-ARM-TRIPWIRE-DESIGN.md §8), the branches were DELETED in the
-  tripwire-deletion slice
-  (work/string-ownership-refactor/TRIPWIRE-DELETION-PLAN.md): the
+  tripwire-deletion slice (2026-07-19; see the tripwire-deletion entry
+  in doc/history.md, 0.33.85 series): the
   three 4a store fallbacks collapsed into the unconditional
   retain-free consume, and `_ensure_owned` became an identity
   pass-through (staking is owned upstream by `string_stakes`).

@@ -402,3 +402,22 @@ real below.
       strengthened to require both checks in order after the tool.
       Verified live on the promoted tree: audit-mode recipe ->
       mechanics 35/35 -> sanity 1/1; full tools lane 59/59.
+- [x] FILENAME-AUTHORITY approval contract (maintainer directive):
+      approval state is the exact filename — approval-DRAFT.json =
+      pending (dry-run OK, apply refused), approval.json = approved
+      (apply allowed); alternate names and both-present fail closed.
+      status/approved_by/date removed from the schema (legacy records
+      keep them as INERT history; the existing 0.33.89-combined
+      approval.json + BASELINE.md bytes are untouched and remain
+      valid).  Reviewer's ONLY mutation is the rename; identity/date
+      come from the Git commit.  Draft generator now emits a COMPLETE
+      approval (baseline_md mechanically composed from the recorded
+      facts — no placeholders); future BASELINE.md template records
+      the full approval sha256 + a Git-history pointer instead of
+      duplicated identity.  Durable-record sanity moved to filename
+      authority (+ no-DRAFT-sibling ambiguity check).  Teeth: flipped
+      status/identity tests to inertness proofs; rename-enables-apply,
+      alternate-name, both-present, complete-draft teeth added —
+      36/36; sanity 16/16; legacy record verified end-to-end via the
+      audit-mode recipe (auto-gates 36+1); tools lane 60/60.  Docs
+      updated with the binding five-step workflow.

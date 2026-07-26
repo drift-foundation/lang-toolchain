@@ -88,13 +88,19 @@ ahead of time:
   change is explicitly approved (`counter_keys_added` /
   `counter_keys_removed`) — a key appearing or disappearing even with
   value zero is a schema change;
-* an explicit **status**: dry-run tolerates `"pending"` (with a
-  warning); `--apply` requires `"approved"`, a non-placeholder
-  reviewer identity, and a filename without "DRAFT";
+* **approval state is the EXACT FILENAME** — `approval-DRAFT.json`
+  is pending (dry-run allowed, `--apply` refused); `approval.json` is
+  approved (`--apply` allowed); any other filename, or both files
+  present in one directory, fails closed.  The reviewer approves by
+  RENAMING the draft — no JSON edits; reviewer identity and date are
+  recorded by Git history (the commit that renames the file).  Legacy
+  records may carry inert `status`/`approved_by`/`date` fields;
+  authority comes only from the filename;
 * the `BASELINE.md` fragments (title, predecessor description,
-  attribution text) and the approver's identity + date, which are
-  recorded in the regenerated `BASELINE.md` together with the
-  approval file's own hash.
+  attribution text) — mechanically composed by the generator so the
+  draft is COMPLETE before review — recorded in the regenerated
+  `BASELINE.md` together with the approval file's FULL sha256 and a
+  pointer to Git history for the reviewer identity/date.
 
 Safety properties (all toothed in
 `lang/tests/tools/test_ownership_corpus_promote.py`):
@@ -164,17 +170,27 @@ just ownership-corpus-promotion-draft <candidate-run-dir> \
 The generator reads the current reviewed baseline and the explicit
 retained candidate, validates both schemas and the candidate's hard
 gates, refuses unsupported changes (inclusion rule, excluded
-population), and writes a NEW, non-overwriting JSON with all
-machine-derivable facts filled in — six artifact hashes, exact
-universe changes, exact counter deltas and key-set changes — plus
-`status: "pending"`, empty reviewer/date, and `baseline_md` fields
-marked `<<HUMAN REVIEW REQUIRED>>`.
+population), and writes a NEW, non-overwriting record whose
+`approval-DRAFT.json` is COMPLETE: all machine-derivable facts —
+evidence hashes, exact universe changes, exact counter deltas and
+key-set changes, attribution facts — plus the finished `baseline_md`
+text composed from those facts.  The draft is pending purely by its
+FILENAME; there are no status/reviewer/date fields to edit.
 
-The clean separation: the DRAFT GENERATOR records facts; the
-REVIEWER supplies judgment (verifies the per-fixture attribution,
-writes the explanatory text, sets `approved_by`/`date`, flips status
-to `"approved"`, renames the file out of DRAFT); the PROMOTION TOOL
-verifies and materializes that judgment.  `--apply` refuses pending
-status, placeholder identities, DRAFT-named files, and unreviewed
-`<<...>>` placeholders — the dry run verifies every pinned value
-either way, and authoring mistakes fail closed.
+The binding workflow:
+
+```
+generator produces a COMPLETE approval-DRAFT.json
+reviewer reads it and approves by RENAMING it to approval.json
+promoter dry-run
+promoter --apply
+the commit records the reviewer identity and date
+```
+
+The clean separation: the DRAFT GENERATOR records facts AND composes
+the complete `baseline_md` text from them; the REVIEWER's only
+mutation is the rename; the PROMOTION TOOL verifies and materializes
+that judgment.  `--apply` refuses DRAFT-named files, alternate
+filenames, ambiguous both-present states, and `<<...>>` placeholders
+in an edited draft — the dry run verifies every pinned value either
+way, and authoring mistakes fail closed.

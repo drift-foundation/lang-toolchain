@@ -845,8 +845,8 @@ class HIRToMIR:
 
 		History: this used to be an inline `_ref_field_temps.add` copied at
 		each site, and three separate memory bugs came from a new read path
-		forgetting the copy (see doc/refactor_triggers.md and the Scope A
-		probe in work/string-ownership-refactor/PROGRESS.md, where the
+		forgetting the copy (see doc/refactor_triggers.md and the String
+		Scope A probe recorded in doc/history.md, where the
 		COPY-kind capture-slot read passed an unmarked env-field alias to a
 		by-value call arg → double release of `Tag.label`). Add new read
 		paths through this helper, never with a bare `add`.

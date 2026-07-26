@@ -642,7 +642,7 @@ class BorrowChecker:
 
 		Accepts the full Copy surface — including Copy-but-NON-bitcopy
 		fields (`String`, or a Copy struct like `Tag { label: String }`)
-		— since String Scope A (work/string-ownership-refactor/). 0.33.70
+		— since String Scope A (doc/history.md). 0.33.70
 		had narrowed this to `Copy && is_bitcopy` because the non-bitcopy
 		case produced a confirmed heap-use-after-free: the COPY-kind
 		capture-slot READ (`hir_to_mir.py::_load_capture_from_env`)

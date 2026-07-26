@@ -109,7 +109,7 @@ def test_drop_policy_int_is_pod() -> None:
 def test_drop_policy_string_unshortcut_classification() -> None:
 	"""`String` classified WITHOUT a Copy hook — Scope A structural policy.
 
-	Since String Scope A (work/string-ownership-refactor/), String's
+	Since String Scope A (0.33.75 era; doc/history.md), String's
 	ownership facts are STRUCTURAL and mode-independent:
 	`_is_copy_structural(String)` returns True (retain-copy — an ARC
 	handle whose copy bumps the refcount), so `copy_status(String)` is

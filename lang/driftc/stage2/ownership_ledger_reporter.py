@@ -373,7 +373,7 @@ DIV_C1_PATH_DEPENDENT = "c1_path_dependent"
 DIV_C2_INVISIBLE_STAKE = "c2_invisible_stake"
 DIV_C3_MOVEOUT_NOT_OWNED = "c3_moveout_not_owned"
 # C3 agree/observational classes (Slice 2 Part 2, hybrid plan accepted
-# 2026-07-12 — see work/string-ownership-refactor/C3-DECISION-REPORT.md).
+# 2026-07-12; decision recorded in doc/history.md).
 # C3's original comparison asked "is the subject LIVE at the move?",
 # which is the wrong invariant for compiler-authored cleanup moves; the
 # corrected ladder recognizes, in order:

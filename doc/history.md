@@ -64,6 +64,15 @@ representative small-subject suite (64 B–4 KiB, request-shaped) is
 scan-all 2.33x, 2 MiB no-match 2.46x (view form 2.52x), 16-branch
 alternation 1.61x; compile time and binary size at parity.
 
+Two post-review hot-loop ablations were measured under seeded-shuffle
+interleaving on the representative small-subject and wide-alternation
+suites and REJECTED as non-material/non-general; the shipped engine
+is unchanged by them.  Exact measured ranges: A (per-start workspace
+assert moved to once-per-search) 0.3-3.5% SLOWER on small subjects,
+3.5% faster on wide alternation; B (matching successors collected
+into one shared worklist drained once per byte) 4.8-7.8% SLOWER on
+small subjects, 5.9% faster on wide alternation.
+
 EXPORTED-INTERNAL SOURCE-SURFACE CHANGE (compatibility note): the
 underscore-internal helpers `_make_bitmap`, `_clear_bitmap`, and
 `_add_state` are REMOVED from `std.regex`'s exports and module (an
@@ -927,9 +936,9 @@ fixes only — no runtime, ABI, or stdlib changes; ABI stays 21.
   driver slice + parser suite 207 passed.
 
 ## 2026-07-07 (0.33.75: String Scope A — structural transfer policy + centralized alias marking; ABI stays 20)
-- **Scope A of the String ownership refactor**
-  (`work/string-ownership-refactor/NEXT-PHASE-PLAN.md`), regression-first on
-  branch `refactor/string-transfer-policy-scope-a`:
+- **Scope A of the String ownership refactor** (phase plan reviewed
+  2026-07-06; roadmap recorded in this entry and the 0.33.7x series),
+  regression-first on branch `refactor/string-transfer-policy-scope-a`:
   1. **Structural classification** (`types_core.py::_is_copy_structural`):
      `String` is now structurally Copy (retain-copy) — previously its
      Copy-ness was query-DEPENDENT (stdlib trait proof) while its needs-drop

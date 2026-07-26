@@ -5,9 +5,9 @@ Each `CleanupPlan` decision carries one of these as its opaque `payload`.
 They are frozen dataclasses carrying enough data — the local name AND
 the frozen EXPECTED type — for a later emitter to validate the
 local/type relationship without trusting the (mutable) `func.local_types`
-mapping at emission time. See
-`work/string-ownership-refactor/SLICE-B2-R6-ARCHITECTURAL-CHECKPOINT.md`
-§4 and `cleanup_plan.py`.
+mapping at emission time. Architecture decided in the B2+C R6
+architectural review (0.33.86-0.33.87 series; see the string_arc-endgame
+entries in doc/history.md) and `cleanup_plan.py`.
 
 Sites:
   * site-3  — Return-boundary destructible drops. ONE decision per
