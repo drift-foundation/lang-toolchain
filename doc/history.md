@@ -1,5 +1,48 @@
 # Drift development history
 
+## 2026-07-26 (0.33.89: std.regex packed-workspace executor — allocation-free matching; ABI 22 unchanged)
+
+The NFA executor's per-byte/per-start allocation churn is gone.  The
+engine now runs over one function-local packed workspace (a single
+`Array<Int>` partitioned into epoch-mark / two state-list / worklist
+regions): epoch generations replace the O(prog) bitmap clear (with a
+deterministic overflow reset — never "unreachable"), the next state
+closure is built directly from matching states (the per-byte `seeds`
+array is gone), and epsilon closure is an iterative mark-on-push
+worklist bounded by prog_len (the recursive `_add_state` and its
+O(prog) native-stack exposure are gone).  Steady state: EXACTLY one
+real allocation + one real free per top-level search — independent of
+input length and candidate-start count (previously ~3,100 real
+allocations for one 256-byte late-hit search; ~18M for a 2 MiB
+no-match scan).  One workspace also spans an entire
+`replace_first`/`replace_all` operation.  Matching stays thread-safe
+and reentrant through shared `&Regex` (no state in `Regex`).
+
+Semantics are bit-identical: a dual-engine shadow differential (the
+pre-rewrite engine embedded verbatim beside the new one; 1000 seeded
+pattern/input cases including invalid patterns) shows zero
+divergence in spans, `is_match`, view parity, and compile error
+tag/offset; all 16 `std_regex_*` e2e fixtures pass (including the
+new view-offsets/alternation-priority pin fixture); valgrind-clean.
+Wrap-counter teeth pin the contract exactly (1 real alloc per
+search, 64x size-independence, scan-all = matches+1, view = +1
+retain/+1 real release, epoch-overflow reset equivalence).
+
+Measured (interleaved baseline-vs-candidate, same machine): the
+representative small-subject suite (64 B–4 KiB, request-shaped) is
+2.0–2.45x faster on every row with nothing slower; 2 MiB carrier
+scan-all 2.33x, 2 MiB no-match 2.46x (view form 2.52x), 16-branch
+alternation 1.61x; compile time and binary size at parity.
+
+EXPORTED-INTERNAL SOURCE-SURFACE CHANGE (compatibility note): the
+underscore-internal helpers `_make_bitmap`, `_clear_bitmap`, and
+`_add_state` are REMOVED from `std.regex`'s exports and module (an
+audit found zero consumers in any local workspace or in-tree test).
+`_try_match_at` and `_find_from` remain as compatibility wrappers,
+each constructing one workspace per invocation;
+`_find_from_gen_saturated` is added as the exported-internal
+overflow-reset test hook.  Public API unchanged; ABI 22 unchanged.
+
 ## 2026-07-25 (0.33.88: two LANGUAGE_BUG fixes — sibling catch-binder identity; string_byte_at OOB now throws; ABI 22 unchanged)
 
 Sibling catch-binder identity: sequential typed catches reusing one

@@ -23,10 +23,12 @@ export {
 	_node_size,
 	_emit_node,
 	_nfa_compile,
+	_make_bitmap,
+	_clear_bitmap,
+	_add_state,
 	_byte_matches,
 	_try_match_at,
 	_find_from,
-	_find_from_gen_saturated,
 	_substr,
 	is_match_view,
 	find_first_view,
@@ -830,143 +832,58 @@ pub fn _nfa_compile(root: &RegexNode) nothrow -> _NfaProg {
 }
 
 // ---------------------------------------------------------------------------
-// NFA executor — Thompson simulation over a function-local PACKED
-// workspace (_NfaScratch).
+// NFA executor — Thompson simulation
 //
-// ZERO allocations per candidate start and per consumed byte; exactly
-// ONE workspace allocation per top-level search (independent of input
-// length and start count).  Epoch marks give an O(1) state-set clear;
-// the next closure is built DIRECTLY from matching states (no seeds
-// array); epsilon closure is an ITERATIVE mark-on-push worklist (no
-// recursion, bounded by prog_len).
+// Epsilon closure via recursive _add_state; byte matching per step.
+// _try_match_at returns the longest match end from a fixed start, or -1.
 // ---------------------------------------------------------------------------
 
-// Packed matcher workspace.  PRIVATE and function-local — NEVER
-// stored in Regex: matching stays thread-safe, reentrant, and
-// callable through shared &Regex.  One Array<Int> of length
-// 4*prog_len, partitioned into regions
-//     [ marks | state list A | state list B | worklist ]
-// at bases 0 / P / 2P / 3P.  marks are epoch numbers:
-// visited(pc) <=> ws[pc] == gen.  The two state-list regions swap
-// ROLES between "current" and "next" via cur_base — no allocation,
-// no copying.  Region cursors are bounded structurally: the epoch
-// guard admits each pc into a list or the worklist at most once per
-// epoch, so no region can exceed prog_len entries (the packed
-// array's own bounds check is the fail-closed backstop).
-struct _NfaScratch {
-	ws: Array<Int>,
-	prog_len: Int,
-	gen: Int,
-	cur_base: Int,
-	cur_len: Int
-}
-
-fn _scratch_new(prog_len: Int) nothrow -> _NfaScratch {
-	var ws = Array<type Int>::with_capacity(4 * prog_len);
+/// Internal: NFA-state-tracking bitmap allocator.
+pub fn _make_bitmap(n: Int) nothrow -> Array<Bool> {
+	var a = Array<type Bool>::with_capacity(n);
 	var i = 0;
-	while i < 4 * prog_len {
-		ws.push(0);
-		i = i + 1;
-	}
-	return _NfaScratch(ws = move ws, prog_len = prog_len, gen = 0,
-		cur_base = prog_len, cur_len = 0);
+	while i < n { a.push(false); i = i + 1; }
+	return move a;
 }
 
-// Epoch advance with a DETERMINISTIC overflow reset (never labeled
-// unreachable): at the ceiling, zero every mark and restart from
-// generation 0.  One O(prog) sweep per ~2^63 advances; behavior is
-// identical across the reset (tooth: _find_from_gen_saturated).
-// gen starts at 0 and is incremented BEFORE first use — an all-zero
-// marks region is never a valid "visited" state.
-fn _scratch_next_gen(sc: &mut _NfaScratch) nothrow -> Void {
-	if sc.gen >= 9223372036854775806 {
-		var i = 0;
-		while i < sc.prog_len {
-			sc.ws[i] = 0;
-			i = i + 1;
-		}
-		sc.gen = 0;
-	}
-	sc.gen = sc.gen + 1;
+/// Internal: bitmap reset between NFA iterations.
+pub fn _clear_bitmap(a: &mut Array<Bool>, n: Int) nothrow -> Void {
+	var i = 0;
+	while i < n { a[i] = false; i = i + 1; }
 }
 
-// Iterative epsilon closure from `seed` into the state-list region at
-// `tgt_base` (current length `tgt_len`) under the CURRENT epoch.
-// Marks on PUSH (worklist bounded by prog_len); Split pushes b BEFORE
-// a so a expands first, matching the deleted recursive walker's DFS —
-// closure CONTENTS are epoch-guarded sets, so match results are
-// order-independent regardless.  Consuming ops and Accept join the
-// state list.  Returns the region's new length.
-fn _closure_into(nfa: &_NfaProg, sc: &mut _NfaScratch, tgt_base: Int, tgt_len: Int, seed: Int, pos: Int, input_len: Int) nothrow -> Int {
-	val prog_len = sc.prog_len;
-	val stack_base = 3 * prog_len;
-	var slen = 0;
-	var tl = tgt_len;
-	if seed >= 0 and seed < prog_len and sc.ws[seed] != sc.gen {
-		sc.ws[seed] = sc.gen;
-		sc.ws[stack_base + slen] = seed;
-		slen = slen + 1;
-	}
-	while slen > 0 {
-		slen = slen - 1;
-		val pc = sc.ws[stack_base + slen];
+// Recursively follow epsilon transitions (Split, Jump, assertions) and
+// collect consuming instructions into clist.
+/// Internal: NFA state-set push (with epsilon-closure expansion).
+pub fn _add_state(nfa: &_NfaProg, bitmap: &mut Array<Bool>, clist: &mut Array<Int>, pc: Int, pos: Int, input_len: Int) nothrow -> Void {
+	if pc >= 0 and pc < nfa.ops.len and not bitmap[pc] {
+		bitmap[pc] = true;
 		val op = nfa.ops[pc];
 		match op {
 			_NfaOp::Split(a, b) => {
-				if b >= 0 and b < prog_len and sc.ws[b] != sc.gen {
-					sc.ws[b] = sc.gen;
-					sc.ws[stack_base + slen] = b;
-					slen = slen + 1;
-				}
-				if a >= 0 and a < prog_len and sc.ws[a] != sc.gen {
-					sc.ws[a] = sc.gen;
-					sc.ws[stack_base + slen] = a;
-					slen = slen + 1;
-				}
+				_add_state(nfa, bitmap, clist, a, pos, input_len);
+				_add_state(nfa, bitmap, clist, b, pos, input_len);
 			},
 			_NfaOp::Jump(target) => {
-				if target >= 0 and target < prog_len and sc.ws[target] != sc.gen {
-					sc.ws[target] = sc.gen;
-					sc.ws[stack_base + slen] = target;
-					slen = slen + 1;
-				}
+				_add_state(nfa, bitmap, clist, target, pos, input_len);
 			},
 			_NfaOp::AssertStart => {
-				val nxt = pc + 1;
-				if pos == 0 and nxt < prog_len and sc.ws[nxt] != sc.gen {
-					sc.ws[nxt] = sc.gen;
-					sc.ws[stack_base + slen] = nxt;
-					slen = slen + 1;
+				if pos == 0 {
+					_add_state(nfa, bitmap, clist, pc + 1, pos, input_len);
 				}
 			},
 			_NfaOp::AssertEnd => {
-				val nxt = pc + 1;
-				if pos == input_len and nxt < prog_len and sc.ws[nxt] != sc.gen {
-					sc.ws[nxt] = sc.gen;
-					sc.ws[stack_base + slen] = nxt;
-					slen = slen + 1;
+				if pos == input_len {
+					_add_state(nfa, bitmap, clist, pc + 1, pos, input_len);
 				}
 			},
-			_NfaOp::ByteMatch(_) => {
-				sc.ws[tgt_base + tl] = pc;
-				tl = tl + 1;
-			},
-			_NfaOp::AnyByte => {
-				sc.ws[tgt_base + tl] = pc;
-				tl = tl + 1;
-			},
-			_NfaOp::Ranges(_, _, _) => {
-				sc.ws[tgt_base + tl] = pc;
-				tl = tl + 1;
-			},
-			_NfaOp::Accept => {
-				sc.ws[tgt_base + tl] = pc;
-				tl = tl + 1;
-			},
+			_NfaOp::ByteMatch(_) => { clist.push(pc); },
+			_NfaOp::AnyByte => { clist.push(pc); },
+			_NfaOp::Ranges(_, _, _) => { clist.push(pc); },
+			_NfaOp::Accept => { clist.push(pc); },
 			default => { }
 		}
 	}
-	return tl;
 }
 
 /// Internal: byte-class match test for a given NFA opcode.
@@ -1005,13 +922,9 @@ pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
 // Run NFA from a fixed start position; return longest match end or -1.
 /// Internal: attempts a single anchored match starting at `start`,
 /// returning the matched byte-length or `-1` on no match.
-/// COMPATIBILITY WRAPPER: constructs one workspace per invocation —
-/// looping callers should prefer the public search entry points,
-/// which share one workspace across the whole search.
 pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int {
 	val src = text._byte_source_all(input);
-	var sc = _scratch_new(nfa.ops.len);
-	return _try_match_at_scratch(nfa, &src, start, &mut sc);
+	return _try_match_at_range(nfa, &src, start);
 }
 
 // THE matcher authority: every entry point (String or view) funnels
@@ -1023,54 +936,44 @@ pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int 
 // entries `_byte_source`; String-form behavior is bit-identical to the
 // pre-source implementation, and the source's private fields mean a
 // narrow view's window can never read the rest of its backing.
-//
-// The workspace `sc` is caller-provided and REUSED: this function
-// performs ZERO allocations — per attempt it advances the epoch and
-// truncates the current list; per byte it builds the next closure
-// directly into the other list region under a fresh epoch and swaps
-// region roles.
-fn _try_match_at_scratch(nfa: &_NfaProg, src: &text._StringByteSource, start: Int, sc: &mut _NfaScratch) nothrow -> Int {
+fn _try_match_at_range(nfa: &_NfaProg, src: &text._StringByteSource, start: Int) nothrow -> Int {
 	val input_len = src.size();
 	val prog_len = nfa.ops.len;
 	val accept_pc = prog_len - 1;
-	assert(sc.prog_len == prog_len, "regex workspace/program size mismatch");
 
-	_scratch_next_gen(sc);
-	sc.cur_base = prog_len;
-	sc.cur_len = _closure_into(nfa, sc, prog_len, 0, 0, start, input_len);
+	var bitmap = _make_bitmap(prog_len);
+	var clist = Array<type Int>::with_capacity(prog_len);
+	_add_state(nfa, &mut bitmap, &mut clist, 0, start, input_len);
 
 	var best_end = 0 - 1;
-	if sc.ws[accept_pc] == sc.gen {
+	if bitmap[accept_pc] {
 		best_end = start;
 	}
 
 	var pos = start;
-	while pos < input_len and sc.cur_len > 0 {
+	while pos < input_len and clist.len > 0 {
 		val b = src.read(pos);
 
-		// Direct next-closure construction: each consuming state that
-		// matches this byte expands straight into the OTHER list
-		// region under one fresh epoch shared by the whole closure.
-		var nxt_base = prog_len;
-		if sc.cur_base == prog_len {
-			nxt_base = 2 * prog_len;
-		}
-		val cur_base = sc.cur_base;
-		val cur_len = sc.cur_len;
-		_scratch_next_gen(sc);
-		var nxt_len = 0;
+		// Step: advance each consuming state that matches this byte.
+		var seeds = Array<type Int>::with_capacity(clist.len);
 		var ci = 0;
-		while ci < cur_len {
-			val pc = sc.ws[cur_base + ci];
-			if _byte_matches(nfa, pc, b) {
-				nxt_len = _closure_into(nfa, sc, nxt_base, nxt_len, pc + 1, pos + 1, input_len);
+		while ci < clist.len {
+			if _byte_matches(nfa, clist[ci], b) {
+				seeds.push(clist[ci] + 1);
 			}
 			ci = ci + 1;
 		}
-		sc.cur_base = nxt_base;
-		sc.cur_len = nxt_len;
 
-		if sc.ws[accept_pc] == sc.gen {
+		// Rebuild state set from seeds.
+		_clear_bitmap(&mut bitmap, prog_len);
+		clist = Array<type Int>::with_capacity(prog_len);
+		var si = 0;
+		while si < seeds.len {
+			_add_state(nfa, &mut bitmap, &mut clist, seeds[si], pos + 1, input_len);
+			si = si + 1;
+		}
+
+		if bitmap[accept_pc] {
 			best_end = pos + 1;
 		}
 		pos = pos + 1;
@@ -1103,12 +1006,10 @@ pub fn is_match_view(re: &Regex, v: &text.StringByteView) nothrow -> Bool {
 ///
 /// Match offsets are VIEW-RELATIVE (compose directly with
 /// `match_subview`); `^`/`$` anchor at the view's boundaries.  Never
-/// retains, never materializes the subject.  Exactly ONE workspace
-/// allocation for the whole search, independent of view length.
+/// retains, never materializes the subject.
 pub fn find_first_view(re: &Regex, v: &text.StringByteView) nothrow -> Optional<RegexMatch> {
 	val src = text._byte_source(v);
-	var sc = _scratch_new(re.nfa.ops.len);
-	return _find_from_scratch(&re.nfa, &src, 0, &mut sc);
+	return _find_from_range(&re.nfa, &src, 0);
 }
 
 /// Checked, OPT-IN conversion: a `RegexMatch` over `s` into a
@@ -1147,18 +1048,14 @@ pub fn match_subview(m: RegexMatch, v: &text.StringByteView) nothrow -> core.Res
 /// Returns `true` if `re` matches anywhere in `input`.
 ///
 /// Equivalent to `find_first(re, input).is_some()` but skips
-/// allocating the `RegexMatch` value.  Performs exactly ONE
-/// workspace allocation for the whole call, independent of input
-/// length; never retains the subject.
+/// allocating the `RegexMatch` value.
 ///
 /// **See also:** `find_first`, `is_match_view`.
 pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
-	val src = text._byte_source_all(input);
-	var sc = _scratch_new(re.nfa.ops.len);
-	val input_len = src.size();
+	val input_len = input.byte_length();
 	var start = 0;
 	while start <= input_len {
-		if _try_match_at_scratch(&re.nfa, &src, start, &mut sc) >= 0 {
+		if _try_match_at(&re.nfa, input, start) >= 0 {
 			return true;
 		}
 		start = start + 1;
@@ -1166,12 +1063,8 @@ pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 	return false;
 }
 
-/// Returns the leftmost match of `re` in `input` (greedy — longest
-/// at that start), or `None` if no match exists.
-///
-/// Performs exactly ONE workspace allocation for the whole search,
-/// independent of input length and of how many candidate starts are
-/// attempted; never retains the subject.
+/// Returns the leftmost match of `re` in `input`, or `None` if no
+/// match exists.
 ///
 /// **See also:** `is_match`, `replace_first`, `RegexMatch`.
 pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
@@ -1179,36 +1072,20 @@ pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
 }
 
 // Search for the first match starting at byte offset `from`.
-/// Internal: like `find_first` but starting search from `from`.
-/// COMPATIBILITY WRAPPER: constructs one workspace per invocation, so
-/// a manual advance-past-match loop performs exactly (matches + 1)
-/// workspace allocations per full scan.  `replace_all` no longer uses
-/// this — it shares one workspace across its entire operation.
+/// Internal: like `find_first` but starting search from `from`
+/// (used by `replace_all` to advance past previous matches).
 pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
 	val src = text._byte_source_all(input);
-	var sc = _scratch_new(re.nfa.ops.len);
-	return _find_from_scratch(&re.nfa, &src, from, &mut sc);
+	return _find_from_range(&re.nfa, &src, from);
 }
 
-/// Internal TEST HOOK for the epoch-overflow reset: identical to
-/// `_find_from` but starts the workspace generation AT the reset
-/// ceiling, so the deterministic reset fires during the search.
-/// Results must be indistinguishable from `_find_from`.
-pub fn _find_from_gen_saturated(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
-	val src = text._byte_source_all(input);
-	var sc = _scratch_new(re.nfa.ops.len);
-	sc.gen = 9223372036854775806;
-	return _find_from_scratch(&re.nfa, &src, from, &mut sc);
-}
-
-// Windowed search loop (see _try_match_at_scratch).  Returned match
-// offsets are WINDOW-RELATIVE.  The caller-provided workspace is
-// reused across every candidate start.
-fn _find_from_scratch(nfa: &_NfaProg, src: &text._StringByteSource, from: Int, sc: &mut _NfaScratch) nothrow -> Optional<RegexMatch> {
+// Windowed search loop (see _try_match_at_range).  Returned match
+// offsets are WINDOW-RELATIVE.
+fn _find_from_range(nfa: &_NfaProg, src: &text._StringByteSource, from: Int) nothrow -> Optional<RegexMatch> {
 	val sublen = src.size();
 	var start = from;
 	while start <= sublen {
-		val end = _try_match_at_scratch(nfa, src, start, sc);
+		val end = _try_match_at_range(nfa, src, start);
 		if end >= 0 {
 			return Optional::Some(RegexMatch(start = start, end = end));
 		}
@@ -1279,14 +1156,10 @@ pub fn replace_first(re: &Regex, input: &String, repl: &String) nothrow -> Strin
 /// **See also:** `replace_first`.
 pub fn replace_all(re: &Regex, input: &String, repl: &String) nothrow -> String {
 	val input_len = input.byte_length();
-	// ONE workspace for the ENTIRE operation: every internal search
-	// below reuses it.
-	val src = text._byte_source_all(input);
-	var sc = _scratch_new(re.nfa.ops.len);
 	var result = "";
 	var cursor = 0;
 	while cursor <= input_len {
-		match _find_from_scratch(&re.nfa, &src, cursor, &mut sc) {
+		match _find_from(re, input, cursor) {
 			Optional::Some(m) => {
 				// Append text between previous cursor and match start.
 				if m.start > cursor {

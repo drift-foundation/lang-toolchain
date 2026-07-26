@@ -1,0 +1,122 @@
+module main;
+
+import std.core as core;
+import std.text as text;
+import std.regex as regex;
+
+// Permanent semantic pins for the packed-workspace executor
+// (regex-engine-allocation-removal): VIEW-RELATIVE offsets, view
+// boundary anchors, alternation arm-order independence
+// (leftmost-then-LONGEST-at-that-start in the set-based engine),
+// empty matches at view boundaries, and match_subview composition.
+
+fn expect_span(m: Optional<regex.RegexMatch>, want_start: Int, want_end: Int, fail_code: Int) nothrow -> Int {
+	match m {
+		Some(got) => {
+			if got.start != want_start or got.end != want_end {
+				return fail_code;
+			}
+			return 0;
+		},
+		None() => { return fail_code + 1; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	// heap-backed subject: "worker,id42,buffer"
+	var s = "worker,";
+	s = s + "id42,buffer";
+
+	// --- view-relative offsets: view over "id42" region ---
+	match regex.compile(&"[a-z]+[0-9]+") {
+		core.Result::Err(e) => { return 10; },
+		core.Result::Ok(re) => {
+			// whole-string match sits at byte 7 ("id42")
+			var rc = expect_span(regex.find_first(&re, &s), 7, 11, 11);
+			if rc != 0 { return rc; }
+
+			// a view starting AT the token: offsets are VIEW-relative
+			match text.byte_view(&s, 7, 11) {
+				core.Result::Err(e2) => { return 13; },
+				core.Result::Ok(v) => {
+					rc = expect_span(regex.find_first_view(&re, &v), 0, 4, 14);
+					if rc != 0 { return rc; }
+
+					// match_subview composes view-relative offsets
+					match regex.find_first_view(&re, &v) {
+						Some(m) => {
+							match regex.match_subview(m, &v) {
+								core.Result::Ok(sub) => {
+									if not sub.eq_string(&"id42") { return 16; }
+								},
+								core.Result::Err(e3) => { return 17; }
+							}
+						},
+						None() => { return 18; }
+					}
+				}
+			}
+		}
+	}
+
+	// --- ^/$ anchor at VIEW boundaries, not the backing's ---
+	match regex.compile(&"^id[0-9]+$") {
+		core.Result::Err(e) => { return 20; },
+		core.Result::Ok(re) => {
+			// against the full string: no match (prefix/suffix present)
+			match regex.find_first(&re, &s) {
+				Some(m) => { return 21; },
+				None() => { }
+			}
+			// against the narrowed view: full-view match, view-relative
+			match text.byte_view(&s, 7, 4) {
+				core.Result::Err(e2) => { return 22; },
+				core.Result::Ok(v) => {
+					val rc = expect_span(regex.find_first_view(&re, &v), 0, 4, 23);
+					if rc != 0 { return rc; }
+				}
+			}
+		}
+	}
+
+	// --- alternation arm order does NOT change the result: the
+	// engine is leftmost start, then LONGEST at that start ---
+	match regex.compile(&"(a|ab)c?") {
+		core.Result::Err(e) => { return 30; },
+		core.Result::Ok(re) => {
+			val subj = "abc";
+			val rc = expect_span(regex.find_first(&re, &subj), 0, 3, 31);
+			if rc != 0 { return rc; }
+		}
+	}
+	match regex.compile(&"(ab|a)c?") {
+		core.Result::Err(e) => { return 33; },
+		core.Result::Ok(re) => {
+			val subj = "abc";
+			val rc = expect_span(regex.find_first(&re, &subj), 0, 3, 34);
+			if rc != 0 { return rc; }
+		}
+	}
+
+	// --- empty match at a view boundary (zero-width at view end) ---
+	match regex.compile(&"x*$") {
+		core.Result::Err(e) => { return 40; },
+		core.Result::Ok(re) => {
+			match text.byte_view(&s, 7, 4) {
+				core.Result::Err(e2) => { return 41; },
+				core.Result::Ok(v) => {
+					// leftmost: empty match at view position 0? no —
+					// x* matches empty everywhere but $ only holds at
+					// the VIEW's end (4), so leftmost successful start
+					// is... every start matches empty ONLY where $
+					// holds; the leftmost start whose attempt succeeds
+					// is start 4 (empty, at the boundary).
+					val rc = expect_span(regex.find_first_view(&re, &v), 4, 4, 42);
+					if rc != 0 { return rc; }
+				}
+			}
+		}
+	}
+
+	return 0;
+}

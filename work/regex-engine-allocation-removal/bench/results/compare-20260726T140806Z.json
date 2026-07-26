@@ -1,0 +1,274 @@
+{
+  "provenance": {
+    "commit": "32d676bbd4f351b6f794b9873756cab81ac614e5",
+    "tree_dirty": true,
+    "driftc_version": "0.33.88",
+    "abi": "22",
+    "stdlib_hash": "e38ad6c762ad8011",
+    "source_hashes": {
+      "ops.drift": "d6143295995ca529de6a4fe27d13b3b04dd6ed16614a7dbae5f5e282712b1697",
+      "counts.drift": "41b38b5364566c7637ce370b322f19ff4ed28a11393b290f8a5c92923f02e4f9",
+      "driver.c": "056d60e9e69f5824996895c700f0c989f20a32fecb578e43220a0dacc0bf44ce",
+      "probe.drift": "6ccc35468fe8bcab39577a4f31596567b613f891b216561b726388d21dee7266",
+      "probe_driver.c": "47949cae876da14f45888b9cdc3fe06be9847f0f0da357eea6d8bf0018db43c2",
+      "model.py": "2dd5495464fdf550e62a63e56b69d0865976d9fc99568df753f0760685b05f40",
+      "gen_small.py": "4760b4b1a0b7f8861f3274bfeae7381c20d1e05fdd3369ebd4d7597ce134b4f6",
+      "generated/ops_small.drift": "cc5a493757e67801870bc6ea32b1d59a92430e22247f12c88c6bb18333723eb8",
+      "generated/counts_small.drift": "04eef522a9802140857e2455e11e56be68451a4cfb70384d565daa2bddef0b61",
+      "generated/driver_small.c": "c4804728103b17e8a49c1a512bbb46df1b0785f9da9a5f0d150fdc14a23c38b1"
+    },
+    "driftc_flags": [
+      "--dev",
+      "--stdlib-root",
+      "stdlib"
+    ],
+    "command": "work/regex-engine-allocation-removal/bench/run_bench.py",
+    "timestamp_utc": "2026-07-26T14:08:44.321744+00:00",
+    "host": "slryzen",
+    "build_key": "21fcb860b624e561"
+  },
+  "compare": {
+    "scan_all_carrier_2m": {
+      "baseline_us": 177425,
+      "candidate_us": 76087,
+      "ratio": 0.4288403550796111,
+      "baseline_launches": [
+        175866,
+        177849,
+        179228,
+        176850,
+        177425
+      ],
+      "candidate_launches": [
+        74749,
+        76087,
+        76130,
+        77185,
+        74669
+      ]
+    },
+    "find_nomatch_2m": {
+      "baseline_us": 268174,
+      "candidate_us": 109057,
+      "ratio": 0.4066650756598328,
+      "baseline_launches": [
+        268174,
+        265743,
+        277246,
+        267407,
+        270887
+      ],
+      "candidate_launches": [
+        111918,
+        106054,
+        105082,
+        109057,
+        110887
+      ]
+    },
+    "find_nomatch_view_2m": {
+      "baseline_us": 265915,
+      "candidate_us": 105583,
+      "ratio": 0.39705545004982795,
+      "baseline_launches": [
+        259727,
+        263583,
+        273861,
+        265915,
+        270766
+      ],
+      "candidate_launches": [
+        111747,
+        104341,
+        105010,
+        105583,
+        110817
+      ]
+    },
+    "alt_nomatch_512k": {
+      "baseline_us": 115954,
+      "candidate_us": 72218,
+      "ratio": 0.6228159442537557,
+      "baseline_launches": [
+        115954,
+        113902,
+        119731,
+        114244,
+        118633
+      ],
+      "candidate_launches": [
+        72218,
+        70834,
+        75052,
+        70260,
+        72231
+      ]
+    },
+    "zw_1k_x20000": {
+      "baseline_us": 973,
+      "candidate_us": 596,
+      "ratio": 0.6125385405960946,
+      "baseline_launches": [
+        967,
+        965,
+        980,
+        978,
+        973
+      ],
+      "candidate_launches": [
+        597,
+        593,
+        597,
+        595,
+        596
+      ]
+    },
+    "short_hit_x20000": {
+      "baseline_us": 4407,
+      "candidate_us": 2416,
+      "ratio": 0.5482187429090084,
+      "baseline_launches": [
+        4407,
+        4376,
+        4501,
+        4407,
+        4440
+      ],
+      "candidate_launches": [
+        2413,
+        2427,
+        2416,
+        2456,
+        2344
+      ]
+    },
+    "short_miss_x20000": {
+      "baseline_us": 22364,
+      "candidate_us": 10927,
+      "ratio": 0.48859774637810766,
+      "baseline_launches": [
+        22360,
+        22240,
+        23184,
+        22364,
+        22521
+      ],
+      "candidate_launches": [
+        10980,
+        10737,
+        10927,
+        11031,
+        10772
+      ]
+    },
+    "anchor_x20000": {
+      "baseline_us": 7232,
+      "candidate_us": 4028,
+      "ratio": 0.5569690265486725,
+      "baseline_launches": [
+        7234,
+        7144,
+        7321,
+        7211,
+        7232
+      ],
+      "candidate_launches": [
+        3865,
+        3963,
+        4028,
+        4045,
+        4032
+      ]
+    },
+    "compile_p1_x2000": {
+      "baseline_us": 261,
+      "candidate_us": 260,
+      "ratio": 0.9961685823754789,
+      "baseline_launches": [
+        262,
+        258,
+        261,
+        271,
+        259
+      ],
+      "candidate_launches": [
+        251,
+        263,
+        260,
+        256,
+        260
+      ]
+    },
+    "compile_alt_x2000": {
+      "baseline_us": 2213,
+      "candidate_us": 2173,
+      "ratio": 0.981924988703118,
+      "baseline_launches": [
+        2213,
+        2241,
+        2213,
+        2209,
+        2219
+      ],
+      "candidate_launches": [
+        2173,
+        2164,
+        2172,
+        2198,
+        2178
+      ]
+    },
+    "scratch_four_x200000": {
+      "baseline_us": 7440,
+      "candidate_us": 7129,
+      "ratio": 0.9581989247311828,
+      "baseline_launches": [
+        7459,
+        7440,
+        7406,
+        7448,
+        7425
+      ],
+      "candidate_launches": [
+        7110,
+        6931,
+        7145,
+        7147,
+        7129
+      ]
+    },
+    "scratch_packed_x200000": {
+      "baseline_us": 3260,
+      "candidate_us": 3191,
+      "ratio": 0.9788343558282209,
+      "baseline_launches": [
+        3263,
+        3407,
+        3223,
+        3260,
+        3218
+      ],
+      "candidate_launches": [
+        3210,
+        3046,
+        3205,
+        3191,
+        3187
+      ]
+    }
+  },
+  "load_samples": [
+    2.64,
+    2.59,
+    2.46,
+    2.35,
+    2.35,
+    2.14,
+    2.14,
+    2.05,
+    1.96,
+    1.89,
+    1.89
+  ],
+  "failures": []
+}

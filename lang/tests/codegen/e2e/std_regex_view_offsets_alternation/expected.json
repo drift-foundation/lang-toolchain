@@ -1,0 +1,4 @@
+{
+  "description": "std.regex permanent pins: view-relative offsets, view-boundary anchors, alternation arm-order independence (leftmost-longest), empty match at view end, match_subview composition",
+  "exit_code": 0
+}

@@ -1,0 +1,240 @@
+// regex-engine-allocation-removal: COUNT-EXACT ops for the
+// -Wl,--wrap driver (driver.c).  Marker windows by SUBTRACTION: each
+// matching op has a compile-only twin on the same pattern; the twin's
+// counter row is subtracted so the reported window covers MATCHING
+// ONLY (compilation, subject construction, and reporting excluded).
+// Bench-local (work/), never part of any gate.
+module main;
+
+import std.core as core;
+import std.text as text;
+import std.regex as regex;
+
+// ---- subjects (recipes identical to ops.drift / model.py) ----
+
+fn build_from_chunk(chunk: &String, target_bytes: Int) nothrow -> String {
+	var sb = text.string_builder(target_bytes + 64);
+	var total = 0;
+	val n = chunk.byte_length();
+	while total < target_bytes {
+		text.sb_append_string(&mut sb, chunk);
+		total = total + n;
+	}
+	return text.sb_build(&mut sb);
+}
+
+pub fn mk_carrier_64k() nothrow -> String {
+	return build_from_chunk(&"alpha,bravo12,charlie345,dd,echo_echo_echo,f,", 64 * 1024);
+}
+
+pub fn mk_carrier_2m() nothrow -> String {
+	return build_from_chunk(&"alpha,bravo12,charlie345,dd,echo_echo_echo,f,", 2 * 1024 * 1024);
+}
+
+pub fn mk_nomatch_64k() nothrow -> String {
+	return build_from_chunk(&"alpha,bravo,charlie,dd,echo_echo_echo,f,", 64 * 1024);
+}
+
+pub fn mk_nomatch_2m() nothrow -> String {
+	return build_from_chunk(&"alpha,bravo,charlie,dd,echo_echo_echo,f,", 2 * 1024 * 1024);
+}
+
+pub fn mk_zw() nothrow -> String {
+	return text.repeat(&"z", 1024);
+}
+
+pub fn mk_short_hit() nothrow -> String {
+	var s = "user";
+	s = s + "42";
+	return move s;
+}
+
+pub fn mk_short_miss() nothrow -> String {
+	var s = "user";
+	s = s + "xyz";
+	return move s;
+}
+
+pub fn mk_anchor_in() nothrow -> String {
+	var s = "alpha";
+	s = s + "bravo";
+	return move s;
+}
+
+// ---- shared workload bodies ----
+
+fn scan_all(re: &regex.Regex, s: &String) nothrow -> Int {
+	var count = 0;
+	var last_end = 0;
+	var cursor = 0;
+	val n = s.byte_length();
+	while cursor <= n {
+		match regex._find_from(re, s, cursor) {
+			Some(m) => {
+				count = count + 1;
+				last_end = m.end;
+				if m.end == m.start {
+					cursor = m.start + 1;
+				} else {
+					cursor = m.end;
+				}
+			},
+			None() => { break; }
+		}
+	}
+	return count * 10000000 + last_end;
+}
+
+// ---- compile-only twins (subtraction baselines) ----
+
+pub fn op_compile_p1(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => { return 1; },
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_compile_alt(s: String) nothrow -> Int {
+	match regex.compile(&"(ab|ac|ad|ae|af|ag|ah|ai|aj|ak|al|am|an|ao|ap|aq)z") {
+		Ok(re) => { return 1; },
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_compile_zw(s: String) nothrow -> Int {
+	match regex.compile(&"a*") {
+		Ok(re) => { return 1; },
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_compile_anchor(s: String) nothrow -> Int {
+	match regex.compile(&"^[a-z]*$") {
+		Ok(re) => { return 1; },
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+// ---- matching ops (window = this op MINUS its compile twin) ----
+
+pub fn op_scan_all(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => { return scan_all(&re, &s); },
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_find_nomatch(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => {
+			match regex.find_first(&re, &s) {
+				Some(m) => { return 0 - 1; },
+				None() => { return 1; }
+			}
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_find_nomatch_view(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => {
+			val v = text.byte_view_all(&s);
+			match regex.find_first_view(&re, &v) {
+				Some(m) => { return 0 - 1; },
+				None() => { return 1; }
+			}
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_alt(s: String) nothrow -> Int {
+	match regex.compile(&"(ab|ac|ad|ae|af|ag|ah|ai|aj|ak|al|am|an|ao|ap|aq)z") {
+		Ok(re) => {
+			match regex.find_first(&re, &s) {
+				Some(m) => { return 0 - 1; },
+				None() => { return 1; }
+			}
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_zw(s: String) nothrow -> Int {
+	match regex.compile(&"a*") {
+		Ok(re) => {
+			var acc = 0;
+			var k = 0;
+			while k < 100 {
+				match regex.find_first(&re, &s) {
+					Some(m) => {
+						if m.start == 0 and m.end == 0 { acc = acc + 1; }
+					},
+					None() => { return 0 - 1; }
+				}
+				k = k + 1;
+			}
+			return acc;
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_short_hit(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => {
+			var acc = 0;
+			var k = 0;
+			while k < 100 {
+				match regex.find_first(&re, &s) {
+					Some(m) => { acc = acc + m.end - m.start; },
+					None() => { return 0 - 1; }
+				}
+				k = k + 1;
+			}
+			return acc;
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_short_miss(s: String) nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Ok(re) => {
+			var acc = 0;
+			var k = 0;
+			while k < 100 {
+				match regex.find_first(&re, &s) {
+					Some(m) => { return 0 - 1; },
+					None() => { acc = acc + 1; }
+				}
+				k = k + 1;
+			}
+			return acc;
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn op_anchor(s: String) nothrow -> Int {
+	match regex.compile(&"^[a-z]*$") {
+		Ok(re) => {
+			var acc = 0;
+			var k = 0;
+			while k < 100 {
+				if regex.is_match(&re, &s) { acc = acc + 1; }
+				k = k + 1;
+			}
+			return acc;
+		},
+		Err(e) => { return 0 - 1; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	// Renamed away in the linked IR; the C driver owns the real main.
+	val s = mk_short_hit();
+	if op_compile_p1(s) != 1 { return 1; }
+	return 0;
+}
