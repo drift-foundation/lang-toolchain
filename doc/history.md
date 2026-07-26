@@ -1,8 +1,38 @@
 # Drift development history
 
-## 2026-07-26 (0.33.89: std.regex packed-workspace executor — allocation-free matching; ABI 22 unchanged)
+## 2026-07-26 (0.33.89: String hot-path recovery — launch-time trace cache; ABI 22 unchanged)
 
-The NFA executor's per-byte/per-start allocation churn is gone.  The
+The 0.33.88 String hot-path regression that blocked certification
+(drift-web baseline-health 161–166k → 142–147k rps) is recovered.
+Ablation-pinned root cause: the B5/ABI-22 change added a per-call
+`getenv("DRIFT_STR_TRACE")` to `drift_string_release` (retain had one
+since ABI 21) — 27 trace lookups per parsed request at ~18–20 ns
+each, exceeding 100% of the net regression on the web parse/route
+carriers (other 0.33.88 improvements partially concealed it).  Fix:
+`DRIFT_STR_TRACE` is read exactly once during process initialization
+(constructor) and published as immutable state; the hot paths branch
+on a plain int.  Presence semantics (any value, including "0") and
+`DRIFT_STR_TRACE_FILTER` behavior are preserved; the variable must be
+set before process launch.  Validation, equality, comparison, layout,
+and ABI 22 are byte-unchanged; branch-lean validation, length-first
+equality, and pointer-identity shortcuts were measured and REJECTED;
+SSO/tagged-storage representation work is deferred as an optional
+future project.  Measured on the reduced web carriers, same-host
+interleaved vs certified 0.33.87: request parse 0.53×, route
+matching 0.48× (i.e. ~2× FASTER than the pre-regression certified
+toolchain), clone+drop pair 0.41×, byte-scan improvement preserved.
+Contract teeth pin the exactly-one-lookup init, launch-time
+immutability in both directions, presence semantics, filter-on-slow-
+path-only, and concurrent retain/release refcount exactness.
+`tools/perf/string_hotpath_bench.drift` (allocation-heavy String
+carriers) and `tools/perf/regex_bench.drift` join `just
+perf-protocols` so this carrier class can never be missed again.
+
+## 2026-07-26 (0.33.89: std.regex packed-workspace executor — constant-allocation matching; ABI 22 unchanged)
+
+The NFA executor's per-byte/per-start allocation churn is gone
+(the inner loop is allocation-free; each top-level search still
+performs exactly one workspace allocation).  The
 engine now runs over one function-local packed workspace (a single
 `Array<Int>` partitioned into epoch-mark / two state-list / worklist
 regions): epoch generations replace the O(prog) bitmap clear (with a

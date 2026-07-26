@@ -8,6 +8,10 @@ team as a candidate standard for any Foundation package. Project-agnostic — it
 describes the methodology and the toolchain primitives it rests on (`flocker`,
 `driftc --sanitize`), not any one package's layout.
 
+For the compiler repo's own certification-only gate — the full
+ownership-audit corpus with its reviewed baseline and the approval-file
+promotion process — see [ownership-corpus-gate.md](ownership-corpus-gate.md).
+
 ## Validation notes
 
 This methodology was validated against a reference conversion on the staged

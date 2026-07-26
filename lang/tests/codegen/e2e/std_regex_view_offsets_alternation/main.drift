@@ -27,7 +27,8 @@ pub fn main() nothrow -> Int {
 	var s = "worker,";
 	s = s + "id42,buffer";
 
-	// --- view-relative offsets: view over "id42" region ---
+	// --- view-relative offsets: view over the "id42,buffer" suffix
+	// (bytes 7..18); the match target "id42" sits at view offset 0 ---
 	match regex.compile(&"[a-z]+[0-9]+") {
 		core.Result::Err(e) => { return 10; },
 		core.Result::Ok(re) => {

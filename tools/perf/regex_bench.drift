@@ -1,0 +1,132 @@
+// tools/perf: compact shipped-engine regex timing protocol
+// (regex-engine-allocation-removal RESUME-STATUS §5.2).  Covers the
+// representative small subjects and the wide-alternation shape on the
+// PRODUCTION std.regex engine; the count-exact allocation tooth
+// (lang/tests/driver/test_regex_scratch_counts.py) remains the
+// machine-independent hard gate — this protocol is the read-only
+// timing surface for manual review.  Maintainer-invoked via
+// `just perf-protocols`; NOT part of `just test` or `just certify`.
+module main;
+
+import std.core as core;
+import std.text as text;
+import std.regex as regex;
+import std.time as time;
+import std.console as cons;
+import std.format as fmt;
+
+fn build_subject(target: Int, late_hit: Bool) nothrow -> String {
+	var sb = text.string_builder(target + 32);
+	var len = 0;
+	val tail = 5;
+	var cap = target;
+	if late_hit { cap = target - tail; }
+	while len + 28 <= cap {
+		text.sb_append_string(&mut sb, &"worker,tunnel,socket,buffer,");
+		len = len + 28;
+	}
+	while len < cap {
+		text.sb_append_string(&mut sb, &"x");
+		len = len + 1;
+	}
+	if late_hit {
+		text.sb_append_string(&mut sb, &",id42");
+	}
+	return text.sb_build(&mut sb);
+}
+
+fn find_len_loop(re: &regex.Regex, s: &String, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var k = 0;
+	while k < reps {
+		match regex.find_first(re, s) {
+			Some(m) => { acc = acc + m.end - m.start; },
+			None() => { acc = acc + 0; }
+		}
+		k = k + 1;
+	}
+	return acc;
+}
+
+fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
+	val late_256 = build_subject(256, true);
+	val late_4k = build_subject(4096, true);
+	val nomatch_256 = build_subject(256, false);
+	val nomatch_4k = build_subject(4096, false);
+	val alt_1k = build_subject(1024, false);
+
+	val blocks = 5;
+	var bi = 0;
+	var line = "";
+
+	line = "RESULT rx_late_256_x8000 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = find_len_loop(re1, &late_256, 8000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 32000 { return 50; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT rx_late_4k_x500 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = find_len_loop(re1, &late_4k, 500);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 2000 { return 51; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT rx_nomatch_256_x8000 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = find_len_loop(re1, &nomatch_256, 8000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 52; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT rx_nomatch_4k_x500 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = find_len_loop(re1, &nomatch_4k, 500);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 53; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT rx_alt_1k_x2000 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = find_len_loop(ralt, &alt_1k, 2000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 54; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	match regex.compile(&"[a-z]+[0-9]+") {
+		Err(e) => { return 30; },
+		Ok(re1) => {
+			match regex.compile(&"(ab|ac|ad|ae|af|ag|ah|ai|aj|ak|al|am|an|ao|ap|aq)z") {
+				Err(e2) => { return 31; },
+				Ok(ralt) => {
+					return run_all(&re1, &ralt);
+				}
+			}
+		}
+	}
+}

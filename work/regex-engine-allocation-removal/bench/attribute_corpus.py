@@ -24,25 +24,52 @@ BASELINE = ROOT / "lang" / "tests" / "ownership_corpus" / "reviewed-baseline"
 
 
 def load_fixture_counters(run_dir: Path, names: list[str]) -> dict[str, dict[str, int]]:
+	"""FAIL-CLOSED loader: every fixture must yield EXACTLY ONE
+	well-formed aggregate record; malformed JSON, a missing record, or
+	multiple records reject the run (review blocker 3)."""
 	out = {}
 	for name in names:
 		f = run_dir / "audit" / f"{name}.jsonl"
-		agg: dict[str, int] = {}
-		for line in f.read_text().splitlines():
+		if not f.exists():
+			raise SystemExit(f"ATTRIBUTION FAIL-CLOSED: missing audit file for {name}")
+		aggs = []
+		for lineno, line in enumerate(f.read_text().splitlines(), 1):
 			start = line.find("{")
 			if start < 0:
-				continue
+				raise SystemExit(
+					f"ATTRIBUTION FAIL-CLOSED: {name}:{lineno}: no JSON object on line")
 			try:
 				rec = json.loads(line[start:])
-			except json.JSONDecodeError:
-				continue
-			if rec.get("record") != "aggregate":
-				continue
-			for k, v in rec.items():
-				if k != "record" and isinstance(v, int):
-					agg[k] = agg.get(k, 0) + v
-		out[name] = agg
+			except json.JSONDecodeError as e:
+				raise SystemExit(
+					f"ATTRIBUTION FAIL-CLOSED: {name}:{lineno}: malformed JSON ({e})")
+			if rec.get("record") == "aggregate":
+				aggs.append(rec)
+		if len(aggs) != 1:
+			raise SystemExit(
+				f"ATTRIBUTION FAIL-CLOSED: {name}: expected exactly 1 aggregate "
+				f"record, found {len(aggs)}")
+		out[name] = {k: v for k, v in aggs[0].items()
+		             if k != "record" and isinstance(v, int)}
 	return out
+
+
+# The attribution this script certifies (measured, reviewed): the
+# uniform per-fixture stdlib delta of the regex rewrite, and the new
+# pin fixture's own contribution.
+EXPECTED_MODAL = (("c3_moveout_owned", -3), ("events", -3),
+                  ("site_class:moveout_expansion", -3))
+EXPECTED_NEW_FIXTURE = "std_regex_view_offsets_alternation"
+EXPECTED_NEW_CONTRIB = {
+	"c1_agree": 1100, "c1_path_dependent": 22,
+	"c3_moveout_flag_guarded": 5, "c3_moveout_owned": 2118,
+	"c3_moveout_unreachable_block": 2, "c3_moveout_zero_safe": 15,
+	"events": 3144, "fns": 1254, "pre_post_verdict_drift": 52,
+	"site_class:materialized_lastuse_release": 669,
+	"site_class:moveout_expansion": 2140,
+	"site_class:overwrite_release": 261,
+	"site_class:scope_exit_release": 74,
+}
 
 
 def main(run_dir_s: str, baseline_run_dir_s: str) -> int:
@@ -58,11 +85,18 @@ def main(run_dir_s: str, baseline_run_dir_s: str) -> int:
 	new_agg = json.loads((run_dir / "aggregate.json").read_text())["counters"]
 	new_man = json.loads((run_dir / "manifest.json").read_text())["universe"]
 
-	# sanity: the baseline RUN dir matches the checked-in baseline
+	# fail-closed: the baseline RUN dir must be IDENTICAL to the
+	# checked-in baseline — aggregate AND manifest (universe identity)
 	br_agg = json.loads((base_run / "aggregate.json").read_text())["counters"]
-	assert br_agg == base_agg, "baseline run dir != checked-in baseline aggregate"
+	if br_agg != base_agg:
+		raise SystemExit("ATTRIBUTION FAIL-CLOSED: baseline run dir aggregate "
+		                 "!= checked-in baseline")
+	br_man = json.loads((base_run / "manifest.json").read_text())["universe"]
+	if br_man != base_man:
+		raise SystemExit("ATTRIBUTION FAIL-CLOSED: baseline run dir manifest "
+		                 "!= checked-in baseline manifest")
 
-	print("== universe ==")
+	print("== universe (FAIL-CLOSED expectations — RESUME-STATUS §5.3) ==")
 	b_ok, n_ok = set(base_man["compiled_ok"]), set(new_man["compiled_ok"])
 	b_f, n_f = set(base_man["failed"]), set(new_man["failed"])
 	added_ok = sorted(n_ok - b_ok)
@@ -73,6 +107,29 @@ def main(run_dir_s: str, baseline_run_dir_s: str) -> int:
 	n_hash = {f["name"]: f["sha256"] for f in new_man["fixtures"]}
 	changed = sorted(n for n in b_hash if n in n_hash and b_hash[n] != n_hash[n])
 	print(f"content-hash changes among pre-existing fixtures: {changed}")
+	universe_errs = []
+	if added_ok != [EXPECTED_NEW_FIXTURE]:
+		universe_errs.append(
+			f"additions must be EXACTLY [{EXPECTED_NEW_FIXTURE}], got {added_ok}")
+	if removed_ok:
+		universe_errs.append(f"removals present: {removed_ok}")
+	if b_f != n_f:
+		universe_errs.append(
+			f"failed population changed: +{sorted(n_f-b_f)} -{sorted(b_f-n_f)}")
+	b_exc = sorted((e["name"], e.get("reason", "")) for e in base_man.get("excluded", []))
+	n_exc = sorted((e["name"], e.get("reason", "")) for e in new_man.get("excluded", []))
+	if b_exc != n_exc:
+		universe_errs.append(
+			f"excluded population changed (name+reason): "
+			f"only_base={sorted(set(b_exc)-set(n_exc))} "
+			f"only_new={sorted(set(n_exc)-set(b_exc))}")
+	if changed:
+		universe_errs.append(f"pre-existing fixture hashes changed: {changed}")
+	if universe_errs:
+		for e in universe_errs:
+			print(f"UNIVERSE VIOLATION: {e}")
+		print("\nATTRIBUTION: FAILED (universe fail-closed)")
+		return 1
 
 	shared = sorted(b_ok & n_ok)
 	print(f"\n== per-fixture attribution over {len(shared)} shared compiled fixtures ==")
@@ -99,12 +156,33 @@ def main(run_dir_s: str, baseline_run_dir_s: str) -> int:
 		beyond = {k: v for k, v in beyond.items() if v}
 		missing = {k: -v for k, v in dict(modal).items() if k not in dict(d)}
 		print(f"  {n}: beyond-modal {beyond}  missing-modal {missing}")
+	# FAIL-CLOSED attribution expectations (review blocker 3): the
+	# modal delta must be EXACTLY the reviewed stdlib delta, on EVERY
+	# shared fixture (zero outliers)
+	if modal != EXPECTED_MODAL:
+		raise SystemExit(
+			f"ATTRIBUTION FAIL-CLOSED: modal delta {dict(modal)} != expected "
+			f"{dict(EXPECTED_MODAL)}")
+	if modal_n != len(shared):
+		raise SystemExit(
+			f"ATTRIBUTION FAIL-CLOSED: modal delta on {modal_n}/{len(shared)} "
+			f"fixtures — outliers present")
+	if outliers:
+		raise SystemExit(
+			f"ATTRIBUTION FAIL-CLOSED: {len(outliers)} outlier fixtures: "
+			f"{sorted(outliers)[:5]}...")
 
 	new_fixture_contrib = {}
 	for name in added_ok:
 		cnt = load_fixture_counters(run_dir, [name])[name]
 		new_fixture_contrib[name] = cnt
 		print(f"new fixture {name}: {cnt}")
+	got = {k: v for k, v in new_fixture_contrib.get(EXPECTED_NEW_FIXTURE, {}).items() if v}
+	if got != EXPECTED_NEW_CONTRIB:
+		raise SystemExit(
+			f"ATTRIBUTION FAIL-CLOSED: new-fixture contribution differs from "
+			f"the reviewed expectation:\n  got      {got}\n  expected "
+			f"{EXPECTED_NEW_CONTRIB}")
 
 	print("\n== reconciliation (residual must be ZERO on every counter) ==")
 	residual_ok = True

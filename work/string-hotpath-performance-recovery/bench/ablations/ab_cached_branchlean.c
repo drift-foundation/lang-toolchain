@@ -48,20 +48,13 @@ typedef struct DriftStringCheck {
 /* drift-owned-string-audit: allow read-only-borrow -- s
  * Pure validation prologue: inspects the handle words and the flags
  * word; never touches refcounts or ownership. */
-static DriftStringCheck drift_string_validate(DriftString s) {
-	DriftStringCheck chk;
-	if (s.storage == NULL) {
-		if (s.len != 0) {
-			drift_contract_fail("malformed String handle: nonzero len, NULL storage");
-		}
-		chk.state = DRIFT_STR_TOMBSTONE;
-		chk.flags = 0;
-		return chk;
+__attribute__((noinline, cold)) static void drift_string_validate_fail(DriftString s, uint64_t f) {
+	if (s.storage == NULL && s.len != 0) {
+		drift_contract_fail("malformed String handle: nonzero len, NULL storage");
 	}
 	if (s.len < 0) {
 		drift_contract_fail("malformed String handle: negative len");
 	}
-	uint64_t f = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
 	if (f & DRIFT_RCBYTES_RESERVED_MASK) {
 		drift_contract_fail("String flags: reserved bit set");
 	}
@@ -69,9 +62,34 @@ static DriftStringCheck drift_string_validate(DriftString s) {
 			== (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
 		drift_contract_fail("String flags: STATIC+IMMORTAL");
 	}
-	if ((f & (DRIFT_RCBYTES_NUL_SCANNED | DRIFT_RCBYTES_HAS_INTERIOR_NUL))
-			== DRIFT_RCBYTES_HAS_INTERIOR_NUL) {
-		drift_contract_fail("String flags: HAS_INTERIOR_NUL without NUL_SCANNED");
+	drift_contract_fail("String flags: HAS_INTERIOR_NUL without NUL_SCANNED");
+}
+
+static DriftStringCheck drift_string_validate(DriftString s) {
+	/* ablation: branch-lean, IDENTICAL fail-closed coverage.  One
+	 * relaxed flags load; every legality check — reserved bits,
+	 * STATIC+IMMORTAL exclusion, NUL-cache coherence, negative len —
+	 * folds into ONE combined predicate with a single unlikely branch
+	 * into a cold outlined decoder that re-derives the exact
+	 * diagnostic. */
+	DriftStringCheck chk;
+	if (s.storage == NULL) {
+		if (__builtin_expect(s.len != 0, 0)) {
+			drift_string_validate_fail(s, 0);
+		}
+		chk.state = DRIFT_STR_TOMBSTONE;
+		chk.flags = 0;
+		return chk;
+	}
+	uint64_t f = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
+	uint64_t bad = (uint64_t)(s.len < 0)
+		| (f & DRIFT_RCBYTES_RESERVED_MASK)
+		| (uint64_t)((f & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL))
+			== (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL))
+		| (uint64_t)((f & (DRIFT_RCBYTES_NUL_SCANNED | DRIFT_RCBYTES_HAS_INTERIOR_NUL))
+			== DRIFT_RCBYTES_HAS_INTERIOR_NUL);
+	if (__builtin_expect(bad != 0, 0)) {
+		drift_string_validate_fail(s, f);
 	}
 	chk.state = DRIFT_STR_LIVE;
 	chk.flags = f;
@@ -88,28 +106,23 @@ static unsigned char *drift_string_bytes_mut(DriftString s) {
  * to stderr with: header ptr, refcount transition, len, first 32 bytes
  * of content, thread id, and a 6-frame backtrace.
  *
- * Set DRIFT_STR_TRACE (PRESENCE enables — any value, including "0")
- * BEFORE process launch.  The variable is read EXACTLY ONCE during
- * process initialization (constructor below) and published as
- * immutable state before user threads can exist; setting or unsetting
- * it after launch has NO effect.  This keeps the retain/release hot
- * paths at a single predictable branch on a plain int — the previous
- * per-call getenv was measured at ~18-20 ns per heap retain/release
- * and was the dominant term of the 0.33.88 String hot-path
- * regression (see work/string-hotpath-performance-recovery/).
- *
- * Optional DRIFT_STR_TRACE_FILTER=<substr> narrows to events whose
- * String content contains the substring (case-sensitive prefix match
- * on the first 32 bytes); useful for isolating a specific allocation
- * (e.g. "memcheck-secret") from the broader noise of an app run.
- * The FILTER lookup stays a per-event getenv on the ALREADY-ENABLED
- * slow path only.  Filtering is per-event; the alloc-time trace at
+ * Set DRIFT_STR_TRACE=1 to enable.  Optional DRIFT_STR_TRACE_FILTER=<substr>
+ * narrows to events whose String content contains the substring (case-
+ * sensitive prefix match on the first 32 bytes); useful for isolating
+ * a specific allocation (e.g. "memcheck-secret") from the broader noise
+ * of an app run.  Filtering is per-event; the alloc-time trace at
  * drift_string_alloc / drift_string_from_cstr always fires unfiltered
  * (so you see the original allocation that anchors all later events).
  *
- * Investigation aid; not for production use. */
+ * Zero cost when the env var is unset (one getenv per call, all sites
+ * short-circuit before any formatting).  Investigation aid; not for
+ * production use. */
+/* ablation: launch-time trace cache.  DRIFT_STR_TRACE is read ONCE
+ * during process initialization (before user threads start) and
+ * published as immutable state; setting the variable after launch has
+ * no effect (documented).  DRIFT_STR_TRACE_FILTER remains a per-event
+ * getenv on the already-enabled slow path only. */
 static int drift_str_trace_on;
-
 __attribute__((constructor)) static void drift_str_trace_init(void) {
 	drift_str_trace_on = getenv("DRIFT_STR_TRACE") ? 1 : 0;
 }

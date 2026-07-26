@@ -1,0 +1,411 @@
+// tools/perf: allocation-heavy String protocol (the carrier class the
+// original B5 byte-scan-only gate missed — see
+// work/string-hotpath-performance-recovery/).  Primitive rows isolate
+// String lifecycle costs (construction+final release, clone+drop on
+// heap/static/empty, equality shapes, comparison, concat); carrier
+// rows are the reduced drift-web request-parse and route-match
+// evidence.  Maintainer-invoked via `just perf-protocols`; NOT part
+// of `just test` or `just certify`.  Compiles unchanged under
+// certified toolchains >= 0.33.87 for interleaved A/B use.  RESULT
+// lines: per-block microseconds, 5 blocks per launch.
+//
+// Primitive rows isolate exactly the operations the ABI-22 runtime
+// changed: construction+final release (representative lengths),
+// non-final retain/release (clone+drop) on heap/static/empty,
+// equality shapes (same-handle / equal-independent / unequal-length /
+// unequal-prefix), comparison, concat, substring materialization.
+// Carrier rows are the reduced drift-web evidence: request
+// parse/materialization and path split + route matching.  Control
+// rows: byte scan (must PRESERVE 0.33.88's improvement), Array<Byte>
+// scan (no Strings at all).
+module main;
+
+import std.core as core;
+import std.io as io;
+import std.text as text;
+import std.time as time;
+import std.console as cons;
+import std.format as fmt;
+
+// heap-backed (non-static) copy of a literal
+fn heapify(s: &String) nothrow -> String {
+	var sb = text.string_builder(s.byte_length() + 1);
+	text.sb_append_string(&mut sb, s);
+	return text.sb_build(&mut sb);
+}
+
+fn mat(src: &String, start: Int, len: Int) nothrow -> String {
+	match text.substring(src, start, len) {
+		Ok(s) => { return move s; },
+		Err(e) => { return "X"; }
+	}
+}
+
+// --- primitive blocks (each returns a checksum) ---
+
+fn b_construct_drop(src: &String, start: Int, len: Int, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		val s = mat(src, start, len);
+		acc = acc + s.byte_length();
+		i = i + 1;
+	}
+	return acc;
+}
+
+fn b_clone_drop(s: &String, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		val c = s.clone();
+		acc = acc + c.byte_length();
+		i = i + 1;
+	}
+	return acc;
+}
+
+fn b_eq(a: &String, b: &String, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		if *a == *b { acc = acc + 1; }
+		i = i + 1;
+	}
+	return acc;
+}
+
+fn b_cmp(a: &String, b: &String, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		if *a < *b { acc = acc + 1; }
+		i = i + 1;
+	}
+	return acc;
+}
+
+fn b_concat(a: &String, b: &String, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		val s = a.clone() + b.clone();
+		acc = acc + s.byte_length();
+		i = i + 1;
+	}
+	return acc;
+}
+
+// --- carriers (reduced drift-web evidence; same String-op mix) ---
+
+// request parse/materialization: per iteration, materialize method,
+// path, query key/value, and 3 header name/value tokens via
+// substring (9 Strings constructed+dropped), and match 3 header
+// names by equality (the parse_request idiom).
+fn c_parse(req: &String, reps: Int) nothrow -> Int {
+	val h_host = "Host";
+	val h_accept = "Accept";
+	val h_agent = "User-Agent";
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		val method = mat(req, 0, 3);          // GET
+		val path = mat(req, 4, 7);            // /health
+		val qk = mat(req, 12, 7);             // verbose
+		val qv = mat(req, 20, 1);             // 1
+		val h1 = mat(req, 32, 4);             // Host
+		val v1 = mat(req, 38, 9);             // localhost
+		val h2 = mat(req, 49, 6);             // Accept
+		val v2 = mat(req, 57, 16);            // application/json
+		val h3 = mat(req, 75, 10);            // User-Agent
+		if h1 == h_host { acc = acc + 1; }
+		if h2 == h_accept { acc = acc + 1; }
+		if h3 == h_agent { acc = acc + 1; }
+		acc = acc + method.byte_length() + path.byte_length()
+			+ qk.byte_length() + qv.byte_length() + v1.byte_length()
+			+ v2.byte_length();
+		i = i + 1;
+	}
+	return acc;
+}
+
+// route: split the path and match segments by equality (the
+// split_path + match_route idiom: per iteration one split — which
+// materializes segment Strings — plus one equality per segment and
+// one unequal-length reject).
+fn c_route(reps: Int) nothrow -> Int {
+	val path = heapify(&"/api/v1/health");
+	val seg_api = "api";
+	val seg_v1 = "v1";
+	val seg_health = "health";
+	val seg_other = "healthz";
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		val segs = text.split(&path, &"/");
+		if segs.len == 4 {
+			if segs[1] == seg_api { acc = acc + 1; }
+			if segs[2] == seg_v1 { acc = acc + 1; }
+			if segs[3] == seg_health { acc = acc + 1; }
+			if segs[3] == seg_other { acc = acc - 100; }
+		}
+		i = i + 1;
+	}
+	return acc;
+}
+
+// control: per-byte read scan (0.33.88's improvement must SURVIVE)
+fn c_sba_scan(s: &String, reps: Int) nothrow -> Int {
+	val n = s.byte_length();
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		var j = 0;
+		while j < n {
+			acc = acc + cast<Int>(core.string_byte_at(s, j));
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	return acc;
+}
+
+fn c_byte_scan(raw: &Array<Byte>, reps: Int) nothrow -> Int {
+	var acc = 0;
+	var i = 0;
+	while i < reps {
+		var j = 0;
+		while j < raw.len {
+			acc = acc + cast<Int>(raw[j]);
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	return acc;
+}
+
+pub fn main() nothrow -> Int {
+	val req = heapify(&"GET /health?verbose=1 HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\nUser-Agent: pin/1.0\r\n\r\n");
+	var raw: Array<Byte> = [];
+	var ri = 0;
+	while ri < req.byte_length() {
+		raw.push(core.string_byte_at(&req, ri));
+		ri = ri + 1;
+	}
+
+	val lhs_heap = heapify(&"/health");        // heap 7B
+	val rhs_heap = heapify(&"/health");        // equal, independent
+	val neq_len = heapify(&"/healthz");        // unequal length
+	val neq_pfx = heapify(&"1health");         // same len, first byte differs
+	val long_a = heapify(&"application/json; charset=utf-8; boundary=----driftformboundary7MA4YWxk"); // 71B
+	val long_b = heapify(&"application/json; charset=utf-8; boundary=----driftformboundary7MA4YWxl"); // last byte differs
+	val stat = "/health";                       // static literal
+	val empty = "";
+
+	val blocks = 5;
+	var bi = 0;
+	var line = "";
+
+	// row helper is manual (no closures): each row runs `blocks`
+	// timed blocks and prints one RESULT line.
+
+	line = "RESULT construct_drop_7 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_construct_drop(&req, 4, 7, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 14000000 { return 10; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT construct_drop_16 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_construct_drop(&req, 57, 16, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 32000000 { return 11; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT construct_drop_48 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_construct_drop(&long_a, 0, 48, 1000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 48000000 { return 12; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT clone_drop_heap us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_clone_drop(&lhs_heap, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 14000000 { return 13; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT clone_drop_static us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_clone_drop(&stat, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 14000000 { return 14; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT clone_drop_empty us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_clone_drop(&empty, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 15; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_same_handle us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&lhs_heap, &lhs_heap, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 2000000 { return 16; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_equal_independent us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&lhs_heap, &rhs_heap, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 2000000 { return 17; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_unequal_len us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&lhs_heap, &neq_len, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 18; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_unequal_prefix us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&lhs_heap, &neq_pfx, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 19; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_long_last_byte us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&long_a, &long_b, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 0 { return 20; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT eq_same_handle_long us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_eq(&long_a, &long_a, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 2000000 { return 27; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT cmp_shared_prefix us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_cmp(&lhs_heap, &neq_len, 2000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 2000000 { return 21; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT concat_7_7 us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = b_concat(&lhs_heap, &rhs_heap, 1000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 14000000 { return 22; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT carrier_parse us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = c_parse(&req, 300000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r < 300000 { return 23; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT carrier_route us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = c_route(1000000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r != 3000000 { return 24; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT control_sba_scan us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = c_sba_scan(&req, 200000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r <= 0 { return 25; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	line = "RESULT control_byte_scan us=";
+	bi = 0;
+	while bi < blocks {
+		val t0 = time.now_monotonic();
+		val r = c_byte_scan(&raw, 200000);
+		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		if r <= 0 { return 26; }
+		bi = bi + 1;
+	}
+	cons.println(line);
+
+	return 0;
+}

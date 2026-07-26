@@ -1,0 +1,228 @@
+{
+ "provenance": {
+  "commit": "75a7d53ae1b0c2e5b17351f1ec3c69702b27702a",
+  "tree_dirty": true,
+  "host": "slryzen",
+  "timestamp_utc": "2026-07-26T18:27:37.598774+00:00",
+  "launches": 5,
+  "shuffle_seed": 20260726,
+  "side_orders": [
+   [
+    "worklistB",
+    "assertA",
+    "stock"
+   ],
+   [
+    "stock",
+    "assertA",
+    "worklistB"
+   ],
+   [
+    "assertA",
+    "stock",
+    "worklistB"
+   ],
+   [
+    "assertA",
+    "stock",
+    "worklistB"
+   ],
+   [
+    "stock",
+    "assertA",
+    "worklistB"
+   ]
+  ],
+  "loadavg_samples": [
+   1.05,
+   1.04,
+   1.03,
+   1.03,
+   1.02,
+   1.1
+  ],
+  "env_scrubbed": [
+   "DRIFT_STR_TRACE",
+   "DRIFT_STR_TRACE_FILTER"
+  ],
+  "binaries": {
+   "stock": "bb25d5b6b61bff4dbf4d3f28ab291b72eb70aa864fb9d52f1a57abcba82ad9fc",
+   "assertA": "18573a124800b88a0af6f02b3299f92d397f870995f29eca941bd36db903ec45",
+   "worklistB": "a007723a0d79eed8fc1233d4c18aafe833e9555e4de09378bd50900b0b00b9b2"
+  },
+  "workdir": "/tmp/regex-hotloop-yqok2xxi",
+  "note": "differential (1000 cases) re-proved 0 mismatches per variant during build_side, BEFORE timing"
+ },
+ "rows": {
+  "rx_late_256_x8000": {
+   "launch_medians_us": {
+    "worklistB": [
+     161476,
+     163902,
+     160039,
+     159916,
+     165655
+    ],
+    "assertA": [
+     159581,
+     158689,
+     159671,
+     154112,
+     159380
+    ],
+    "stock": [
+     154033,
+     157637,
+     158428,
+     153983,
+     153843
+    ]
+   },
+   "median_us": {
+    "worklistB": 161476,
+    "assertA": 159380,
+    "stock": 154033
+   },
+   "ratio_vs_stock": {
+    "assertA": 1.0347133406477833,
+    "worklistB": 1.0483208143709466
+   }
+  },
+  "rx_late_4k_x500": {
+   "launch_medians_us": {
+    "worklistB": [
+     131494,
+     129864,
+     127889,
+     130517,
+     130877
+    ],
+    "assertA": [
+     126740,
+     125391,
+     125842,
+     121429,
+     125569
+    ],
+    "stock": [
+     121766,
+     125140,
+     122522,
+     121691,
+     121710
+    ]
+   },
+   "median_us": {
+    "worklistB": 130517,
+    "assertA": 125569,
+    "stock": 121766
+   },
+   "ratio_vs_stock": {
+    "assertA": 1.0312320352150848,
+    "worklistB": 1.0718673521344217
+   }
+  },
+  "rx_nomatch_256_x8000": {
+   "launch_medians_us": {
+    "worklistB": [
+     128496,
+     131864,
+     128207,
+     131710,
+     132507
+    ],
+    "assertA": [
+     128573,
+     125175,
+     125667,
+     121501,
+     125160
+    ],
+    "stock": [
+     121255,
+     124291,
+     125517,
+     121210,
+     122170
+    ]
+   },
+   "median_us": {
+    "worklistB": 131710,
+    "assertA": 125175,
+    "stock": 122170
+   },
+   "ratio_vs_stock": {
+    "assertA": 1.0245968732094621,
+    "worklistB": 1.0780879102889416
+   }
+  },
+  "rx_nomatch_4k_x500": {
+   "launch_medians_us": {
+    "worklistB": [
+     129260,
+     131752,
+     128136,
+     132089,
+     137377
+    ],
+    "assertA": [
+     126058,
+     124766,
+     125404,
+     123836,
+     125068
+    ],
+    "stock": [
+     122453,
+     126214,
+     129875,
+     121053,
+     124667
+    ]
+   },
+   "median_us": {
+    "worklistB": 131752,
+    "assertA": 125068,
+    "stock": 124667
+   },
+   "ratio_vs_stock": {
+    "assertA": 1.0032165689396553,
+    "worklistB": 1.0568313988465272
+   }
+  },
+  "rx_alt_1k_x2000": {
+   "launch_medians_us": {
+    "worklistB": [
+     244644,
+     240394,
+     261803,
+     250357,
+     253596
+    ],
+    "assertA": [
+     251321,
+     248841,
+     267859,
+     264772,
+     256563
+    ],
+    "stock": [
+     265974,
+     255389,
+     266758,
+     258016,
+     270033
+    ]
+   },
+   "median_us": {
+    "worklistB": 250357,
+    "assertA": 256563,
+    "stock": 265974
+   },
+   "ratio_vs_stock": {
+    "assertA": 0.9646168422477385,
+    "worklistB": 0.9412837345003647
+   }
+  }
+ }
+}

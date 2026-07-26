@@ -88,32 +88,17 @@ static unsigned char *drift_string_bytes_mut(DriftString s) {
  * to stderr with: header ptr, refcount transition, len, first 32 bytes
  * of content, thread id, and a 6-frame backtrace.
  *
- * Set DRIFT_STR_TRACE (PRESENCE enables — any value, including "0")
- * BEFORE process launch.  The variable is read EXACTLY ONCE during
- * process initialization (constructor below) and published as
- * immutable state before user threads can exist; setting or unsetting
- * it after launch has NO effect.  This keeps the retain/release hot
- * paths at a single predictable branch on a plain int — the previous
- * per-call getenv was measured at ~18-20 ns per heap retain/release
- * and was the dominant term of the 0.33.88 String hot-path
- * regression (see work/string-hotpath-performance-recovery/).
- *
- * Optional DRIFT_STR_TRACE_FILTER=<substr> narrows to events whose
- * String content contains the substring (case-sensitive prefix match
- * on the first 32 bytes); useful for isolating a specific allocation
- * (e.g. "memcheck-secret") from the broader noise of an app run.
- * The FILTER lookup stays a per-event getenv on the ALREADY-ENABLED
- * slow path only.  Filtering is per-event; the alloc-time trace at
+ * Set DRIFT_STR_TRACE=1 to enable.  Optional DRIFT_STR_TRACE_FILTER=<substr>
+ * narrows to events whose String content contains the substring (case-
+ * sensitive prefix match on the first 32 bytes); useful for isolating
+ * a specific allocation (e.g. "memcheck-secret") from the broader noise
+ * of an app run.  Filtering is per-event; the alloc-time trace at
  * drift_string_alloc / drift_string_from_cstr always fires unfiltered
  * (so you see the original allocation that anchors all later events).
  *
- * Investigation aid; not for production use. */
-static int drift_str_trace_on;
-
-__attribute__((constructor)) static void drift_str_trace_init(void) {
-	drift_str_trace_on = getenv("DRIFT_STR_TRACE") ? 1 : 0;
-}
-
+ * Zero cost when the env var is unset (one getenv per call, all sites
+ * short-circuit before any formatting).  Investigation aid; not for
+ * production use. */
 static void drift_str_trace_event(const char *what, void *hdr,
 		const char *data, long len, uint64_t prev_rc, uint64_t new_rc) {
 	const char *want = getenv("DRIFT_STR_TRACE_FILTER");
@@ -309,7 +294,7 @@ DriftString drift_string_retain(DriftString s) {
 		 * ~2^63 increments before any wrap (>= not >) */
 		drift_contract_fail("String refcount overflow");
 	}
-	if (drift_str_trace_on) {
+	if (getenv("DRIFT_STR_TRACE")) {
 		drift_str_trace_event("retain", s.storage,
 			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev + 1);
 	}
@@ -333,7 +318,7 @@ void drift_string_release(DriftString s) {
 	if (prev == 0) {
 		abort(); /* underflow — unconditional, as B0 */
 	}
-	if (drift_str_trace_on) {
+	if (getenv("DRIFT_STR_TRACE")) {
 		drift_str_trace_event("release", s.storage,
 			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev - 1);
 	}

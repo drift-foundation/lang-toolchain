@@ -210,3 +210,32 @@ restored tree. No stash operation is part of the resume procedure.
 Safe to switch away now. Do not promote the corpus baseline or start
 certification while paused. Preserve this branch or a user-created recovery
 commit so the uncommitted implementation cannot be lost.
+
+---
+
+## CLOSURE ADDENDUM (2026-07-26 — supersedes §5/§6 status language)
+
+This file's restart framing is COMPLETE.  Status now: the §5
+static-review HOLD is CLOSED —
+
+- §5.1: both hot-loop ablations measured in isolated scratch trees
+  (semantic identity re-proved per variant via the 1000-case
+  differential before timing) and REJECTED on evidence, twice: fixed
+  order, then the hardened seeded-shuffle runner
+  (bench/results/hotloop-20260726T182737Z.json).  No production
+  change; rejected ablations recorded.
+- §5.2: tools/perf/regex_bench.drift wired into `just
+  perf-protocols` (trace env scrubbed).
+- §5.3: bench/attribute_corpus.py is fail-closed on universe AND
+  attribution (exact modal, zero outliers, pinned new-fixture
+  contribution, strict record loader, baseline-run manifest
+  identity, name+reason excluded comparison).
+- §5.4: wording corrected in history/announcement/fixture/progress
+  ("constant-allocation matching"; "failed/excluded populations
+  unchanged"; the first-view comment).
+- §5.5/§6: executed as specified — merged conceptually with the
+  String hot-path recovery on branch
+  string-hotpath-performance-recovery; combined corpus run
+  ownership-corpus-combined-20260726-102955-3365314 measured and
+  attributed residual-zero; ONE 0.33.89/ABI-22 certification remains
+  (maintainer-owned: promotion, web gate, run-all-tests.sh).

@@ -117,12 +117,66 @@ perf-protocols:
 			--stdlib-root stdlib tools/perf/stdlib_workload.drift --entry main::main -o "$out/workload.bin" 2>&1 | tail -1
 	done
 	stat -c "workload binary: %s bytes" "$out/workload.bin"
+	# Allocation-heavy String carriers (the class the B5-era
+	# byte-scan-only gate missed) — timing runs with the trace env
+	# scrubbed so a stray DRIFT_STR_TRACE can never contaminate figures.
+	compile_hb "string hotpath bench" env PYTHONPATH=. ./.venv/bin/python -m lang.driftc.driftc --dev --allow-unsafe \
+		--stdlib-root stdlib tools/perf/string_hotpath_bench.drift --entry main::main -o "$out/string_hotpath.bin"
+	echo "== string hotpath bench (3 fresh launches) =="
+	for i in 1 2 3; do echo "-- launch $i"; env -u DRIFT_STR_TRACE -u DRIFT_STR_TRACE_FILTER "$out/string_hotpath.bin"; done
+	# Shipped-engine regex timing surface (RESUME-STATUS §5.2); the
+	# count-exact allocation tooth remains the hard gate.
+	compile_hb "regex bench" env PYTHONPATH=. ./.venv/bin/python -m lang.driftc.driftc --dev --allow-unsafe \
+		--stdlib-root stdlib tools/perf/regex_bench.drift --entry main::main -o "$out/regex.bin"
+	echo "== regex bench (3 fresh launches; trace env scrubbed — regex uses Strings too) =="
+	for i in 1 2 3; do echo "-- launch $i"; env -u DRIFT_STR_TRACE -u DRIFT_STR_TRACE_FILTER "$out/regex.bin"; done
 	echo "perf-protocols: outputs in $out"
+
+# ── Ownership CORPUS baseline PROMOTION (reviewed, manual) ───────────
+# Materializes an ALREADY-APPROVED promotion via
+# tools/drift_corpus_promote.py: dry-run by default (pass
+# FLAGS="--apply" to write); requires a reviewed approval file pinning
+# predecessor+candidate artifact hashes, the exact universe change,
+# and the exact counter deltas; fails closed on any divergence; writes
+# ONLY the four reviewed-baseline files; ends with an exact zero-delta
+# comparison.  NEVER invoked by `just test`, `just certify`, or
+# run-all-tests.sh — the tool materializes approval, it cannot grant it.
+ownership-corpus-promote RUN_DIR APPROVAL *FLAGS:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
+		"{{RUN_DIR}}" "{{APPROVAL}}" {{FLAGS}}
+	# Focused promotion teeth run AUTOMATICALLY after every successful
+	# dry run or apply — never a separately remembered step.  The
+	# broader tools lane stays covered by `just test`/run-all-tests.sh.
+	echo "ownership-corpus-promote: running focused promotion teeth"
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+		lang/tests/tools/test_ownership_corpus_promote.py -q
+	echo "ownership-corpus-promote: running live-baseline sanity"
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+		"lang/tests/tools/test_ownership_corpus_check.py::test_reviewed_baseline_matches_approved_promotion" -q
+
+# Promotion-record generation: builds a durable, self-contained record
+# (predecessor/ + candidate/ artifact copies, COMPACT per-fixture
+# counter extractions, and a facts-only pending approval draft with
+# machine-computed attribution) from the retained candidate and
+# predecessor runs.  The reviewer supplies judgment (verifies
+# attribution_facts, writes baseline_md, sets identity/date/status)
+# before promotion; the raw build/tmp runs need not be preserved after
+# the record is generated and verified.
+ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
+		"{{CAND_RUN}}" "{{RECORD_DIR}}" --draft --predecessor-run "{{PRED_RUN}}"
+	echo "ownership-corpus-promotion-draft: running focused promotion teeth"
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
+		lang/tests/tools/test_ownership_corpus_promote.py -q
 
 # ── Ownership CORPUS certification gate ──────────────────────────────
 # DISTINCT from `ownership-matrix-check` above: the matrix is the 51
 # curated generated ownership-transfer fixtures (generator-freshness
-# guard, runs inside `just test`); THIS is the full 924-fixture
+# guard, runs inside `just test`); THIS is the full-corpus
 # compile-audit corpus compared EXACTLY (identical universe, every
 # counter delta +0, hard gates zero — --require-zero-delta fails closed
 # on any divergence) against the checked-in reviewed baseline

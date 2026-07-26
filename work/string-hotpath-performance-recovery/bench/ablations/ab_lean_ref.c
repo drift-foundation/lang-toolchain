@@ -88,32 +88,17 @@ static unsigned char *drift_string_bytes_mut(DriftString s) {
  * to stderr with: header ptr, refcount transition, len, first 32 bytes
  * of content, thread id, and a 6-frame backtrace.
  *
- * Set DRIFT_STR_TRACE (PRESENCE enables — any value, including "0")
- * BEFORE process launch.  The variable is read EXACTLY ONCE during
- * process initialization (constructor below) and published as
- * immutable state before user threads can exist; setting or unsetting
- * it after launch has NO effect.  This keeps the retain/release hot
- * paths at a single predictable branch on a plain int — the previous
- * per-call getenv was measured at ~18-20 ns per heap retain/release
- * and was the dominant term of the 0.33.88 String hot-path
- * regression (see work/string-hotpath-performance-recovery/).
- *
- * Optional DRIFT_STR_TRACE_FILTER=<substr> narrows to events whose
- * String content contains the substring (case-sensitive prefix match
- * on the first 32 bytes); useful for isolating a specific allocation
- * (e.g. "memcheck-secret") from the broader noise of an app run.
- * The FILTER lookup stays a per-event getenv on the ALREADY-ENABLED
- * slow path only.  Filtering is per-event; the alloc-time trace at
+ * Set DRIFT_STR_TRACE=1 to enable.  Optional DRIFT_STR_TRACE_FILTER=<substr>
+ * narrows to events whose String content contains the substring (case-
+ * sensitive prefix match on the first 32 bytes); useful for isolating
+ * a specific allocation (e.g. "memcheck-secret") from the broader noise
+ * of an app run.  Filtering is per-event; the alloc-time trace at
  * drift_string_alloc / drift_string_from_cstr always fires unfiltered
  * (so you see the original allocation that anchors all later events).
  *
- * Investigation aid; not for production use. */
-static int drift_str_trace_on;
-
-__attribute__((constructor)) static void drift_str_trace_init(void) {
-	drift_str_trace_on = getenv("DRIFT_STR_TRACE") ? 1 : 0;
-}
-
+ * Zero cost when the env var is unset (one getenv per call, all sites
+ * short-circuit before any formatting).  Investigation aid; not for
+ * production use. */
 static void drift_str_trace_event(const char *what, void *hdr,
 		const char *data, long len, uint64_t prev_rc, uint64_t new_rc) {
 	const char *want = getenv("DRIFT_STR_TRACE_FILTER");
@@ -265,13 +250,8 @@ DriftString drift_string_literal(const char *data, drift_isize len) {
  * emits explicit `drift_string_release(a); drift_string_release(b);`
  * after the concat call to drop the input stakes. */
 DriftString drift_string_concat(DriftString a, DriftString b) {
-	DriftStringCheck ca = drift_string_validate(a);
-	DriftStringCheck cb = drift_string_validate(b);
-	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
-		drift_contract_fail("String tombstone observed (concat)");
-	}
+	/* lean_ref: no per-operand validation */
 	if (b.len > DRIFT_STRING_MAX_LEN - a.len) {
-		/* subtraction form cannot wrap: a.len <= MAX_LEN is invariant */
 		drift_contract_fail("String concat overflow");
 	}
 	drift_isize total = a.len + b.len;
@@ -281,10 +261,10 @@ DriftString drift_string_concat(DriftString a, DriftString b) {
 	DriftRcBytes *blk = drift_string_alloc_block(total);
 	unsigned char *out = (unsigned char *)(blk + 1);
 	if (a.len > 0) {
-		memcpy(out, drift_string_bytes_mut(a), (size_t)a.len);
+		memcpy(out, (const char *)(a.storage + 1), (size_t)a.len);
 	}
 	if (b.len > 0) {
-		memcpy(out + a.len, drift_string_bytes_mut(b), (size_t)b.len);
+		memcpy(out + a.len, (const char *)(b.storage + 1), (size_t)b.len);
 	}
 	DriftString s = {total, blk};
 	return s;
@@ -296,23 +276,15 @@ DriftString drift_string_concat(DriftString a, DriftString b) {
  * for the returned value.  Tombstone retain FAILS CLOSED (§2.4 —
  * subject to the armed-trap reachability gate). */
 DriftString drift_string_retain(DriftString s) {
-	DriftStringCheck chk = drift_string_validate(s);
-	if (chk.state == DRIFT_STR_TOMBSTONE) {
-		drift_contract_fail("retain of String tombstone");
-	}
-	if (chk.flags & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
+	/* lean_ref: ABI-21-shaped */
+	if (s.storage == NULL) {
 		return s;
 	}
-	uint64_t prev = atomic_fetch_add_explicit(&s.storage->strong, 1, memory_order_relaxed);
-	if (prev >= DRIFT_RC_MAX_LIVE) {
-		/* unconditional fail-closed, normal AND NDEBUG builds; fires
-		 * ~2^63 increments before any wrap (>= not >) */
-		drift_contract_fail("String refcount overflow");
+	uint64_t f = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
+	if (f & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
+		return s;
 	}
-	if (drift_str_trace_on) {
-		drift_str_trace_event("retain", s.storage,
-			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev + 1);
-	}
+	atomic_fetch_add_explicit(&s.storage->strong, 1, memory_order_relaxed);
 	return s;
 }
 
@@ -322,20 +294,17 @@ DriftString drift_string_retain(DriftString s) {
  * drop-only NO-OP (zero-storage drop safety); malformed handles fail
  * closed even here. */
 void drift_string_release(DriftString s) {
-	DriftStringCheck chk = drift_string_validate(s);
-	if (chk.state == DRIFT_STR_TOMBSTONE) {
+	/* lean_ref: ABI-21-shaped */
+	if (s.storage == NULL) {
 		return;
 	}
-	if (chk.flags & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
+	uint64_t f = atomic_load_explicit(&s.storage->flags, memory_order_relaxed);
+	if (f & (DRIFT_RCBYTES_STATIC | DRIFT_RCBYTES_IMMORTAL)) {
 		return;
 	}
 	uint64_t prev = atomic_fetch_sub_explicit(&s.storage->strong, 1, memory_order_release);
 	if (prev == 0) {
-		abort(); /* underflow — unconditional, as B0 */
-	}
-	if (drift_str_trace_on) {
-		drift_str_trace_event("release", s.storage,
-			(const char *)drift_string_bytes_mut(s), (long)s.len, prev, prev - 1);
+		abort();
 	}
 	if (prev == 1) {
 		atomic_thread_fence(memory_order_acquire);
@@ -374,48 +343,34 @@ char *drift_string_to_cstr(DriftString s) {
 /* drift-owned-string-audit: allow read-only-borrow -- a, b
  * Pure read: compares bytes; does not touch refcounts. */
 int drift_string_eq(DriftString a, DriftString b) {
-	DriftStringCheck ca = drift_string_validate(a);
-	DriftStringCheck cb = drift_string_validate(b);
-	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
-		drift_contract_fail("String tombstone observed (eq)");
-	}
+	/* lean_ref: ABI-21-shaped */
 	if (a.len != b.len) {
 		return 0;
 	}
 	if (a.len == 0) {
 		return 1;
 	}
-	return memcmp(drift_string_bytes_mut(a), drift_string_bytes_mut(b), (size_t)a.len) == 0;
+	if (a.storage == NULL || b.storage == NULL) {
+		return 0;
+	}
+	return memcmp((const char *)(a.storage + 1), (const char *)(b.storage + 1), (size_t)a.len) == 0;
 }
 
 /* drift-owned-string-audit: allow read-only-borrow -- a, b
  * Pure read: byte-lex compare; does not touch refcounts. */
 int drift_string_cmp(DriftString a, DriftString b) {
-	DriftStringCheck ca = drift_string_validate(a);
-	DriftStringCheck cb = drift_string_validate(b);
-	if (ca.state == DRIFT_STR_TOMBSTONE || cb.state == DRIFT_STR_TOMBSTONE) {
-		drift_contract_fail("String tombstone observed (cmp)");
-	}
+	/* lean_ref: ABI-21-shaped */
 	const size_t a_len = (size_t)a.len;
 	const size_t b_len = (size_t)b.len;
 	const size_t min_len = a_len < b_len ? a_len : b_len;
-
 	if (min_len > 0) {
-		// memcmp uses unsigned byte ordering; this matches our spec for
-		// `String` comparison operators.
-		const int cmp = memcmp(drift_string_bytes_mut(a), drift_string_bytes_mut(b), min_len);
+		const int cmp = memcmp((const char *)(a.storage + 1), (const char *)(b.storage + 1), min_len);
 		if (cmp != 0) {
 			return cmp;
 		}
 	}
-
-	// Shared prefix is equal; shorter string sorts first.
-	if (a_len < b_len) {
-		return -1;
-	}
-	if (a_len > b_len) {
-		return 1;
-	}
+	if (a_len < b_len) return -1;
+	if (a_len > b_len) return 1;
 	return 0;
 }
 

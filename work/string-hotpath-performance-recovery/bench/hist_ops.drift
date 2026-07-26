@@ -1,0 +1,72 @@
+// counts+histogram ops: the two carriers at x1000, exported for the
+// wrap driver (hist_driver.c).
+module main;
+
+import std.core as core;
+import std.io as io;
+import std.text as text;
+
+fn heapify(s: &String) nothrow -> String {
+	var sb = text.string_builder(s.byte_length() + 1);
+	text.sb_append_string(&mut sb, s);
+	return text.sb_build(&mut sb);
+}
+
+fn mat(src: &String, start: Int, len: Int) nothrow -> String {
+	match text.substring(src, start, len) {
+		Ok(s) => { return move s; },
+		Err(e) => { return "X"; }
+	}
+}
+
+pub fn op_parse_once(dummy: Int) nothrow -> Int {
+	val req = heapify(&"GET /health?verbose=1 HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\nUser-Agent: pin/1.0\r\n\r\n");
+	val h_host = "Host";
+	val h_accept = "Accept";
+	val h_agent = "User-Agent";
+	var acc = 0;
+	var i = 0;
+	while i < 1000 {
+		val method = mat(&req, 0, 3);
+		val path = mat(&req, 4, 7);
+		val qk = mat(&req, 12, 7);
+		val qv = mat(&req, 20, 1);
+		val h1 = mat(&req, 32, 4);
+		val v1 = mat(&req, 38, 9);
+		val h2 = mat(&req, 49, 6);
+		val v2 = mat(&req, 57, 16);
+		val h3 = mat(&req, 75, 10);
+		if h1 == h_host { acc = acc + 1; }
+		if h2 == h_accept { acc = acc + 1; }
+		if h3 == h_agent { acc = acc + 1; }
+		acc = acc + method.byte_length() + path.byte_length()
+			+ qk.byte_length() + qv.byte_length() + v1.byte_length()
+			+ v2.byte_length();
+		i = i + 1;
+	}
+	return acc;
+}
+
+pub fn op_route_once(dummy: Int) nothrow -> Int {
+	val path = heapify(&"/api/v1/health");
+	val seg_api = "api";
+	val seg_v1 = "v1";
+	val seg_health = "health";
+	var acc = 0;
+	var i = 0;
+	while i < 1000 {
+		val segs = text.split(&path, &"/");
+		if segs.len == 4 {
+			if segs[1] == seg_api { acc = acc + 1; }
+			if segs[2] == seg_v1 { acc = acc + 1; }
+			if segs[3] == seg_health { acc = acc + 1; }
+		}
+		i = i + 1;
+	}
+	return acc;
+}
+
+pub fn main() nothrow -> Int {
+	if op_parse_once(0) < 1000 { return 1; }
+	return 0;
+}

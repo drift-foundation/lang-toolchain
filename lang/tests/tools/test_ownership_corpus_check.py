@@ -4,7 +4,7 @@
 --baseline <checked-in> --require-zero-delta`).
 
 The 51-fixture ownership MATRIX (`just ownership-matrix-check`, part of
-`just test`) and the 924-fixture ownership CORPUS (this gate, run
+`just test`) and the full ownership-audit CORPUS (this gate, run
 exactly once from `just certify`) are DISTINCT certification gates —
 see lang/tests/ownership_corpus/reviewed-baseline/BASELINE.md.
 
@@ -145,7 +145,17 @@ def test_zero_delta_requires_baseline_flagging() -> None:
 # ── Checked-in baseline sanity + wiring pins ─────────────────────────
 
 
-def test_reviewed_baseline_is_complete_and_clean() -> None:
+def test_reviewed_baseline_matches_approved_promotion() -> None:
+	"""Durable-record sanity (replaces the stale 924 hardcode): the
+	live baseline must be exactly the candidate of ONE approved
+	promotion record, with the approval's universe expectations
+	matching the manifest, hard gates zero, and the FULL approval
+	hash recorded in BASELINE.md."""
+	import hashlib
+
+	def sha(path: Path) -> str:
+		return hashlib.sha256(path.read_bytes()).hexdigest()
+
 	agg = json.loads((BASELINE / "aggregate.json").read_text())
 	man = json.loads((BASELINE / "manifest.json").read_text())
 	assert isinstance(agg["counters"], dict) and agg["counters"], "counters present"
@@ -154,14 +164,53 @@ def test_reviewed_baseline_is_complete_and_clean() -> None:
 	)
 	uni = man["universe"]
 	assert uni["inclusion_rule"], "verbatim inclusion rule recorded"
-	assert len(uni["compiled_ok"]) == 924, "the reviewed 924-fixture universe"
 	assert (BASELINE / "metadata.json").is_file(), "provenance metadata checked in"
+
+	promotions = ROOT / "lang" / "tests" / "ownership_corpus" / "promotions"
+	assert promotions.is_dir(), "durable promotion records directory missing"
+	live = {n: sha(BASELINE / n)
+	        for n in ("aggregate.json", "manifest.json", "metadata.json")}
+	matches = []
+	for record in sorted(promotions.iterdir()):
+		cand = record / "candidate"
+		if not cand.is_dir():
+			continue
+		if all((cand / n).is_file() and sha(cand / n) == live[n]
+		       for n in live):
+			matches.append(record)
+	assert len(matches) == 1, (
+		f"the live baseline must match EXACTLY ONE promotion record's "
+		f"candidate; matched: {[r.name for r in matches]}"
+	)
+	record = matches[0]
+
+	approval_path = record / "approval.json"
+	assert approval_path.is_file(), (
+		f"promotion record {record.name} lacks a finalized approval.json"
+	)
+	app = json.loads(approval_path.read_text())
+	assert app.get("status") == "approved", "approval must be approved"
+	assert app.get("approved_by") and not any(
+		m in app["approved_by"].upper()
+		for m in ("PENDING", "DRAFT", "TODO", "PLACEHOLDER", "REVIEW")), (
+		"approval must carry a real reviewer identity"
+	)
+
+	exp = app["expected_universe"]
+	assert len(uni["compiled_ok"]) == exp["compiled_count"], (
+		f"manifest compiled count {len(uni['compiled_ok'])} != approved "
+		f"{exp['compiled_count']}"
+	)
+	assert len(uni["failed"]) == exp["failed_count"]
+	assert len(uni["excluded"]) == exp["excluded_count"]
+
 	readme = (BASELINE / "BASELINE.md").read_text()
-	for needle in ("0.33.88", "ABI 22", "b2caeb44",          # promoted baseline
-	               "0.33.87", "ABI 21", "3d48b7f0",          # historical predecessor
-	               "drift_corpus_audit.py",
-	               "Generation command", "NEVER regenerates"):
-		assert needle in readme, f"BASELINE.md must record provenance: {needle!r}"
+	assert sha(approval_path) in readme, (
+		"BASELINE.md must record the FULL sha256 of the governing approval"
+	)
+	flat = " ".join(readme.split())  # line wrapping must not hide policy
+	for needle in ("drift_corpus_promote.py", "NEVER regenerates"):
+		assert needle in flat, f"BASELINE.md must state policy: {needle!r}"
 
 
 def test_justfile_wiring_corpus_once_in_certify_never_in_test() -> None:

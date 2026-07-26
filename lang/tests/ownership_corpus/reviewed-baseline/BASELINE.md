@@ -1,97 +1,49 @@
 # Reviewed ownership-corpus baseline
 
-The checked-in reference for `just ownership-corpus-check` (the
-924-fixture ownership-audit corpus certification gate).
+The checked-in reference for `just ownership-corpus-check` (the 925-fixture ownership-audit corpus certification gate) — the COMBINED 0.33.89/ABI-22 candidate: std.regex packed-workspace executor + String hot-path recovery.
 
 ## Provenance
 
 | field | value |
 |---|---|
-| origin run | corpus measurement run, retained run dir `build/tmp/ownership-corpus-20260725-070420-2045579`; promoted from the RETAINED artifacts without a rerun |
-| toolchain | driftc **0.33.88**, runtime **ABI 22** (string-view-performance candidate — the commit accompanying this promotion) |
-| corpus tool | `tools/drift_corpus_audit.py` v1.7.1 |
-| run date | 2026-07-25T13:04:20Z (started_unix 1784984660) |
-| universe | 924 compiled / 1268 discovered (344 compile-failed partition, 49 rule-excluded), 14 counters, all hard gates 0 |
+| origin run | retained run dir `lang/tests/ownership_corpus/promotions/0.33.89-combined/candidate`; promoted from the RETAINED artifacts without a rerun |
+| driftc / ABI | **0.33.89** / **ABI 22** |
+| corpus tool | v1.7.1 |
+| run started_unix | 1785083395.9722407 |
+| universe | 925 compiled / 1269 discovered (344 compile-failed, 49 rule-excluded) |
+| promotion | drift_corpus_promote.py under approval `approval.json` (sha256 d251720d2ff530685620cb53bf8f941f4fb3be691bd7026816b70f7aa54d0b4c), approved by sl@pushcoin.com on 2026-07-26 |
 
-Checked-in artifacts: `aggregate.json` (counters), `manifest.json`
-(universe identity: verbatim inclusion rule, per-fixture
-whole-directory content hashes, compile partition), and
-`metadata.json` (the origin run's volatile context — jobs, duration,
-python — kept as provenance RECORD only).  Only aggregate + manifest
-participate in comparison.
+## Predecessor
 
-## Promotion record (2026-07-25)
+The 2026-07-25 string-view-performance promotion (driftc 0.33.88 / ABI 22; run ownership-corpus-20260725-070420-2045579), itself over the 2026-07-24 promotion and the certified 0.33.87 baseline at 3d48b7f0.
 
-Predecessor baseline: the 2026-07-24 promotion (driftc 0.33.88 /
-ABI 22 at commit `b2caeb44`, itself promoted over the certified
-**0.33.87** / **ABI 21** baseline at commit `3d48b7f0`).  The
-maintainer explicitly reviewed and approved promotion of EXACTLY this
-run — verified byte-exact against the attribution report before
-copying:
+## Approved deltas and attribution
 
-* UNIVERSE: partition IDENTICAL (924/344/49); hash delta = exactly
-  the 4 fixtures intentionally migrated to the Result byte-access
-  API (`iterator_op_id_mapping`,
-  `pub_error_manual_diagnostic_redaction`,
-  `pub_error_manual_diagnostic_string_field`,
-  `string_byte_at_method`); no fixtures added or removed.
-* COUNTERS (vs the predecessor): fns +32,340; events +20,356;
-  c1_agree +18,485; c3_moveout_owned +19,431;
-  site_class:moveout_expansion +19,431;
-  site_class:overwrite_release +924;
-  site_class:materialized_lastuse_release +1; every other counter +0;
-  all hard gates zero.
-* PER-FIXTURE ATTRIBUTION (residual zero): 923/924 fixtures carry
-  the IDENTICAL modal delta {fns +35, events +22, c1_agree +20,
-  c3_moveout_owned +21, moveout_expansion +21, overwrite_release +1}
-  — the uniform stdlib contribution of the string-view-performance
-  phase (std.text +24 fns, std.regex +6, std.json +3, std.parse +2,
-  std.source +1, std.core −1 = exactly +35).  The single outlier is
-  `string_byte_at_method` (its body became four Result matches):
-  beyond-modal {events +28, moveout +27, c1_agree +5,
-  materialized_lastuse_release +1}.  Per-fixture sums reconcile to
-  the totals on EVERY counter.
+Counter deltas vs the predecessor (exact, per the approval):
 
-## Generation command
+* `c1_agree`: +1100
+* `c1_path_dependent`: +22
+* `c3_moveout_flag_guarded`: +5
+* `c3_moveout_owned`: -654
+* `c3_moveout_unreachable_block`: +2
+* `c3_moveout_zero_safe`: +15
+* `events`: +372
+* `fns`: +1254
+* `pre_post_verdict_drift`: +52
+* `site_class:materialized_lastuse_release`: +669
+* `site_class:moveout_expansion`: -632
+* `site_class:overwrite_release`: +261
+* `site_class:scope_exit_release`: +74
 
-The underlying run was produced by the standard recipe on the
-reviewed string-view-performance tree — promotion copied the retained
-artifacts; the corpus was NOT rerun for the promotion:
-
-```
-just ownership-corpus-check
-# → tools/drift_corpus_audit.py --out build/tmp/ownership-corpus-<ts> -j16 \
-#       --baseline lang/tests/ownership_corpus/reviewed-baseline \
-#       --require-zero-delta
-```
-
-then copying `aggregate.json`, `manifest.json`, `metadata.json` here.
+Machine attribution_facts in this approval, re-proven from the record's fixture-counters on every run: ALL 924 shared fixtures carry the IDENTICAL modal delta {events -3, c3_moveout_owned -3, site_class:moveout_expansion -3} — the uniform stdlib contribution of the regex packed-workspace rewrite — with ZERO outliers; the remaining deltas are the new pin fixture std_regex_view_offsets_alternation's own contribution.  Residual zero on every counter; hard gates zero.  The String hot-path runtime recovery (launch-time trace cache, C-runtime-only) contributes ZERO ownership delta.
 
 ## Update policy
 
-This baseline changes ONLY through an explicit, REVIEWED commit that
-intentionally accepts a new corpus state (universe change from fixture
-edits, or a reviewed counter change).  Certification NEVER regenerates
-or re-blesses it automatically — a broken candidate must not be able
-to approve itself; baseline drift must be visible in the diff.
-Refresh by copying `aggregate.json` + `manifest.json` +
-`metadata.json` from the accepted run's `--out` directory and updating
-the provenance table AND generation command above — version, ABI,
-commit, tool version, date — in the same commit.  Never point the
-recipe at an ephemeral `build/tmp/...` directory.
-
-## Relationship to the ownership MATRIX
-
-Two DISTINCT certification gates share the "ownership" name:
-
-* **`just ownership-matrix-check`** — the 51 curated, GENERATED
-  ownership-transfer matrix fixtures (`__ownership_matrix__/_gen.py`
-  freshness guard).  Runs inside `just test` (so twice under
-  run-all-tests.sh, once per sanitizer mode).
-* **`just ownership-corpus-check`** — THIS gate: the full 924-fixture
-  compile-audit corpus with exact-equality counter comparison against
-  this baseline.  Runs EXACTLY ONCE per entrypoint — from the
-  independent `just certify` workflow, and as the first step of the
-  maintainer's private pre-handoff runner (run-all-tests.sh) — and NEVER
-  from `just test` (which run-all-tests.sh executes twice).  `certify`
-  never invokes run-all-tests.sh.
+This baseline changes ONLY through `tools/drift_corpus_promote.py`
+under a reviewed approval file — dry-run by default, `--apply`
+required, artifact hashes pinned on both sides, exact universe and
+counter-delta expectations enforced, hard gates zero, and a
+post-write exact zero-delta comparison.  Certification NEVER
+regenerates or re-blesses it; the promote tool is never invoked by
+`just test`, `just certify`, or run-all-tests.sh.  Process
+documentation: doc/ownership-corpus-gate.md.

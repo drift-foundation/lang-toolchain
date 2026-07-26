@@ -205,7 +205,7 @@ implementation after blockers, no further arm-selection review.
       lang/versions.py 0.33.88 -> 0.33.89 (ABI 22 unchanged).
 - [x] Corpus measured (build/tmp/ownership-corpus-regex-20260726-
       082739-3276579, retained): 925/1269 compiled (344 failed / 49
-      excluded — partition unchanged, +1 discovered = the new pin
+      excluded — failed/excluded populations unchanged, +1 discovered = the new pin
       fixture).  ATTRIBUTION RESIDUAL ZERO (bench/attribute_corpus.py
       vs the retained promoted-baseline run): universe exactly +1
       fixture, zero pre-existing hash changes; ALL 924 shared
@@ -238,3 +238,61 @@ hot-loop ablation, a durable regex perf-protocol surface, fail-closed corpus
 attribution, wording corrections, and combined release sequencing with the
 pending pure-String hot-path recovery.  The existing retained corpus run is
 valid only if no production success-path amendment is accepted.
+
+## 2026-07-26 — HOLD closure round (combined 0.33.89 candidate)
+
+- [x] §5.1 hot-loop ablations MEASURED in isolated scratch stdlib
+      trees (bench/hotloop_ablations.py; each variant re-proved
+      semantically identical via the 1000-case differential BEFORE
+      timing):
+      * A (workspace assert per-search instead of per-start):
+        0.997-1.010 on small subjects, 0.960 on wide-alt only —
+        not material/repeatable => REJECTED, recorded.
+      * B (shared worklist drained once per byte): 1.016-1.039 on
+        small subjects (WORSE), 0.940 on wide-alt — mixed, mostly
+        worse => REJECTED, recorded.
+      NO production change; the engine stays as reviewed.
+- [x] §5.2 durable regex perf protocol: tools/perf/regex_bench.drift
+      (256 B + 4 KiB late/no-match + wide-alt on the shipped engine)
+      wired into `just perf-protocols`; count-exact tooth remains the
+      hard gate.
+- [x] §5.3 attribute_corpus.py hardened FAIL-CLOSED: exact-addition
+      check (only std_regex_view_offsets_alternation), no removals,
+      failed AND excluded populations unchanged, zero pre-existing
+      hash changes — any violation exits 1 before counter analysis.
+- [x] §5.4 wording: history + announcement now say
+      "constant-allocation matching (allocation-free inner loop)";
+      "failed/excluded populations unchanged" replaces "partition
+      unchanged"; fixture first-view comment corrected (the view
+      covers the whole "id42,buffer" suffix; match target at view
+      offset 0).
+- [!] The fixture comment fix changes that fixture's content hash =>
+      the retained corpus run 082739 is INVALID for promotion; a
+      fresh combined-candidate corpus run is in flight (String
+      runtime C change cannot affect audit counters; expected
+      attribution identical to the retained run's).
+- [x] §5.1 rerun with the HARDENED runner (seeded shuffled order,
+      trace env scrubbed, exact row/side validation, per-launch
+      results + provenance preserved:
+      bench/results/hotloop-20260726T182737Z.json; post-String-fix
+      tree, noted in provenance): rejection CONFIRMED — A/stock
+      1.003-1.035 small / 0.965 alt; B/stock 1.048-1.078 small /
+      0.941 alt.  Both variants remain rejected; no production
+      change; the combined corpus run stays valid.
+
+## 2026-07-26 — CLOSED (combined 0.33.89 candidate)
+
+The static-review HOLD is CLOSED: §5.1 both ablations rejected on
+evidence (twice; hardened shuffled-order artifact
+bench/results/hotloop-20260726T182737Z.json), §5.2 durable protocol
+in tools/perf + perf-protocols (trace env scrubbed), §5.3
+attribution fail-closed (strict loader, manifest identity, exact
+modal/zero outliers/pinned new-fixture contribution), §5.4 wording
+aligned everywhere.  The earlier "[!] fresh corpus run in flight"
+entry is SUPERSEDED: the combined-candidate run
+ownership-corpus-combined-20260726-102955-3365314 completed and
+attributed RESIDUAL ZERO under the hardened script.  This branch's
+work ships inside the combined 0.33.89/ABI-22 candidate with the
+String hot-path recovery (work/string-hotpath-performance-recovery/,
+also CLOSED); remaining steps are maintainer-owned: baseline
+promotion, drift-web gate, run-all-tests.sh, ONE certification.

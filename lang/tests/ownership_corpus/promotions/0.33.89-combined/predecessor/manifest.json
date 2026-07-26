@@ -1,7 +1,7 @@
 {
   "environment": {
     "abi": "22",
-    "driftc_version": "0.33.89",
+    "driftc_version": "0.33.88",
     "tool_version": "1.7.1"
   },
   "universe": {
@@ -745,7 +745,6 @@
       "std_regex_replace",
       "std_regex_stress_adversarial",
       "std_regex_stress_compile_growth",
-      "std_regex_view_offsets_alternation",
       "std_regex_zero_length_progress",
       "std_runtime_global_registry_arc_payload",
       "std_runtime_global_registry_basic",
@@ -5608,10 +5607,6 @@
       {
         "name": "std_regex_stress_compile_growth",
         "sha256": "644bf1e438c2da39a5247b663e96d537e70bf12294767c5b9c725a426bffcc52"
-      },
-      {
-        "name": "std_regex_view_offsets_alternation",
-        "sha256": "06a3c3ac51598d079093bc41485a295cabcf1f653d9f0c84627a02072a5290f0"
       },
       {
         "name": "std_regex_zero_length_progress",
