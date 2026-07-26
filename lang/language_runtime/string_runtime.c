@@ -96,7 +96,8 @@ static unsigned char *drift_string_bytes_mut(DriftString s) {
  * paths at a single predictable branch on a plain int — the previous
  * per-call getenv was measured at ~18-20 ns per heap retain/release
  * and was the dominant term of the 0.33.88 String hot-path
- * regression (see work/string-hotpath-performance-recovery/).
+ * regression (0.33.89 recovery; see doc/history.md and the trace
+ * contract teeth in lang/tests/driver/test_string_trace_cache.py).
  *
  * Optional DRIFT_STR_TRACE_FILTER=<substr> narrows to events whose
  * String content contains the substring (case-sensitive prefix match

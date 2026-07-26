@@ -122,8 +122,12 @@ def main():
 	launches = int(os.environ.get("STRING_BENCH_LAUNCHES", "5"))
 	seed = int(os.environ.get("STRING_BENCH_SEED", "20260726"))
 	workdir = os.environ.get("STRING_BENCH_WORKDIR")
-	work = Path(workdir) if workdir else Path(
-		tempfile.mkdtemp(prefix="string-hotpath-matrix-"))
+	if workdir:
+		work = Path(workdir)
+	else:
+		from lang.test_support.drift_tmp import session_root
+		work = Path(tempfile.mkdtemp(prefix="string-hotpath-matrix-",
+		                             dir=session_root()))
 	work.mkdir(parents=True, exist_ok=True)
 
 	build_log: list = []

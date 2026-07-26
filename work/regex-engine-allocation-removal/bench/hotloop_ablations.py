@@ -239,7 +239,8 @@ def build_side(name: str, mutate, work: Path) -> Path:
 
 
 def main():
-	work = Path(tempfile.mkdtemp(prefix="regex-hotloop-"))
+	from lang.test_support.drift_tmp import session_root
+	work = Path(tempfile.mkdtemp(prefix="regex-hotloop-", dir=session_root()))
 	sides = {
 		"stock": build_side("stock", None, work),
 		"assertA": build_side("assertA", variant_a, work),

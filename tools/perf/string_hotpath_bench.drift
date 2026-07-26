@@ -1,6 +1,6 @@
 // tools/perf: allocation-heavy String protocol (the carrier class the
-// original B5 byte-scan-only gate missed — see
-// work/string-hotpath-performance-recovery/).  Primitive rows isolate
+// original B5 byte-scan-only gate missed — see the 0.33.89 String
+// hot-path recovery entry in doc/history.md).  Primitive rows isolate
 // String lifecycle costs (construction+final release, clone+drop on
 // heap/static/empty, equality shapes, comparison, concat); carrier
 // rows are the reduced drift-web request-parse and route-match
