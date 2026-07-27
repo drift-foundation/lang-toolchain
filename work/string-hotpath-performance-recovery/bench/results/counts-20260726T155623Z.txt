@@ -1,5 +1,0 @@
-OP=parse_x1000 r=46000 retain_heap=9000 retain_static=0 retain_immortal=0 retain_tomb=0 release_heap=18001 release_static=4 release_immortal=0 release_tomb=18005 getenv_trace=27001 getenv_other=0 from_utf8=9001 literal=0 concat=0 alloc_arr=9001 free_arr=9001
-HIST=parse_x1000 1:1000 3:1000 4:1000 6:1000 7:2000 9:1000 10:1000 16:1000 98:1
-OP=route_x1000 r=3000 retain_heap=9000 retain_static=0 retain_immortal=1000 retain_tomb=0 release_heap=12001 release_static=1004 release_immortal=2000 release_tomb=4005 getenv_trace=21001 getenv_other=0 from_utf8=3001 literal=0 concat=0 alloc_arr=7001 free_arr=9001
-HIST=route_x1000 2:1000 3:1000 6:1000 14:1
-DONE
