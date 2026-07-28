@@ -10,7 +10,7 @@ MIR + a real ownership ledger, independent of the emitters:
     ref classifications.
   * `classify_destructible_locals` — the destructible / nullsafe split,
     including the `__`-hidden exclusion and the string/array exclusions.
-  * `site4_verdict` — MUST_DROP (live overwrite), MUST_NOT_DROP (first
+  * `site4_disposition` — MUST_DROP (live overwrite), MUST_NOT_DROP (first
     store of uninit), and the missing-ledger tripwire.
   * `compute_store_defs` / `compute_assigned_in` — definite-assignment
     dataflow.
@@ -39,8 +39,9 @@ from lang.driftc.stage2.destructible_authority import (
 	compute_store_defs,
 	flag_managed_at_return,
 	site3_return_decision,
-	site4_verdict,
+	site4_disposition,
 )
+from lang.driftc.stage2.cleanup_payloads import Site4Disposition
 
 
 # ── type-table fixtures ───────────────────────────────────────────────
@@ -175,7 +176,7 @@ def test_classify_destructible_locals_split() -> None:
 	assert "d" not in nullsafe
 
 
-# ── site4_verdict ─────────────────────────────────────────────────────
+# ── site4_disposition ─────────────────────────────────────────────────
 
 
 def _attach_ledger(func: M.MirFunc):
@@ -184,7 +185,7 @@ def _attach_ledger(func: M.MirFunc):
 	return ledger
 
 
-def test_site4_verdict_must_drop_on_live_overwrite() -> None:
+def test_site4_disposition_must_drop_on_live_overwrite() -> None:
 	tt = TypeTable()
 	drop_ty = _droppable_struct(tt)
 	func = _make_func("ov", params=[], locals_=["x"], types={"x": drop_ty})
@@ -194,18 +195,21 @@ def test_site4_verdict_must_drop_on_live_overwrite() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry
 	ledger = _attach_ledger(func)
-	# At idx 1 (the second store) x is LIVE → MUST_DROP. The authority
-	# computes needs_drop internally and returns (verdict, needs_drop).
-	_v, _nd = site4_verdict(
+	# At idx 1 (the second store) x is LIVE → MUST_DROP → UNCONDITIONAL,
+	# no flag.  The authority returns
+	# (disposition, raw_verdict, needs_drop, flag_local).
+	disp, verdict, needs_drop, flag_local = site4_disposition(
 		ledger,
 		fn_name=func.name, block_name="entry", instr_idx=1,
-		local="x", local_ty=drop_ty, type_table=tt,
+		local="x", local_ty=drop_ty, type_table=tt, func=func,
 	)
-	assert _v is DropVerdict.MUST_DROP
-	assert _nd is True
+	assert disp is Site4Disposition.UNCONDITIONAL
+	assert verdict is DropVerdict.MUST_DROP
+	assert needs_drop is True
+	assert flag_local is None
 
 
-def test_site4_verdict_must_not_drop_on_first_store() -> None:
+def test_site4_disposition_must_not_drop_on_first_store() -> None:
 	tt = TypeTable()
 	drop_ty = _droppable_struct(tt)
 	func = _make_func("first", params=[], locals_=["x"], types={"x": drop_ty})
@@ -214,21 +218,24 @@ def test_site4_verdict_must_not_drop_on_first_store() -> None:
 	entry.terminator = M.Return(value=None)
 	func.blocks["entry"] = entry
 	ledger = _attach_ledger(func)
-	# At idx 0 x is UNINIT (pre-state) → MUST_NOT_DROP.
-	_v, _nd = site4_verdict(
+	# At idx 0 x is UNINIT (pre-state) → MUST_NOT_DROP → NO_DROP.
+	disp, verdict, _needs_drop, flag_local = site4_disposition(
 		ledger,
 		fn_name=func.name, block_name="entry", instr_idx=0,
-		local="x", local_ty=drop_ty, type_table=tt,
+		local="x", local_ty=drop_ty, type_table=tt, func=func,
 	)
-	assert _v is DropVerdict.MUST_NOT_DROP
+	assert disp is Site4Disposition.NO_DROP
+	assert verdict is DropVerdict.MUST_NOT_DROP
+	assert flag_local is None
 
 
-def test_site4_verdict_missing_ledger_raises() -> None:
+def test_site4_disposition_missing_ledger_raises() -> None:
+	func = _make_func("nl", params=[], locals_=["x"], types={})
 	with pytest.raises(RuntimeError, match="without an attached ownership ledger"):
-		site4_verdict(
+		site4_disposition(
 			None,
 			fn_name="test::x", block_name="entry", instr_idx=0,
-			local="x", local_ty=None, type_table=None,
+			local="x", local_ty=None, type_table=None, func=func,
 		)
 
 
@@ -486,15 +493,63 @@ class _StubLedger:
 		return self._verdict
 
 
-def test_site4_verdict_path_dependent_tripwire() -> None:
-	"""A PATH_DEPENDENT verdict at the store point fires the exact
-	proof-obligation tripwire RuntimeError."""
+def test_site4_disposition_path_dependent_zero_safe_is_unconditional() -> None:
+	"""PATH_DEPENDENT for a zero-storage-drop-safe local (array/variant)
+	resolves to UNCONDITIONAL — dropping the moved-out ZEROED storage is a
+	safe no-op, so no runtime flag is needed.  (The former contract that
+	ALL site-4 PATH_DEPENDENT states were unreachable is proven false: a
+	conditional-move-then-overwrite is valid source.)"""
+	tt = TypeTable()
+	arr_ty = tt.new_array(tt.ensure_string())  # ARRAY → zero-storage-drop-safe
+	assert zero_storage_drop_safe(arr_ty, tt) is True
+	func = _make_func("pdzs", params=[], locals_=["a"], types={"a": arr_ty})
 	ledger = _StubLedger(DropVerdict.PATH_DEPENDENT)
-	with pytest.raises(RuntimeError, match="returned PathDependent"):
-		site4_verdict(
+	disp, verdict, _needs_drop, flag_local = site4_disposition(
+		ledger,
+		fn_name=func.name, block_name="entry", instr_idx=3,
+		local="a", local_ty=arr_ty, type_table=tt, func=func,
+	)
+	assert disp is Site4Disposition.UNCONDITIONAL
+	assert verdict is DropVerdict.PATH_DEPENDENT   # raw verdict reported honestly
+	assert flag_local is None
+
+
+def test_site4_disposition_path_dependent_zero_unsafe_flag_managed_is_guarded() -> None:
+	"""PATH_DEPENDENT for a zero-storage-UNSAFE local (struct owning a
+	String) that drop_flags flagged resolves to FLAG_GUARDED, carrying the
+	drop-flag local name — the flag decides live-vs-moved at runtime."""
+	tt = TypeTable()
+	struct_ty = _droppable_struct(tt)
+	assert zero_storage_drop_safe(struct_ty, tt) is False
+	func = _make_func("pdzu", params=[], locals_=["x"], types={"x": struct_ty})
+	# Simulate drop_flags planning having flagged `x`.
+	setattr(func, "_drop_flag_managed_locals", {"x"})
+	setattr(func, "_drop_flag_for_local", {"x": "__drop_flag_x"})
+	ledger = _StubLedger(DropVerdict.PATH_DEPENDENT)
+	disp, verdict, _needs_drop, flag_local = site4_disposition(
+		ledger,
+		fn_name=func.name, block_name="entry", instr_idx=3,
+		local="x", local_ty=struct_ty, type_table=tt, func=func,
+	)
+	assert disp is Site4Disposition.FLAG_GUARDED
+	assert verdict is DropVerdict.PATH_DEPENDENT
+	assert flag_local == "__drop_flag_x"
+
+
+def test_site4_disposition_path_dependent_zero_unsafe_unflagged_fails_closed() -> None:
+	"""PATH_DEPENDENT for a zero-storage-UNSAFE local WITHOUT a drop flag is
+	a planning gap — fail closed (never a silent unconditional or skipped
+	drop)."""
+	tt = TypeTable()
+	struct_ty = _droppable_struct(tt)
+	func = _make_func("pdgap", params=[], locals_=["x"], types={"x": struct_ty})
+	# No _drop_flag_managed_locals metadata → not flagged.
+	ledger = _StubLedger(DropVerdict.PATH_DEPENDENT)
+	with pytest.raises(RuntimeError, match="without a drop flag"):
+		site4_disposition(
 			ledger,
-			fn_name="test::pd", block_name="entry", instr_idx=3,
-			local="x", local_ty=None, type_table=None,
+			fn_name=func.name, block_name="entry", instr_idx=3,
+			local="x", local_ty=struct_ty, type_table=tt, func=func,
 		)
 
 

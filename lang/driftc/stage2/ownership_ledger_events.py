@@ -43,6 +43,13 @@ SITE_DROP_BEFORE_OVERWRITE = "drop_before_overwrite"
 # import-cheap for HIR→MIR).
 VERDICT_MUST_DROP = "must_drop"
 VERDICT_MUST_NOT_DROP = "must_not_drop"
+# Site 4 (drop-before-overwrite): the ledger genuinely returns
+# `PathDependent` for a conditionally-moved-then-overwritten local
+# (moved on one runtime branch, live on another).  The observe stream
+# reports it AS path-dependent — never flattened into must_drop /
+# must_not_drop — so telemetry stays honest about the branch-dependent
+# state the site-4 authority then resolves into a disposition.
+VERDICT_PATH_DEPENDENT = "path_dependent"
 
 
 # Stable reason tags.  Callers pass one of these — new tags are added here,
@@ -79,6 +86,14 @@ REASON_MOVED_UNCONDITIONAL = "moved_unconditional"
 # (no behaviour change) but lets the observe stream surface the
 # case for follow-up diagnosis.
 REASON_UNKNOWN_TYPE = "unknown_type"
+# Site 4 PathDependent resolution reasons — the ownership class the
+# authority used to turn a `PathDependent` verdict into a concrete
+# disposition.  `zero_safe` → UNCONDITIONAL canonical drop (dropping the
+# moved-out ZEROED storage is a no-op for variants/arrays);
+# `flag_guarded` → the runtime drop flag decides at the overwrite point
+# for a zero-storage-UNSAFE local.
+REASON_PATH_DEPENDENT_ZERO_SAFE = "path_dependent_zero_safe"
+REASON_PATH_DEPENDENT_FLAG_GUARDED = "path_dependent_flag_guarded"
 
 
 @dataclass(frozen=True, slots=True)

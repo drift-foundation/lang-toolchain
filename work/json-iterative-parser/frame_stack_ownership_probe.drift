@@ -1,0 +1,115 @@
+// §4.1 ownership feasibility probe: explicit frame stack of NON-COPY
+// frames, with the three load-bearing operations of an iterative
+// parser — (a) mutate the TOP frame in place (append a child), (b)
+// pop the top frame moving it out, (c) hand the completed child to
+// the new top.  Models JsonNode/ArrayFrame at minimal scale.
+module main;
+
+import std.core as core;
+import std.mem as mem;
+import std.console as cons;
+import std.format as fmt;
+
+// non-Copy node (Array makes it non-Copy), like JsonNode
+pub variant Node {
+	Leaf(v: Int),
+	Branch(kids: Array<Node>),
+	@tombstone Tombstone
+}
+
+// non-Copy in-progress container frame, like ArrayFrame
+struct Frame {
+	kids: Array<Node>
+}
+
+fn empty_frame() nothrow -> Frame {
+	val k = Array<type Node>::with_capacity(0);
+	return Frame(kids = move k);
+}
+
+fn node_sum(n: &Node) nothrow -> Int {
+	match n {
+		Node::Leaf(v) => { return *v; },
+		Node::Branch(kids) => {
+			var s = 0;
+			var i = 0;
+			while i < kids.len {
+				s = s + node_sum(&kids[i]);
+				i = i + 1;
+			}
+			return s;
+		},
+		default => { return 0; }
+	}
+}
+
+// Build, iteratively, the tree [[1,2],[3,[4,5]]] using ONLY:
+//   push frame; append child to top frame; pop-move frame -> node;
+//   hand node to new top (or root).  No recursion.
+pub fn main() nothrow -> Int {
+	var stack: Array<Frame> = [];
+	var root: Optional<Node> = Optional::None();
+
+	// hand a completed node to the current top frame, or to root
+	// (expressed as a local closure-free helper via a flag return is
+	// awkward; inline it each time to keep the borrow shapes explicit)
+
+	// open outer [
+	stack.push(empty_frame());
+
+	// open [1,2]
+	stack.push(empty_frame());
+	// (a) mutate TOP in place: append leaves
+	stack[stack.len - 1].kids.push(Node::Leaf(1));
+	stack[stack.len - 1].kids.push(Node::Leaf(2));
+	// (b) pop-move the top frame; (c) hand to new top
+	match stack.pop() {
+		Some(var f) => {
+			val k = mem.replace(&mut f.kids, Array<type Node>::with_capacity(0));
+			stack[stack.len - 1].kids.push(Node::Branch(move k));
+		},
+		None() => { return 90; }
+	}
+
+	// open [3,[4,5]]
+	stack.push(empty_frame());
+	stack[stack.len - 1].kids.push(Node::Leaf(3));
+	// nested [4,5]
+	stack.push(empty_frame());
+	stack[stack.len - 1].kids.push(Node::Leaf(4));
+	stack[stack.len - 1].kids.push(Node::Leaf(5));
+	match stack.pop() {
+		Some(var f) => {
+			val k = mem.replace(&mut f.kids, Array<type Node>::with_capacity(0));
+			stack[stack.len - 1].kids.push(Node::Branch(move k));
+		},
+		None() => { return 91; }
+	}
+	// close [3,[4,5]]
+	match stack.pop() {
+		Some(var f) => {
+			val k = mem.replace(&mut f.kids, Array<type Node>::with_capacity(0));
+			stack[stack.len - 1].kids.push(Node::Branch(move k));
+		},
+		None() => { return 92; }
+	}
+
+	// close outer ] -> root
+	match stack.pop() {
+		Some(var f) => {
+			val k = mem.replace(&mut f.kids, Array<type Node>::with_capacity(0));
+			root = Optional::Some(Node::Branch(move k));
+		},
+		None() => { return 93; }
+	}
+
+	match root {
+		Some(r) => {
+			val total = node_sum(&r);
+			cons.println("sum=" + fmt.format_int(total));
+			if total != 15 { return 1; }
+			return 0;
+		},
+		None() => { return 94; }
+	}
+}

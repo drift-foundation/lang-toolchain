@@ -20,6 +20,7 @@ from lang.driftc.stage2.ownership_ledger import DropVerdict, build_ledger
 from lang.driftc.stage2.destructible_planner import build_destructible_plan, PlannerStop
 from lang.driftc.stage2.cleanup_payloads import (
 	Site3ReturnPayload,
+	Site4Disposition,
 	Site4Payload,
 	NullsafePayload,
 )
@@ -86,8 +87,15 @@ def test_planner_site4_split_and_site3_and_non_mutation():
 	s4 = plan.decisions_for_site("site4")
 	assert len(s4) == 2
 	assert {d.payload.verdict for d in s4} == {DropVerdict.MUST_NOT_DROP, DropVerdict.MUST_DROP}
-	assert census["site4_must_drop"] == 1
-	assert census["site4_must_not_drop"] == 1
+	# Disposition axis (what the emitter authors) AND the raw-verdict axis
+	# (unflattened) are tracked separately.  Here the two coincide: MUST_DROP
+	# → UNCONDITIONAL, MUST_NOT_DROP → NO_DROP, and no PATH_DEPENDENT.
+	assert census["site4_disp_unconditional"] == 1
+	assert census["site4_disp_no_drop"] == 1
+	assert census["site4_disp_flag_guarded"] == 0
+	assert census["site4_verdict_must_drop"] == 1
+	assert census["site4_verdict_must_not_drop"] == 1
+	assert census["site4_verdict_path_dependent"] == 0
 	for d in s4:
 		assert isinstance(d.payload, Site4Payload)
 		assert d.payload.ty == drop_ty                 # frozen expected type carried
@@ -121,7 +129,8 @@ def test_planner_nullsafe_overwrite_recorded():
 	plan, census, _ = build_destructible_plan(func, type_table=tt)
 	ns = plan.decisions_for_site("nullsafe")
 	assert census["nullsafe"] == 2 == len(ns)
-	assert census["site4_must_drop"] == 0 and census["site4_must_not_drop"] == 0
+	assert census["site4_disp_unconditional"] == 0 and census["site4_disp_no_drop"] == 0
+	assert census["site4_verdict_must_drop"] == 0 and census["site4_verdict_must_not_drop"] == 0
 	for d in ns:
 		assert isinstance(d.payload, NullsafePayload)
 		assert d.payload.ty == ns_ty
@@ -197,11 +206,58 @@ def test_planner_dirty_ledger_fails():
 		build_destructible_plan(func, type_table=tt)
 
 
-def test_site4_payload_rejects_path_dependent():
-	"""PATH_DEPENDENT must be UNCONSTRUCTIBLE as an emission payload — an
-	emitter must never silently treat it as 'do not emit'."""
-	with pytest.raises(ValueError, match="PATH_DEPENDENT is never a payload"):
-		Site4Payload(local="x", ty=1, needs_drop=True, verdict=DropVerdict.PATH_DEPENDENT)
-	# The two legitimate verdicts construct fine.
-	assert Site4Payload(local="x", ty=1, needs_drop=True, verdict=DropVerdict.MUST_DROP).emit is True
-	assert Site4Payload(local="x", ty=1, needs_drop=False, verdict=DropVerdict.MUST_NOT_DROP).emit is False
+def test_site4_payload_verdict_disposition_fail_closed():
+	"""PATH_DEPENDENT IS a valid payload verdict (a conditional-move-then-
+	overwrite genuinely depends on the runtime branch), but ONLY paired
+	with the disposition the authority derived from it.  The frozen payload
+	pins the admissible (verdict, disposition) combinations fail-closed."""
+	# ── MUST_DROP → UNCONDITIONAL (emits, unguarded) ──
+	p = Site4Payload(local="x", ty=1, needs_drop=True,
+	                 verdict=DropVerdict.MUST_DROP,
+	                 disposition=Site4Disposition.UNCONDITIONAL)
+	assert p.emit is True and p.guarded is False
+	# ── MUST_NOT_DROP → NO_DROP (emits nothing) ──
+	p = Site4Payload(local="x", ty=1, needs_drop=False,
+	                 verdict=DropVerdict.MUST_NOT_DROP,
+	                 disposition=Site4Disposition.NO_DROP)
+	assert p.emit is False and p.guarded is False
+	# ── PATH_DEPENDENT → UNCONDITIONAL (zero-storage-safe class) ──
+	p = Site4Payload(local="x", ty=1, needs_drop=True,
+	                 verdict=DropVerdict.PATH_DEPENDENT,
+	                 disposition=Site4Disposition.UNCONDITIONAL)
+	assert p.emit is True and p.guarded is False
+	# ── PATH_DEPENDENT + flag → FLAG_GUARDED (zero-storage-unsafe class) ──
+	p = Site4Payload(local="x", ty=1, needs_drop=True,
+	                 verdict=DropVerdict.PATH_DEPENDENT,
+	                 disposition=Site4Disposition.FLAG_GUARDED,
+	                 flag_local="__drop_flag_x")
+	assert p.emit is True and p.guarded is True
+
+	# ── Fail-closed illegal combinations ──
+	# NO_DROP requires MUST_NOT_DROP.
+	with pytest.raises(ValueError, match="NO_DROP requires verdict MUST_NOT_DROP"):
+		Site4Payload(local="x", ty=1, needs_drop=True,
+		             verdict=DropVerdict.MUST_DROP,
+		             disposition=Site4Disposition.NO_DROP)
+	# FLAG_GUARDED requires PATH_DEPENDENT.
+	with pytest.raises(ValueError, match="FLAG_GUARDED requires verdict PATH_DEPENDENT"):
+		Site4Payload(local="x", ty=1, needs_drop=True,
+		             verdict=DropVerdict.MUST_DROP,
+		             disposition=Site4Disposition.FLAG_GUARDED,
+		             flag_local="__drop_flag_x")
+	# UNCONDITIONAL rejects MUST_NOT_DROP.
+	with pytest.raises(ValueError, match="UNCONDITIONAL requires verdict"):
+		Site4Payload(local="x", ty=1, needs_drop=False,
+		             verdict=DropVerdict.MUST_NOT_DROP,
+		             disposition=Site4Disposition.UNCONDITIONAL)
+	# FLAG_GUARDED requires a nonempty flag_local.
+	with pytest.raises(ValueError, match="requires a flag_local"):
+		Site4Payload(local="x", ty=1, needs_drop=True,
+		             verdict=DropVerdict.PATH_DEPENDENT,
+		             disposition=Site4Disposition.FLAG_GUARDED)
+	# A non-FLAG_GUARDED disposition must NOT carry a flag_local.
+	with pytest.raises(ValueError, match="flag_local must be None"):
+		Site4Payload(local="x", ty=1, needs_drop=True,
+		             verdict=DropVerdict.MUST_DROP,
+		             disposition=Site4Disposition.UNCONDITIONAL,
+		             flag_local="__drop_flag_x")

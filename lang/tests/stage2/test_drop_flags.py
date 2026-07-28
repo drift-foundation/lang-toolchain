@@ -636,3 +636,169 @@ def test_2b_admission_through_insert_drop_flags() -> None:
 	f_var = build(tt3, _declare_destructible_variant_tf(tt3))
 	f_var, m_var = insert_drop_flags(f_var, type_table=tt3, drop_policy=_drop_policy_for(tt3))
 	assert not m_var and "__drop_flag_x" not in f_var.locals
+
+
+# -- criterion 2c: zero-unsafe PathDependent at an OVERWRITE site -------------
+
+
+def test_overwrite_site_carrier_flagged_via_2c_not_exit_liveness() -> None:
+	"""A local that is conditionally moved, OVERWRITTEN, then
+	UNCONDITIONALLY moved out before the Return is PathDependent ONLY at
+	its overwrite site: at the exit it is MovedOut (criterion 2a false) and
+	there is no cleanup hook (2b false).  Criterion 2c must flag it — else
+	the site-4 authority fails closed on the zero-unsafe PathDependent
+	overwrite.
+
+	CFG:
+	    entry:  StoreLocal(x, t_init); If(cond, a, b)
+	    a:      MoveOut(t_taken, x); Goto(join)        # moved on this branch
+	    b:      Goto(join)                             # live on this branch
+	    join:   StoreLocal(x, t_new)                   # OVERWRITE — 2c site
+	            MoveOut(t_final, x); Return(t_final)    # unconditional move-out
+	"""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.drop_flags import (
+		_is_potentially_live_at_some_exit,
+		_has_zero_storage_unsafe_path_dependent_at_cleanup_hook,
+		_has_zero_storage_unsafe_path_dependent_at_overwrite_site,
+	)
+
+	type_table = TypeTable()
+	drop_ty = _make_droppable_struct(type_table)
+	bool_ty = type_table.ensure_bool()
+	func = _empty_fn(
+		"ov2c", params=["cond"], locals_=["cond", "x"],
+		types={"cond": bool_ty, "x": drop_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local="x", value="t_init"))
+	entry.terminator = M.IfTerminator(cond="cond", then_target="a", else_target="b")
+	a = M.BasicBlock(name="a")
+	a.instructions.append(M.MoveOut(dest="t_taken", local="x", ty=drop_ty))
+	a.terminator = M.Goto(target="join")
+	b = M.BasicBlock(name="b")
+	b.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	join.instructions.append(M.StoreLocal(local="x", value="t_new"))
+	join.instructions.append(M.MoveOut(dest="t_final", local="x", ty=drop_ty))
+	join.terminator = M.Return(value="t_final")
+	for blk in (entry, a, b, join):
+		func.blocks[blk.name] = blk
+	func.entry = "entry"
+
+	dp = _drop_policy_for(type_table)
+
+	# Prove the 2a/2b criteria do NOT admit x, but 2c does.
+	ledger = build_ledger(func, drop_policy=dp)
+	assert _is_potentially_live_at_some_exit(ledger, func, "x") is False, (
+		"x is unconditionally moved out before the Return → not live at exit")
+	assert _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
+		ledger=ledger, func=func, type_table=type_table,
+		drop_policy=dp, local_name="x") is False, "no cleanup hook in this MIR"
+	assert _has_zero_storage_unsafe_path_dependent_at_overwrite_site(
+		ledger=ledger, func=func, type_table=type_table,
+		drop_policy=dp, local_name="x") is True, (
+		"the join-block overwrite of x is zero-unsafe PathDependent → 2c admits")
+
+	# Integration: insert_drop_flags therefore allocates a flag for x.
+	insert_drop_flags(func, type_table=type_table, drop_policy=dp)
+	flag_locals = [n for n in func.locals if n.startswith("__drop_flag_")]
+	assert flag_locals, "criterion 2c must flag the overwrite-site carrier"
+	assert func._drop_flag_for_local.get("x") in flag_locals
+
+
+def test_match_binder_zero_unsafe_pathdependent_overwrite_is_flaggable() -> None:
+	"""`drop_flags` provides proper compiler SUPPORT for a zero-storage-UNSAFE
+	`__match_binder_*` that is PathDependent at an OVERWRITE site: it IS
+	flag-manageable despite the leading `__` — otherwise the site-4
+	drop-before-overwrite authority would fail closed on a valid
+	compiler-authored binder (a `var` match binder conditionally moved then
+	overwritten).  This is compiler support, NOT a source-side workaround
+	(masking it by skipping was rejected in review, 2026-07-27); the real
+	lowering is exercised end-to-end by
+	`test_match_binder_guarded_site4_lowering.py`.
+
+	The allowlist is `__match_binder_*` ONLY; all other `__` internal locals
+	(`__borrow_tmp*`, `__match_scrut*`, `__try_err*`) stay skipped — see
+	`test_allowlist_exempts_match_binder_only_not_borrow_tmp`."""
+	from lang.driftc.stage2.ownership_ledger import build_ledger
+	from lang.driftc.stage2.drop_flags import (
+		_has_zero_storage_unsafe_path_dependent_at_overwrite_site,
+	)
+	type_table = TypeTable()
+	drop_ty = _make_droppable_struct(type_table)
+	bool_ty = type_table.ensure_bool()
+	binder = "__match_binder_9_vspans"   # compiler-generated, but typed + destructible
+	func = _empty_fn(
+		"binder_ov", params=["cond"], locals_=["cond", binder],
+		types={"cond": bool_ty, binder: drop_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local=binder, value="t_init"))
+	entry.terminator = M.IfTerminator(cond="cond", then_target="a", else_target="b")
+	a = M.BasicBlock(name="a")
+	a.instructions.append(M.MoveOut(dest="t_taken", local=binder, ty=drop_ty))
+	a.terminator = M.Goto(target="join")
+	b = M.BasicBlock(name="b")
+	b.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	join.instructions.append(M.StoreLocal(local=binder, value="t_new"))   # OVERWRITE (2c site)
+	join.instructions.append(M.MoveOut(dest="t_final", local=binder, ty=drop_ty))
+	join.terminator = M.Return(value="t_final")
+	for blk in (entry, a, b, join):
+		func.blocks[blk.name] = blk
+	func.entry = "entry"
+
+	dp = _drop_policy_for(type_table)
+	ledger = build_ledger(func, drop_policy=dp)
+	assert _has_zero_storage_unsafe_path_dependent_at_overwrite_site(
+		ledger=ledger, func=func, type_table=type_table,
+		drop_policy=dp, local_name=binder) is True
+
+	insert_drop_flags(func, type_table=type_table, drop_policy=dp)
+	# The __match_binder_ local IS flagged (allowlist / proper support).
+	assert func._drop_flag_for_local.get(binder) is not None, (
+		"drop_flags must flag a zero-unsafe PathDependent __match_binder_*")
+	# Internal temps stay skipped.
+	assert not any(n.startswith("__match_scrut") for n in func._drop_flag_for_local)
+
+
+def test_allowlist_exempts_match_binder_only_not_borrow_tmp() -> None:
+	"""The `drop_flags` allowlist exempts `__match_binder_*` ONLY.  This pins
+	the FILTER boundary directly: a `__borrow_tmp` local built in the exact
+	flaggable move-then-overwrite shape is STILL skipped (the `__` prefix
+	filter exempts only `__match_binder_`, so `__borrow_tmp` never reaches the
+	flag criteria).  We claim nothing about whether real materialised borrow
+	temps ever take this shape — the point is that the allowlist does not
+	extend to them, so no inert support is claimed."""
+	type_table = TypeTable()
+	drop_ty = _make_droppable_struct(type_table)
+	bool_ty = type_table.ensure_bool()
+	# Build the SAME PathDependent-overwrite shape but on a __borrow_tmp name.
+	bt = "__borrow_tmp_3"
+	func = _empty_fn(
+		"bt_ov", params=["cond"], locals_=["cond", bt],
+		types={"cond": bool_ty, bt: drop_ty},
+	)
+	entry = M.BasicBlock(name="entry")
+	entry.instructions.append(M.StoreLocal(local=bt, value="t_init"))
+	entry.terminator = M.IfTerminator(cond="cond", then_target="a", else_target="b")
+	a = M.BasicBlock(name="a")
+	a.instructions.append(M.MoveOut(dest="t_taken", local=bt, ty=drop_ty))
+	a.terminator = M.Goto(target="join")
+	b = M.BasicBlock(name="b")
+	b.terminator = M.Goto(target="join")
+	join = M.BasicBlock(name="join")
+	join.instructions.append(M.StoreLocal(local=bt, value="t_new"))
+	join.instructions.append(M.MoveOut(dest="t_final", local=bt, ty=drop_ty))
+	join.terminator = M.Return(value="t_final")
+	for blk in (entry, a, b, join):
+		func.blocks[blk.name] = blk
+	func.entry = "entry"
+
+	dp = _drop_policy_for(type_table)
+	insert_drop_flags(func, type_table=type_table, drop_policy=dp)
+	flag_for = getattr(func, "_drop_flag_for_local", {}) or {}
+	assert flag_for.get(bt) is None, (
+		"the allowlist exempts __match_binder_* ONLY, so a __borrow_tmp local "
+		"is skipped by the general `__` filter before the flag criteria")

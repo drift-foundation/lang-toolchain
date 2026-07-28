@@ -1,0 +1,36 @@
+module main;
+import std.core as core;
+import std.containers as containers;
+import std.console as cons;
+
+error Boom { at: Int }
+
+variant Sp { Leaf(x: Int), Obj(m: containers.HashMap<String, Int>), @tombstone Tombstone }
+
+fn maythrow(i: Int) -> Int { if i < 0 { throw Boom(at = i); } return i; }
+
+// THROWING driver, conditional move of a destructible then overwrite,
+// with a throwing call in the loop (unwind-path drop planning).
+fn driver(locate: Bool) nothrow -> Int {
+	var pspan: Optional<Sp> = Optional::Some(Sp::Leaf(x = 1));
+	var acc = 0;
+	var g = 0;
+	while g < 3 {
+		g = g + 1;
+		if locate {
+			match move pspan {
+				Some(s) => { match s { Sp::Leaf(x) => { acc = acc + x; }, default => { } } },
+				None() => { }
+			}
+		}
+		pspan = Optional<Sp>::None();
+	}
+	return acc;
+}
+
+pub fn main() nothrow -> Int {
+	val r = driver(true);
+	cons.println("r=" );
+	if r >= 0 { return 0; }
+	return 1;
+}

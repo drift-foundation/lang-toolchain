@@ -12,8 +12,11 @@ frozen-plan emitters):
     `is_nullsafe_drop`), including the cycle-guarded caches.
   * `classify_destructible_locals` — the per-function
     `destructible_locals` / `nullsafe_destructible_locals` split.
-  * `site4_verdict` — the StoreLocal-into-destructible ledger verdict
-    (drop-before-overwrite, site 4), with its two tripwires.
+  * `site4_disposition` — the StoreLocal-into-destructible drop
+    decision (drop-before-overwrite, site 4): resolves the ledger
+    verdict + ownership class into an EXPLICIT TYPED `Site4Disposition`
+    (NO_DROP / UNCONDITIONAL / FLAG_GUARDED) plus the raw verdict, the
+    `needs_drop` axis, and the drop-flag local (FLAG_GUARDED only).
   * `compute_store_defs` / `compute_assigned_in` — the definite-assignment
     dataflow that feeds the Return-boundary drop set.
   * `compute_return_move_state` — the per-block moved-out / explicitly-
@@ -52,6 +55,7 @@ from . import cfg as _cfg
 from .ownership_ledger import DropVerdict
 from .drop_policy_compute import compute_drop_policy, zero_storage_drop_safe
 from .drop_flags import is_flag_managed
+from .cleanup_payloads import Site4Disposition
 
 
 class DropClassifier:
@@ -225,7 +229,7 @@ def classify_destructible_locals(
 	return destructible_locals, nullsafe_destructible_locals
 
 
-def site4_verdict(
+def site4_disposition(
 	ledger,
 	*,
 	fn_name: str,
@@ -234,19 +238,30 @@ def site4_verdict(
 	local: str,
 	local_ty: "TypeId | None",
 	type_table: TypeTable,
-) -> "tuple[DropVerdict, bool]":
-	"""Site-4 (drop-before-overwrite) ledger verdict.
+	func: "M.MirFunc",
+) -> "tuple[Site4Disposition, DropVerdict, bool, str | None]":
+	"""Site-4 (drop-before-overwrite) drop decision.
 
 	CLOSED AUTHORITY: the type-level `needs_drop` axis is computed HERE
 	from `type_table + local_ty` via the canonical `compute_drop_policy`,
-	so callers cannot obtain a different verdict by injecting a divergent
-	axis. Returns `(verdict, needs_drop)` — the typed
-	`DropVerdict.MUST_DROP`/`DropVerdict.MUST_NOT_DROP` member (never a
-	bare string) plus the computed axis the caller may retain. Preserves
-	the missing-ledger RuntimeError and the PathDependent proof-obligation
-	tripwire with byte-identical messages.  The audit count lives in
-	`overwrite_cleanup` (counted-only recorder), the observe-mode reporter
-	check in `destructible_planner`'s site-4 arm, and the emission in
+	so callers cannot obtain a different decision by injecting a divergent
+	axis.  Returns `(disposition, raw_verdict, needs_drop, flag_local)`:
+
+	  * `disposition` — the EXPLICIT TYPED `Site4Disposition` the emitter
+	    acts on (never a bare verdict, never an ambiguous boolean).
+	  * `raw_verdict` — the UNMODIFIED ledger `DropVerdict` (MUST_DROP /
+	    MUST_NOT_DROP / PATH_DEPENDENT), retained verbatim for honest
+	    telemetry: PATH_DEPENDENT is reported AS PATH_DEPENDENT even when
+	    it resolves to an UNCONDITIONAL or FLAG_GUARDED disposition.
+	  * `needs_drop` — the computed DropPolicy axis.
+	  * `flag_local` — the drop-flag local, non-None IFF FLAG_GUARDED.
+
+	`func` is MANDATORY (not an optional bypass): the FLAG_GUARDED path
+	reads `func._drop_flag_managed_locals` / `_drop_flag_for_local`, and a
+	missing `func` would silently downgrade a zero-unsafe PathDependent
+	site into the fail-closed error.  Preserves the missing-ledger
+	RuntimeError.  The disposition/verdict census lives in
+	`destructible_planner`'s site-4 arm; the emission in
 	`overwrite_cleanup`'s plan phase.
 	"""
 	needs_drop = (
@@ -268,23 +283,38 @@ def site4_verdict(
 		needs_drop=needs_drop,
 	)
 	if _verdict is DropVerdict.MUST_DROP:
-		return DropVerdict.MUST_DROP, needs_drop
+		return Site4Disposition.UNCONDITIONAL, DropVerdict.MUST_DROP, needs_drop, None
 	elif _verdict is DropVerdict.MUST_NOT_DROP:
-		return DropVerdict.MUST_NOT_DROP, needs_drop
+		return Site4Disposition.NO_DROP, DropVerdict.MUST_NOT_DROP, needs_drop, None
 	else:
-		# PathDependent — proof-obligation tripwire.  The
-		# observe re-run said the lattice never yields
-		# MaybeUninit at drop_before_overwrite points.  If
-		# it ever does, this raise signals the regression.
+		# PathDependent — the lattice is CORRECT to return this: the
+		# overwritten slot's liveness genuinely depends on the runtime
+		# branch (moved on one path, live on another).  Resolve it into
+		# the right cleanup per ownership class (never force
+		# MUST_DROP/MUST_NOT_DROP):
+		#   * zero-storage-drop-safe (variants via tag-0, arrays via the
+		#     zeroed header) → UNCONDITIONAL canonical drop; dropping the
+		#     moved-out ZEROED storage is a safe no-op on the moved path.
+		#   * zero-storage-UNSAFE + drop-flag-managed → FLAG_GUARDED drop
+		#     at the overwrite (the flag records live-vs-moved at runtime).
+		#   * zero-storage-UNSAFE + NOT flag-managed → fail-closed: this
+		#     shape must have been flag-selected by drop_flags planning
+		#     (the site-4 overwrite criterion); reaching here is a
+		#     planning gap, not a valid emission.
+		if local_ty is not None and zero_storage_drop_safe(local_ty, type_table):
+			return Site4Disposition.UNCONDITIONAL, DropVerdict.PATH_DEPENDENT, needs_drop, None
+		flag_local = None
+		if is_flag_managed(func, local):
+			flag_local = (getattr(func, "_drop_flag_for_local", {}) or {}).get(local)
+		if flag_local:
+			return Site4Disposition.FLAG_GUARDED, DropVerdict.PATH_DEPENDENT, needs_drop, flag_local
 		raise RuntimeError(
-			f"drop_before_overwrite: ledger returned "
-			f"PathDependent at (fn={fn_name}, "
-			f"block={block_name}, idx={instr_idx}, "
-			f"local={local}).  Tier-1 promotion "
-			f"retired the `initialized_destructibles` "
-			f"fallback — if PathDependent is now reachable, "
-			f"either tighten the lattice or restore a "
-			f"flag-guarded path here before re-landing."
+			f"drop_before_overwrite: PathDependent zero-storage-UNSAFE "
+			f"local without a drop flag at (fn={fn_name}, "
+			f"block={block_name}, idx={instr_idx}, local={local}).  "
+			f"drop_flags planning must flag path-dependent overwrite "
+			f"sites for zero-unsafe destructibles; this is a planning "
+			f"gap, not a valid emission (fail-closed)."
 		)
 
 
@@ -678,7 +708,7 @@ def string_return_releases(
 __all__ = [
 	"DropClassifier",
 	"classify_destructible_locals",
-	"site4_verdict",
+	"site4_disposition",
 	"compute_store_defs",
 	"compute_assigned_in",
 	"ReturnMoveState",

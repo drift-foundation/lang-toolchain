@@ -100,18 +100,26 @@ def insert_drop_flags(
 		all_locals.append(name)
 	flag_for: Dict[str, str] = {}
 	for name in all_locals:
-		# Skip compiler-internal locals (HIR→MIR-generated `__` names
-		# such as `__match_scrut_tmp*`, `__try_err*`, intermediate
-		# diagnostic temps, etc.).  These have specialised handling in
-		# downstream passes (the destructible classification excludes
-		# them via the same prefix rule with a small allowlist for
-		# `__match_binder_*` / `__borrow_tmp`).  Adding flag plumbing
-		# for them produces MIR that downstream passes do not expect
-		# (e.g. address-taken-without-known-type errors in LLVM
-		# codegen).  The bucket-6 carrier shapes are all user-named
-		# locals — the pass need not touch internal temps to satisfy
-		# the acceptance contract.
-		if name.startswith("__"):
+		# Skip compiler-internal locals (HIR→MIR-generated `__` names such as
+		# `__match_scrut_tmp*`, `__try_err*`, intermediate diagnostic temps,
+		# etc.) — flag plumbing for them produces MIR downstream passes do not
+		# expect (e.g. address-taken-without-known-type in LLVM codegen).
+		#
+		# EXCEPT `__match_binder_*`: a `var` match binder is a real, typed,
+		# user-assignable destructible local, so valid source can conditionally
+		# move it and then OVERWRITE it (e.g. `match h { Case(var r) => { if b
+		# { sink(move r); } r = fresh(); ... } }`) — genuinely PathDependent at
+		# the overwrite, which the site-4 authority requires a drop flag for.
+		# This is proper compiler SUPPORT (proven by the guarded-site-4
+		# lowering driver test), not a source-side workaround.
+		#
+		# The allowlist is scoped to `__match_binder_*` — the ONLY internal
+		# prefix valid source is DEMONSTRABLY able to drive into a
+		# PathDependent-at-overwrite site-4 shape (a `var` binder conditionally
+		# moved then overwritten; proven end-to-end by the guarded-site-4
+		# lowering driver test).  `__borrow_tmp*` and every other `__` temp are
+		# left to the general skip rather than allow-listed on speculation.
+		if name.startswith("__") and not name.startswith("__match_binder_"):
 			continue
 		ty = func.local_types.get(name)
 		if ty is None:
@@ -164,6 +172,17 @@ def insert_drop_flags(
 		#       the site-4 drop-before-overwrite verdict to crash on the
 		#       next iteration.
 		#
+		#   (2c) OVERWRITE-SITE carrier (2026-07-27).  The ledger reports
+		#       zero-storage-UNSAFE `PathDependent` for the local at a
+		#       `StoreLocal(L, _)` OVERWRITE point.  This is the GENERAL
+		#       drop-before-overwrite carrier: a local conditionally moved
+		#       then overwritten, uniformly moved-out at exit and with no
+		#       path-dependent cleanup hook (so neither 2a nor 2b admits
+		#       it), is PathDependent ONLY at its overwrite.  Shape:
+		#       `if b { sink(move r); } r = fresh();` where `r` is consumed
+		#       before any scope exit.  The overwrite IS the site the flag
+		#       guards; without 2c the site-4 authority fails closed.
+		#
 		# Together these criteria pick out every shape where
 		# cleanup_authoring needs a runtime flag to decide whether
 		# to drop on the non-move branch.  They exclude (a)
@@ -175,6 +194,13 @@ def insert_drop_flags(
 		if not (
 			_is_potentially_live_at_some_exit(ledger, func, name)
 			or _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
+				ledger=ledger,
+				func=func,
+				type_table=type_table,
+				drop_policy=drop_policy,
+				local_name=name,
+			)
+			or _has_zero_storage_unsafe_path_dependent_at_overwrite_site(
 				ledger=ledger,
 				func=func,
 				type_table=type_table,
@@ -327,6 +353,62 @@ def _has_zero_storage_unsafe_path_dependent_at_cleanup_hook(
 				if verdict is DropVerdict.PATH_DEPENDENT:
 					if not zero_storage_drop_safe(cand_ty, type_table):
 						return True
+	return False
+
+
+def _has_zero_storage_unsafe_path_dependent_at_overwrite_site(
+	*,
+	ledger,
+	func: M.MirFunc,
+	type_table: TypeTable,
+	drop_policy: Callable[[TypeId], "DropPolicy"],
+	local_name: str,
+) -> bool:
+	"""Bug trigger criterion (2c, 2026-07-27).  True iff the ledger reports
+	a zero-storage-UNSAFE `PathDependent` verdict for `local_name` at some
+	`StoreLocal(local_name, _)` OVERWRITE site (the site-4
+	drop-before-overwrite point).
+
+	Criteria (2a) and (2b) cover the FUNCTION-EXIT and CLEANUP-HOOK
+	carriers, but neither is general: a local that is conditionally moved
+	and then OVERWRITTEN, yet is uniformly moved-out at every exit and has
+	no path-dependent cleanup hook (e.g. it is re-stored and consumed
+	before any scope exit), is PathDependent ONLY at its overwrite point.
+	Without (2c) such a carrier is never flagged, and the site-4 authority
+	(`site4_disposition`) then fails closed on a zero-unsafe PathDependent
+	overwrite lacking a drop flag.  (2c) admits exactly that carrier: the
+	overwrite point IS the site the flag guards.
+
+	Zero-storage-safe types are excluded (they take UNCONDITIONAL
+	authoring); only zero-UNSAFE PathDependent needs a runtime flag."""
+	for blk in func.blocks.values():
+		for idx, ins in enumerate(blk.instructions):
+			if not isinstance(ins, M.StoreLocal):
+				continue
+			if getattr(ins, "local", None) != local_name:
+				continue
+			# A pipeline-synthesized zero-back store is not a user overwrite;
+			# but drop_flags runs at PLANNING (pre-normalization), before any
+			# synthetic zero-backs exist, so no such marker is present here.
+			ty = func.local_types.get(local_name)
+			if ty is None:
+				continue
+			try:
+				policy = drop_policy(ty)
+			except Exception:
+				policy = None
+			needs_drop_axis = bool(policy.needs_drop) if policy is not None else False
+			try:
+				verdict = ledger.verdict_at(
+					(blk.name, idx),
+					local_name,
+					needs_drop=needs_drop_axis,
+				)
+			except Exception:
+				continue
+			if verdict is DropVerdict.PATH_DEPENDENT:
+				if not zero_storage_drop_safe(ty, type_table):
+					return True
 	return False
 
 

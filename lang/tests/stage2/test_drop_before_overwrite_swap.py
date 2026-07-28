@@ -5,7 +5,7 @@
 This file pins BOTH historical milestones on site 4, exercised through
 the PRODUCTION-FAITHFUL pipeline (B2+C S8 item 6 repair): the site-4
 verdict is decided at the pre-normalization PLAN slot
-(`build_destructible_plan` → `site4_verdict`, the closed authority) and
+(`build_destructible_plan` → `site4_disposition`, the closed authority) and
 the drop-before-overwrite sequence is EMITTED by `overwrite_cleanup`'s
 plan phase — neither owned by the ownership-normalization pass.
 
@@ -25,12 +25,17 @@ Phase 4 Tier-1 promotion (2026-04-23):
 - Cases that previously downgraded to the fallback now fail loudly as
   proof-obligation tripwires, at the PLAN slot in production:
   - missing ledger — `require_fresh_ledger` refuses the plan build
-    (`AssertionError`); the authority-level `site4_verdict` keeps its
+    (`AssertionError`); the authority-level `site4_disposition` keeps its
     own missing-ledger `RuntimeError` for direct callers.
-  - `verdict is PathDependent` — the lattice produced `MaybeUninit`
-    at a StoreLocal point.  Unreached across 1031 e2e cases at
-    promotion time; the planner-hosted raise fires if a future change
-    breaks that.
+  - `verdict is PathDependent` — a conditional-move-then-overwrite is
+    VALID source and the lattice is correct to return PathDependent
+    (2026-07-27: the former "all site-4 PathDependent is unreachable"
+    contract is proven false).  The authority now RESOLVES it per
+    ownership class: zero-storage-safe → UNCONDITIONAL, zero-unsafe +
+    drop-flag → FLAG_GUARDED.  What remains fail-closed is a zero-unsafe
+    PathDependent site with NO drop flag (a drop_flags criterion-2c
+    planning gap) — see
+    `test_path_dependent_zero_unsafe_without_flag_fails_closed`.
 
 Tests build minimal MIR fixtures and run the driver's per-fn ownership
 sequence: plan (ledger A) → ownership normalization → unified Return cleanup →
@@ -312,7 +317,7 @@ def test_tier1_raises_when_ledger_unattached() -> None:
 	"""Post-promotion: the fallback `initialized_destructibles` state is
 	gone.  PRODUCTION path: the plan build refuses to run without a fresh
 	attached ledger (`require_fresh_ledger`).  AUTHORITY path: a direct
-	`site4_verdict` call with no ledger keeps the original Tier-1
+	`site4_disposition` call with no ledger keeps the original Tier-1
 	missing-ledger RuntimeError.  Silent wrong behaviour on either path
 	would reintroduce the split authority the promotion retired."""
 	import pytest
@@ -329,9 +334,9 @@ def test_tier1_raises_when_ledger_unattached() -> None:
 	with pytest.raises(AssertionError, match="requires an attached ledger"):
 		build_destructible_plan(func, type_table=type_table)
 	# Authority-level tripwire preserved for direct callers.
-	from lang.driftc.stage2.destructible_authority import site4_verdict
+	from lang.driftc.stage2.destructible_authority import site4_disposition
 	with pytest.raises(RuntimeError, match="without an attached ownership ledger"):
-		site4_verdict(
+		site4_disposition(
 			None,
 			fn_name=func.name,
 			block_name="entry",
@@ -339,16 +344,24 @@ def test_tier1_raises_when_ledger_unattached() -> None:
 			local="x",
 			local_ty=drop_ty,
 			type_table=type_table,
+			func=func,
 		)
 
 
-def test_tier1_raises_on_path_dependent_verdict() -> None:
-	"""Post-promotion: PathDependent at a drop_before_overwrite point
-	is the proof-obligation tripwire, raised at the PLAN slot in
-	production.  Today's lattice never produces MaybeUninit at any real
-	StoreLocal in observe (1031/1031 cases clean); if a future change
-	starts producing it, this raise fires so we investigate before
-	silently falling back to legacy.
+def test_path_dependent_zero_unsafe_without_flag_fails_closed() -> None:
+	"""PATH_DEPENDENT at a drop_before_overwrite point is NO LONGER an
+	unconditional tripwire — a conditional-move-then-overwrite is valid
+	source, and the lattice is CORRECT to return PathDependent (the former
+	"all site-4 PathDependent states are unreachable" contract is proven
+	false).  The authority resolves it per ownership class.
+
+	What REMAINS fail-closed (directive 6): a zero-storage-UNSAFE
+	PathDependent site that reaches planning WITHOUT drop_flags having
+	flagged the local.  That is a planning gap (drop_flags criterion 2c
+	must flag such overwrite sites); emitting an unconditional drop would
+	be a use-after-free on the moved branch, so we fail closed instead of
+	miscompiling.  Here `x` is a droppable struct (zero-unsafe) and no
+	drop_flags pass ran, so the guard has no flag metadata to consult.
 
 	CFG to force MaybeUninit at `join:0`:
 
@@ -385,7 +398,7 @@ def test_tier1_raises_on_path_dependent_verdict() -> None:
 	func.blocks["join"] = join
 	_attach_ledger(func)
 	from lang.driftc.stage2.destructible_planner import build_destructible_plan
-	with pytest.raises(RuntimeError, match="returned PathDependent"):
+	with pytest.raises(RuntimeError, match="without a drop flag"):
 		build_destructible_plan(func, type_table=type_table)
 
 

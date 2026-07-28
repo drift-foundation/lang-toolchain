@@ -1,0 +1,19 @@
+{
+  "counters": {
+    "c1_agree": 901956,
+    "c1_path_dependent": 20406,
+    "c3_moveout_flag_guarded": 4625,
+    "c3_moveout_owned": 1868972,
+    "c3_moveout_unreachable_block": 1854,
+    "c3_moveout_zero_safe": 13965,
+    "events": 2812184,
+    "fns": 1165311,
+    "pre_post_verdict_drift": 48230,
+    "site_class:drop_before_overwrite_site4": 14,
+    "site_class:materialized_lastuse_release": 619414,
+    "site_class:moveout_expansion": 1889416,
+    "site_class:overwrite_release": 234704,
+    "site_class:scope_exit_release": 68636
+  },
+  "fixtures_compiled": 925
+}

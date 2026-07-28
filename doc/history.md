@@ -1,5 +1,108 @@
 # Drift development history
 
+## 2026-07-27 (0.33.89: std.json iterative parser + PathDependent drop-before-overwrite compiler fix; ABI 22 unchanged)
+
+Closes a client-triggerable denial-of-service and the compiler defect that
+blocked its fix, both folded into the 0.33.89/ABI-22 candidate (ABI
+byte-unchanged — compiler-internal + stdlib only).
+
+**The DoS.** The recursive `std.json` parser recursed one native/fiber
+frame per nesting level, so a deeply-nested client document drove a
+default 256 KiB serve fiber into its guard page (SIGSEGV), debug-lane
+first (larger frames overflow sooner); the web app had worked around it
+with a 2 MiB fiber stack. The parser is rewritten to an ITERATIVE
+explicit-stack form: container state (in-progress arrays/objects) lives in
+a HEAP frame stack, so nesting costs heap, not native stack. Every
+observable is preserved byte-for-byte — scalar handling, error tags AND
+offsets (including the keyed `duplicate-key` error), duplicate-key timing
+(Reject probes at the key before its value), the `_SpanTree` locate
+sidecar, and the object path's throwing HashMap inserts absorbed to
+`internal-error`. Parity is proven by the full 70-case `std_json_*` e2e
+corpus (written against the recursive parser) passing unchanged, plus new
+deep-input tests the recursive parser could not run. The standard profiles
+(`permissive`/`strict`/`signed_ir`, and thus `parse`) now carry a finite
+default `max_depth = 128` (selected from measured real-document depths);
+`max_depth = None` is the documented opt-in for unbounded depth. Proof:
+5000-deep input on a DEFAULT 256 KiB VirtualThread (no 2 MiB mitigation)
+returns `limit-depth` and exits 0 — no signal — in BOTH the debug and
+release lanes. Hot-path perf is gated by a comparative same-toolchain,
+order-controlled (A/B) multi-launch median-ratio measurement of the
+iterative parser against the preserved recursive parser across multiple
+shallow shapes (scalar / tiny array / tiny object / malformed / request),
+plus per-parse heap-allocation counts and a multi-size linear-scaling gate.
+The remaining shallow tradeoff for closing the DoS was profiled with
+callgrind (hardware counters unavailable in the sandbox) — per-parse
+instructions, mispredicts, and hottest functions per shape, iterative vs
+recursive. The full profiling record (exact commands, callgrind options,
+source/binary hashes, raw per-shape figures, and the annotated
+hot-function summary) is preserved durably in
+`doc/perf-analysis-json-iterative-parser.md`; the figures below are backed
+by it. Two profile-guided optimizations were LANDED: (1) a root-scalar
+fast dispatch in `_parse_value` (a top-level scalar skips the engine and
+its frame-stack allocation entirely); (2) an in-place object/array hand-off
+(mutate the top frame through `&mut stack[top]` rather than a whole-frame
+pop/mutate/push copy). A third change — an inline key TAKE on the object
+hand-off (`mem.replace(&mut *pkey, "")` moving the key into the field map
+instead of cloning it) — cuts instruction count and atomic retain traffic
+(`drift_string_retain` −24% on the tiny-object shape); the binding
+interleaved A/B (same process times both parsers, forms shuffled, UNPINNED
+and SERIAL on an idle host, medians of all samples, no minima) measures it
+~5% faster on the tiny-object shape and a wash on request (within run-to-run
+noise). The take is BOUND on the robust tiny-object win plus the retain
+saving and a clean ownership corpus; it is never measurably worse than the
+clone. The perf gate runs serially outside the parallel xdist lane (via
+`just perf-protocols`) with per-shape ratio + absolute-ns bands. A further
+idea — a node-only non-located engine specialization — was profile-assessed
+and NOT pursued: callgrind
+instruction attribution bounds the COMPLETE non-located span-handling cost
+(the `_set_leaf` calls whose body is skipped when `!locate`, the drop of the
+always-allocated empty span vectors, and the inlined `if ctx.locate`
+branches and `move span` drops) at ~188 Ir/parse ≈ 0.49% on the request
+shape (≤0.8% on bare scalars), so a second parser body is not warranted for a
+sub-0.5% gain. The residual shallow overhead vs the recursive parser is
+dominated by heap frame-stack traffic (the intended cost of holding
+container state off the fiber stack), not key handling or span transport,
+both bounded above. It scales linearly (flat per-element cost across an 8x
+size range).
+
+**The compiler defect.** Landing the iterative parser (and its owned
+container-frame destructuring) surfaced a long-standing ICE: a destructible
+local that is CONDITIONALLY MOVED on one branch and then OVERWRITTEN is
+valid source whose liveness at the overwrite is genuinely PathDependent,
+but the site-4 drop-before-overwrite authority treated all PathDependent
+overwrite verdicts as an unreachable proof-obligation tripwire and ICE'd.
+The lattice is correct to return PathDependent; the authority
+(`destructible_authority.site4_disposition`, renamed from `site4_verdict`)
+now RESOLVES it per ownership class into an explicit typed disposition
+(never masking, never forcing MUST_DROP/MUST_NOT_DROP):
+zero-storage-drop-safe values (variants via tag-0, arrays via the zeroed
+header) emit the canonical drop UNCONDITIONALLY (dropping moved-out zeroed
+storage is a safe no-op); zero-storage-UNSAFE values emit a FLAG-GUARDED
+drop at the overwrite, gated on the local's runtime drop flag. Drop-flag
+planning (`drop_flags`) gained criterion 2c — flagging zero-unsafe
+PathDependent OVERWRITE sites (the general carrier neither exit-liveness
+nor the cleanup-hook criterion admits) — and now allow-lists
+`__match_binder_*` (a `var` match binder is a real user-assignable
+destructible that valid source can conditionally move then overwrite, so
+proper compiler support flag-manages it rather than the site-4 authority
+failing closed; the allowlist is scoped to `__match_binder_*` — every other
+`__` internal local, including `__borrow_tmp`, is left to the general skip
+rather than allow-listed on speculation). A fail-closed
+tripwire remains for any zero-unsafe PathDependent overwrite that reaches
+emission without a drop flag (a planning gap, never a silent miscompile). The
+guarded emission reuses ONE shared block-split primitive
+(`drop_flag_guard`) for both the site-1 scope-drop authority
+(`cleanup_authoring`, rewired to it, byte-identical output) and the site-4
+overwrite authority, and its block-split anchor relocation is enforced by
+an EmitterPhase-owned, transactional relocation contract on the frozen
+`CleanupPlan` (staged-INSTR-only, phase-created-block-only,
+terminator-relocation-rejected, cross-block split-chain order proven,
+published only after a complete postflight; a private session type + AST
+bypass pin keep the contract un-circumventable). Exactly-once destruction
+across moved/live branches, loops, throwing unwind, and repeated
+overwrites is proven by a compile+run regression and a valgrind twin; the
+common (non-guarded) path adds ZERO ledger builds.
+
 ## 2026-07-26 (0.33.89: String hot-path recovery — launch-time trace cache; ABI 22 unchanged)
 
 The 0.33.88 String hot-path regression that blocked certification

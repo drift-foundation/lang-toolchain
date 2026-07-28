@@ -105,7 +105,7 @@ class Decision:
 	payload: Any                     # site-specific emission data (S2 supplies immutable)
 
 
-class ConsumptionSession:
+class _ConsumptionSession:
 	"""One PHASE-SCOPED consumption pass over the CURRENT function.
 
 	Constructed by `CleanupPlan.open_session(func)`: scans the function
@@ -136,7 +136,12 @@ class ConsumptionSession:
 	    phase.mark_rewritten(); phase.commit()     # postflight validate + consume
 	"""
 
-	def __init__(self, plan: "CleanupPlan", func: "M.MirFunc") -> None:
+	def __init__(
+		self,
+		plan: "CleanupPlan",
+		func: "M.MirFunc",
+		relocations: "Dict[int, str] | None" = None,
+	) -> None:
 		self._plan = plan
 		self._func = func
 		self._open = True
@@ -145,11 +150,22 @@ class ConsumptionSession:
 		self._loc: Dict[int, Tuple[str, int, bool]] = {}
 		# id(obj) -> total occurrences across the whole function
 		self._count: Dict[int, int] = {}
+		# token -> the block the anchor was SANCTIONED to relocate to by a
+		# validated block split (see `CleanupPlan._relocations`).  All
+		# location checks use this in place of the frozen `coord.block` — a
+		# relocation is DECLARED and validated, never a silent tolerance of
+		# a moved anchor.
+		self._reloc: Dict[int, str] = relocations or {}
 		self._scan()
 		self._validate_relative_order()
 
+	def _expected_block(self, dec: "Decision") -> str:
+		"""The block `dec`'s anchor must currently be in: the frozen
+		`coord.block`, unless a validated split relocated it."""
+		return self._reloc.get(dec.token, dec.coord.block)
+
 	# context-manager: a session is a phase; leaving the phase closes it.
-	def __enter__(self) -> "ConsumptionSession":
+	def __enter__(self) -> "_ConsumptionSession":
 		return self
 
 	def __exit__(self, *exc: Any) -> None:
@@ -188,7 +204,10 @@ class ConsumptionSession:
 		for dec in self._plan._decisions:
 			if dec.coord.anchor_kind != ANCHOR_INSTR:
 				continue
-			by_block.setdefault(dec.coord.block, []).append(dec)
+			# Group by the CURRENT expected block (post-relocation), so a
+			# split that moved an anchor into a fresh child block is checked
+			# for order within that child block, not its original block.
+			by_block.setdefault(self._expected_block(dec), []).append(dec)
 		for bname, decs in by_block.items():
 			ordered = sorted(decs, key=lambda d: d.coord.orig_index)
 			last = -1
@@ -248,10 +267,15 @@ class ConsumptionSession:
 				f"(disappearance/duplication/movement fails closed)"
 			)
 		bname, index, is_term = entry
-		if bname != dec.coord.block:
+		expected_block = self._expected_block(dec)
+		if bname != expected_block:
+			_via = (
+				f" (relocated from {dec.coord.block!r})"
+				if expected_block != dec.coord.block else ""
+			)
 			raise PlanContractError(
 				f"cleanup_plan[{self._plan._fn_name}]: anchor for site "
-				f"{dec.site!r} moved from block {dec.coord.block!r} to "
+				f"{dec.site!r} moved from block {expected_block!r}{_via} to "
 				f"{bname!r}"
 			)
 		if dec.coord.anchor_kind == ANCHOR_TERM and not is_term:
@@ -321,6 +345,26 @@ class CleanupPlan:
 		self._frozen = False
 		self._next_token = 0
 		self._consumed: set[int] = set()   # PLAN-PRIVATE consumption state (tokens)
+		# ── Sanctioned block-split relocations (PUBLISHED map) ──
+		# A frozen `Decision`'s INSTRUCTION anchor may be MOVED to a fresh
+		# child block by a validated block split (e.g. `overwrite_cleanup`'s
+		# FLAG_GUARDED site-4 emission splits a store's block; the guarded
+		# store and any later staged store in the same tail relocate into the
+		# new `post_blk`).  This map is the SOURCE OF TRUTH every session
+		# honors, so the same-block + relative-order anchor contract holds
+		# against the relocated location — not a stale coordinate.
+		#
+		# It is PLAN-PRIVATE and mutated ONLY by `EmitterPhase.commit()`, and
+		# only TRANSACTIONALLY — after the phase's complete postflight (every
+		# staged anchor located at its relocated site AND the original
+		# decision order proven across the split control-flow chain) succeeds.
+		# A failed postflight leaves this map untouched.  Relocation
+		# AUTHORIZATION lives entirely on `EmitterPhase` (which knows its own
+		# staged set and the blocks IT created this phase) — there is no
+		# public plan method to register blocks or relocate anchors, so a
+		# caller cannot relocate an unstaged decision, reuse another phase's
+		# block, or move a terminator anchor.
+		self._relocations: Dict[int, str] = {}   # token -> current expected block (INSTR only)
 
 	# ---- build phase -------------------------------------------------
 
@@ -533,9 +577,8 @@ class CleanupPlan:
 
 	# ---- consumption phase -------------------------------------------
 
-	def open_session(self, func: "M.MirFunc") -> ConsumptionSession:
-		"""Open a batch consumption session: ONE scan of `func`, then O(1)
-		`locate`. Forbidden before finalization."""
+	def _validate_session_target(self, func: "M.MirFunc") -> None:
+		"""Shared precondition for opening any session over `func`."""
 		if not self._frozen:
 			raise PlanContractError(
 				f"cleanup_plan[{self._fn_name}]: open_session() before "
@@ -546,7 +589,19 @@ class CleanupPlan:
 				f"cleanup_plan[{self._fn_name}]: session func {func.name!r} "
 				f"does not belong to this plan"
 			)
-		return ConsumptionSession(self, func)
+
+	def open_session(self, func: "M.MirFunc") -> _ConsumptionSession:
+		"""Open a batch consumption session: ONE scan of `func`, then O(1)
+		`locate`. Forbidden before finalization.
+
+		The session honors ONLY the PUBLISHED relocation map (`_relocations`).
+		There is NO way — public or otherwise — to supply an alternative map
+		here: the session type is module-private and its relocation-carrying
+		construction is reachable only from `EmitterPhase.commit` (which lives
+		in this module).  So a caller cannot fabricate a relocation and then
+		consume against it."""
+		self._validate_session_target(func)
+		return _ConsumptionSession(self, func, relocations=self._relocations)
 
 	def begin_phase(self, func: "M.MirFunc") -> "EmitterPhase":
 		"""Open an emitter phase enforcing preflight → rewrite → postflight →
@@ -570,7 +625,7 @@ class CleanupPlan:
 			)
 
 	def _mark_consumed(self, dec: "Decision") -> None:
-		"""Plan-private: called ONLY by `ConsumptionSession.consume` after a
+		"""Plan-private: called ONLY by `_ConsumptionSession.consume` after a
 		successful `locate`. There is no public way to mark a decision
 		consumed without a session validating its anchor first."""
 		self._require_owned(dec)
@@ -690,19 +745,36 @@ class EmitterPhase:
 	def __init__(self, plan: "CleanupPlan", func: "M.MirFunc") -> None:
 		self._plan = plan
 		self._func = func
-		self._preflight: ConsumptionSession | None = plan.open_session(func)
+		self._preflight: _ConsumptionSession | None = plan.open_session(func)
 		self._staged: List[Decision] = []
 		self._staged_tokens: set[int] = set()
 		self._rewritten = False
 		self._committed = False
+		# Snapshot the block names present at phase START.  A relocation
+		# target must be a block this phase CREATED — i.e. present now but NOT
+		# in this snapshot.  This is what makes "newly created by this phase"
+		# enforceable (a pre-existing block, or a block another phase created,
+		# is in the snapshot and cannot be a relocation target).
+		self._blocks_at_start: set[str] = set(func.blocks.keys())
 
 	def stage(self, dec: "Decision") -> int:
 		"""PREFLIGHT: validate `dec` against the pre-rewrite MIR and stage it
-		for consumption at commit. Returns the preflight index."""
+		for consumption at commit. Returns the preflight index.
+
+		Rejects an ALREADY-CONSUMED decision: staging one would let `commit`
+		attempt to consume it a second time AFTER publishing relocations,
+		leaving relocation state behind on the failure.  A decision may be
+		consumed exactly once, and only by the phase that stages it."""
 		if self._rewritten:
 			raise PlanContractError(
 				f"cleanup_plan[{self._plan._fn_name}]: stage() after "
 				f"mark_rewritten()"
+			)
+		if dec.token in self._plan._consumed:
+			raise PlanContractError(
+				f"cleanup_plan[{self._plan._fn_name}]: stage() of an "
+				f"already-consumed decision for site {dec.site!r} at "
+				f"{dec.coord.block}:{dec.coord.orig_index}"
 			)
 		assert self._preflight is not None
 		index = self._preflight.locate(dec)
@@ -731,10 +803,143 @@ class EmitterPhase:
 		self._preflight.close()
 		self._preflight = None
 
+	def _compute_relocations(self) -> "Dict[int, str]":
+		"""Derive this phase's PENDING relocations from its PRIVATE staged set
+		— never any other plan-owned decision.  A staged anchor now in a
+		block other than its currently-expected block is a relocation IFF:
+
+		  * it is an INSTRUCTION anchor (a terminator / non-INSTR anchor is
+		    never relocated — it must have been consumed by an earlier phase);
+		  * it moved into a block THIS PHASE created (present now, absent from
+		    `self._blocks_at_start`) — never a pre-existing block nor a block
+		    another phase created (that would be in the snapshot);
+		  * it is present EXACTLY once (a duplicate/vanished anchor is left for
+		    `locate()` to reject, never silently relocated).
+
+		Fails closed on a terminator or non-phase-created target.  Returns the
+		pending token->block map WITHOUT touching the published plan map."""
+		where: Dict[int, List[str]] = {}
+		for bname, blk in self._func.blocks.items():
+			for instr in blk.instructions:
+				where.setdefault(id(instr), []).append(bname)
+			if blk.terminator is not None:
+				where.setdefault(id(blk.terminator), []).append(bname)
+		phase_created = set(self._func.blocks.keys()) - self._blocks_at_start
+		pending: Dict[int, str] = {}
+		for dec in self._staged:
+			cur = where.get(id(dec.obj), [])
+			expected = self._plan._relocations.get(dec.token, dec.coord.block)
+			if len(cur) != 1 or cur[0] == expected:
+				continue
+			new_block = cur[0]
+			if dec.coord.anchor_kind != ANCHOR_INSTR:
+				raise PlanContractError(
+					f"cleanup_plan[{self._plan._fn_name}]: {dec.coord.anchor_kind} "
+					f"anchor for site {dec.site!r} at {dec.coord.block}:"
+					f"{dec.coord.orig_index} moved to {new_block!r} — "
+					f"terminator/non-instruction relocation is not permitted "
+					f"(a block split relocates tail instructions only; a "
+					f"terminator anchor must be consumed by an earlier phase)"
+				)
+			if new_block not in phase_created:
+				raise PlanContractError(
+					f"cleanup_plan[{self._plan._fn_name}]: staged anchor for "
+					f"site {dec.site!r} at {dec.coord.block}:{dec.coord.orig_index} "
+					f"moved to block {new_block!r}, which was NOT created during "
+					f"this phase (pre-existing, or created by another phase) — "
+					f"illegitimate relocation target"
+				)
+			pending[dec.token] = new_block
+		return pending
+
+	def _main_line_chain(self, start: str, phase_created: "set[str]") -> "Dict[str, int]":
+		"""Order blocks along the split's main (non-drop) control-flow chain
+		beginning at `start` (the original, now-split block): `start` → its
+		`post` → that post's `post` → …  A guarded split terminates its origin
+		with `IfTerminator(flag, drop_blk, post_blk)`, so the main line is the
+		ELSE edge (the drop block is the side branch); a plain `Goto` into a
+		phase-created block continues the line.  A loop backedge (a post whose
+		terminator points back out of the chain) stops the walk via the
+		visited guard.  Returns {block_name: chain_index}."""
+		order: Dict[str, int] = {}
+		cur: "str | None" = start
+		pos = 0
+		while cur is not None and cur not in order:
+			order[cur] = pos
+			pos += 1
+			blk = self._func.blocks.get(cur)
+			if blk is None:
+				break
+			term = blk.terminator
+			nxt: "str | None" = None
+			if isinstance(term, M.IfTerminator):
+				# Split origin: main line continues at the post (else) edge,
+				# but ONLY when both edges are phase-created (a genuine split).
+				if term.then_target in phase_created and term.else_target in phase_created:
+					nxt = term.else_target
+			elif isinstance(term, M.Goto):
+				if term.target in phase_created:
+					nxt = term.target
+			cur = nxt
+		return order
+
+	def _validate_split_chain_order(self, post: "_ConsumptionSession", merged: "Dict[int, str]") -> None:
+		"""Prove the ORIGINAL order of staged INSTR anchors is preserved
+		ACROSS the split control-flow chain — not merely within each
+		destination block.  For every original block that had ≥1 staged
+		anchor relocated, walk the main-line chain and require the anchors,
+		sorted by original index, to be strictly increasing in
+		(chain-position-of-current-block, index-within-block).  A cross-block
+		order reversal (two originally-ordered anchors landing in a swapped
+		chain order) fails closed."""
+		phase_created = set(self._func.blocks.keys()) - self._blocks_at_start
+		by_orig: Dict[str, List[Decision]] = {}
+		for dec in self._staged:
+			if dec.coord.anchor_kind != ANCHOR_INSTR:
+				continue
+			by_orig.setdefault(dec.coord.block, []).append(dec)
+		for ob, decs in by_orig.items():
+			relocated = [d for d in decs if merged.get(d.token, d.coord.block) != d.coord.block]
+			if not relocated:
+				continue   # nothing left ob → the per-block order check suffices
+			chain = self._main_line_chain(ob, phase_created)
+			ranked: List[Tuple[int, int, int]] = []   # (orig_index, chain_pos, within_index)
+			for d in sorted(decs, key=lambda x: x.coord.orig_index):
+				entry = post._loc.get(id(d.obj))
+				if entry is None:
+					raise PlanContractError(
+						f"cleanup_plan[{self._plan._fn_name}]: staged anchor for "
+						f"site {d.site!r} (orig {ob}:{d.coord.orig_index}) vanished "
+						f"before split-chain order validation"
+					)
+				bname, within, _is_term = entry
+				if bname not in chain:
+					raise PlanContractError(
+						f"cleanup_plan[{self._plan._fn_name}]: staged anchor for "
+						f"site {d.site!r} (orig {ob}:{d.coord.orig_index}) is in "
+						f"block {bname!r}, which is not on the split main-line "
+						f"chain from {ob!r} — anchor escaped the split chain"
+					)
+				ranked.append((d.coord.orig_index, chain[bname], within))
+			last_key = (-1, -1)
+			for orig_index, cpos, within in ranked:
+				key = (cpos, within)
+				if key <= last_key:
+					raise PlanContractError(
+						f"cleanup_plan[{self._plan._fn_name}]: split-chain order "
+						f"violation in original block {ob!r}: anchor at orig index "
+						f"{orig_index} lands at chain position {key}, not strictly "
+						f"after the previous anchor at {last_key} (cross-block "
+						f"order reversal)"
+					)
+				last_key = key
+
 	def commit(self) -> None:
 		"""POSTFLIGHT: fresh-validate every staged decision against the
-		mutated MIR, then mark them consumed. Fails closed (marking nothing)
-		if any staged anchor no longer satisfies the contract."""
+		mutated MIR, prove the original order across any split chain, then —
+		TRANSACTIONALLY — publish this phase's relocations and mark the
+		decisions consumed. Fails closed (publishing/marking NOTHING) if any
+		staged anchor no longer satisfies the contract."""
 		if self._committed:
 			raise PlanContractError(
 				f"cleanup_plan[{self._plan._fn_name}]: commit() twice"
@@ -744,12 +949,50 @@ class EmitterPhase:
 				f"cleanup_plan[{self._plan._fn_name}]: commit() before "
 				f"mark_rewritten()"
 			)
-		post = self._plan.open_session(self._func)
+		# 1) Derive this phase's PENDING relocations (staged-only,
+		#    phase-created-only, INSTR-only).  Raises before any mutation.
+		pending = self._compute_relocations()
+		# 2) Postflight-validate against the PUBLISHED map merged with PENDING
+		#    (pending is NOT yet published — a failure below rolls it back by
+		#    simply never publishing it).  Uses the module-private session
+		#    constructor: the pending map is NEVER exposed on the public plan
+		#    surface.
+		merged = dict(self._plan._relocations)
+		merged.update(pending)
+		# The pending-relocation session is constructed HERE — the ONLY place
+		# outside `open_session` that builds a session with a non-published
+		# map.  `_ConsumptionSession` is module-private and this construction
+		# lives inside cleanup_plan.py, so no external module can fabricate a
+		# relocation-carrying session (enforced by the AST bypass pin).
+		self._plan._validate_session_target(self._func)
+		post = _ConsumptionSession(self._plan, self._func, relocations=merged)
+		try:
+			for dec in self._staged:
+				post.locate(dec)      # relocated same-block + identity + fields + types
+			self._validate_split_chain_order(post, merged)
+		finally:
+			post.close()
+		# 3) PREVALIDATE the COMPLETE staged token set can be consumed —
+		#    owned + not already consumed — BEFORE any publication, so the
+		#    atomic step below cannot raise partway.  (`stage()` already
+		#    rejects already-consumed decisions; this is the belt-and-braces
+		#    proof over the whole set.)
 		for dec in self._staged:
-			post.locate(dec)          # fresh postflight validation (fail closed)
+			self._plan._require_owned(dec)
+			if dec.token in self._plan._consumed:
+				raise PlanContractError(
+					f"cleanup_plan[{self._plan._fn_name}]: staged decision for "
+					f"site {dec.site!r} at {dec.coord.block}:{dec.coord.orig_index} "
+					f"is already consumed at commit — refusing to publish "
+					f"relocations for a non-consumable set"
+				)
+		# 4) ATOMIC publish: update `_relocations` and `_consumed` together
+		#    with NO raise between them (both are plain set/dict mutations on
+		#    a pre-validated set), so relocation state can never be published
+		#    without the matching consumption, nor vice-versa.
+		self._plan._relocations.update(pending)
 		for dec in self._staged:
-			self._plan._mark_consumed(dec)
-		post.close()
+			self._plan._consumed.add(dec.token)
 		self._committed = True
 
 
@@ -767,7 +1010,6 @@ __all__ = (
 	"ANCHOR_TERM",
 	"AnchorCoord",
 	"Decision",
-	"ConsumptionSession",
 	"EmitterPhase",
 	"CleanupPlan",
 	"anchor_instr",

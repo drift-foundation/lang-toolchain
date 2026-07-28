@@ -102,8 +102,10 @@ def test_plan_consumer_emits_nullsafe_and_site4_drops():
 
 	plan, census, _ = build_destructible_plan(func, type_table=tt)
 	assert census["nullsafe"] == 1
-	assert census["site4_must_drop"] == 1
-	assert census["site4_must_not_drop"] == 1
+	assert census["site4_disp_unconditional"] == 1
+	assert census["site4_disp_no_drop"] == 1
+	assert census["site4_verdict_must_drop"] == 1
+	assert census["site4_verdict_must_not_drop"] == 1
 
 	# Verdicts as expected before we consume.
 	s4 = {id(d.obj): d.payload.verdict for d in plan.decisions_for_site("site4")}

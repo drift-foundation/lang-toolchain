@@ -37,7 +37,7 @@ from .destructible_authority import (
 	compute_store_defs,
 	flag_managed_at_return,
 	site3_return_decision,
-	site4_verdict,
+	site4_disposition,
 	string_return_releases,
 )
 from .cleanup_plan import CleanupPlan, anchor_instr, anchor_term
@@ -45,6 +45,7 @@ from .cleanup_payloads import (
 	NullsafePayload,
 	Site3Drop,
 	Site3ReturnPayload,
+	Site4Disposition,
 	Site4Payload,
 	StringReleasePayload,
 )
@@ -134,8 +135,20 @@ def build_destructible_plan(
 	census: Dict[str, int] = {
 		"site3_returns": 0,
 		"site3_locals": 0,
-		"site4_must_drop": 0,
-		"site4_must_not_drop": 0,
+		# Site-4 census carries BOTH axes, kept strictly separate so
+		# telemetry never conflates a raw ledger verdict with the emission
+		# disposition the authority derived from it:
+		#   * disposition axis — what the emitter actually authors.
+		"site4_disp_no_drop": 0,
+		"site4_disp_unconditional": 0,
+		"site4_disp_flag_guarded": 0,
+		#   * raw-verdict axis — the UNMODIFIED ledger verdict.  A zero-safe
+		#     PATH_DEPENDENT counts as site4_verdict_path_dependent here even
+		#     though its disposition is UNCONDITIONAL; it is NOT folded into
+		#     site4_verdict_must_drop.
+		"site4_verdict_must_drop": 0,
+		"site4_verdict_must_not_drop": 0,
+		"site4_verdict_path_dependent": 0,
 		"nullsafe": 0,
 		"nullsafe_synthetic": 0,
 		"string_release_returns": 0,
@@ -171,8 +184,9 @@ def build_destructible_plan(
 				census["nullsafe"] += 1
 			elif local in destructible_locals:
 				ty = local_types[local]
-				# Closed authority: verdict AND canonical needs_drop axis.
-				verdict, needs_drop = site4_verdict(
+				# Closed authority: typed disposition + raw verdict +
+				# canonical needs_drop axis + (flag-guarded only) flag local.
+				disposition, verdict, needs_drop, flag_local = site4_disposition(
 					ledger,
 					fn_name=func.name,
 					block_name=bname,
@@ -180,21 +194,41 @@ def build_destructible_plan(
 					local=local,
 					local_ty=ty,
 					type_table=type_table,
+					func=func,
 				)
+				# Frozen type bindings carry the local's expected type AND,
+				# for a FLAG_GUARDED decision, the drop-flag local's Bool
+				# type — so the emitter validates the flag local through the
+				# plan (not the mutable func.local_types) at consumption.
+				_type_bindings = {local: ty}
+				if flag_local is not None:
+					_type_bindings[flag_local] = type_table.ensure_bool()
 				plan.add(
 					obj=instr,
 					coord=anchor_instr(bname, idx),
 					site="site4",
 					fields={"local": local, "value": instr.value},
-					type_bindings={local: ty},
+					type_bindings=_type_bindings,
 					payload=Site4Payload(
-						local=local, ty=ty, needs_drop=needs_drop, verdict=verdict
+						local=local, ty=ty, needs_drop=needs_drop,
+						verdict=verdict, disposition=disposition,
+						flag_local=flag_local,
 					),
 				)
-				if verdict is DropVerdict.MUST_DROP:
-					census["site4_must_drop"] += 1
+				# Disposition axis (what the emitter authors).
+				if disposition is Site4Disposition.NO_DROP:
+					census["site4_disp_no_drop"] += 1
+				elif disposition is Site4Disposition.FLAG_GUARDED:
+					census["site4_disp_flag_guarded"] += 1
 				else:
-					census["site4_must_not_drop"] += 1
+					census["site4_disp_unconditional"] += 1
+				# Raw-verdict axis (honest, unflattened).
+				if verdict is DropVerdict.MUST_DROP:
+					census["site4_verdict_must_drop"] += 1
+				elif verdict is DropVerdict.MUST_NOT_DROP:
+					census["site4_verdict_must_not_drop"] += 1
+				else:
+					census["site4_verdict_path_dependent"] += 1
 				# Site-4 observe-mode telemetry (S8 re-home): the legacy pass's
 				# per-StoreLocal `[drift:ownership_ledger]` record — lost when
 				# the S4 migration neutered its site-4 arm — now emits HERE,
@@ -203,22 +237,29 @@ def build_destructible_plan(
 				# emission, so observe re-runs keep catching any new
 				# bucket-5/6 class.  Debug-gated; zero cost otherwise.
 				if drift_debug.enabled("ownership_ledger"):
+					if verdict is DropVerdict.MUST_DROP:
+						_site_verdict = _ledger_events.VERDICT_MUST_DROP
+						_site_reason = _ledger_events.REASON_NEEDS_DROP
+					elif verdict is DropVerdict.MUST_NOT_DROP:
+						_site_verdict = _ledger_events.VERDICT_MUST_NOT_DROP
+						_site_reason = _ledger_events.REASON_NOT_DROP_NEEDING
+					else:
+						# PathDependent reported honestly, tagged with the
+						# ownership class the authority used to resolve it.
+						_site_verdict = _ledger_events.VERDICT_PATH_DEPENDENT
+						_site_reason = (
+							_ledger_events.REASON_PATH_DEPENDENT_FLAG_GUARDED
+							if disposition is Site4Disposition.FLAG_GUARDED
+							else _ledger_events.REASON_PATH_DEPENDENT_ZERO_SAFE
+						)
 					_reporter.check(
 						ledger,
 						fn_name=func.name,
 						site=_ledger_events.SITE_DROP_BEFORE_OVERWRITE,
 						point=(bname, idx),
 						local=local,
-						site_verdict=(
-							_ledger_events.VERDICT_MUST_DROP
-							if verdict is DropVerdict.MUST_DROP
-							else _ledger_events.VERDICT_MUST_NOT_DROP
-						),
-						site_reason=(
-							_ledger_events.REASON_NEEDS_DROP
-							if verdict is DropVerdict.MUST_DROP
-							else _ledger_events.REASON_NOT_DROP_NEEDING
-						),
+						site_verdict=_site_verdict,
+						site_reason=_site_reason,
 						needs_drop=_ledger_needs_drop,
 						emit=_reporter.stderr_emit,
 					)

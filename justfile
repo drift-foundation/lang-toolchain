@@ -130,6 +130,13 @@ perf-protocols:
 		--stdlib-root stdlib tools/perf/regex_bench.drift --entry main::main -o "$out/regex.bin"
 	echo "== regex bench (3 fresh launches; trace env scrubbed — regex uses Strings too) =="
 	for i in 1 2 3; do echo "-- launch $i"; env -u DRIFT_STR_TRACE -u DRIFT_STR_TRACE_FILTER "$out/regex.bin"; done
+	# std.json iterative-vs-recursive wall-clock gate: SERIAL (never xdist —
+	# `-p no:xdist`), unpinned, per-shape ratio + absolute-ns bands.  This is
+	# the mandatory home for the JSON perf gate (excluded from `lang-driver-test`
+	# via `-m "not perf"`); a band breach fails the lane (set -e).
+	echo "== std.json iterative-vs-recursive perf gate (serial, unpinned) =="
+	PYTHONPATH=. ./.venv/bin/python3 -m pytest -p no:xdist -m perf -s \
+		lang/tests/driver/test_std_json_parse_perf_gate.py
 	echo "perf-protocols: outputs in $out"
 
 # ── Ownership CORPUS baseline PROMOTION (reviewed, manual) ───────────
@@ -160,10 +167,11 @@ ownership-corpus-promote RUN_DIR APPROVAL *FLAGS:
 # (predecessor/ + candidate/ artifact copies, COMPACT per-fixture
 # counter extractions, and a facts-only pending approval draft with
 # machine-computed attribution) from the retained candidate and
-# predecessor runs.  The reviewer supplies judgment (verifies
-# attribution_facts, writes baseline_md, sets identity/date/status)
-# before promotion; the raw build/tmp runs need not be preserved after
-# the record is generated and verified.
+# predecessor runs.  The reviewer supplies judgment by APPROVING —
+# renaming approval-DRAFT.json to approval.json (approval is FILENAME-ONLY;
+# no JSON edits, and Git records the approver identity/date).  The draft is
+# already complete (baseline_md composed mechanically); the raw build/tmp
+# runs need not be preserved after the record is generated and verified.
 ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -308,11 +316,14 @@ lang-driver-test:
 	  echo "pytest is missing in .venv; please install it (e.g., .venv/bin/python3 -m pip install pytest)"; \
 	  exit 1; \
 	fi
+	# `-m "not perf"`: the native wall-clock perf gate MUST NOT run in this
+	# parallel lane — concurrent rows contend for the CPU and invalidate the
+	# timing. It runs serially via `just perf-protocols` (mandatory pre-cert).
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" --dist=worksteal -v lang/tests/driver; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" --dist=worksteal -m "not perf" -v lang/tests/driver; \
 	else \
 	  echo "pytest-xdist is missing in .venv; running driver tests serially (install: ./.venv/bin/python3 -m pip install pytest-xdist)"; \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -m "not perf" -v lang/tests/driver; \
 	fi
 
 # Basic LLVM codegen smoke test (llvmlite), kept separate from pytest collection.
@@ -436,10 +447,13 @@ ext-consumer-test:
 # Nightly: full driver suite + complete package-consumer e2e (blocking).
 # ASAN: DRIFT_ASAN=1 just ext-consumer-test-nightly
 ext-consumer-test-nightly:
+	# `-m "not perf"`: the native wall-clock perf gate must never run in this
+	# parallel lane (CPU contention invalidates the timings); it runs serially
+	# via `just perf-protocols`.
 	if ./.venv/bin/python3 -c "import xdist" >/dev/null 2>&1; then \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" --dist=worksteal -v lang/tests/driver; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -n "${DRIVER_JOBS:-${PYTEST_JOBS:-{{PYTEST_AUTO_JOBS}}}}" --dist=worksteal -m "not perf" -v lang/tests/driver; \
 	else \
-	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -v lang/tests/driver; \
+	  PYTHONPATH=. ./.venv/bin/python3 -m pytest -m "not perf" -v lang/tests/driver; \
 	fi
 	PYTHONPATH=. ./.venv/bin/python3 lang/tests/codegen/e2e/pkg_consumer_runner.py --blocking --summarize
 

@@ -125,6 +125,7 @@ from .ledger_cache import (
 )
 from .ownership_ledger import DropVerdict, LiveState, LiveStateMap
 from .drop_policy_compute import compute_drop_policy, zero_storage_drop_safe
+from .drop_flag_guard import build_guarded_drop_blocks
 
 
 # Patch-2 reason tag for the zero-storage-UNSAFE + PathDependent
@@ -530,9 +531,19 @@ def author_cleanup(
 		# `current_blk` with an IfTerminator and starts a fresh
 		# `post_blk`.  Unguarded emissions before/between guards
 		# accumulate in the appropriate `current_instrs`.
+		#
+		# The guarded split shape (LoadLocal(flag) → IfTerminator →
+		# drop_blk[<drop_seq> + flag-clear + Goto] → post_blk) is authored
+		# by the SHARED `drop_flag_guard.build_guarded_drop_blocks`
+		# primitive — the SAME one the site-4 drop-before-overwrite
+		# authority uses — so the two sites cannot diverge (single
+		# implementation).  `name_prefix="cleanup"` preserves this site's
+		# historical `{blk}_cleanup_drop_{local}` / `_cleanup_post_{local}`
+		# block names, and the primitive allocates its flag temp before the
+		# drop-sequence temps, matching the pre-refactor temp order — so the
+		# emitted MIR is byte-identical to the former inline split.
 		current_blk = blk
 		current_instrs = list(pre_hook)
-		new_blocks: List[M.BasicBlock] = []
 
 		for kind, local, ty, _verdict, _raw_state in decisions:
 			if kind == _KIND_SKIP:
@@ -548,58 +559,46 @@ def author_cleanup(
 					current_instrs.append(M.ConstBool(dest=clear_dest, value=False))
 					current_instrs.append(M.StoreLocal(local=flag_for[local], value=clear_dest))
 				continue
-			# kind == _KIND_GUARDED
+			# kind == _KIND_GUARDED — split via the shared primitive.
 			flag_local = flag_for[local]
-			flag_load_dest = _new_temp()
-			current_instrs.append(M.LoadLocal(dest=flag_load_dest, local=flag_local))
 
-			# drop_blk is brand-new (not yet inserted into func.blocks);
-			# mutations to it cannot affect the attached ledger.  The
-			# block-list insert at line 571 (below) is the operation
-			# that actually invalidates the ledger; mark_ledger_dirty
-			# there.
-			drop_blk = M.BasicBlock(name=_new_block_name(func, f"{blk.name}_cleanup_drop_{local}", new_blocks))
-			tmp = _new_temp()
-			drop_blk.instructions.append(M.MoveOut(dest=tmp, local=local, ty=ty))  # ledger-cache-safety-audit: allow new-block
-			drop_blk.instructions.append(M.DropValue(value=tmp, ty=ty))  # ledger-cache-safety-audit: allow new-block
-			func.local_types[tmp] = ty
-			clear_dest = _new_temp()
-			drop_blk.instructions.append(M.ConstBool(dest=clear_dest, value=False))  # ledger-cache-safety-audit: allow new-block
-			drop_blk.instructions.append(M.StoreLocal(local=flag_local, value=clear_dest))  # ledger-cache-safety-audit: allow new-block
+			def _scope_drop_seq(buf, _local=local, _ty=ty):
+				tmp = _new_temp()
+				buf.append(M.MoveOut(dest=tmp, local=_local, ty=_ty))  # ledger-cache-safety-audit: allow new-block
+				buf.append(M.DropValue(value=tmp, ty=_ty))  # ledger-cache-safety-audit: allow new-block
+				func.local_types[tmp] = _ty
 
-			post_blk = M.BasicBlock(name=_new_block_name(func, f"{blk.name}_cleanup_post_{local}", new_blocks))
-			drop_blk.terminator = M.Goto(target=post_blk.name)  # ledger-cache-safety-audit: allow new-block
-
-			# current_blk IS in func.blocks; the next two mutations
-			# (instructions replacement + terminator) DO invalidate
-			# the attached ledger.
-			current_blk.instructions = list(current_instrs)
-			mark_ledger_dirty(func, "cleanup_authoring.emit_guarded_drop")
-			current_blk.terminator = M.IfTerminator(
-				cond=flag_load_dest,
-				then_target=drop_blk.name,
-				else_target=post_blk.name,
+			origin_blk, drop_blk, post_blk = build_guarded_drop_blocks(
+				func,
+				origin_block_name=current_blk.name,
+				pre_instrs=current_instrs,
+				tail_instrs=[],
+				original_term=original_term,
+				flag_local=flag_local,
+				drop_sequence=_scope_drop_seq,
+				new_temp=_new_temp,
+				pending=[],
+				label=local,
+				name_prefix="cleanup",
 			)
-
-			new_blocks.append(drop_blk)
-			new_blocks.append(post_blk)
+			# Register immediately so a chained second guarded split sees
+			# `post_blk` in func.blocks as its origin.
+			func.blocks[current_blk.name] = origin_blk
+			func.blocks[drop_blk.name] = drop_blk  # ledger-cache-safety-audit: allow new-block
+			func.blocks[post_blk.name] = post_blk  # ledger-cache-safety-audit: allow new-block
+			mark_ledger_dirty(func, "cleanup_authoring.emit_guarded_drop")
 			emitted_drops += 1
 
 			current_blk = post_blk
 			current_instrs = []
 
 		# After all decisions: append the post-hook instructions and
-		# restore the original terminator on the final `current_blk`.
+		# restore the original terminator on the final `current_blk` (the
+		# primitive left it holding the empty tail + original_term).
 		current_instrs.extend(post_hook)
 		current_blk.instructions = current_instrs
 		current_blk.terminator = original_term
 		mark_ledger_dirty(func, "cleanup_authoring.emit_unguarded_drop_tail")
-
-		# Register the new blocks.
-		for nb in new_blocks:
-			func.blocks[nb.name] = nb
-		if new_blocks:
-			mark_ledger_dirty(func, "cleanup_authoring.register_new_blocks")
 
 		# Rebuild ledger after block-split mutation: the original
 		# block's instructions/terminator changed, new blocks were
@@ -618,21 +617,6 @@ def author_cleanup(
 			worklist.insert(0, current_blk)
 
 	return emitted_drops
-
-
-def _new_block_name(func: M.MirFunc, base: str, pending: List[M.BasicBlock]) -> str:
-	"""Allocate a fresh block name that does not collide with existing
-	`func.blocks` keys NOR with blocks `pending` insertion (queued in
-	this pass call)."""
-	pending_names = {b.name for b in pending}
-	if base not in func.blocks and base not in pending_names:
-		return base
-	i = 1
-	while True:
-		name = f"{base}_{i}"
-		if name not in func.blocks and name not in pending_names:
-			return name
-		i += 1
 
 
 def _try_per_arm_elaboration(

@@ -68,6 +68,7 @@ from . import ownership_ledger_reporter as _ledger_reporter
 from .cleanup_plan import CleanupPlan, PlanContractError
 from .cleanup_payloads import NullsafePayload, Site4Payload
 from .ledger_cache import mark_ledger_dirty
+from .drop_flag_guard import build_guarded_drop_blocks
 from .string_ownership_analysis import classify_string_array_locals
 
 
@@ -306,12 +307,20 @@ def insert_overwrite_cleanup(
 	# MUST_NOT_DROP site-4 store ids — staged/consumed but MUST author no
 	# drop sequence (proven below).
 	must_not_drop_ids: Set[int] = set()
+	# id(StoreLocal) -> (store_obj, local, ty, flag_local) for
+	# FLAG_GUARDED (zero-storage-unsafe PathDependent) site-4 anchors —
+	# authored by a block split (drop iff the runtime drop flag is set),
+	# NOT the inline canonical sequence.
+	guarded_site4: Dict[int, Tuple[M.MInstr, str, TypeId, str]] = {}
 	# Emitter-local authoring side table: (store id, DropValue) per authored
 	# drop, in emission order. Keeps plan/validation identity OUT of the MIR
 	# nodes (no dynamic `plan_authored_for` attribute); the pre-commit
 	# bijection reads this. A LIST (not a dict) so a duplicate authoring for
 	# one store is detectable rather than silently overwritten.
 	emitted_drops: List[Tuple[int, M.DropValue]] = []
+	# FLAG_GUARDED authoring side table: (guarded store id, authored
+	# DropValue) — one per split, read by the guarded-emission validator.
+	guarded_authored: List[Tuple[int, M.DropValue]] = []
 
 	def _register_emit(dec, *, is_site4: bool, pl) -> None:
 		# Fail closed on a duplicate identity key: the plain dict would
@@ -345,10 +354,30 @@ def insert_overwrite_cleanup(
 				f"{dec.coord.block}:{dec.coord.orig_index} carries a "
 				f"{type(pl).__name__} payload (expected Site4Payload)"
 			)
-		phase.stage(dec)                       # preflight validate (even MUST_NOT_DROP)
-		if pl.emit:                            # MUST_DROP only (the 14)
+		phase.stage(dec)                       # preflight validate (every disposition)
+		if pl.guarded:                         # FLAG_GUARDED: block-split below
+			# Consumption-side flag validation (item 3).  `phase.stage(dec)`
+			# already ran the plan's `_check_type_bindings` (build+consume),
+			# which enforces that EVERY frozen binding's local still carries
+			# its frozen type in `func.local_types` — including the drop
+			# flag's Bool binding the planner froze.  Here we additionally
+			# pin that the binding was actually FROZEN (a future planner that
+			# forgot to bind the flag fails closed BEFORE any block split,
+			# never a runtime miscompile).
+			bool_ty = type_table.ensure_bool()
+			_bindings = dict(dec.type_bindings)
+			if _bindings.get(pl.flag_local) != bool_ty:
+				raise PlanContractError(
+					f"overwrite_cleanup (fn '{func.name}'): FLAG_GUARDED site4 "
+					f"decision for '{pl.local}' at {dec.coord.block}:"
+					f"{dec.coord.orig_index} has no Bool type binding for its "
+					f"drop flag '{pl.flag_local}' (bound "
+					f"{_bindings.get(pl.flag_local)!r})."
+				)
+			guarded_site4[id(dec.obj)] = (dec.obj, pl.local, pl.ty, pl.flag_local)
+		elif pl.emit:                          # UNCONDITIONAL: inline canonical drop
 			_register_emit(dec, is_site4=True, pl=pl)
-		else:                                  # MUST_NOT_DROP: emits nothing
+		else:                                  # NO_DROP: emits nothing
 			must_not_drop_ids.add(id(dec.obj))
 	for block in func.blocks.values():
 		new_instrs: List[M.MInstr] = []
@@ -380,6 +409,31 @@ def insert_overwrite_cleanup(
 			# Real dirty mark within the audit's proximity window of
 			# the actual mutation (no allow marker).
 			mark_ledger_dirty(func, "overwrite_cleanup.plan_overwrite")
+
+	# ── FLAG_GUARDED site-4: block-split guarded drops ──
+	# Zero-storage-UNSAFE PathDependent overwrites: the drop-before-overwrite
+	# must run IFF the local's runtime drop flag says the slot is live (the
+	# earlier branch that MAY have moved it out cleared the flag; dropping the
+	# moved-out zeroed storage would be a use-after-free / phantom drop).  The
+	# split shape is authored by the SHARED `drop_flag_guard` primitive so it
+	# cannot drift from the site-1 (cleanup_authoring) guarded authority.
+	if guarded_site4:
+		_emit_guarded_site4(
+			func, guarded_site4, local_types, _new_temp, guarded_authored
+		)
+		# One dirty mark for the whole block-split batch: origin blocks were
+		# replaced and drop/post blocks created (ledger (block, idx) state
+		# invalidated) — same discipline as cleanup_authoring's split.
+		mark_ledger_dirty(func, "overwrite_cleanup.guarded_site4_split")
+		_validate_guarded_site4_emission(func, guarded_site4, guarded_authored)
+		# The same-block postflight contract is resolved by the EmitterPhase:
+		# `phase.commit()` (below) derives this phase's relocations from its
+		# PRIVATE staged set, requires each relocated anchor to be an
+		# INSTRUCTION anchor moved into a block THIS PHASE created, proves the
+		# original decision order across the split control-flow chain, and only
+		# THEN publishes the relocation map — transactionally.  The emitter
+		# performs the split; authorization + validation live on the phase.
+		site4_emitted_count += len(guarded_site4)
 
 	# ── Pre-commit BIJECTION: emitting decision ↔ canonical drop sequence ──
 	# `phase.commit()` proves the STORE anchors survived, but not that each
@@ -629,6 +683,263 @@ def _validate_plan_emission(
 				f"'{bn}'[{si}]): destructible store for '{local}' lacks a "
 				f"correctly-linked canonical drop sequence immediately before "
 				f"it (operand/type mismatch)."
+			)
+
+
+def _emit_guarded_site4(
+	func: M.MirFunc,
+	guarded_site4: Dict[int, Tuple[M.MInstr, str, "TypeId", str]],
+	local_types: Dict[str, "TypeId"],
+	new_temp,
+	authored_out: List[Tuple[int, M.DropValue]],
+) -> "Set[str]":
+	"""Author the FLAG_GUARDED (zero-storage-UNSAFE PathDependent) site-4
+	drop-before-overwrite cleanups by splitting each store's block.
+
+	For each guarded store the drop runs IFF the local's runtime drop
+	flag is set:
+
+	    origin:  <pre-store instrs> ; LoadLocal(flag) ; If(flag, drop, post)
+	    drop:    LoadLocal(old) ; ZeroValue ; StoreLocal(zero)[sz] ;
+	             DropValue(old) ; StoreLocal(flag, false) ; Goto(post)
+	    post:    <store + drop_flags' flag-set + rest> ; original terminator
+
+	The split shape (LoadLocal(flag)/IfTerminator/flag-clear/Goto) is the
+	SHARED `drop_flag_guard.build_guarded_drop_blocks` primitive — the same
+	one the site-1 scope-drop authority uses — so the guarded emission
+	cannot diverge between the two sites.  The site-4-specific
+	`drop_sequence` (retain-before-release Load→Zero→Store(zero)→Drop) is
+	supplied here; the primitive appends the flag-clear + Goto.
+
+	Worklist form: each split removes one guarded store and may relocate
+	other still-pending guarded stores into the fresh `post_blk` (found
+	again on the next pass), so multiple guarded stores in one block are
+	handled without index bookkeeping."""
+	remaining = dict(guarded_site4)
+	created_blocks: Set[str] = set()
+	# Bounded: one split per guarded store; +len slack covers post_blk
+	# re-scans.  A non-converging worklist is a fail-closed contract error.
+	guard_budget = 2 * len(guarded_site4) + 8
+	while remaining:
+		guard_budget -= 1
+		if guard_budget < 0:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+				f"block-split worklist failed to converge "
+				f"({len(remaining)} store(s) still pending)."
+			)
+		located = None
+		for bn, block in func.blocks.items():
+			for i, ins in enumerate(block.instructions):
+				if id(ins) in remaining:
+					located = (bn, i, id(ins))
+					break
+			if located is not None:
+				break
+		if located is None:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+				f"{len(remaining)} FLAG_GUARDED store(s) vanished before their "
+				f"guarded drop could be authored (removed/replaced anchor)."
+			)
+		bn, idx, sid = located
+		_store_obj, local, ty, flag_local = remaining.pop(sid)
+		block = func.blocks[bn]
+		pre_instrs = list(block.instructions[:idx])
+		# tail = the overwriting store + drop_flags' following StoreLocal(flag,
+		# true) + the rest of the block; the store keeps its object identity so
+		# the EmitterPhase commit re-locates its anchor by id().
+		tail_instrs = list(block.instructions[idx:])
+		original_term = block.terminator
+
+		authored_holder: List[M.DropValue] = []
+
+		def _site4_drop_seq(buf, _local=local, _ty=ty, _holder=authored_holder):
+			tmp = new_temp()
+			buf.append(M.LoadLocal(dest=tmp, local=_local))
+			zero = new_temp()
+			buf.append(M.ZeroValue(dest=zero, ty=_ty))
+			local_types[zero] = _ty
+			zb = M.StoreLocal(local=_local, value=zero)
+			setattr(zb, "synthetic_zero_back", True)
+			buf.append(zb)
+			drop = M.DropValue(value=tmp, ty=_ty)
+			buf.append(drop)
+			local_types[tmp] = _ty
+			_holder.append(drop)
+
+		origin_blk, drop_blk, post_blk = build_guarded_drop_blocks(
+			func,
+			origin_block_name=bn,
+			pre_instrs=pre_instrs,
+			tail_instrs=tail_instrs,
+			original_term=original_term,
+			flag_local=flag_local,
+			drop_sequence=_site4_drop_seq,
+			new_temp=new_temp,
+			pending=[],
+			label=local,
+		)
+		# Replace the origin block in place (preserves dict order/key) and
+		# register the two fresh blocks.
+		func.blocks[bn] = origin_blk
+		func.blocks[drop_blk.name] = drop_blk
+		func.blocks[post_blk.name] = post_blk
+		# `post_blk` is where every relocated anchor (the guarded store, any
+		# later store, a block-terminating Return) now lives; `drop_blk` holds
+		# only freshly-authored nodes.  `bn` reuses the ORIGINAL name (its
+		# pre-split anchors keep the same expected block), so it is NOT a
+		# relocation target and is not declared here.
+		created_blocks.add(drop_blk.name)
+		created_blocks.add(post_blk.name)
+		authored_out.append((sid, authored_holder[0]))
+	return created_blocks
+
+
+def _validate_guarded_site4_emission(
+	func: M.MirFunc,
+	guarded_site4: Dict[int, Tuple[M.MInstr, str, "TypeId", str]],
+	guarded_authored: List[Tuple[int, M.DropValue]],
+) -> None:
+	"""Fail-closed structural proof that every FLAG_GUARDED site-4 store
+	produced EXACTLY ONE canonical guarded-drop split.
+
+	For each guarded store:
+	  * the store survives exactly once (in a `post_blk`);
+	  * its authored `DropValue` sits in a `drop_blk` holding the canonical
+	    guarded sequence `Load→Zero→Store(zero)[sz]→Drop→ConstBool(false)→
+	    StoreLocal(flag,false)` and terminating in `Goto(post_blk)`;
+	  * a UNIQUE origin block loads the flag and branches
+	    `IfTerminator(flag, drop_blk, post_blk)`.
+	Orphan / missing / duplicate authoring and any broken link raise
+	`PlanContractError`."""
+	authored: Dict[int, List[M.DropValue]] = {}
+	for sid_a, drop_a in guarded_authored:
+		authored.setdefault(sid_a, []).append(drop_a)
+	g_ids = set(guarded_site4)
+	a_ids = set(authored)
+	orphans = a_ids - g_ids
+	if orphans:
+		raise PlanContractError(
+			f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+			f"{len(orphans)} authored guarded drop(s) target no FLAG_GUARDED "
+			f"decision (orphan authoring)."
+		)
+	missing = g_ids - a_ids
+	if missing:
+		raise PlanContractError(
+			f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+			f"{len(missing)} FLAG_GUARDED decision(s) received no authored "
+			f"guarded drop."
+		)
+	dup = [sid for sid, drops in authored.items() if len(drops) != 1]
+	if dup:
+		raise PlanContractError(
+			f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+			f"{len(dup)} FLAG_GUARDED decision(s) authored more than one drop."
+		)
+
+	pos: Dict[int, Tuple[str, int]] = {}
+	occ: Dict[int, int] = {}
+	for bn, block in func.blocks.items():
+		for i, ins in enumerate(block.instructions):
+			pos[id(ins)] = (bn, i)
+			occ[id(ins)] = occ.get(id(ins), 0) + 1
+
+	for sid in g_ids:
+		store_obj, local, ty, flag_local = guarded_site4[sid]
+		drop = authored[sid][0]
+		# 1) store survives exactly once.
+		n = occ.get(id(store_obj), 0)
+		if n != 1:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): "
+				f"guarded store for '{local}' occurs {n} time(s) after the "
+				f"split (expected exactly once)."
+			)
+		# 2) drop_blk canonical shape around the authored DropValue.
+		if id(drop) not in pos:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): the "
+				f"authored guarded drop for '{local}' is absent from the "
+				f"function after the split."
+			)
+		dbn, didx = pos[id(drop)]
+		drop_blk = func.blocks[dbn]
+		di = drop_blk.instructions
+		if didx < 3 or didx + 2 >= len(di):
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}', block "
+				f"'{dbn}'[{didx}]): guarded drop for '{local}' lacks room for "
+				f"the canonical guarded sequence."
+			)
+		load, zv, zb = di[didx - 3], di[didx - 2], di[didx - 1]
+		cb, fclear = di[didx + 1], di[didx + 2]
+		shape_ok = (
+			isinstance(load, M.LoadLocal) and load.local == local
+			and isinstance(zv, M.ZeroValue) and zv.ty == ty
+			and isinstance(zb, M.StoreLocal)
+			and zb.local == local and zb.value == zv.dest
+			and getattr(zb, "synthetic_zero_back", False) is True
+			and isinstance(drop, M.DropValue)
+			and drop.value == load.dest and drop.ty == ty
+			and isinstance(cb, M.ConstBool) and cb.value is False
+			and isinstance(fclear, M.StoreLocal)
+			and fclear.local == flag_local and fclear.value == cb.dest
+		)
+		if not shape_ok:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}', block "
+				f"'{dbn}'[{didx}]): guarded drop for '{local}' is not the "
+				f"canonical Load→Zero→Store(zero)→Drop→flag-clear sequence "
+				f"(operand/type mismatch)."
+			)
+		# 3) drop_blk ends in Goto(post) where the store lives.
+		term = drop_blk.terminator
+		if not isinstance(term, M.Goto):
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}', block "
+				f"'{dbn}'): guarded drop block does not terminate in Goto(post)."
+			)
+		post_name = term.target
+		sbn, _sidx = pos[id(store_obj)]
+		if sbn != post_name:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): guarded "
+				f"store for '{local}' is in block '{sbn}', not the drop block's "
+				f"Goto target '{post_name}'."
+			)
+		# 4) a UNIQUE origin branches If(flag, drop_blk, post_blk) after
+		#    loading the flag.
+		origins = [
+			b for b in func.blocks.values()
+			if isinstance(b.terminator, M.IfTerminator)
+			and b.terminator.then_target == dbn
+		]
+		if len(origins) != 1:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): guarded "
+				f"drop block '{dbn}' for '{local}' has {len(origins)} origin "
+				f"IfTerminator(s) (expected exactly one)."
+			)
+		origin = origins[0]
+		it = origin.terminator
+		if it.else_target != post_name:
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): origin "
+				f"of '{dbn}' for '{local}' branches its else edge to "
+				f"'{it.else_target}', not the post block '{post_name}'."
+			)
+		if (
+			not origin.instructions
+			or not isinstance(origin.instructions[-1], M.LoadLocal)
+			or origin.instructions[-1].local != flag_local
+			or origin.instructions[-1].dest != it.cond
+		):
+			raise PlanContractError(
+				f"overwrite_cleanup guarded site-4 (fn '{func.name}'): origin "
+				f"of '{dbn}' for '{local}' does not load the drop flag "
+				f"'{flag_local}' immediately before the guard branch."
 			)
 
 

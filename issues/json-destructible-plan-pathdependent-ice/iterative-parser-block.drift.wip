@@ -1,0 +1,358 @@
+// ── Iterative value parser (explicit heap frame stack) ──────────────
+//
+// Replaces the former recursive _parse_value/_parse_array/_parse_object
+// trio.  Nesting depth costs HEAP frames, not native/fiber-stack
+// frames, so a deeply nested (client-supplied) document can no longer
+// drive a serve fiber into its guard page — it returns `limit-depth`
+// once `max_depth` is exceeded (finite by default; see permissive()).
+// Every observable is preserved byte-for-byte: scalar handling, error
+// tags AND offsets (including the keyed `duplicate-key` error and the
+// exact `_parse_string` error), duplicate-key timing (Reject probes at
+// the key, before its value), the _SpanTree sidecar shape/ordering,
+// and the object path's throwing HashMap inserts (absorbed to
+// `internal-error` by the nothrow _parse_value wrapper, exactly as the
+// old _parse_object did).  Design record: work/json-iterative-parser/.
+
+// One in-progress container frame.  `stage` 0 = just opened (expect
+// first element/key or the close bracket); 1 = a member has completed
+// (expect ',' or the close bracket).
+variant _Frame {
+	Arr(values: Array<JsonNode>, items: Array<_SpanTree>, start: Int, stage: Int),
+	Obj(fields: containers.HashMap<String, JsonNode>,
+	    occurrences: Array<_KeyOccurrence>,
+	    vspans: containers.HashMap<String, _SpanTree>,
+	    member_count: Int, start: Int, stage: Int,
+	    pending_key: String, pending_key_start: Int),
+	@tombstone Tombstone
+}
+
+fn _new_arr_frame(start: Int) nothrow -> _Frame {
+	return _Frame::Arr(
+		values = Array<type JsonNode>::with_capacity(0),
+		items = Array<type _SpanTree>::with_capacity(0),
+		start = start, stage = 0);
+}
+
+fn _new_obj_frame(start: Int) nothrow -> _Frame {
+	return _Frame::Obj(
+		fields = containers.hash_map<type String, std.json.JsonNode>(),
+		occurrences = Array<type _KeyOccurrence>::with_capacity(0),
+		vspans = containers.hash_map<type String, _SpanTree>(),
+		member_count = 0, start = start, stage = 0,
+		pending_key = "", pending_key_start = 0);
+}
+
+// Nothrow entry (unchanged signature/contract): absorb any throw from
+// the object path's HashMap inserts into `internal-error` at the
+// current offset — exactly the old _parse_object wrapper's behavior.
+fn _parse_value(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
+	return try _parse_value_iter(text, idx, ctx, depth, sp)
+		catch { core.Result::Err(_err_parse(text, "internal-error", *idx)); };
+}
+
+// Parse one scalar at *idx (null/true/false/string/number).  Returns
+// Some(Ok(node)) on a scalar (idx advanced, Leaf span set), Some(Err)
+// on a malformed scalar, or None if the byte does not begin a scalar
+// (i.e. it is '[' or '{', handled by the caller as a container open).
+fn _parse_scalar_opt(text: &String, idx: &mut Int, ctx: &_ParseCtx, sp: &mut Optional<_SpanTree>) nothrow -> Optional<core.Result<JsonNode, JsonErrorData>> {
+	val start = *idx;
+	val b = core.string_byte_at(text, *idx);
+	if b == cast<Byte>(110) {
+		match _parse_literal(text, idx, "null", JsonNode::Null()) {
+			core.Result::Err(e) => { return Optional::Some(core.Result::Err(move e)); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return Optional::Some(core.Result::Ok(move node)); }
+		}
+	}
+	if b == cast<Byte>(116) {
+		match _parse_literal(text, idx, "true", JsonNode::Bool(true)) {
+			core.Result::Err(e) => { return Optional::Some(core.Result::Err(move e)); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return Optional::Some(core.Result::Ok(move node)); }
+		}
+	}
+	if b == cast<Byte>(102) {
+		match _parse_literal(text, idx, "false", JsonNode::Bool(false)) {
+			core.Result::Err(e) => { return Optional::Some(core.Result::Err(move e)); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return Optional::Some(core.Result::Ok(move node)); }
+		}
+	}
+	if b == cast<Byte>(34) {
+		match _parse_string(text, idx, ctx) {
+			core.Result::Err(e) => { return Optional::Some(core.Result::Err(move e)); },
+			core.Result::Ok(v) => { _set_leaf(ctx, sp, start, *idx); return Optional::Some(core.Result::Ok(JsonNode::String(move v))); }
+		}
+	}
+	if b == cast<Byte>(45) or _is_digit(b) {
+		match _parse_number(text, idx, ctx) {
+			core.Result::Err(e) => { return Optional::Some(core.Result::Err(move e)); },
+			core.Result::Ok(node) => { _set_leaf(ctx, sp, start, *idx); return Optional::Some(core.Result::Ok(move node)); }
+		}
+	}
+	return Optional<core.Result<JsonNode, JsonErrorData>>::None();
+}
+
+// Insert a completed (key,value) into an object frame's field map + the
+// value-span map, under the duplicate-key policy — the value-side half
+// of the old _parse_object_throwing member loop.  Throwing (HashMap).
+fn _obj_insert(ctx: &_ParseCtx, dup: &DuplicateKeyPolicy,
+               fields: &mut containers.HashMap<String, JsonNode>,
+               vspans: &mut containers.HashMap<String, _SpanTree>,
+               var key: String, var v: JsonNode, var child_sp: Optional<_SpanTree>) -> Void {
+	match *dup {
+		DuplicateKeyPolicy::KeepFirst() => {
+			if ctx.locate {
+				match child_sp {
+					Some(c) => { vspans.insert_if_absent(key.clone(), move c); },
+					None => { }
+				}
+			}
+			fields.insert_if_absent(move key, move v);
+		},
+		default => {
+			if ctx.locate {
+				match child_sp {
+					Some(c) => { vspans.insert(key.clone(), move c); },
+					None => { }
+				}
+			}
+			fields.insert(move key, move v);
+		}
+	}
+}
+
+// THE iterative driver.  Throwing (object inserts); wrapped above.
+fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, sp: &mut Optional<_SpanTree>) -> core.Result<JsonNode, JsonErrorData> {
+	val n = text.byte_length();
+	var stack: Array<_Frame> = [];
+
+	// The just-completed value awaiting hand-off to the top frame (or
+	// return as the document root when the stack is empty).
+	var have_pending = false;
+	var pending_node: JsonNode = JsonNode::Null();
+	var pending_span: Optional<_SpanTree> = Optional::None();
+
+	while true {
+		// ── hand off a completed value ──────────────────────────────
+		if have_pending {
+			if stack.len == 0 {
+				*sp = move pending_span;
+				return core.Result::Ok(move pending_node);
+			}
+			val top = stack.len - 1;
+			match &mut stack[top] {
+				_Frame::Arr(values, items, astart, stage) => {
+					values.push(move pending_node);
+					if ctx.locate {
+						match move pending_span {
+							Some(c) => { items.push(move c); },
+							None => { }
+						}
+					}
+					*stage = 1;
+				},
+				_Frame::Obj(fields, occ, vspans, mc, ostart, stage, pkey, pks) => {
+					val k = mem.replace(&mut *pkey, "");
+					// object insert may throw (HashMap) → absorbed to
+					// internal-error by the nothrow wrapper.
+					_obj_insert(ctx, &ctx.cfg.duplicate_keys, fields, vspans, move k, move pending_node, move pending_span);
+					*stage = 1;
+				},
+				default => { }
+			}
+			pending_span = Optional::None();
+			have_pending = false;
+			continue;
+		}
+
+		// ── decide the next action from the top frame (or root) ──────
+		// The exact error VALUE (not just a tag) is built inside the
+		// borrow and returned after it is released.
+		var want_value = false;
+		var do_close = false;
+		var perr: Optional<JsonErrorData> = Optional::None();
+
+		if stack.len == 0 {
+			want_value = true;
+		} else {
+			val top = stack.len - 1;
+			match &mut stack[top] {
+				_Frame::Arr(values, items, astart, stage) => {
+					_skip_ws(text, idx);
+					if *idx >= n {
+						perr = Optional::Some(_err_parse(text, "invalid-syntax", *idx));
+					} else {
+						val b = core.string_byte_at(text, *idx);
+						if *stage == 0 {
+							if b == cast<Byte>(93) {
+								*idx = *idx + 1; do_close = true;
+							} else {
+								if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+									perr = Optional::Some(_err_parse(text, "limit-array-items", *idx));
+								} else {
+									want_value = true;
+								}
+							}
+						} else {
+							if b == cast<Byte>(44) {
+								*idx = *idx + 1;
+								_skip_ws(text, idx);
+								if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+									perr = Optional::Some(_err_parse(text, "limit-array-items", *idx));
+								} else {
+									want_value = true;
+								}
+							} else {
+								if b == cast<Byte>(93) {
+									*idx = *idx + 1; do_close = true;
+								} else {
+									perr = Optional::Some(_err_parse(text, "invalid-syntax", *idx));
+								}
+							}
+						}
+					}
+				},
+				_Frame::Obj(fields, occ, vspans, mc, ostart, stage, pkey, pks) => {
+					_skip_ws(text, idx);
+					if *idx >= n {
+						perr = Optional::Some(_err_parse(text, "invalid-syntax", *idx));
+					} else {
+						val b0 = core.string_byte_at(text, *idx);
+						var read_member = false;
+						if *stage == 0 {
+							if b0 == cast<Byte>(125) {
+								*idx = *idx + 1; do_close = true;
+							} else {
+								read_member = true;
+							}
+						} else {
+							if b0 == cast<Byte>(44) {
+								*idx = *idx + 1;
+								_skip_ws(text, idx);
+								read_member = true;
+							} else {
+								if b0 == cast<Byte>(125) {
+									*idx = *idx + 1; do_close = true;
+								} else {
+									perr = Optional::Some(_err_parse(text, "invalid-syntax", *idx));
+								}
+							}
+						}
+						if read_member {
+							val key_start = *idx;
+							var key = "";
+							var key_ok = false;
+							match _parse_string(text, idx, ctx) {
+								core.Result::Err(e) => { perr = Optional::Some(move e); },
+								core.Result::Ok(v) => { key = v; key_ok = true; }
+							}
+							if key_ok {
+								val key_end = *idx;
+								if ctx.locate {
+									occ.push(_KeyOccurrence(key = key.clone(), key_span = JsonByteSpan(start = key_start, end = key_end)));
+								}
+								var dup_bad = false;
+								match ctx.cfg.duplicate_keys {
+									DuplicateKeyPolicy::Reject() => {
+										if fields.contains_key(&key) {
+											dup_bad = true;
+										}
+									},
+									default => { }
+								}
+								if dup_bad {
+									perr = Optional::Some(_err_parse_key(text, "duplicate-key", key_start, move key));
+								} else {
+									*mc = *mc + 1;
+									if _over_limit(&ctx.cfg.limits.max_object_fields, *mc) {
+										perr = Optional::Some(_err_parse(text, "limit-object-fields", key_start));
+									} else {
+										_skip_ws(text, idx);
+										if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(58) {
+											perr = Optional::Some(_err_parse(text, "invalid-syntax", *idx));
+										} else {
+											*idx = *idx + 1;
+											_skip_ws(text, idx);
+											*pkey = move key;
+											*pks = key_start;
+											want_value = true;
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				default => { perr = Optional::Some(_err_parse(text, "internal-error", *idx)); }
+			}
+		}
+
+		// ── execute the decided action (stack borrow released) ───────
+		match perr {
+			Some(e) => { return core.Result::Err(move e); },
+			None => { }
+		}
+		if do_close {
+			match stack.pop() {
+				Optional::Some(var f) => {
+					match f {
+						_Frame::Arr(values, items, astart, stage) => {
+							if ctx.locate {
+								pending_span = Optional::Some(_SpanTree::Arr(span = JsonByteSpan(start = astart, end = *idx), items = move items));
+							}
+							pending_node = JsonNode::Array(move values);
+						},
+						_Frame::Obj(fields, occ, vspans, mc, ostart, stage, pkey, pks) => {
+							if ctx.locate {
+								pending_span = Optional::Some(_SpanTree::Obj(span = JsonByteSpan(start = ostart, end = *idx), occurrences = move occ, values = move vspans));
+							}
+							pending_node = JsonNode::Object(move fields);
+						},
+						default => { return core.Result::Err(_err_parse(text, "internal-error", *idx)); }
+					}
+				},
+				Optional::None() => { return core.Result::Err(_err_parse(text, "internal-error", *idx)); }
+			}
+			have_pending = true;
+			continue;
+		}
+		if want_value {
+			if *idx >= n {
+				return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
+			}
+			val vb = core.string_byte_at(text, *idx);
+			if vb == cast<Byte>(91) {
+				if _over_limit(&ctx.cfg.limits.max_depth, stack.len + 1) {
+					return core.Result::Err(_err_parse(text, "limit-depth", *idx));
+				}
+				stack.push(_new_arr_frame(*idx));
+				*idx = *idx + 1;
+				continue;
+			}
+			if vb == cast<Byte>(123) {
+				if _over_limit(&ctx.cfg.limits.max_depth, stack.len + 1) {
+					return core.Result::Err(_err_parse(text, "limit-depth", *idx));
+				}
+				stack.push(_new_obj_frame(*idx));
+				*idx = *idx + 1;
+				continue;
+			}
+			var leaf_sp: Optional<_SpanTree> = Optional::None();
+			match _parse_scalar_opt(text, idx, ctx, &mut leaf_sp) {
+				Some(res) => {
+					match res {
+						core.Result::Err(e) => { return core.Result::Err(move e); },
+						core.Result::Ok(node) => {
+							pending_node = move node;
+							pending_span = move leaf_sp;
+							have_pending = true;
+							continue;
+						}
+					}
+				},
+				None() => {
+					return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
+				}
+			}
+		}
+	}
+	return core.Result::Err(_err_parse(text, "internal-error", *idx));
+}

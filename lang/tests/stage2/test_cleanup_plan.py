@@ -605,38 +605,67 @@ def test_double_finalize_fails():
 
 import ast as _ast
 
+# Forbidden bypasses in any PRODUCTION module other than cleanup_plan.py:
+#   * `.consume(...)` / `._mark_consumed(...)`  — consumption outside the
+#     EmitterPhase postflight lifecycle;
+#   * `._open_session_with(...)`                — the (retired) private
+#     relocation-map session opener (pinned defensively in case re-added);
+#   * `ConsumptionSession(...)` / `_ConsumptionSession(...)` construction
+#     — building a session (and thus a relocation-carrying one) directly;
+#   * any Call with a `relocations=` keyword — fabricating a relocation map.
+# Only `EmitterPhase` (inside cleanup_plan.py) may create a pending-
+# relocation session or publish relocation state.
+_BYPASS_ATTRS = ("consume", "_mark_consumed", "_open_session_with")
+_BYPASS_CTORS = ("ConsumptionSession", "_ConsumptionSession")
 
-def _find_consume_bypass(source: str, name: str = "<probe>") -> list:
-	"""Return `[(lineno, attr)]` for every `X.consume(...)` or
-	`X._mark_consumed(...)` Call in `source`. These are the forbidden
-	production consumption bypasses — production must go through
-	`plan.begin_phase(...)` → stage → mark_rewritten → commit."""
+
+def _find_plan_bypass(source: str, name: str = "<probe>") -> list:
+	"""Return `[(lineno, marker)]` for every forbidden plan/session bypass in
+	`source` (see `_BYPASS_ATTRS` / `_BYPASS_CTORS` / `relocations=`)."""
 	found = []
 	tree = _ast.parse(source, filename=name)
 	for node in _ast.walk(tree):
-		if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
-			if node.func.attr in ("consume", "_mark_consumed"):
-				found.append((node.lineno, node.func.attr))
+		if not isinstance(node, _ast.Call):
+			continue
+		fn = node.func
+		if isinstance(fn, _ast.Attribute):
+			if fn.attr in _BYPASS_ATTRS:
+				found.append((node.lineno, fn.attr))
+			if fn.attr in _BYPASS_CTORS:      # module.ConsumptionSession(...)
+				found.append((node.lineno, fn.attr))
+		if isinstance(fn, _ast.Name) and fn.id in _BYPASS_CTORS:
+			found.append((node.lineno, fn.id))
+		for kw in node.keywords:
+			if kw.arg == "relocations":
+				found.append((node.lineno, "relocations="))
 	return found
 
 
-def test_consume_bypass_detector_catches_synthetic_calls():
-	"""The detector must actually FIRE on a production-shaped bypass — a
-	vacuous scan is worthless."""
+def test_plan_bypass_detector_catches_synthetic_calls():
+	"""The detector must actually FIRE on every forbidden shape — a vacuous
+	scan is worthless."""
 	probe = (
 		"def emit(plan, func):\n"
 		"    sess = plan.open_session(func)\n"
-		"    sess.consume(dec)\n"          # forbidden
-		"    plan._mark_consumed(dec)\n"    # forbidden
+		"    sess.consume(dec)\n"                              # forbidden
+		"    plan._mark_consumed(dec)\n"                       # forbidden
+		"    plan._open_session_with(func, {})\n"              # forbidden
+		"    s = _ConsumptionSession(plan, func, relocations={})\n"   # forbidden ctor + kw
+		"    t = mod.ConsumptionSession(plan, func)\n"         # forbidden ctor (attr)
+		"    u = other_call(x, relocations=some_map)\n"        # forbidden kw
 	)
-	hits = _find_consume_bypass(probe)
-	attrs = sorted(a for _ln, a in hits)
-	assert attrs == ["_mark_consumed", "consume"], hits
+	markers = sorted(m for _ln, m in _find_plan_bypass(probe))
+	assert markers == sorted([
+		"consume", "_mark_consumed", "_open_session_with",
+		"_ConsumptionSession", "ConsumptionSession",
+		"relocations=", "relocations=",
+	]), markers
 	# And it does NOT fire on the sanctioned phase lifecycle.
 	ok = ("def emit(plan, func):\n"
 	      "    ph = plan.begin_phase(func)\n"
-	      "    ph.stage(dec); ph.mark_rewritten(); ph.commit()\n")
-	assert _find_consume_bypass(ok) == []
+	      "    ph.stage(dec); ph.mark_rewritten(); ph.commit()\n"
+	      "    sess = plan.open_session(func)\n")
+	assert _find_plan_bypass(ok) == []
 
 
 def test_production_consumes_via_emitter_phase_not_session_bypass():
@@ -648,8 +677,10 @@ def test_production_consumes_via_emitter_phase_not_session_bypass():
 	assert root.is_dir(), f"production scan root does not exist: {root}"
 
 	# cleanup_plan.py is the plan's own implementation — EmitterPhase.commit
-	# and ConsumptionSession.consume legitimately call `_mark_consumed`
-	# there. Every OTHER production module must not.
+	# and _ConsumptionSession.consume legitimately call `_mark_consumed`,
+	# construct the session, and pass `relocations=` THERE.  Every OTHER
+	# production module must not — it may only go through the public plan
+	# surface (begin_phase / stage / mark_rewritten / commit / open_session).
 	impl = (root / "stage2" / "cleanup_plan.py").resolve()
 
 	visited = 0
@@ -658,16 +689,16 @@ def test_production_consumes_via_emitter_phase_not_session_bypass():
 		if path.resolve() == impl:
 			continue
 		visited += 1
-		for lineno, attr in _find_consume_bypass(path.read_text(), str(path)):
-			offenders.append(f"{path.relative_to(root)}:{lineno} .{attr}()")
+		for lineno, marker in _find_plan_bypass(path.read_text(), str(path)):
+			offenders.append(f"{path.relative_to(root)}:{lineno} {marker}")
 
 	assert visited > 50, f"scan visited too few production files ({visited}); path is likely wrong"
 	assert not offenders, (
-		"production modules must consume plan decisions through the S1 "
-		"EmitterPhase postflight lifecycle (begin_phase -> stage -> "
-		"mark_rewritten -> commit), never a raw session.consume / "
-		"plan._mark_consumed bypass that marks consumed before a later "
-		"rewrite can invalidate the anchor. Offenders:\n  "
+		"production modules must go through the public CleanupPlan surface "
+		"(begin_phase -> stage -> mark_rewritten -> commit; open_session for "
+		"read-only validation), never a raw session.consume / _mark_consumed "
+		"bypass, a direct (_)ConsumptionSession construction, "
+		"_open_session_with, or a fabricated relocations= map. Offenders:\n  "
 		+ "\n  ".join(offenders)
 	)
 
@@ -757,3 +788,238 @@ def test_assert_sites_consumed_complete_and_orphan():
 		sess.consume(s3)
 	plan.assert_sites_consumed({"site3"})
 	plan.assert_all_consumed()
+
+
+# --- sanctioned block-split relocation contract -------------------------
+# A validated block split (e.g. overwrite_cleanup's FLAG_GUARDED site-4
+# emission) MOVES a staged INSTR anchor into a block THIS PHASE created.
+# Relocation AUTHORIZATION lives entirely on EmitterPhase: it derives
+# eligible decisions from its PRIVATE staged set, requires the target to be
+# a block created during THIS phase (snapshot diff), rejects terminator
+# relocation, proves the original decision order across the split chain, and
+# PUBLISHES the relocation map only after a fully-successful postflight.
+
+
+def _split_store_into(func, blk, store, new_block_name):
+	"""Simulate a block split: the store (INSTR) AND the terminator move out
+	of `blk` into a fresh `new_block_name`; `blk` gets a Goto to it — exactly
+	what `overwrite_cleanup`'s guarded site-4 split does to a store's block."""
+	post = M.BasicBlock(name=new_block_name)
+	post.instructions = [store]
+	post.terminator = blk.terminator
+	blk.instructions = [i for i in blk.instructions if i is not store]
+	blk.terminator = M.Goto(target=new_block_name)
+	func.blocks[new_block_name] = post
+	return post
+
+
+def _two_store_plan():
+	"""func `entry: [store_a, store_b] ; Return`, both registered as site4."""
+	func = _mk_func()
+	blk = M.BasicBlock(name="entry")
+	store_a = _store("a", "%va")
+	store_b = _store("b", "%vb")
+	blk.instructions = [store_a, store_b]
+	blk.terminator = M.Return(value=None)
+	func.blocks["entry"] = blk
+	func.entry = "entry"
+	plan = CleanupPlan(func.name)
+	plan.add(obj=store_a, coord=anchor_instr("entry", 0), site="site4",
+	         fields={"local": "a", "value": "%va"}, payload=("drop", "a"))
+	plan.add(obj=store_b, coord=anchor_instr("entry", 1), site="site4",
+	         fields={"local": "b", "value": "%vb"}, payload=("drop", "b"))
+	plan.validate_and_freeze(func)
+	da = [d for d in plan.decisions_for_site("site4") if d.obj is store_a][0]
+	db = [d for d in plan.decisions_for_site("site4") if d.obj is store_b][0]
+	return func, blk, store_a, store_b, plan, da, db
+
+
+def test_phase_relocates_staged_instr_anchor_into_phase_created_block():
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)   # site4 store (INSTR) + site3 return (TERM)
+	s4 = plan.decisions_for_site("site4")[0]
+	s3 = plan.decisions_for_site("site3")[0]
+	# The site-3 Return (TERM) is consumed by an EARLIER phase.
+	with plan.open_session(func) as sess:
+		sess.consume(s3)
+	# A fresh phase snapshots the blocks; the emitter stages the store, then
+	# splits its block (creating "entry_post" AFTER the snapshot).
+	phase = plan.begin_phase(func)
+	phase.stage(s4)
+	_split_store_into(func, blk, store_x, "entry_post")
+	phase.mark_rewritten()
+	phase.commit()
+	assert plan.is_consumed(s4)
+	assert plan._relocations.get(s4.token) == "entry_post"
+	plan.assert_all_consumed()
+
+
+def test_phase_rejects_terminator_relocation():
+	"""A block split relocates tail INSTRUCTIONS only; a staged terminator
+	anchor whose Return moved into the split fails closed — terminator
+	relocation is never authorized."""
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	s4 = plan.decisions_for_site("site4")[0]
+	s3 = plan.decisions_for_site("site3")[0]
+	phase = plan.begin_phase(func)
+	phase.stage(s4)
+	phase.stage(s3)                      # stage the TERM anchor too
+	_split_store_into(func, blk, store_x, "entry_post")   # moves store AND Return
+	phase.mark_rewritten()
+	with pytest.raises(PlanContractError, match="terminator/non-instruction"):
+		phase.commit()
+	assert plan._relocations == {}       # rollback: nothing published
+	assert not plan.is_consumed(s4)
+
+
+def test_phase_rejects_relocation_into_preexisting_block():
+	"""A relocation target must be a block THIS phase created; moving a
+	staged anchor into a pre-existing block (present at phase start) fails
+	closed."""
+	func, blk, store_x, ret = _pristine()
+	other = M.BasicBlock(name="other")
+	other.terminator = M.Return(value=None)
+	func.blocks["other"] = other          # pre-existing, BEFORE the phase
+	plan = _built(func, blk, store_x, ret)
+	s4 = plan.decisions_for_site("site4")[0]
+	s3 = plan.decisions_for_site("site3")[0]
+	with plan.open_session(func) as sess:
+		sess.consume(s3)
+	phase = plan.begin_phase(func)        # snapshot INCLUDES "other"
+	phase.stage(s4)
+	# Move the store into the pre-existing "other" (not phase-created).
+	blk.instructions = [i for i in blk.instructions if i is not store_x]
+	blk.terminator = M.Goto(target="other")
+	other.instructions = [store_x] + other.instructions
+	phase.mark_rewritten()
+	with pytest.raises(PlanContractError, match="NOT created during this phase"):
+		phase.commit()
+	assert plan._relocations == {}
+	assert not plan.is_consumed(s4)
+
+
+def test_phase_rejects_cross_block_order_reversal():
+	"""Two originally-ordered staged anchors that land in a SWAPPED split-
+	chain order fail closed — the original decision order is proven across
+	the control-flow chain, not merely within each destination block."""
+	func, blk, store_a, store_b, plan, da, db = _two_store_plan()
+	phase = plan.begin_phase(func)
+	phase.stage(da)
+	phase.stage(db)
+	# Build a REVERSED chain: entry -> post1 (holds B, orig 1) -> post2 (holds
+	# A, orig 0).  A is later in the chain than B, reversing the source order.
+	post2 = M.BasicBlock(name="entry_post2")
+	post2.instructions = [store_a]
+	post2.terminator = M.Return(value=None)
+	post1 = M.BasicBlock(name="entry_post1")
+	post1.instructions = [store_b]
+	post1.terminator = M.Goto(target="entry_post2")
+	blk.instructions = []
+	blk.terminator = M.Goto(target="entry_post1")
+	func.blocks["entry_post1"] = post1
+	func.blocks["entry_post2"] = post2
+	phase.mark_rewritten()
+	with pytest.raises(PlanContractError, match="split-chain order violation"):
+		phase.commit()
+	assert plan._relocations == {}       # failed postflight → rollback
+
+
+def test_phase_rejects_reuse_of_prior_phase_block():
+	"""A block created by an EARLIER phase is in the LATER phase's start
+	snapshot, so it cannot be a relocation target there (reuse across phases
+	is rejected)."""
+	func, blk, store_a, store_b, plan, da, db = _two_store_plan()
+	# Phase 1: stage A, split its block into fresh "P", commit.
+	p1 = plan.begin_phase(func)
+	p1.stage(da)
+	_split_store_into(func, blk, store_a, "P")   # A -> P; B stays in entry
+	p1.mark_rewritten()
+	p1.commit()
+	assert plan._relocations.get(da.token) == "P"
+	# Phase 2: stage B, move it into P (created by phase 1).
+	p2 = plan.begin_phase(func)                   # snapshot INCLUDES "P"
+	p2.stage(db)
+	blk.instructions = [i for i in blk.instructions if i is not store_b]
+	func.blocks["P"].instructions = func.blocks["P"].instructions + [store_b]
+	p2.mark_rewritten()
+	with pytest.raises(PlanContractError, match="NOT created during this phase"):
+		p2.commit()
+	# Rollback: B not relocated; A's phase-1 relocation is UNTOUCHED.
+	assert db.token not in plan._relocations
+	assert plan._relocations.get(da.token) == "P"
+	assert not plan.is_consumed(db)
+
+
+def test_phase_does_not_relocate_unstaged_decision_and_fails_closed():
+	"""Relocation is derived from the phase's PRIVATE staged set: an UNSTAGED
+	decision whose anchor moved is never relocated (and, being a dangling
+	moved anchor, makes commit fail closed rather than silently accept it)."""
+	func, blk, store_a, store_b, plan, da, db = _two_store_plan()
+	phase = plan.begin_phase(func)
+	phase.stage(da)                      # stage A only; B is NOT staged
+	# Move BOTH A and B into a fresh block, but only A was staged.
+	post = M.BasicBlock(name="entry_post")
+	post.instructions = [store_a, store_b]
+	post.terminator = M.Return(value=None)
+	blk.instructions = []
+	blk.terminator = M.Goto(target="entry_post")
+	func.blocks["entry_post"] = post
+	phase.mark_rewritten()
+	# B (unstaged) moved but is never relocated → its dangling move trips the
+	# relative-order contract; commit fails closed, publishing nothing.
+	with pytest.raises(PlanContractError):
+		phase.commit()
+	assert db.token not in plan._relocations
+	assert da.token not in plan._relocations   # transactional: A not published either
+	assert not plan.is_consumed(da)
+
+
+def test_public_open_session_cannot_override_relocations():
+	"""The public `open_session(func)` takes ONLY `func` — there is no way to
+	inject a relocation map and consume against it.  A moved anchor reached
+	through the public surface fails closed against the (published) map."""
+	import inspect
+	func, blk, store_x, ret = _pristine()
+	plan = _built(func, blk, store_x, ret)
+	s3 = plan.decisions_for_site("site3")[0]
+	with plan.open_session(func) as sess:
+		sess.consume(s3)
+	# The public surface exposes no relocation override.
+	params = list(inspect.signature(plan.open_session).parameters)
+	assert params == ["func"], f"open_session must take only 'func', got {params}"
+	# A split-moved anchor cannot be validated through the public session.
+	_split_store_into(func, blk, store_x, "entry_post")
+	with pytest.raises(PlanContractError, match="relative-order|moved from block"):
+		plan.open_session(func)
+
+
+def test_staging_already_consumed_decision_is_rejected():
+	"""`stage()` rejects an already-consumed decision, so a phase can never
+	relocate one — no relocation state is left behind."""
+	func, blk, store_a, store_b, plan, da, db = _two_store_plan()
+	with plan.open_session(func) as sess:
+		sess.consume(da)
+	assert plan.is_consumed(da)
+	phase = plan.begin_phase(func)
+	with pytest.raises(PlanContractError, match="already-consumed"):
+		phase.stage(da)
+	assert plan._relocations == {}
+
+
+def test_commit_prevalidates_consumption_before_publishing_relocation():
+	"""If a staged decision becomes consumed out-of-band before commit, the
+	commit prevalidation catches it and publishes NO relocation — relocation
+	state and consumption stay in lock-step (fully transactional)."""
+	func, blk, store_a, store_b, plan, da, db = _two_store_plan()
+	phase = plan.begin_phase(func)
+	phase.stage(da)
+	_split_store_into(func, blk, store_a, "P")   # da WOULD relocate to P
+	phase.mark_rewritten()
+	# Simulate da consumed out-of-band AFTER staging (contract violation the
+	# atomic commit must catch before publishing the relocation).
+	plan._consumed.add(da.token)
+	with pytest.raises(PlanContractError, match="already consumed at commit"):
+		phase.commit()
+	assert da.token not in plan._relocations   # relocation NOT published
+	assert plan._relocations == {}
