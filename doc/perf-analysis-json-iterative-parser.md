@@ -13,7 +13,7 @@ conclusions are prose-only.
 |------|-------|
 | Candidate source | `stdlib/std/json/json.drift` sha256 `4c24f438d11313495cf010fa02cbcb6e96b9c638c94c9fcd13b6029dc740fa10` — the **take** object hand-off (`fields.insert(mem.replace(&mut *pkey, ""), move node)`). This is the bound form in the tree. |
 | Repo HEAD at capture | `a40400f67469bb14557db5a00e7b601bcf1bd04a` |
-| Toolchain | 0.33.89 candidate / ABI 22 (`lang/versions.py`) |
+| Toolchain | 0.33.90 / ABI 22 (`lang/versions.py`) |
 | Host | perf_event blocked (`perf_event_paranoid=4`, no sudo) → Callgrind for instruction counts; `time.now_monotonic` in-process for wall-clock |
 | Label `d4` / "take" | the **bound** hand-off — takes the key out of the frame with `mem.replace` and moves it into `fields`; on the located path clones once into `vspans`. Matches the current source above. |
 | Label `d3` / "clone" | the **rejected** alternative — `fields.insert((*pkey).clone(), move node)` (clones into `fields`, and again into `vspans` when locating). Built only for the A/B; NOT in the tree. |

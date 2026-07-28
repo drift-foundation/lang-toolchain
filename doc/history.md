@@ -1,10 +1,11 @@
 # Drift development history
 
-## 2026-07-27 (0.33.89: std.json iterative parser + PathDependent drop-before-overwrite compiler fix; ABI 22 unchanged)
+## 2026-07-28 (0.33.90: std.json iterative parser + PathDependent drop-before-overwrite compiler fix; ABI 22 unchanged)
 
 Closes a client-triggerable denial-of-service and the compiler defect that
-blocked its fix, both folded into the 0.33.89/ABI-22 candidate (ABI
-byte-unchanged — compiler-internal + stdlib only).
+blocked its fix, both landed as 0.33.90/ABI-22 (ABI byte-unchanged —
+compiler-internal + stdlib only) over the certified 0.33.89 combined
+candidate (std.regex packed-workspace executor + String hot-path recovery).
 
 **The DoS.** The recursive `std.json` parser recursed one native/fiber
 frame per nesting level, so a deeply-nested client document drove a
