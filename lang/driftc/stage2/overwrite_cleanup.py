@@ -421,10 +421,9 @@ def insert_overwrite_cleanup(
 		_emit_guarded_site4(
 			func, guarded_site4, local_types, _new_temp, guarded_authored
 		)
-		# One dirty mark for the whole block-split batch: origin blocks were
-		# replaced and drop/post blocks created (ledger (block, idx) state
-		# invalidated) — same discipline as cleanup_authoring's split.
-		mark_ledger_dirty(func, "overwrite_cleanup.guarded_site4_split")
+		# Dirty marking happens per split inside `_emit_guarded_site4`,
+		# immediately after each origin replacement + drop/post registration —
+		# same discipline as cleanup_authoring's split.
 		_validate_guarded_site4_emission(func, guarded_site4, guarded_authored)
 		# The same-block postflight contract is resolved by the EmitterPhase:
 		# `phase.commit()` (below) derives this phase's relocations from its
@@ -783,8 +782,9 @@ def _emit_guarded_site4(
 		# Replace the origin block in place (preserves dict order/key) and
 		# register the two fresh blocks.
 		func.blocks[bn] = origin_blk
-		func.blocks[drop_blk.name] = drop_blk
-		func.blocks[post_blk.name] = post_blk
+		func.blocks[drop_blk.name] = drop_blk  # ledger-cache-safety-audit: allow new-block
+		func.blocks[post_blk.name] = post_blk  # ledger-cache-safety-audit: allow new-block
+		mark_ledger_dirty(func, "overwrite_cleanup.guarded_site4_split")
 		# `post_blk` is where every relocated anchor (the guarded store, any
 		# later store, a block-terminating Return) now lives; `drop_blk` holds
 		# only freshly-authored nodes.  `bn` reuses the ORIGINAL name (its
