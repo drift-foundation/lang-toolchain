@@ -394,6 +394,24 @@ def main(argv: list[str] | None = None) -> int:
 		print("--require-zero-delta needs --baseline", file=sys.stderr)
 		return 2
 
+	# FAIL FAST on a missing/corrupt --baseline BEFORE the (~minutes-long)
+	# compile sweep: `_compare` loads exactly these two files at the very end,
+	# so validate them now (<1s) rather than after wasting the whole run.  This
+	# is a pure precheck — a valid baseline passes it and the run proceeds
+	# normally; `_compare` re-validates both sides (incl. the new run) at the end.
+	if args.baseline:
+		bl = Path(args.baseline)
+		try:
+			bm = json.loads((bl / "manifest.json").read_text())
+			bc = json.loads((bl / "aggregate.json").read_text())["counters"]
+			_validate_universe_schema("baseline", bm["universe"])
+			_validate_counters_schema("baseline", bc)
+		except (OSError, ValueError, KeyError, TypeError) as e:
+			print(f"BASELINE PRECHECK FAILED ({type(e).__name__}: {e}) — fix "
+			      f"--baseline {bl} and re-run; refusing to spend the compile "
+			      f"sweep on an unusable baseline.", file=sys.stderr)
+			return 2
+
 	run_dir = Path(args.out)
 	if run_dir.exists() and any(run_dir.iterdir()):
 		print(f"refusing to reuse non-empty --out {run_dir}: stale audit files "
