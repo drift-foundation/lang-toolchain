@@ -258,10 +258,10 @@ def test_iterative_vs_recursive_perf_bands() -> None:
 	xdist-parallel rows).  Per shape it gates the RATIO (median + worst launch)
 	and the ABSOLUTE ns overhead (median + worst launch) against `_BANDS`,
 	calibrated unpinned/serial/idle.  Reports spread; takes no minima."""
-	import tempfile
+	from lang.test_support.drift_tmp import drift_tempdir
 	failures, lines = [], []
 	for shape in _SHAPES:
-		with tempfile.TemporaryDirectory() as td:
+		with drift_tempdir(prefix=f"json_perf_{shape}_") as td:
 			ratios, deltas_ns = _measure_shape(Path(td), shape)
 		r_med, r_max, r_min = statistics.median(ratios), max(ratios), min(ratios)
 		d_med, d_max = statistics.median(deltas_ns), max(deltas_ns)

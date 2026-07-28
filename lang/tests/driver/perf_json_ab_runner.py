@@ -230,8 +230,8 @@ def main() -> int:
 		      f"source legitimately changed, then re-run.", file=sys.stderr)
 		return 3
 
-	import tempfile
-	work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="json_ab_"))
+	from lang.test_support.drift_tmp import drift_mkdtemp
+	work = Path(args.work) if args.work else Path(drift_mkdtemp(prefix="json_ab_"))
 	work.mkdir(parents=True, exist_ok=True)
 
 	bins = {}
