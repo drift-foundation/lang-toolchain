@@ -22,7 +22,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from lang.codegen.llvm.test_utils import sanitizer_timeout, valgrind_cmd
+import pytest
+
+from lang.codegen.llvm.test_utils import asan_active, sanitizer_timeout, valgrind_cmd
 from lang.driftc.parser import stdlib_root
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -129,9 +131,9 @@ def test_match_binder_guarded_site4_compiles_and_runs_exactly_once(tmp_path: Pat
 		f"  actual   {sorted(Counter(drops).items())}")
 
 
+@pytest.mark.skipif(asan_active(), reason="valgrind cannot run ASan-instrumented binaries")
 def test_match_binder_guarded_site4_valgrind_clean(tmp_path: Path) -> None:
 	if shutil.which("valgrind") is None:
-		import pytest
 		pytest.skip("valgrind required")
 	out_bin = _compile(tmp_path)
 	vg_log = tmp_path / "vg.log"
