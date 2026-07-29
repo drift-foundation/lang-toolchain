@@ -36,6 +36,53 @@
       D8 rewritten accordingly — no total-provenance variant exists; e8d miscompile
       routed to the separate LANGUAGE_BUG regression-first process, W-FP treats it as a
       precondition only.
-- [ ] BLOCKED ON D8 (per reviewer) + remaining decisions D1, D1b, D2, D4-D7, D9. No
-      implementation started; no repo source, stdlib, test, or doc files touched (all
-      artifacts under work/ + session scratchpad).
+- [x] 2026-07-29 D8 RESOLVED → (b) (fn-pointer invokes exempt; provenance-honest
+      after R-7=yes) and remaining review corrections applied (validator = policy-
+      classification invariant; R2 = non-receiver mode erasure; e8d routed to its own
+      LANGUAGE_BUG slice — since fixed as 0.33.91, committed 453a2f52).
+- [x] 2026-07-29 FULL DECISION SLATE RATIFIED by user: D1 in-scope, D1b(b), D2
+      include, D4 mode-erasure, D6 alias transparency, D7(a), D9 source-only. PLAN.md
+      updated (decisions marked resolved; matrix rows 7/16; §9 row-11 removal +
+      policy-classification wording; §12 rewritten — D5 is the single remaining
+      gate).
+- [x] 2026-07-29 Plan-consistency cleanup per review: header → "policy approved;
+      awaiting D5"; release-ordering statement consolidated into §7 (bug fix landed
+      first internally as 0.33.91/453a2f52, rule ships in the SAME 0.33.91 release —
+      §12 now defers to §7); W7 retains DRIFTC_VERSION 0.33.91 / ABI 22 and specifies
+      ONE combined history entry + ONE combined release-notes file (extend existing,
+      no second announcement); W4 fixed to resolved D1b(b); §9 fn-pointer bullet →
+      acceptance pins for BOTH spellings; O5/R-6 conditional wording removed.
+- [x] 2026-07-29 D5-test-changes.md PUBLISHED (exact per-test dispositions, source-
+      verified): 0 e2e retirements (15 repurposed in place), 2 Python retirements
+      (selector tests → replaced by R2 pins), 19 negative fixtures in scope (not 26 —
+      survey corrected; 7 additions, 4 capture-list fixtures reclassified
+      UNAFFECTED), corpus promotion = 426 deltas + 0 removals + exactly 20
+      enumerated additions (13 failed + 7 compiled_ok; universe 1,269 → 1,289), 0
+      expected partition flips. Two soundness gates flagged (B19 same-stmt conflict
+      via synthesized borrows; C4 capture-overlap via synthesized borrows). Sweep-
+      exclusion list + W3 six at-risk messages + diagnostic-wording unification
+      recorded. Three open reviewer choices (A3, A7, B15/B16 handling).
+- [x] 2026-07-29 D5 round-1 review: existing dispositions + 2 Python retirements
+      APPROVED; A3 repurpose-to-rvalue, A7 repurpose (keep reborrow coverage),
+      B15/B16 finalize-at-W3 under user-facing + present-before-change constraints.
+      Five corrections applied: (1) D1b(b) recorded as the rule's SOLE
+      non-redundancy rejection — new MUT_RVALUE_BINDING classification +
+      E_MUT_RVALUE_ARG_BINDING_REQUIRED diagnostic (never E_REDUNDANT_ARG_BORROW /
+      "pass directly"); PLAN §1/W0/W4/row-7/§9/§12 updated. (2) Rvalue A/B gate
+      baseline = programmatic-HIR driver test (source_written=False), since the
+      explicit-baseline source is itself rejected post-rule; e2e keeps only
+      rvalue_arg_temp_drop_bare. (3) Additions enumerated exactly: 20 named
+      fixtures (13 failed + 7 compiled_ok) → universe 1,269 → 1,289 exact.
+      (4) Blanket diagnostic unification withdrawn — distinct failures keep
+      distinct messages; only the two equivalent D1b spellings share a remedy
+      phrase. (5) Summary count fixed: 13 positive repurposes.
+- [x] 2026-07-29 D5 round-2 revision applied: A/B baseline constraint recorded (the
+      programmatic-HIR half MUST run full HIR→MIR→LLVM and execute under
+      memcheck/ASAN; borrow-checker-only style insufficient); R2 fixture #13
+      expanded to all four ratified shapes as four uniquely-named overload sets
+      (defeats subset-matching aliasing); stale approximate corpus block removed
+      (exact 426+20+0 / 1,269→1,289 authoritative); A3 stale alternative removed;
+      PLAN §7 sweep wording fixed (one-token EXCEPT the two D1b mutable-rvalue
+      sites, which take the binding/repurpose treatment).
+- [ ] AWAITING D5 FINAL APPROVAL — the single remaining gate. No implementation
+      until D5-test-changes.md is approved.

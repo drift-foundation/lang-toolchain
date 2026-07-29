@@ -1,6 +1,7 @@
 # Plan v3: reject source-written borrows at declared `&T` / `&mut T` parameters
 
-Status: RESEARCH + REVISED PLAN — nothing implemented. Awaiting explicit up/down vote.
+Status: POLICY APPROVED (full decision slate ratified 2026-07-29) — nothing
+implemented. Awaiting D5 (`D5-test-changes.md`) review only.
 Date: 2026-07-28. Toolchain at time of research: 0.33.90 / ABI 22.
 Artifacts: `probes/` (17 pinned behavior probes + results), `recount/` (site-level dataset
 + method + R2 scan script). Every "current behavior" claim below cites a probe.
@@ -41,9 +42,18 @@ read("alice");     // valid: auto-borrow materializes the temporary (probe e5)
 **Redundancy criterion (precise):** a source-written borrow argument is redundant iff
 deleting it yields a well-typed call with the same resolution — i.e. the operand is a
 place of the parameter's inner type with compatible mutability, or an already-`&T` value
-re-borrowed. A borrow whose deletion changes typing is NOT redundant; whether any such
-borrows remain legal is decision D7 (interface views) — after W2-W5 land, D7's case is
-the only known survivor of that test.
+re-borrowed. A borrow whose deletion changes typing is NOT redundant and stays legal —
+per resolved D7(a), the `&Concrete → &Interface` borrow+widen coercion is the one known
+such context after W2-W5 land.
+
+**Sole deliberate exception — D1b(b), mutable-rvalue arguments.** `edit(&mut make())`
+is rejected even though its deletion does not compile (bare mutable rvalues are
+rejected today and stay rejected). This is NOT a redundancy claim: it carries its own
+W0 classification (`MUT_RVALUE_BINDING`) and its own diagnostic —
+`E_MUT_RVALUE_ARG_BINDING_REQUIRED`, "mutable borrow of a temporary in argument
+position; bind it to a `var` first" (exact string finalized at W4) — never
+`E_REDUNDANT_ARG_BORROW` and never a "pass X directly" fix-it. Migration is
+bind-to-`var`-first.
 
 Diagnostic: `E_REDUNDANT_ARG_BORROW`, phase typecheck, span = the borrow expression:
 `redundant borrow for parameter 'arg: &String'; pass 'name' directly` (operand text via
@@ -149,8 +159,10 @@ diagnostic shape. Every family below is *wiring* to this policy — no family im
 its own variant. A validator assert (typed mode) checks that **every call argument has
 received a policy classification** and that **no argument classified REDUNDANT was
 accepted** — so checker-path drift is caught structurally while remaining consistent
-with the deliberate non-rejections (D7(a) coercion borrows, D8(b) fn-pointer
-exemption), which carry their own classifications.
+with the deliberate non-rejections and the one deliberate non-redundancy rejection,
+each carrying its own classification: REDUNDANT (rejected), COERCION (D7(a), legal),
+EXEMPT (D8(b) fn pointers, legal), MUT_RVALUE_BINDING (D1b(b), rejected with the
+binding-required diagnostic).
 
 - **W1 — provenance + core wiring.** `source_written` flag on `HBorrow` (set in
   `ast_to_hir`, preserved by the `replace()`-based rewriters, validator-asserted);
@@ -168,9 +180,12 @@ exemption), which carry their own classifications.
   leans on the ref-typed argument) and converting `swap`'s structural
   `E_INTRINSIC_SWAP_MUT_BORROW_REQUIRED` to a type-based check (0.31.81 `replace`
   precedent). **Moderate — the largest compiler work item**; 284 sites depend on it.
-- **W4 — mutable-rvalue policy** per D1b (see §5): either (a) extend bare
-  materialization to `&mut T` params, or (b) keep today's "bind to a `var` first"
-  rejection and migrate the 2 sites. Small either way.
+- **W4 — mutable-rvalue policy**: resolved D1b(b) — the bare form stays rejected
+  (today's behavior); the explicit `&mut <rvalue>` argument spelling is rejected via
+  the `MUT_RVALUE_BINDING` classification with its own
+  `E_MUT_RVALUE_ARG_BINDING_REQUIRED` diagnostic (distinct from redundancy; no
+  "pass directly" fix-it; wording finalized here). Migrate the 2 pinning-test
+  sites. Small.
 - **W5 — direct-lambda call paths** wired to W0. Small; 4 sites.
 - **W-FP — fn-pointer invoke path** (`HInvoke`): under resolved D8(b), no rejection
   here — W-FP reduces to giving fn-pointer invoke arguments their W0 policy
@@ -179,24 +194,27 @@ exemption), which carry their own classifications.
   not a work item of this plan. Trivial.
 - **W6 — R2 definition-site check** (mode-erasure form, §6) + `json._encode_node`
   rename + retirement of the two `&`-as-selector tests. Small.
-- **W7 — release mechanics.** `DRIFTC_VERSION` bump; ABI stays 22; `doc/history.md`
-  MIGRATION section (0.33.83 template); spec + effective-drift edits (§7); package
-  emission change per D9.
+- **W7 — release mechanics.** **Retain `DRIFTC_VERSION` = 0.33.91, ABI 22** — the
+  e8d bug fix landed first internally under 0.33.91 and this rule ships in that same
+  release; no further version bump. `doc/history.md`: extend the existing 0.33.91
+  entry into ONE combined release entry (bug fix + rule, with a 0.33.83-template
+  MIGRATION section); likewise extend the existing release-notes file
+  (`/tmp/drift-announce/2026-07-29T133025Z-drift-lang-release-notes.md`) rather than
+  writing a second announcement. Spec + effective-drift edits (§7); package emission
+  change per D9.
 
 ## 5. Decisions required before implementation
 
-- **D1 — rvalues in scope** (shared): included per the motivating example; probes
-  e5/e6 verify the bare spelling exists with identical drop timing. Implementation
-  gates the 946-site rvalue sweep on A/B memcheck fixtures (§8, risk R-2).
-- **D1b — mutable rvalues** (exactly 2 sites, both in the pinning test):
-  **(a)** extend bare materialization (`edit(mk())` mints a mutable scope temp —
-  symmetry, small new lowering surface), or **(b)** keep the "bind to a `var` first"
-  rejection (zero compiler work, matches the spec's §3.5 text, preserves today's
-  asymmetry, migrates 2 test sites). No recommendation forced by data; (b) is cheaper,
-  (a) is cleaner language.
-- **D2 — gray-zone builtin formals** (32 sites): include (recommended — users see
-  `&T` params in docs and the bare form works) or exclude on the literal
-  "syntactically declared" wording.
+- **D1 — RESOLVED 2026-07-29: rvalues in scope** (shared rvalues are the motivating
+  case); probes e5/e6 verify the bare spelling exists with identical drop timing.
+  Implementation gates the 946-site rvalue sweep on A/B memcheck fixtures (§8, R-2).
+- **D1b — RESOLVED 2026-07-29 → (b):** mutable rvalues keep the "bind to a `var`
+  first" rejection — zero compiler work, matches the spec's §3.5 text; migrates the
+  2 pinning-test sites. Bare materialization for `&mut` rvalues is optional
+  extension O5.
+- **D2 — RESOLVED 2026-07-29: include builtin formals** (`Array.extend`,
+  `byte_length`/`string_*` — 32 sites): compiler-internal reference formals count as
+  declared; users see them as `&T` params and the bare form works.
 - **D3 — `issues/` snapshots: RESOLVED 2026-07-29.** No compiler/path exemption for
   `issues/`. Non-executed historical/context snapshots are preserved verbatim, even on
   superseded syntax (they are simply never compiled — the sweep skips them). Issue
@@ -208,28 +226,23 @@ exemption), which carry their own classifications.
   **2 sites to migrate**. The remaining 192 archival sites stay unchanged. Standing
   rule: an archived source that later becomes an active test input must first be
   updated to current syntax.
-- **D4 — R2 scope**: adopt the mode-erasure formulation (§6). Confirm.
-- **D5 — test rewrites/deletions + corpus promotion require sign-off** (repository
-  rule): ~431 e2e dirs edited, ~15 purpose-losing fixtures retired or repurposed
-  (`borrow_string_param`, `borrow_mut_int`, `reborrow_mut_to_shared_*`,
-  `test_ref_to_value_arg_coercion.py`, `test_autoborrow_diagnostics_span.py`
-  expectations, `test_borrow_rvalue_move_args.py` pins), `om_*` regen (~16 emitter
-  strings), and **one full reviewed ownership-corpus promotion (415 in-universe
-  deltas)**. Nothing proceeds without explicit approval of the list.
-- **D6 — alias-declared references** (`type Handle = &Session`): no in-repo instances;
-  recommend alias transparency (resolved-REF template params count as declared), pinned
-  either way.
-- **D7 — interface-view borrows (new).** `drive(&f)` where `f: FileSink` and the formal
-  is declared `&Sink` is a *coercion* borrow — deleting it fails today (probe e9), so it
-  is not redundant under §1's criterion. Options:
-  **(a)** keep coercion borrows legal (documented exception: the rule rejects only
-  deletion-equivalent borrows) — zero work, but `&` survives in one argument context;
-  **(b)** extend W0 with auto-borrow+widen (`Concrete lvalue → &Interface` at declared
-  `&`-interface formals), then reject `&f` too — uniform outcome, moderate work that
-  lands inside the open `&Concrete→&Interface` coercion-gap thread (the [2133]
-  diagnostic bug and D1 borrowed-view design), which this would partially implement.
-  ≤43 candidate sites repo-wide. This is a genuine policy fork the vote must settle;
-  (b) is the fully uniform reading of the proposal.
+- **D4 — RESOLVED 2026-07-29: adopt the non-receiver mode-erasure formulation** (§6).
+- **D5 — THE REMAINING APPROVAL GATE.** Test rewrites/deletions + corpus promotion
+  require sign-off on an EXACT list, not an estimate: see `D5-test-changes.md` in
+  this directory (per-test disposition — retire / repurpose / expected-change /
+  unaffected — plus the precise corpus-promotion scope incl. removals and om_*
+  regen). Mechanical `&`-deletion edits across fixtures are approved wholesale and
+  are not itemized. Nothing proceeds without explicit approval of that file.
+- **D6 — RESOLVED 2026-07-29: alias transparency** — `type Handle = &Session`
+  parameters count as declared references (resolved-REF template params); pinned by a
+  new test (no in-repo instances today).
+- **D7 — RESOLVED 2026-07-29 → (a): coercion borrows stay legal.** `drive(&f)` where
+  `f: FileSink` at a declared `&Sink` formal is a genuine borrow+widen coercion —
+  deleting it fails today (probe e9), so it is not redundant under §1's criterion and
+  is NOT rejected. Interface auto-borrow+widen is deliberately NOT bundled into this
+  rule (it belongs to the open `&Concrete→&Interface` coercion-gap thread). The rule
+  rejects only deletion-equivalent borrows; W0's classification carries a distinct
+  COERCION class for these.
 - **D8 — thin function pointers: RESOLVED 2026-07-29 → option (b).** Fn-pointer
   invokes are **exempt** from R1: after the separate e8d LANGUAGE_BUG fix, both bare
   `f(s)` and explicit `f(&s)` are legal for `f: Fn(&String) nothrow -> R`. Rationale:
@@ -242,8 +255,8 @@ exemption), which carry their own classifications.
   The e8d miscompile is handled in the standard LANGUAGE_BUG regression-first process
   on its own track (`work/fnptr-ref-arg-autoborrow-miscompile/`), a prerequisite of
   this plan, not part of it.
-- **D9 — package policy (new; replaces v2's incorrect "packages migrate like source").**
-  Recommend **source-only enforcement with provenance stripped at emission**: canonical
+- **D9 — RESOLVED 2026-07-29: source-only enforcement, provenance stripped at
+  emission.** Canonical
   DMIR is typed/desugared with formatting metadata stripped (spec §package-format), so
   `source_written` is never encoded; decoders default it false, which also makes ALL
   pre-existing packages valid automatically (their serialized borrows decode as
@@ -277,16 +290,21 @@ Justification, all verified:
 ## 7. Migration and compatibility
 
 - **In-tree sweep**: ≈4,900 sites after D3 (192 archival `issues/` sites excluded;
-  the 2 active-input sites in `repro_single_file.drift` migrate), all one-token
-  deletions (places and rvalues alike; bare spellings verified). Span-driven via the
-  compiler's own `E_REDUNDANT_ARG_BORROW` diagnostics — never regex (`captures(&x)`,
-  ctor fields, `match &x` are lookalikes).
+  the 2 active-input sites in `repro_single_file.drift` migrate) — one-token
+  deletions (places and rvalues alike; bare spellings verified) **except the two
+  D1b mutable-rvalue sites** (both in `test_borrow_rvalue_move_args.py`), which
+  take the binding/repurpose treatment (`val p = &mut mk(...); touch(p)` — the
+  D1b(b) migration exemplar, D5 §C3). Span-driven via the compiler's own
+  `E_REDUNDANT_ARG_BORROW` diagnostics — never regex (`captures(&x)`, ctor
+  fields, `match &x` are lookalikes).
   The 936 embedded-Python sites need an extraction-aware pass (~1/3 have escape-shifted
   line attribution).
-- **Order**: the separate e8d LANGUAGE_BUG fix is a prerequisite that lands
-  independently and first; then W0/W1; W2-W5 + W6 before or with the sweep (stdlib
-  must keep compiling); fixture edits + `om_*` regen + corpus promotion + doc edits
-  ride the same release (0.33.65 precedent for docs-in-same-commit).
+- **Order**: the e8d LANGUAGE_BUG fix has already landed first internally (0.33.91,
+  commit 453a2f52) and this rule ships in the SAME 0.33.91 release; then W0/W1;
+  W2-W5 + W6 before or with the sweep (stdlib must keep compiling); fixture edits +
+  `om_*` regen + corpus promotion + doc edits ride the same release (0.33.65
+  precedent for docs-in-same-commit). This is the single authoritative ordering
+  statement — §12 defers here.
 - **Docs**: spec §3.6 flips ("explicit forms remain legal" → rejected), §1.3
   predict-the-verdict drill, §3.2 coercion table, §3.5 rvalue sentence (reconcile the
   existing spec/implementation divergence), receiver §6.3 cross-note; effective-drift
@@ -312,7 +330,7 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
 | 4 | `read(r)` | OK | no borrow written |
 | 5 | `read(&r)` | **error** | today accepted via hidden deref |
 | 6 | `read(&"alice")` / `read(&make())` | **error** | bare forms verified (e5, e6) |
-| 7 | `edit(&mut make())` | **error** | bare per D1b(a), or bind-to-`var` per D1b(b) |
+| 7 | `edit(&mut make())` | **error** — `E_MUT_RVALUE_ARG_BINDING_REQUIRED` | the sole non-redundancy rejection (D1b(b), MUT_RVALUE_BINDING class); deletion does not compile; migrate by binding to a `var` first |
 | 8 | `read(&obj.field)` / `read(&arr[i])` | **error** | fix-it slices operand text |
 | 9 | `identity<type &String>(&name)` | OK | generic-by-value formal |
 | 10 | `cb.call(&mut scope)` (FnN/CallbackN) | OK | formal is generic `A` |
@@ -321,7 +339,7 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
 | 13 | `mem.swap(&mut a, &mut b)` / `mem.replace(&mut p, v)` | **error** | bare works after W3 |
 | 14 | `sink.write(&rec)` (interface dispatch, `rec: &String`) | **error** | bare works after W2 |
 | 15 | `(|y: &mut Int| => …)(&mut x)` | **error** | bare works after W5 |
-| 16 | `drive(&f)` — concrete at declared `&Sink` | **D7**: OK under (a) (coercion borrow, not redundant) / **error** under (b) (bare widens) | the one surviving non-redundant borrow context |
+| 16 | `drive(&f)` — concrete at declared `&Sink` | OK | D7 resolved (a): coercion borrow, not redundant; interface auto-borrow+widen not bundled |
 | 17 | concrete pair `pick(&String)`/`pick(String)` — or `peek(&Int)`/`peek(&mut Int)` | **definition-site error** (R2) | bare is ambiguous today (e7, e10) |
 | 18 | method mixed set `b.pick(s)` vs `pick<T>` | OK — selects concrete | existing tiebreak |
 | 19 | free-fn mixed set, either spelling | ambiguous (unchanged) | pre-broken (e3/e3b); O1 |
@@ -334,10 +352,13 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
   behavior; alias pin (D6); A/B explicit-vs-bare rvalue fixtures under memcheck +
   valgrind pinning drop counts/order (extends e6); package encode→decode→recompile with
   pre-rule bodies (D9).
-- **Negative**: rows 2-8, 11, 13-15 asserting `E_REDUNDANT_ARG_BORROW` with rendered
-  operand text (plain var, projection, index, parenthesized, `& x` whitespace);
-  diagnostic goldens; W0 validator assert (no family accepts a source-written borrow at
-  a declared-`&` formal).
+- **Negative**: rows 2-6, 8, and 13-15 asserting `E_REDUNDANT_ARG_BORROW` with
+  rendered operand text (plain var, projection, index, parenthesized, `& x`
+  whitespace); row 7 asserting `E_MUT_RVALUE_ARG_BINDING_REQUIRED` (the D1b(b)
+  classification — not a redundancy diagnostic);
+  diagnostic goldens; W0 validator assert of the policy-classification invariant —
+  every call argument receives a classification and no argument classified REDUNDANT
+  is accepted (row 11 is not a negative case: thin fn pointers are exempt per D8(b)).
 - **Overload**: R2 fixtures for both pair shapes (T/&T and &/&mut, free + method);
   post-rename `json._encode_node` pin; status-quo pins for mixed sets (e3/e7/e10 as
   fixtures).
@@ -345,7 +366,9 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
   bare places and `<type …>` interplay (188 combined sites); reworked (not deleted)
   `swap_requires_var_rejected`.
 - **Fn pointers**: e8d miscompile regression (bare at `&` fn-pointer param must never
-  reach codegen unresolved), plus D8-per-decision accept/reject pins.
+  reach codegen unresolved), plus acceptance pins for BOTH spellings — bare `fp(s)`
+  and explicit `fp(&s)` compile and run (D8(b): exempt; already covered by
+  `test_fnptr_ref_arg_autoborrow.py`, kept green under the rule).
 - **Full**: complete e2e suite post-sweep; ownership-corpus `--require-zero-delta` after
   the reviewed promotion; `just ownership-matrix-check`; memcheck suite. **The
   implementer runs the full suite and reports results as part of the implementation
@@ -359,7 +382,8 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
 - **O2**: text-mode rendering of `Diagnostic.notes` (today JSON-only).
 - **O3**: receiver forms (`(&obj).method()`) under a redundancy rule.
 - **O4**: redundant `&`-of-a-reference outside call positions.
-- **O5**: D1b(a) mutable-rvalue materialization, if D1b(b) is chosen initially.
+- **O5**: D1b(a) mutable-rvalue bare materialization (D1b resolved to (b); this
+  remains a possible future symmetry extension).
 
 ## 11. Risks / unresolved questions
 
@@ -373,8 +397,10 @@ interface `Sink { fn write(self: &Self, rec: &String); }`, `val name: String`,
   resolution). Does not change any conclusion.
 - **R-4**: downstream corpuses unmeasured; in-tree evidence predicts heavy usage.
 - **R-5**: W2 must be validated against the runtime-side `log.Sink` dispatch path.
-- **R-6**: D7(b), if chosen, lands inside the open `&Concrete→&Interface` coercion-gap
-  design thread and must not fork it.
+- **R-6**: resolved D7(a) keeps interface auto-borrow+widen OUT of this rule; if the
+  open `&Concrete→&Interface` coercion-gap thread later adds it, W0's COERCION
+  classification is the integration point — that thread must not be forked by this
+  work.
 - **R-7 — ANSWERED (yes, probe e11)**: fn-pointer type expressions can carry typevars
   (`Fn(T)` in generic context compiles and instantiates). Consequence folded into D8:
   option (a) accepts over-rejection for generic-written fn types at reference
@@ -391,11 +417,21 @@ a miscompile that needs fixing regardless (D8). Compiler work ≈ one moderate s
 (W3) + several small ones; migration ≈ 4,900 one-token edits (after D3's archival
 exclusion) + one corpus promotion + doc rewrite.
 
-Conditions: (1) decisions D1-D9 ratified (D3 resolved 2026-07-29: migrate active
-test inputs, preserve archival snapshots verbatim, no compiler exemption) — D7 and D8
-are genuine policy forks the vote must settle, not defaults this plan may assume; (2) W0-W6 land with the rule in one
-release, with the separate e8d LANGUAGE_BUG fix as an independent prerequisite landing
-first — the rule must never reject a spelling whose bare form does not compile; (3) rvalue A/B memcheck fixtures pass before
-the 946-site rvalue sweep; (4) the frozen-corpus reviewed promotion (415 deltas), the
-D5 test-retirement list, and downstream migration are approved as first-class release
-items.
+Decision status (2026-07-29): **all policy decisions are resolved** — D1 (rvalues in
+scope), D1b(b) (bind mutable rvalues to a `var`), D2 (builtin formals included), D3
+(migrate active test inputs, preserve archival snapshots), D4 (non-receiver mode
+erasure), D6 (alias transparency), D7(a) (coercion borrow+widen stays legal, no
+bundled interface auto-borrow), D8(b) (thin fn pointers exempt), D9 (source-only
+enforcement, provenance stripped from packages). The e8d LANGUAGE_BUG prerequisite is
+fixed in-tree as 0.33.91 (committed 453a2f52, certification in progress).
+
+**The single remaining gate is D5**: explicit approval of the exact test
+retirement/repurpose/expected-change list and the corpus-promotion scope, published
+as `D5-test-changes.md` in this directory. Mechanical `&`-deletions across fixtures
+are pre-approved wholesale; only the listed dispositions need review. Remaining
+execution conditions: (a) release ordering per §7 (single authoritative statement) —
+the rule must never claim redundancy for a spelling whose bare form does not compile;
+the sole rejection of such a spelling is D1b(b)'s `MUT_RVALUE_BINDING` class with its
+binding-required diagnostic (§1); (b) rvalue A/B memcheck verification passes before
+the 946-site rvalue sweep; (c) the frozen-corpus reviewed promotion and downstream
+migration are first-class release items.
