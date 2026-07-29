@@ -1,0 +1,13 @@
+module main;
+
+fn apply_it<T>(f: Fn(T) nothrow -> T, v: T) nothrow -> T {
+	return f(v);
+}
+
+fn double_it(x: Int) nothrow -> Int {
+	return x * 2;
+}
+
+pub fn main() nothrow -> Int {
+	return apply_it(double_it, 21);
+}

@@ -1,5 +1,64 @@
 # Drift development history
 
+## 2026-07-29 (0.33.91: thin fn-pointer `&T` argument auto-borrow — bare-call miscompile fixed; ABI 22 unchanged)
+
+LANGUAGE_BUG fix (regression-first): calling a thin function-pointer value
+whose signature declares a reference parameter with a BARE place argument
+— `val f: Fn(&String) nothrow -> Int = read_len; f(s)` — was accepted by
+the type checker and then miscompiled: the indirect call passed the value
+by value where the signature requires `ptr`, and clang rejected the
+emitted module (`'%.t3' defined with type '%DriftString' but expected
+'ptr'`; `i64` vs `ptr` for the `&mut Int` flavor). Zero in-repo sources
+used `Fn(&…)` types, which is how it went unnoticed.
+
+**Root cause.** The "binding call" branch of `resolve_call_expr`
+(`checker/call_resolver.py` — `HCall` whose callee is an `HVar` bound to
+a local of FUNCTION type) validated ONLY arity: no argument-type
+comparison, no parameter-directed auto-borrow, and its arity-error
+message read a never-assigned `arg_types` (latent `UnboundLocalError` on
+that error path, also fixed). The shallow validator
+(`check_call_signature`) only catches arguments it can infer (literals),
+so local-variable arguments — both the missing-borrow shape and plain
+wrong-type locals — reached codegen entirely unchecked.
+
+**Fix.** The branch now computes place-typed argument types, runs the
+SAME auto-borrow engine as direct calls (`apply_autoborrow_args` — the
+borrow exists structurally as an `HBorrow` node in HIR; no checker-local
+type adjustment, no codegen masking), then strictly verifies
+`want == have` per slot with the standard implicit `&mut T → &T` reborrow
+escape, emitting the sibling paths' "function value argument type
+mismatch" diagnostic on genuine mismatches.
+
+**Same-branch defects fixed with it** (review round 2): keyword arguments
+on a function value were never rejected by this branch — a zero-argument
+fn value passed the positional arity check with the keyword ignored,
+surfacing as the typed-mode `internal: kwargs survived typed mode
+(checker bug)` error instead of a user diagnostic; the branch now emits
+the sibling paths' "keyword arguments are not supported on function
+values in v1". And the branch's arity-mismatch diagnostic previously
+died with a Python `UnboundLocalError` traceback; `f()` at
+`Fn(&String)` now yields the clean "no matching overload" diagnostic
+(pinned).
+
+**Pinned semantics** (`lang/tests/driver/test_fnptr_ref_arg_autoborrow.py`,
+11 rows incl. an ASAN row): bare `f(s)` / `g(x)` at `Fn(&String)` /
+`Fn(&mut Int)` auto-borrow, compile, and run (the `&mut` write is visible
+in the caller); explicit `f(&s)` / `g(&mut x)` remain legal and
+equivalent; generic `Fn(T)` instantiated at `&String` AND at `Int` is
+unaffected (the fix keys on the resolved FUNCTION TypeId — no
+source-provenance assumptions); wrong-inner-type locals and
+immutable-place-at-`&mut` are rejected by driftc, never by clang. The
+`.call(...)`-on-Fn and `HInvoke` paths keep their existing
+strict-rejection semantics (rejections, not miscompiles) — unifying them
+under one argument policy is tracked by the paused
+reject-redundant-call-borrows plan (W0), not this fix.
+
+**Versioning:** behavior-changing compiler fix → `DRIFTC_VERSION`
+0.33.90 → **0.33.91**. **No ABI change — `DRIFT_RT_ABI_VERSION` stays
+22** (typed-checker argument handling only; the fixed program's IR is
+byte-identical to what the explicit-borrow spelling already emitted; no
+boundary signature, layout, or calling-convention change).
+
 ## 2026-07-28 (0.33.90: std.json iterative parser + PathDependent drop-before-overwrite compiler fix; ABI 22 unchanged)
 
 Closes a client-triggerable denial-of-service and the compiler defect that

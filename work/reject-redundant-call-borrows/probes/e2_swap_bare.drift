@@ -1,0 +1,10 @@
+module main;
+
+import std.mem as mem;
+
+pub fn main() nothrow -> Int {
+	var a: Int = 3;
+	var b: Int = 4;
+	mem.swap(a, b);
+	return a * 10 + b;
+}

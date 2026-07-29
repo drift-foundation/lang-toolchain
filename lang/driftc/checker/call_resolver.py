@@ -6098,8 +6098,25 @@ def resolve_call_expr(
 					if call_type_args:
 						diagnostics.append(_tc_diag(message="type arguments are not supported on function values", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
+					if getattr(expr, "kwargs", None):
+						# A zero-arg fn value passes the positional arity
+						# check with the keyword ignored, surfacing later as
+						# the typed-mode "kwargs survived" internal error
+						# instead of a user diagnostic.
+						diagnostics.append(_tc_diag(message="keyword arguments are not supported on function values in v1", severity="error", span=getattr(expr, "loc", Span())))
+						return record_expr(expr, ctx.unknown_ty)
 					param_types = list(fn_def.param_types[:-1])
 					ret_type = fn_def.param_types[-1]
+					# This branch never had argument types before (it checked
+					# arity only — its own error message read a never-assigned
+					# `arg_types`); place-typed args are required so the
+					# auto-borrow below can borrow lvalues.
+					arg_types = [type_expr(a, used_as_value=False) for a in expr.args]
+					for _ai, _arg in enumerate(expr.args):
+						if isinstance(_arg, H.HLambda):
+							_ty = arg_types[_ai]
+							if _ty is None or _ty == ctx.unknown_ty:
+								arg_types[_ai] = type_expr(_arg)
 					if drift_debug.enabled("call_resolve"):
 						print(f"[call_resolve] binding call name={expr.fn.name} param_types={param_types} ret_type={ret_type} arg_count={len(expr.args)}", file=_debug_stderr)
 					if len(param_types) != len(expr.args):
@@ -6107,6 +6124,33 @@ def resolve_call_expr(
 							print(f"[call_resolve] binding mismatch name={expr.fn.name} param_len={len(param_types)} arg_len={len(expr.args)} arg_types={arg_types}", file=_debug_stderr)
 						diagnostics.append(_tc_diag(message=f"no matching overload for function '{expr.fn.name}' with args {_fmt_overload_args(ctx, arg_types)}", severity="error", span=getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
+					# Parameter-directed auto-borrow, same engine as direct
+					# calls: a bare place at a `&T`/`&mut T` fn-pointer param
+					# gets a structural HBorrow in HIR.  Lowering consumes the
+					# rewritten args, so the borrow must exist as a node here —
+					# recording the call with unchecked args miscompiled
+					# (indirect call received the value where the signature
+					# needs ptr; clang rejected the module).
+					updated_types, had_autoborrow_error = ctx.apply_autoborrow_args(
+						expr.args,
+						arg_types,
+						param_types,
+						span=getattr(expr, "loc", Span()),
+					)
+					arg_types = list(updated_types)
+					if had_autoborrow_error:
+						return record_expr(expr, ctx.unknown_ty)
+					for want, have in zip(param_types, arg_types):
+						if have is not None and want != have:
+							# Implicit reborrow: allow &mut T where &T is expected.
+							have_def = ctx.type_table.get(have)
+							want_def = ctx.type_table.get(want)
+							if (have_def.kind is TypeKind.REF and want_def.kind is TypeKind.REF
+									and have_def.ref_mut is True and want_def.ref_mut is False
+									and have_def.param_types and want_def.param_types
+									and have_def.param_types[0] == want_def.param_types[0]):
+								continue
+							diagnostics.append(_tc_diag(message=f"function value argument type mismatch (have {ctx.type_table.get(have).name}, expected {ctx.type_table.get(want).name})", severity="error", span=getattr(expr, "loc", Span())))
 					if drift_debug.enabled("call_resolve"):
 						print(f"[call_resolve] binding resolved name={expr.fn.name} csid={getattr(expr, 'callsite_id', None)} return={ret_type}", file=_debug_stderr)
 					record_call_info(expr, param_types=param_types, return_type=ret_type, can_throw=fn_def.can_throw(), target=CallTarget.indirect(binding_id))

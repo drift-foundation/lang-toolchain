@@ -1,0 +1,21 @@
+import json, collections, os
+S='/tmp/claude-1000/-home-sl-src-drift-lang/a3650d41-affa-4fca-bc2e-d412027a1a2a/scratchpad'  # drift-tmp-root-audit: allow archived research provenance copy (reject-redundant-call-borrows survey), not executed by tests
+R=json.load(open(S+'/results.json'))
+D=json.load(open(S+'/diag.json'))
+print('TOTAL FIRING:',len(R))
+def tab(key,title,items=None):
+    c=collections.Counter((r[key] if not isinstance(key,tuple) else tuple(r[k] for k in key)) for r in (items or R))
+    print('--',title)
+    for k,v in c.most_common(): print('   %-40s %d'%(str(k),v))
+tab('area','by area')
+tab('opkind','by operand kind')
+print('   rvalue sub:',collections.Counter(r['opsub'] for r in R if r['opkind']=='rvalue').most_common())
+tab('tv','formal &-over-typevar (True) vs concrete (False)')
+tab('fam','by callee family')
+tab('op','& vs &mut')
+tab('decl_kind','decl kind')
+print()
+print('DIAG unresolved total', sum(D['unresolved'].values()))
+print('DIAG excluded', D['excluded'])
+print('ambiguous count', D['ambiguous'])
+print('top unresolved:', collections.Counter(D['unresolved']).most_common(20))

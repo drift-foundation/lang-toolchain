@@ -1,0 +1,23 @@
+module main;
+
+interface Sink {
+	fn write(self: &Self, rec: &String) nothrow -> Int;
+}
+
+struct FileSink { tag: Int }
+
+implement Sink for FileSink {
+	pub fn write(self: &FileSink, rec: &String) nothrow -> Int {
+		return rec.byte_length();
+	}
+}
+
+fn drive(k: &Sink) nothrow -> Int {
+	val s: String = "hello";
+	return k.write(&s);
+}
+
+pub fn main() nothrow -> Int {
+	val f = FileSink(tag = 1);
+	return drive(f);
+}

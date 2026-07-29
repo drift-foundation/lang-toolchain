@@ -1,0 +1,13 @@
+module main;
+
+fn mk() nothrow -> String {
+	return "alice";
+}
+
+fn edit(arg: &mut String) nothrow -> Int {
+	return arg.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	return edit(mk());
+}
