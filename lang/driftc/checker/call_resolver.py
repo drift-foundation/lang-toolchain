@@ -6098,7 +6098,7 @@ def resolve_call_expr(
 					if call_type_args:
 						diagnostics.append(_tc_diag(message="type arguments are not supported on function values", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
 						return record_expr(expr, ctx.unknown_ty)
-					if getattr(expr, "kwargs", None):
+					if call_kwargs_issues("function values", getattr(expr, "kwargs", None)):
 						# A zero-arg fn value passes the positional arity
 						# check with the keyword ignored, surfacing later as
 						# the typed-mode "kwargs survived" internal error

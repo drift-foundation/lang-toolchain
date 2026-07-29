@@ -67,6 +67,13 @@
       announcement renamed to convention →
       /tmp/drift-announce/2026-07-29T133025Z-drift-lang-release-notes.md. history.md
       0.33.91 entry extended with the kwargs + arity fixes.
+- [x] 2026-07-29 Post-commit (453a2f52) gate finding: driver contract guard
+      test_call_contract_ownership_guard.py::test_no_ad_hoc_kwargs_rejection_in_checker
+      rejects ad-hoc `if getattr(expr, "kwargs", None):` in call_resolver — kwargs
+      rejection must delegate to call_kwargs_issues(). Fixed to the approved pattern
+      (`if call_kwargs_issues("function values", getattr(expr, "kwargs", None)):`),
+      diagnostic unchanged. Guard file + 11-row regression: 14/14 green. One-line
+      uncommitted follow-up on top of 453a2f52.
 - [x] SLICE COMPLETE — awaiting review. Not committed (git reserved to user; branch
       handling per user direction). Follow-ups surfaced, NOT bundled: (1)
       test_std_fs_read_dir.py hardcoded timeout=30 → should use sanitizer_timeout();
