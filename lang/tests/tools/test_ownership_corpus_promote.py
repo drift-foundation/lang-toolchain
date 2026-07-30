@@ -607,3 +607,143 @@ def test_recipes_run_focused_teeth_automatically():
 	assert "test_ownership_corpus_promote.py" in draft
 	assert draft.index("drift_corpus_promote.py") \
 		< draft.index("test_ownership_corpus_promote.py")
+
+
+# ── predecessor from the CHECKED-IN record chain ─────────────────────
+# A clone carries no build/tmp runs: the only predecessor evidence that
+# survives cloning is the promotions record whose candidate byte-equals
+# the live baseline.  --draft without --predecessor-run must consume
+# exactly that, fail-closed on every divergence.
+
+
+def make_chain_record(base: Path, promotions: Path,
+                      name: str = "0.0.1-prior") -> Path:
+	"""An APPROVED record whose candidate IS the live baseline."""
+	rec = promotions / name
+	cand = rec / "candidate"
+	cand.mkdir(parents=True)
+	for art in ("aggregate.json", "manifest.json", "metadata.json"):
+		(cand / art).write_bytes((base / art).read_bytes())
+	fc = promote.extract_fixture_counters(base, ["a"])
+	fc_path = cand / "fixture-counters.json"
+	fc_path.write_text(json.dumps(fc, indent=1, sort_keys=True) + "\n")
+	(rec / "approval.json").write_text(json.dumps({
+		"approval": "ownership-corpus-promotion",
+		"candidate": {"fixture_counters_sha256": sha(fc_path)},
+	}, indent=2))
+	return rec
+
+
+def run_tool_draft_chain(run, out, base, promotions):
+	try:
+		return promote.main([str(run), str(out), "--draft",
+		                     "--promotions-dir", str(promotions),
+		                     "--baseline-dir", str(base)])
+	except SystemExit as e:
+		return int(e.code or 0)
+
+
+def test_draft_from_record_chain(world, tmp_path):
+	"""Record-chain draft == raw-log draft, end to end through --apply."""
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	make_chain_record(base, promotions)
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 0
+	draft = json.loads((record / "approval-DRAFT.json").read_text())
+	# identical facts to the raw-log bootstrap path
+	raw = tmp_path / "raw-record"
+	assert run_tool_draft(run, raw, base) == 0
+	raw_draft = json.loads((raw / "approval-DRAFT.json").read_text())
+	for k in ("predecessor", "expected_universe", "expected_counter_deltas",
+	          "counter_keys_added", "counter_keys_removed",
+	          "attribution_facts"):
+		assert draft[k] == raw_draft[k], k
+	# the chain-drafted record promotes cleanly after the rename
+	out = record / "approval-DRAFT.json"
+	final = record / "approval.json"
+	out.rename(final)
+	assert run_tool(record / "candidate", final, base, apply=True) == 0
+
+
+def test_draft_chain_no_matching_record_rejected(world, tmp_path):
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	# a record exists but its candidate does NOT match the live baseline
+	rec = make_chain_record(base, promotions)
+	agg = rec / "candidate" / "aggregate.json"
+	data = json.loads(agg.read_text())
+	data["counters"]["events"] = 99
+	agg.write_text(json.dumps(data, indent=2, sort_keys=True))
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 1
+	assert not record.exists()
+
+
+def test_draft_chain_missing_promotions_dir_rejected(world, tmp_path):
+	base, run, approval = world
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base,
+	                            tmp_path / "no-such-dir") == 1
+	assert not record.exists()
+
+
+def test_draft_chain_unapproved_record_rejected(world, tmp_path):
+	"""A matching but DRAFT-state record is not authoritative."""
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	rec = make_chain_record(base, promotions)
+	(rec / "approval.json").rename(rec / "approval-DRAFT.json")
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 1
+	assert not record.exists()
+
+
+def test_draft_chain_ambiguous_records_rejected(world, tmp_path):
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	make_chain_record(base, promotions, "0.0.1-prior")
+	make_chain_record(base, promotions, "0.0.1-duplicate")
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 1
+	assert not record.exists()
+
+
+def test_draft_chain_tampered_counters_rejected(world, tmp_path):
+	"""The record's own approval hash-pins its fixture-counters."""
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	rec = make_chain_record(base, promotions)
+	fc = rec / "candidate" / "fixture-counters.json"
+	data = json.loads(fc.read_text())
+	data["fixtures"]["a"]["events"] = 101
+	fc.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 1
+	assert not record.exists()
+
+
+def test_draft_chain_wrong_fixture_set_rejected(world, tmp_path):
+	"""Counters must cover exactly the baseline's compiled set."""
+	base, run, approval = world
+	promotions = tmp_path / "promotions"
+	rec = make_chain_record(base, promotions)
+	fc = rec / "candidate" / "fixture-counters.json"
+	data = json.loads(fc.read_text())
+	data["fixtures"]["renamed"] = data["fixtures"].pop("a")
+	fc.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+	# re-pin the hash so ONLY the set check can reject
+	app = json.loads((rec / "approval.json").read_text())
+	app["candidate"]["fixture_counters_sha256"] = sha(fc)
+	(rec / "approval.json").write_text(json.dumps(app, indent=2))
+	record = tmp_path / "chain-record"
+	assert run_tool_draft_chain(run, record, base, promotions) == 1
+	assert not record.exists()
+
+
+def test_draft_explicit_predecessor_run_still_bootstraps(world, tmp_path):
+	"""--predecessor-run bypasses the chain (baselines predating
+	record-keeping) — even with NO promotions dir in sight."""
+	base, run, approval = world
+	record = tmp_path / "boot-record"
+	assert run_tool_draft(run, record, base) == 0

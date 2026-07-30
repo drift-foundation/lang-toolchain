@@ -77,9 +77,18 @@ one-token deletion: mutable-temporary arguments become bindings
 rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
 dead). D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
 Python selector-test retirements (replaced by the four-shape R2 fixture), 23
-new fixtures. The frozen ownership-corpus baseline requires one reviewed
-promotion (426 content deltas + 23 additions, 0 removals, universe 1,269 →
-1,292, 0 expected partition flips).
+new fixtures. The frozen ownership-corpus baseline was advanced by one
+reviewed promotion (record
+`lang/tests/ownership_corpus/promotions/0.33.91-reject-redundant-call-borrows/`):
+408 content deltas + 23 additions, 0 removals, universe 1,269 → 1,292, 0
+partition flips; per-fixture attribution is a uniform −1 fn / −1
+owned-moveout on 919 of 925 shared fixtures (the deleted dead
+`json._encode_node` wrapper, visible in every fixture's stdlib compile)
+plus 6 approved outliers, residual zero on every counter. Promotion
+drafting is now clone-sufficient: `drift_corpus_promote.py --draft` takes
+its predecessor evidence from the checked-in record chain (the approved
+record whose candidate byte-equals the live baseline), with
+`--predecessor-run` retained only as the raw-log bootstrap escape hatch.
 
 **Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
 fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —

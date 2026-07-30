@@ -166,17 +166,23 @@ ownership-corpus-promote RUN_DIR APPROVAL *FLAGS:
 # Promotion-record generation: builds a durable, self-contained record
 # (predecessor/ + candidate/ artifact copies, COMPACT per-fixture
 # counter extractions, and a facts-only pending approval draft with
-# machine-computed attribution) from the retained candidate and
-# predecessor runs.  The reviewer supplies judgment by APPROVING —
+# machine-computed attribution) from the retained candidate run.
+# Predecessor evidence comes from the CHECKED-IN record chain (the one
+# approved record whose candidate byte-equals the live baseline) — a
+# clone is all a draft needs; pass PRED_RUN (a retained raw-log run
+# dir) only as the bootstrap escape hatch for a baseline predating
+# record-keeping.  The reviewer supplies judgment by APPROVING —
 # renaming approval-DRAFT.json to approval.json (approval is FILENAME-ONLY;
 # no JSON edits, and Git records the approver identity/date).  The draft is
 # already complete (baseline_md composed mechanically); the raw build/tmp
 # runs need not be preserved after the record is generated and verified.
-ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN:
+ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN="":
 	#!/usr/bin/env bash
 	set -euo pipefail
+	pred="{{PRED_RUN}}"
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
-		"{{CAND_RUN}}" "{{RECORD_DIR}}" --draft --predecessor-run "{{PRED_RUN}}"
+		"{{CAND_RUN}}" "{{RECORD_DIR}}" --draft \
+		${pred:+--predecessor-run "$pred"}
 	echo "ownership-corpus-promotion-draft: running focused promotion teeth"
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
 		lang/tests/tools/test_ownership_corpus_promote.py -q

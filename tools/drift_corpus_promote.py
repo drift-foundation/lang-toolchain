@@ -11,8 +11,8 @@
 #   drift_corpus_promote.py <run-dir> <approval-file> [--apply]
 #                           [--baseline-dir DIR]
 #   drift_corpus_promote.py <candidate-run-dir> <promotion-record-dir>
-#                           --draft --predecessor-run <run-dir>
-#                           [--baseline-dir DIR]
+#                           --draft [--predecessor-run <run-dir>]
+#                           [--promotions-dir DIR] [--baseline-dir DIR]
 #
 #   --draft: PROMOTION-RECORD generation — creates a durable,
 #     self-contained record directory:
@@ -21,10 +21,19 @@
 #                                fixture-counters}.json
 #         <record>/candidate/{aggregate,manifest,metadata,
 #                              fixture-counters}.json
-#     predecessor artifacts are copies of the LIVE baseline
-#     (identity-checked against --predecessor-run's aggregate and
-#     manifest); fixture-counters.json is the COMPACT extraction of
-#     the one aggregate record per compiled fixture from each run's
+#     predecessor artifacts are copies of the LIVE baseline.  The
+#     predecessor's per-fixture evidence comes from the CHECKED-IN
+#     record chain: the one approved record under --promotions-dir
+#     whose candidate/ is byte-equal to the live baseline (it IS the
+#     run behind it), its fixture-counters verified against the hash
+#     its own approval pinned.  A clone of the repo therefore carries
+#     everything a draft needs; retained run dirs do not survive one.
+#     --predecessor-run is the BOOTSTRAP escape hatch for a baseline
+#     predating record-keeping: a retained raw-log run dir byte-equal
+#     to the live baseline (aggregate + manifest), from which the
+#     counters are extracted directly.
+#     Candidate fixture-counters.json is the COMPACT extraction of
+#     the one aggregate record per compiled fixture from the run's
 #     raw audit logs (the raw logs need not be preserved).  The
 #     approval draft pins every evidence hash and carries the
 #     machine-computed attribution_facts (modal delta, outliers,
@@ -228,6 +237,64 @@ def extract_fixture_counters(run_dir: Path, compiled: list) -> dict:
 	return {"record": "fixture-counters", "fixtures": out}
 
 
+def resolve_predecessor_record(promotions_dir: Path,
+                               baseline_dir: Path) -> Path:
+	"""Locate THE approved checked-in promotion record whose candidate
+	is byte-equal to the live baseline — that record's candidate IS
+	the run behind the baseline, and a clone carries it."""
+	require(promotions_dir.is_dir(),
+	        f"promotions dir not found: {promotions_dir} — for a "
+	        f"baseline predating record-keeping, pass --predecessor-run "
+	        f"(raw-log bootstrap path)")
+	base_agg = (baseline_dir / "aggregate.json").read_bytes()
+	base_man = (baseline_dir / "manifest.json").read_bytes()
+	matches = []
+	for rec in sorted(p for p in promotions_dir.iterdir() if p.is_dir()):
+		cand = rec / "candidate"
+		if not ((cand / "aggregate.json").exists()
+		        and (cand / "manifest.json").exists()):
+			continue
+		if ((cand / "aggregate.json").read_bytes() == base_agg
+				and (cand / "manifest.json").read_bytes() == base_man):
+			matches.append(rec)
+	require(len(matches) == 1,
+	        f"expected exactly ONE checked-in record whose candidate "
+	        f"byte-equals the live baseline, found {len(matches)}"
+	        + (f": {sorted(m.name for m in matches)}" if matches else
+	           f" under {promotions_dir} — for a baseline predating "
+	           f"record-keeping, pass --predecessor-run"))
+	rec = matches[0]
+	require((rec / APPROVED_NAME).exists(),
+	        f"record {rec.name!r} matches the live baseline but is not "
+	        f"approved ({APPROVED_NAME} missing) — only an APPLIED "
+	        f"promotion's record is authoritative")
+	return rec
+
+
+def load_record_fixture_counters(rec: Path, compiled: list) -> dict:
+	"""Predecessor per-fixture evidence from the checked-in record,
+	verified against the hash its own approval pinned."""
+	app = load_json(rec / APPROVED_NAME, f"record {rec.name} approval")
+	fc_path = rec / "candidate" / "fixture-counters.json"
+	require(fc_path.exists(),
+	        f"record {rec.name} missing candidate fixture-counters.json")
+	want = app.get("candidate", {}).get("fixture_counters_sha256")
+	require(isinstance(want, str) and len(want) == 64,
+	        f"record {rec.name} approval lacks "
+	        f"candidate.fixture_counters_sha256")
+	got = sha256_file(fc_path)
+	require(got == want,
+	        f"record {rec.name} fixture-counters sha256 {got[:16]}... "
+	        f"!= pinned {want[:16]}...")
+	data = load_json(fc_path, f"record {rec.name} fixture-counters")
+	require(data.get("record") == "fixture-counters",
+	        f"record {rec.name} fixture-counters wrong record kind")
+	require(sorted(data.get("fixtures", {})) == list(compiled),
+	        f"record {rec.name} fixture-counters cover a different "
+	        f"compiled set than the live baseline")
+	return data
+
+
 def verify_attribution(app: dict, approval_dir: Path,
                        base_agg: dict, new_agg: dict,
                        added_ok: list) -> None:
@@ -322,30 +389,36 @@ def check_universe_integrity(side: str, u: dict) -> None:
 
 
 def generate_draft(audit, run_dir: Path, baseline_dir: Path,
-                   record_dir: Path, predecessor_run: Path) -> int:
+                   record_dir: Path, predecessor_run: Path,
+                   promotions_dir: Path) -> int:
 	"""Build the durable promotion record (facts only)."""
 	require(not record_dir.exists(),
 	        f"promotion record already exists (non-overwriting): {record_dir}")
-	require(predecessor_run is not None,
-	        "--draft requires --predecessor-run <retained predecessor run "
-	        "dir> for fixture-counter extraction")
+	# Predecessor evidence: the checked-in record chain by default
+	# (clone-sufficient); --predecessor-run is the raw-log bootstrap
+	# escape hatch for a baseline predating record-keeping.
+	pred_record = None
+	if predecessor_run is None:
+		pred_record = resolve_predecessor_record(promotions_dir, baseline_dir)
 	for name in ARTIFACTS:
 		require((baseline_dir / name).exists(), f"baseline missing {name}")
 		require((run_dir / name).exists(), f"candidate missing {name}")
-		require((predecessor_run / name).exists(),
-		        f"predecessor run missing {name}")
+		if predecessor_run is not None:
+			require((predecessor_run / name).exists(),
+			        f"predecessor run missing {name}")
 	base_man = load_json(baseline_dir / "manifest.json", "baseline manifest")
 	new_man = load_json(run_dir / "manifest.json", "candidate manifest")
 	base_agg = load_json(baseline_dir / "aggregate.json", "baseline aggregate")
 	new_agg = load_json(run_dir / "aggregate.json", "candidate aggregate")
-	# predecessor-run identity: it must BE the run behind the live
-	# baseline (aggregate + manifest byte-equal)
-	require((predecessor_run / "aggregate.json").read_bytes()
-	        == (baseline_dir / "aggregate.json").read_bytes(),
-	        "--predecessor-run aggregate != live baseline aggregate")
-	require((predecessor_run / "manifest.json").read_bytes()
-	        == (baseline_dir / "manifest.json").read_bytes(),
-	        "--predecessor-run manifest != live baseline manifest")
+	if predecessor_run is not None:
+		# bootstrap-path identity: the run must BE the run behind the
+		# live baseline (aggregate + manifest byte-equal)
+		require((predecessor_run / "aggregate.json").read_bytes()
+		        == (baseline_dir / "aggregate.json").read_bytes(),
+		        "--predecessor-run aggregate != live baseline aggregate")
+		require((predecessor_run / "manifest.json").read_bytes()
+		        == (baseline_dir / "manifest.json").read_bytes(),
+		        "--predecessor-run manifest != live baseline manifest")
 	try:
 		audit._validate_universe_schema("baseline", base_man["universe"])
 		audit._validate_universe_schema("candidate", new_man["universe"])
@@ -375,8 +448,12 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 	          for k in sorted(set(bc) | set(nc))
 	          if nc.get(k, 0) - bc.get(k, 0)}
 
-	# compact per-fixture evidence extraction (fail-closed)
-	pred_fc = extract_fixture_counters(predecessor_run, sorted(b_ok))
+	# compact per-fixture evidence (fail-closed): record chain, or raw
+	# logs on the bootstrap path
+	if pred_record is not None:
+		pred_fc = load_record_fixture_counters(pred_record, sorted(b_ok))
+	else:
+		pred_fc = extract_fixture_counters(predecessor_run, sorted(b_ok))
 	cand_fc = extract_fixture_counters(run_dir, sorted(n_ok))
 
 	# attribution facts: per-fixture deltas over shared fixtures
@@ -413,8 +490,10 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 	# facts — the reviewer's only mutation is the rename.
 	env = new_man.get("environment", {})
 	pred_env = base_man.get("environment", {})
-	pred_meta = load_json(predecessor_run / "metadata.json",
-	                      "predecessor metadata")
+	pred_meta = load_json(
+		(pred_record / "candidate" if pred_record is not None
+		 else predecessor_run) / "metadata.json",
+		"predecessor metadata")
 	if modal:
 		modal_txt = (", ".join(f"{k} {v:+d}" for k, v in sorted(modal.items()))
 		             + f" on all {len(shared) - len(outliers)} shared fixtures")
@@ -508,8 +587,13 @@ def main(argv=None) -> int:
 	                     "record dir at <approval-file> (must not exist) "
 	                     "instead of promoting")
 	ap.add_argument("--predecessor-run", default=None,
-	                help="(--draft only) retained predecessor run dir for "
-	                     "fixture-counter extraction")
+	                help="(--draft only) BOOTSTRAP escape hatch: retained "
+	                     "raw-log predecessor run dir, for a baseline "
+	                     "predating record-keeping (default: predecessor "
+	                     "evidence comes from the checked-in record chain)")
+	ap.add_argument("--promotions-dir", default=None,
+	                help="(--draft only) checked-in promotion-records dir "
+	                     "(default: <baseline-dir>/../promotions)")
 	ap.add_argument("--baseline-dir", default=str(DEFAULT_BASELINE))
 	args = ap.parse_args(argv)
 
@@ -522,7 +606,10 @@ def main(argv=None) -> int:
 		require(not args.apply, "--draft and --apply are mutually exclusive")
 		return generate_draft(audit, run_dir, baseline_dir, approval_path,
 		                      Path(args.predecessor_run)
-		                      if args.predecessor_run else None)
+		                      if args.predecessor_run else None,
+		                      Path(args.promotions_dir)
+		                      if args.promotions_dir
+		                      else baseline_dir.parent / "promotions")
 
 	app = load_json(approval_path, "approval file")
 	validate_approval(app)
