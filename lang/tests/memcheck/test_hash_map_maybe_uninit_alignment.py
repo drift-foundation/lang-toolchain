@@ -77,7 +77,7 @@ pub fn main() nothrow -> Int {
 \t// Read-back via maybe_assume_init_ref through `get(&k)`.
 \tval probe = "k-3";
 \tvar total = 0;
-\tmatch m.get(&probe) {
+\tmatch m.get(probe) {
 \t\tOptional::Some(v_ref) => { total = total + v_ref.byte_length(); },
 \t\tOptional::None() => {}
 \t}
@@ -85,7 +85,7 @@ pub fn main() nothrow -> Int {
 \tvar j = 0;
 \twhile j < 4 {
 \t\tval rk = "k-" + fmt.format_int(j);
-\t\tmatch m.remove(&rk) {
+\t\tmatch m.remove(rk) {
 \t\t\tOptional::Some(v) => { core.drop_value<type String>(move v); },
 \t\t\tOptional::None() => {}
 \t\t}
@@ -129,7 +129,7 @@ pub fn main() nothrow -> Int {
 \t// from the slot into `taken`.
 \tval kk = "k-2";
 \tvar total = 0;
-\tmatch m.remove(&kk) {
+\tmatch m.remove(kk) {
 \t\tOptional::Some(taken) => {
 \t\t\ttotal = total + taken.get().tag;
 \t\t\tcore.drop_value<type conc.Arc<Payload>>(move taken);

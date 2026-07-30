@@ -8,18 +8,18 @@ import std.net as net;
 pub fn main() nothrow -> Int {
 	val io_t = conc.Duration(millis = 1000);
 	var saddr = net.socket_addr("127.0.0.1", 0);
-	var sr = net.udp_bind(&saddr);
+	var sr = net.udp_bind(saddr);
 	match sr {
 		Ok(srv) => {
 			val port = srv.test_local_port();
 			var caddr = net.socket_addr("127.0.0.1", 0);
-			var cr = net.udp_bind(&caddr);
+			var cr = net.udp_bind(caddr);
 			match cr {
 				Ok(cli) => {
 					var b = io.buffer(1);
-					io.buffer_write(&mut b, 0, cast<Byte>(65));
+					io.buffer_write(b, 0, cast<Byte>(65));
 					var send_addr = net.socket_addr("127.0.0.1", port);
-					var ws = cli.send_to(&send_addr, &b, io_t);
+					var ws = cli.send_to(send_addr, b, io_t);
 					var ws_code = 0;
 					match ws {
 						Ok(_) => { ws_code = 0; },
@@ -29,7 +29,7 @@ pub fn main() nothrow -> Int {
 					if ws_code != 0 { return ws_code; }
 					var rbuf = io.buffer(1);
 					var raddr = net.socket_addr("0.0.0.0", 0);
-					var rr = srv.recv_from(&mut raddr, &mut rbuf, io_t);
+					var rr = srv.recv_from(raddr, rbuf, io_t);
 					var rr_code = 0;
 					match rr {
 						Ok(n) => { rr_code = n; },
@@ -39,7 +39,7 @@ pub fn main() nothrow -> Int {
 					if rr_code == -7 { return 7; }
 					if rr_code == -8 { return 8; }
 					if rr_code != 1 { return 5; }
-					val v = io.buffer_read(&mut rbuf, 0);
+					val v = io.buffer_read(rbuf, 0);
 					if cast<Int>(v) != 65 { return 6; }
 					val _ = cli.close(io_t);
 					val _ = srv.close(io_t);

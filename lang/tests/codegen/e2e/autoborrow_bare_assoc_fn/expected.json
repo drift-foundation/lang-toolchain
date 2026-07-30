@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows W-assoc: bare place at a declared &String formal of an associated function auto-borrows (this shape previously miscompiled \u2014 e8d assoc flavor)",
+  "exit_code": 5,
+  "stderr": "",
+  "stdout": ""
+}

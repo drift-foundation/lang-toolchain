@@ -7,40 +7,40 @@ pub fn main() nothrow -> Int {
 	// Test 1: ASCII string append into empty buffer
 	var buf = io.buffer(64);
 	val s1 = "Hello";
-	io.buffer_write_string(&mut buf, &s1);
-	if io.buffer_len(&buf) != 5 {
+	io.buffer_write_string(buf, s1);
+	if io.buffer_len(buf) != 5 {
 		return 1;
 	}
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(72) {
+	if io.buffer_read(buf, 0) != cast<Byte>(72) {
 		return 2;
 	}
-	if io.buffer_read(&mut buf, 4) != cast<Byte>(111) {
+	if io.buffer_read(buf, 4) != cast<Byte>(111) {
 		return 3;
 	}
 
 	// Test 2: multi-byte UTF-8 append (U+00E9 = 0xC3 0xA9 = "é")
 	val s2 = "é";
-	io.buffer_write_string(&mut buf, &s2);
-	if io.buffer_len(&buf) != 7 {
+	io.buffer_write_string(buf, s2);
+	if io.buffer_len(buf) != 7 {
 		return 4;
 	}
-	if io.buffer_read(&mut buf, 5) != cast<Byte>(195) {
+	if io.buffer_read(buf, 5) != cast<Byte>(195) {
 		return 5;
 	}
-	if io.buffer_read(&mut buf, 6) != cast<Byte>(169) {
+	if io.buffer_read(buf, 6) != cast<Byte>(169) {
 		return 6;
 	}
 
 	// Test 3: append into non-empty preserves earlier bytes
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(72) {
+	if io.buffer_read(buf, 0) != cast<Byte>(72) {
 		return 7;
 	}
 
 	// Test 4: empty string is no-op
 	val empty = "";
-	val len_before = io.buffer_len(&buf);
-	io.buffer_write_string(&mut buf, &empty);
-	if io.buffer_len(&buf) != len_before {
+	val len_before = io.buffer_len(buf);
+	io.buffer_write_string(buf, empty);
+	if io.buffer_len(buf) != len_before {
 		return 8;
 	}
 

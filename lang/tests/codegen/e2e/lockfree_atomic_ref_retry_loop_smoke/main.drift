@@ -24,8 +24,8 @@ pub fn main() nothrow -> Int {
 	var ar = sync.atomic_ref<type Node>(sync.null_ref_token<type Node>());
 	val t1 = sync.ref_token<type Node>(cast<Uint>(11));
 	val t2 = sync.ref_token<type Node>(cast<Uint>(22));
-	if cas_set(&ar, sync.null_ref_token<type Node>(), t1) != 0 { return 3; }
-	if cas_set(&ar, sync.null_ref_token<type Node>(), t2) != 0 { return 4; }
+	if cas_set(ar, sync.null_ref_token<type Node>(), t1) != 0 { return 3; }
+	if cas_set(ar, sync.null_ref_token<type Node>(), t2) != 0 { return 4; }
 	if ar.load(sync.MemoryOrder::Acquire()).to_uint() != cast<Uint>(22) { return 5; }
 	return 0;
 }

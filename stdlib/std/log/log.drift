@@ -660,7 +660,7 @@ implement LoggerConfigBuilder {
 pub fn create_logger(name: String, config: LoggerConfig) nothrow -> Logger {
 	val reg = runtime.global_registry();
 	val _ = io.install_process_stdio(reg);
-	val st = _runtime_state_from_cfg(&config, _resolve_stderr_cap(reg));
+	val st = _runtime_state_from_cfg(config, _resolve_stderr_cap(reg));
 	val h = _alloc_runtime_state(move st);
 	return Logger(name = name, min_level = config.min_level, state = h);
 }
@@ -747,8 +747,8 @@ fn _clone_runtime_state(st: &LoggerRuntimeState, min_level: Level) nothrow -> Lo
 fn _alloc_runtime_state(st: LoggerRuntimeState) nothrow -> sync.Handle<Byte> {
 	unsafe {
 		var raw = mem.alloc_uninit<type LoggerRuntimeState>(1);
-		mem.write<type LoggerRuntimeState>(&mut raw, 0, move st);
-		val p = mem.rawbuffer_ptr<type LoggerRuntimeState>(&raw);
+		mem.write<type LoggerRuntimeState>(raw, 0, move st);
+		val p = mem.rawbuffer_ptr<type LoggerRuntimeState>(raw);
 		return sync.handle<type Byte>(cast<Uint>(p));
 	}
 }
@@ -774,8 +774,8 @@ fn _alloc_envelope(level_rank: Int, logger_min_rank: Int, enqueue_timeout_ms: In
 	unsafe {
 		var raw = mem.alloc_uninit<type LogEnvelope>(1);
 		val env = LogEnvelope(level_rank = level_rank, logger_min_rank = logger_min_rank, enqueue_timeout_ms = enqueue_timeout_ms, vtid = vtid, tid = tid, payload_json = payload_json);
-		mem.write<type LogEnvelope>(&mut raw, 0, move env);
-		val p = mem.rawbuffer_ptr<type LogEnvelope>(&raw);
+		mem.write<type LogEnvelope>(raw, 0, move env);
+		val p = mem.rawbuffer_ptr<type LogEnvelope>(raw);
 		val u = cast<Uint>(p);
 		return sync.handle<type Byte>(u);
 	}
@@ -788,7 +788,7 @@ fn _drop_envelope_handle(h: sync.Handle<Byte>) nothrow -> Void {
 	unsafe {
 		val p = cast<mem.Ptr<Byte> >(h.to_uint());
 		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
-		val env = mem.read<type LogEnvelope>(&mut raw, 0);
+		val env = mem.read<type LogEnvelope>(raw, 0);
 		core.drop_value(move env);
 		mem.dealloc<type LogEnvelope>(raw);
 	}
@@ -802,8 +802,8 @@ fn _emit_envelope_handle(st: &LoggerRuntimeState, h: sync.Handle<Byte>) nothrow 
 	unsafe {
 		val p = cast<mem.Ptr<Byte> >(h.to_uint());
 		var raw = mem.rawbuffer_from_parts<type LogEnvelope>(p, 1);
-		val env = mem.read<type LogEnvelope>(&mut raw, 0);
-		val tm = time.format_iso8601_utc(&time.now_utc());
+		val env = mem.read<type LogEnvelope>(raw, 0);
+		val tm = time.format_iso8601_utc(time.now_utc());
 		// vtid/tid were captured synchronously at emit time on the
 		// caller's thread — use the stored snapshot, never probe
 		// here (the drain path may be running on a completely
@@ -936,12 +936,12 @@ fn _emit<V>(logger: &Logger, var level: Level, ev: String, attrs: containers.Has
 		Some(st) => {
 			match _resolve_ctx_from_state(st) {
 				Some(ctx) => {
-					val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, &attrs) catch { false };
+					val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, attrs) catch { false };
 					core.drop_value(move attrs);
 					return ok;
 				},
 				None => {
-					val ok = try _emit_throwing<type V>(logger, level, ev, &attrs) catch { false };
+					val ok = try _emit_throwing<type V>(logger, level, ev, attrs) catch { false };
 					core.drop_value(move attrs);
 					return ok;
 				}
@@ -987,7 +987,7 @@ fn _emit_explicit_ctx_attrs(logger: &Logger, var level: Level, ev: String, ctx: 
 		core.drop_value(move attrs);
 		return false;
 	}
-	val ok = try _emit_ctx_attrs_throwing(logger, level, ev, ctx, &attrs) catch { false };
+	val ok = try _emit_ctx_attrs_throwing(logger, level, ev, ctx, attrs) catch { false };
 	core.drop_value(move attrs);
 	return ok;
 }
@@ -997,7 +997,7 @@ fn _emit_explicit_ctx_attrs_typed<V>(logger: &Logger, var level: Level, ev: Stri
 		core.drop_value(move attrs);
 		return false;
 	}
-	val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, &attrs) catch { false };
+	val ok = try _emit_ctx_attrs_throwing_typed<type V>(logger, level, ev, ctx, attrs) catch { false };
 	core.drop_value(move attrs);
 	return ok;
 }
@@ -1494,7 +1494,7 @@ implement core.Destructible for Logger {
 		unsafe {
 			val p = cast<mem.Ptr<Byte> >(self.state.to_uint());
 			var raw = mem.rawbuffer_from_parts<type LoggerRuntimeState>(p, 1);
-			val st = mem.read<type LoggerRuntimeState>(&mut raw, 0);
+			val st = mem.read<type LoggerRuntimeState>(raw, 0);
 			core.drop_value(move st);
 			mem.dealloc<type LoggerRuntimeState>(raw);
 		}
@@ -1536,8 +1536,8 @@ fn _byte_hex2(b: Byte) nothrow -> String {
 fn _byte_to_string(b: Byte) nothrow -> String {
 	unsafe {
 		var raw = mem.alloc_uninit<type Byte>(1);
-		mem.write<type Byte>(&mut raw, 0, b);
-		val out = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.write<type Byte>(raw, 0, b);
+		val out = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(raw), 1);
 		mem.dealloc<type Byte>(raw);
 		return out;
 	}
@@ -1548,7 +1548,7 @@ fn _json_escape(s: String) nothrow -> String {
 	var i = 0;
 	val n = s.byte_length();
 	while i < n {
-		val b = core.string_byte_at(&s, i);
+		val b = core.string_byte_at(s, i);
 		if b == cast<Byte>(34) {
 			out = out + "\\\"";
 		} else {

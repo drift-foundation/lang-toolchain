@@ -4,7 +4,7 @@ import std.core as core;
 import std.codec as codec;
 
 fn _require_err(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
-	val result = codec.base64url_decode(&s);
+	val result = codec.base64url_decode(s);
 	match result {
 		core.Result::Ok(vals) => { return code; },
 		core.Result::Err(e) => {
@@ -17,12 +17,12 @@ fn _require_err(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
 
 fn _require_roundtrip(src: &Array<Byte>, code: Int) nothrow -> Int {
 	val encoded = codec.base64url_encode(src);
-	val result = codec.base64url_decode(&encoded);
+	val result = codec.base64url_decode(encoded);
 	match result {
 		core.Result::Err(e) => { return code; },
 		core.Result::Ok(vals) => {
 			if vals.len != src.len { return code + 1; }
-			val a = codec.hex_encode(&vals);
+			val a = codec.hex_encode(vals);
 			val b = codec.hex_encode(src);
 			if a != b { return code + 2; }
 		}
@@ -32,14 +32,14 @@ fn _require_roundtrip(src: &Array<Byte>, code: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var empty: Array<Byte> = [];
-	val enc0 = codec.base64url_encode(&empty);
+	val enc0 = codec.base64url_encode(empty);
 	if enc0 != "" {
 		return 1;
 	}
 
 	var one: Array<Byte> = [];
 	one.push(cast<Byte>(0));
-	val enc1 = codec.base64url_encode(&one);
+	val enc1 = codec.base64url_encode(one);
 	if enc1 != "AA" {
 		return 2;
 	}
@@ -47,7 +47,7 @@ pub fn main() nothrow -> Int {
 	var two: Array<Byte> = [];
 	two.push(cast<Byte>(0));
 	two.push(cast<Byte>(0));
-	val enc2 = codec.base64url_encode(&two);
+	val enc2 = codec.base64url_encode(two);
 	if enc2 != "AAA" {
 		return 3;
 	}
@@ -56,7 +56,7 @@ pub fn main() nothrow -> Int {
 	three.push(cast<Byte>(0));
 	three.push(cast<Byte>(0));
 	three.push(cast<Byte>(0));
-	val enc3 = codec.base64url_encode(&three);
+	val enc3 = codec.base64url_encode(three);
 	if enc3 != "AAAA" {
 		return 4;
 	}
@@ -65,21 +65,21 @@ pub fn main() nothrow -> Int {
 	src.push(cast<Byte>(251));
 	src.push(cast<Byte>(239));
 	src.push(cast<Byte>(190));
-	val enc_url = codec.base64url_encode(&src);
+	val enc_url = codec.base64url_encode(src);
 	if enc_url != "----" {
 		return 5;
 	}
 
-	var r = _require_roundtrip(&src, 6);
+	var r = _require_roundtrip(src, 6);
 	if r != 0 { return r; }
 
-	r = _require_roundtrip(&one, 10);
+	r = _require_roundtrip(one, 10);
 	if r != 0 { return r; }
 
-	r = _require_roundtrip(&two, 14);
+	r = _require_roundtrip(two, 14);
 	if r != 0 { return r; }
 
-	r = _require_roundtrip(&three, 18);
+	r = _require_roundtrip(three, 18);
 	if r != 0 { return r; }
 
 	val res_empty = codec.base64url_decode("");
@@ -126,7 +126,7 @@ pub fn main() nothrow -> Int {
 		big.push(cast<Byte>(bi));
 		bi = bi + 1;
 	}
-	r = _require_roundtrip(&big, 120);
+	r = _require_roundtrip(big, 120);
 	if r != 0 { return r; }
 
 	return 0;

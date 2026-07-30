@@ -14,7 +14,7 @@ pub struct Payload
 
 implement core.Destructible for Payload {
 	pub fn destroy(var self: Payload) nothrow -> Void {
-		val _ = atomic.atomic_fetch_add_int(&self.counter.get(), 1, 2);
+		val _ = atomic.atomic_fetch_add_int(self.counter.get(), 1, 2);
 	}
 }
 
@@ -40,7 +40,7 @@ pub fn main() nothrow -> Int {
 		{ val _ = move sender; }
 		{ val _ = move receiver; }
 	}
-	val n = atomic.atomic_load_int(&counter.get(), 1);
+	val n = atomic.atomic_load_int(counter.get(), 1);
 	/* Expected: 3 destructions (1 received + 2 drained on receiver-drop) */
 	if n != 3 { return 30 + n; }
 	return 0;

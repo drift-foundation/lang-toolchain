@@ -8,5 +8,5 @@ fn pick(a: &Int, b: &Int, c: Bool) -> &Int {
 pub fn main() nothrow -> Int{
 	var x = 1;
 	var y = 2;
-	return *pick(&x, &y, true);
+	return *pick(x, y, true);
 }

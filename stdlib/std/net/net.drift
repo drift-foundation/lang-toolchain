@@ -246,7 +246,7 @@ pub fn socket_addr_v6(ip: String, port: Int) nothrow -> SocketAddrV6 {
 ///
 /// **Example:** `examples/udp_ping/main.drift`.
 pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
-	val fd = thread.net_udp_bind(&addr.ip, addr.port);
+	val fd = thread.net_udp_bind(addr.ip, addr.port);
 	if fd < 0 {
 		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = thread.io_errno()));
 	}
@@ -263,7 +263,7 @@ pub fn udp_bind(addr: &SocketAddr) nothrow -> core.Result<UdpSocket, NetError> {
 ///
 /// **See also:** `udp_bind`, `UdpSocket`.
 pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetError> {
-	val fd = thread.net_udp_bind_v6(&addr.ip, addr.port);
+	val fd = thread.net_udp_bind_v6(addr.ip, addr.port);
 	if fd < 0 {
 		return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = thread.io_errno()));
 	}
@@ -291,7 +291,7 @@ pub fn udp_bind_v6(addr: &SocketAddrV6) nothrow -> core.Result<UdpSocket, NetErr
 pub fn listen(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result<TcpListener, NetError> {
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
-		val fd = thread.net_listen(&addr.ip, addr.port);
+		val fd = thread.net_listen(addr.ip, addr.port);
 		if fd >= 0 {
 			return core.Result::Ok(TcpListener(fd = fd));
 		}
@@ -384,7 +384,7 @@ pub fn connect(addr: &SocketAddr, timeout: conc.Duration) nothrow -> core.Result
 	}
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
-		val fd = thread.net_connect(&addr.ip, addr.port, deadline);
+		val fd = thread.net_connect(addr.ip, addr.port, deadline);
 		if fd >= 0 {
 			return core.Result::Ok(TcpStream(fd = fd));
 		}
@@ -686,7 +686,7 @@ implement TcpStream {
 	pub fn peer_addr(self: &TcpStream) nothrow -> core.Result<SocketAddr, NetError> {
 		var ip: String = "";
 		var port: Int = 0;
-		val r = thread.net_peer_addr(self.fd, &mut ip, &mut port);
+		val r = thread.net_peer_addr(self.fd, ip, port);
 		if r < 0 {
 			val err = thread.io_errno();
 			return core.Result::Err(NetError(kind = NET_ERROR_KIND_ERRNO, code = err));
@@ -770,7 +770,7 @@ implement UdpSocket {
 		val len = io.buffer_len(buf);
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
-			val n = thread.net_udp_send_to(self.fd, &addr.ip, addr.port, ptr, len);
+			val n = thread.net_udp_send_to(self.fd, addr.ip, addr.port, ptr, len);
 			if n >= 0 {
 				return core.Result::Ok(n);
 			}
@@ -812,7 +812,7 @@ implement UdpSocket {
 		val len = io.buffer_len(buf);
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
-			val n = thread.net_udp_send_to_v6(self.fd, &addr.ip, addr.port, ptr, len);
+			val n = thread.net_udp_send_to_v6(self.fd, addr.ip, addr.port, ptr, len);
 			if n >= 0 {
 				return core.Result::Ok(n);
 			}
@@ -862,7 +862,7 @@ implement UdpSocket {
 		val len = io.buffer_capacity_mut(buf);
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
-			val n = thread.net_udp_recv_from(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
+			val n = thread.net_udp_recv_from(self.fd, ptr, len, addr_out.ip, addr_out.port);
 			if n >= 0 {
 				io.buffer_commit_read(buf, n);
 				return core.Result::Ok(n);
@@ -906,7 +906,7 @@ implement UdpSocket {
 		val len = io.buffer_capacity_mut(buf);
 		val deadline = _deadline_from_timeout(timeout);
 		while true {
-			val n = thread.net_udp_recv_from_v6(self.fd, ptr, len, &mut addr_out.ip, &mut addr_out.port);
+			val n = thread.net_udp_recv_from_v6(self.fd, ptr, len, addr_out.ip, addr_out.port);
 			if n >= 0 {
 				io.buffer_commit_read(buf, n);
 				return core.Result::Ok(n);

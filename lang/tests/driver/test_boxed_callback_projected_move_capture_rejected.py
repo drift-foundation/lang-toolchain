@@ -125,7 +125,7 @@ fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, p
 pub fn main() nothrow -> Int {
 \tval prepare: core.CallbackThrow2<Int, String, Prepared> = core.callback_throw2(| tk, pl | -> Prepared => {
 \t\tval fields = "payload:" + pl;
-\t\tval execute: core.CallbackThrow1<Bool, String> = core.callback_throw1(| is_reclaim | captures(move fields) -> String => _execute(&fields, is_reclaim));
+\t\tval execute: core.CallbackThrow1<Bool, String> = core.callback_throw1(| is_reclaim | captures(move fields) -> String => _execute(fields, is_reclaim));
 \t\treturn Prepared(execute = move execute);
 \t});
 \tval result = try driver_handle(prepare, 1, "hello") catch { "caught" };
@@ -163,7 +163,7 @@ fn _dummy_execute(is_reclaim: Bool) throws -> String {
 
 fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, payload: String) throws -> String {
 \tvar p = prepare.call(tk, payload);
-\tvar execute = mem.replace(&mut p.execute, core.callback_throw1(_dummy_execute));
+\tvar execute = mem.replace(p.execute, core.callback_throw1(_dummy_execute));
 \tvar vt = conc.spawn<type String>(core.callback0(| | captures(move execute) => {
 \t\treturn try execute.call(false) catch { "spawn-err" };
 \t}));
@@ -177,7 +177,7 @@ fn driver_handle(prepare: core.CallbackThrow2<Int, String, Prepared>, tk: Int, p
 pub fn main() nothrow -> Int {
 \tval prepare: core.CallbackThrow2<Int, String, Prepared> = core.callback_throw2(| tk, pl | -> Prepared => {
 \t\tval fields = "payload:" + pl;
-\t\tval execute: core.CallbackThrow1<Bool, String> = core.callback_throw1(| is_reclaim | captures(move fields) -> String => _execute(&fields, is_reclaim));
+\t\tval execute: core.CallbackThrow1<Bool, String> = core.callback_throw1(| is_reclaim | captures(move fields) -> String => _execute(fields, is_reclaim));
 \t\treturn Prepared(execute = move execute);
 \t});
 \tval result = try driver_handle(prepare, 1, "hello") catch { "caught" };

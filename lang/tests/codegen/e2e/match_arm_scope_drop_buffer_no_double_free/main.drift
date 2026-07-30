@@ -8,7 +8,7 @@ pub fn main() nothrow -> Int {
 	match r {
 		Ok(v) => {
 			var buf = io.buffer(1);
-			io.buffer_write(&mut buf, 0, cast<Byte>(65));
+			io.buffer_write(buf, 0, cast<Byte>(65));
 			if v == 2 {
 				return 1;
 			}

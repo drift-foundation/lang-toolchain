@@ -54,7 +54,7 @@ import std.time as time;
 fn busy_ms(ms: Int) nothrow -> Int {
 	val start = time.now_monotonic();
 	var spins = 0;
-	while time.elapsed_ms(&start) < ms {
+	while time.elapsed_ms(start) < ms {
 		spins = spins + 1;
 	}
 	return spins;
@@ -76,7 +76,7 @@ pub fn main() nothrow -> Int {
 	// Occupy the single slot with a busy (non-parking) task.
 	val o1 = order.clone();
 	var code = 0;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| captures(move o1) => {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| captures(move o1) => {
 		val _ = busy_ms(400);
 		val _ = o1.get().fetch_add(1, sync.MemoryOrder::AcqRel());
 		return 0;
@@ -88,7 +88,7 @@ pub fn main() nothrow -> Int {
 			val exa = ex;
 			val o2 = order.clone();
 			var wa = conc.spawn_cb(|| captures(copy exa, move o2) => {
-				match conc.spawn_blocking_on(&exa, "test.op", core.callback0(|| captures(move o2) => {
+				match conc.spawn_blocking_on(exa, "test.op", core.callback0(|| captures(move o2) => {
 					val _ = o2.get().fetch_add(1, sync.MemoryOrder::AcqRel());
 					return 0;
 				})) {
@@ -101,7 +101,7 @@ pub fn main() nothrow -> Int {
 			val exb = ex;
 			val o3 = order.clone();
 			var wb = conc.spawn_cb(|| captures(copy exb, move o3) => {
-				match conc.spawn_blocking_on(&exb, "test.op", core.callback0(|| captures(move o3) => {
+				match conc.spawn_blocking_on(exb, "test.op", core.callback0(|| captures(move o3) => {
 					// FIFO: waiter A must have been admitted (and run)
 					// before waiter B; both after the occupant.
 					val seen = o3.get().load(sync.MemoryOrder::Acquire());
@@ -155,11 +155,11 @@ pub fn main() nothrow -> Int {
 	val ex = conc.build_blocking_executor(b.build(), "test-exec");
 
 	var code = 1;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(1200); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(1200); return 0; })) {
 		core.Result::Ok(first) => {
 			var f = move first;
 			val t = Token(tag = 42);
-			match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| captures(move t) => {
+			match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| captures(move t) => {
 				var mine = move t;
 				return mine.tag;
 			})) {
@@ -191,14 +191,14 @@ pub fn main() nothrow -> Int {
 	val ex = conc.build_blocking_executor(b.build(), "test-exec");
 
 	var code = 1;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(600); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(600); return 0; })) {
 		core.Result::Ok(first) => {
 			var f = move first;
 			val start = time.now_monotonic();
-			match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { return 0; })) {
+			match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { return 0; })) {
 				core.Result::Ok(_) => { code = 2; },
 				core.Result::Err(e) => {
-					val waited = time.elapsed_ms(&start);
+					val waited = time.elapsed_ms(start);
 					match e.kind == conc.CONCURRENCY_KIND_BUSY {
 						true => {
 							// Immediate, not blocked-then-failed.
@@ -236,7 +236,7 @@ pub fn main() nothrow -> Int {
 	var chatty = conc.spawn_cb(|| captures(move t1, move s1) => {
 		// Bounded cooperative loop (deadline + stop flag).
 		val start = time.now_monotonic();
-		while time.elapsed_ms(&start) < 6000 {
+		while time.elapsed_ms(start) < 6000 {
 			match s1.get().load(sync.MemoryOrder::Acquire()) {
 				true => { return 0; },
 				false => {},
@@ -248,13 +248,13 @@ pub fn main() nothrow -> Int {
 	});
 
 	var code = 1;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(500); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(500); return 0; })) {
 		core.Result::Ok(first) => {
 			var f = move first;
 			val before = ticks.get().load(sync.MemoryOrder::Acquire());
 			// This submission Block-waits ~500ms.  Main's carrier must
 			// stay free: chatty runs on the SAME single default carrier.
-			match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { return 0; })) {
+			match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { return 0; })) {
 				core.Result::Ok(second) => {
 					var sec = move second;
 					val after = ticks.get().load(sync.MemoryOrder::Acquire());
@@ -288,13 +288,13 @@ pub fn main() nothrow -> Int {
 	val outcome = conc.arc(sync.atomic_int(0));
 
 	var code = 1;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(2500); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(2500); return 0; })) {
 		core.Result::Ok(first) => {
 			var f = move first;
 			val exw = ex;
 			val oc = outcome.clone();
 			var waiter = conc.spawn_cb(|| captures(copy exw, move oc) => {
-				match conc.spawn_blocking_on(&exw, "test.op", core.callback0(|| => { return 0; })) {
+				match conc.spawn_blocking_on(exw, "test.op", core.callback0(|| => { return 0; })) {
 					core.Result::Ok(_) => { oc.get().store(3, sync.MemoryOrder::Release()); },
 					core.Result::Err(e) => {
 						match e.kind == conc.CONCURRENCY_KIND_CANCELLED {
@@ -311,7 +311,7 @@ pub fn main() nothrow -> Int {
 			// runs its post-submit code cooperatively).
 			val start = time.now_monotonic();
 			var seen = 0;
-			while time.elapsed_ms(&start) < 5000 {
+			while time.elapsed_ms(start) < 5000 {
 				seen = outcome.get().load(sync.MemoryOrder::Acquire());
 				if seen != 0 { break; }
 				val _ = conc.sleep(conc.Duration(millis = 20));
@@ -340,11 +340,11 @@ pub fn main() nothrow -> Int {
 
 	var code = 1;
 	val d1 = done.clone();
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| captures(move d1) => {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| captures(move d1) => {
 		// Yield storm: every yield re-enqueues this VT BEFORE the
 		// worker's running-- — the naive-transfer over-admission shape.
 		val start = time.now_monotonic();
-		while time.elapsed_ms(&start) < 400 {
+		while time.elapsed_ms(start) < 400 {
 			conc.yield_now();
 		}
 		d1.get().store(true, sync.MemoryOrder::Release());
@@ -353,7 +353,7 @@ pub fn main() nothrow -> Int {
 		core.Result::Ok(first) => {
 			var f = move first;
 			val d2 = done.clone();
-			match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| captures(move d2) => {
+			match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| captures(move d2) => {
 				// First observable action: the occupant must ALREADY be
 				// done — admission during its yields would run us early.
 				match d2.get().load(sync.MemoryOrder::Acquire()) {
@@ -392,7 +392,7 @@ pub fn main() nothrow -> Int {
 	b.timeout(conc.Duration(millis = 0));
 	val ex = conc.build_blocking_executor(b.build(), "test-exec");
 
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(1200); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(1200); return 0; })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
@@ -400,7 +400,7 @@ pub fn main() nothrow -> Int {
 	val _waiter = conc.spawn_cb(|| captures(copy exw) => {
 		// Blocks in admission with NO deadline; only the shutdown drain
 		// can release it.
-		match conc.spawn_blocking_on(&exw, "test.op", core.callback0(|| => { return 0; })) {
+		match conc.spawn_blocking_on(exw, "test.op", core.callback0(|| => { return 0; })) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => {},
 		}
@@ -433,14 +433,14 @@ pub fn main() nothrow -> Int {
 	val got = conc.arc(sync.atomic_bool(false));
 
 	var code = 1;
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(200); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(200); return 0; })) {
 		core.Result::Ok(first) => {
 			var f = move first;
 			// The waiter under test.
 			val exw = ex;
 			val g1 = got.clone();
 			var waiter = conc.spawn_cb(|| captures(copy exw, move g1) => {
-				match conc.spawn_blocking_on(&exw, "test.op", core.callback0(|| => { return 0; })) {
+				match conc.spawn_blocking_on(exw, "test.op", core.callback0(|| => { return 0; })) {
 					core.Result::Ok(h) => {
 						var hh = move h;
 						match hh.join() { core.Result::Ok(_) => { g1.get().store(true, sync.MemoryOrder::Release()); }, core.Result::Err(_) => {} }
@@ -455,7 +455,7 @@ pub fn main() nothrow -> Int {
 			var i = 0;
 			var traffic_fail = 0;
 			while i < 12 {
-				match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(30); return 0; })) {
+				match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(30); return 0; })) {
 					core.Result::Ok(h) => {
 						var hh = move h;
 						match hh.join() { core.Result::Ok(_) => {}, core.Result::Err(_) => { traffic_fail = 1; } }
@@ -506,9 +506,9 @@ pub fn main() nothrow -> Int {
 	var i = 0;
 	while i < 12 {
 		val r1 = release.clone();
-		match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| captures(move r1) => {
+		match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| captures(move r1) => {
 			val start = time.now_monotonic();
-			while time.elapsed_ms(&start) < 8000 {
+			while time.elapsed_ms(start) < 8000 {
 				match r1.get().load(sync.MemoryOrder::Acquire()) {
 					true => { return 0; },
 					false => {},
@@ -529,7 +529,7 @@ pub fn main() nothrow -> Int {
 		val exw = ex;
 		val d1 = done_count.clone();
 		var wv = conc.spawn_cb(|| captures(copy exw, move d1) => {
-			match conc.spawn_blocking_on(&exw, "test.op", core.callback0(|| => { return 0; })) {
+			match conc.spawn_blocking_on(exw, "test.op", core.callback0(|| => { return 0; })) {
 				core.Result::Ok(h) => {
 					var hh = move h;
 					match hh.join() { core.Result::Ok(_) => { val _ = d1.get().fetch_add(1, sync.MemoryOrder::AcqRel()); }, core.Result::Err(_) => {} }
@@ -577,7 +577,7 @@ pub fn main() nothrow -> Int {
 	b.timeout(conc.Duration(millis = 0));
 	val ex = conc.build_blocking_executor(b.build(), "test-exec");
 
-	match conc.spawn_blocking_on(&ex, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
+	match conc.spawn_blocking_on(ex, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
@@ -585,7 +585,7 @@ pub fn main() nothrow -> Int {
 	while j < 70 {
 		val exw = ex;
 		val _w = conc.spawn_cb(|| captures(copy exw) => {
-			match conc.spawn_blocking_on(&exw, "test.op", core.callback0(|| => { return 0; })) {
+			match conc.spawn_blocking_on(exw, "test.op", core.callback0(|| => { return 0; })) {
 				core.Result::Ok(_) => {},
 				core.Result::Err(_) => {},
 			}
@@ -621,14 +621,14 @@ pub fn main() nothrow -> Int {
 	ab.max_threads(1);
 	val aex = conc.build_executor(ab.build());
 
-	match conc.spawn_blocking_on(&bex, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
+	match conc.spawn_blocking_on(bex, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
 	// The waiter VT HOMES on A and Block-waits (forever) on B.
 	val bexw = bex;
 	match conc.spawn_on(aex, core.callback0(|| captures(copy bexw) => {
-		match conc.spawn_blocking_on(&bexw, "test.op", core.callback0(|| => { return 0; })) {
+		match conc.spawn_blocking_on(bexw, "test.op", core.callback0(|| => { return 0; })) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => {},
 		}
@@ -664,19 +664,19 @@ pub fn main() nothrow -> Int {
 	b2.queue_limit(4);
 	val bex2 = conc.build_blocking_executor(b2.build(), "test-exec-2");
 
-	match conc.spawn_blocking_on(&bex1, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
+	match conc.spawn_blocking_on(bex1, "test.op", core.callback0(|| => { val _ = busy_ms(1500); return 0; })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
 	val b1w = bex1;
 	val b2w = bex2;
 	val _w = conc.spawn_cb(|| captures(copy b1w, copy b2w) => {
-		match conc.spawn_blocking_on(&b1w, "test.op", core.callback0(|| => { return 0; })) {
+		match conc.spawn_blocking_on(b1w, "test.op", core.callback0(|| => { return 0; })) {
 			core.Result::Ok(_) => { console.println("first-submit-admitted"); },
 			core.Result::Err(_) => {
 				// Resumed by the shutdown drain.  B2 has FREE capacity,
 				// but the prepass closed admission everywhere.
-				match conc.spawn_blocking_on(&b2w, "test.op", core.callback0(|| => { console.println("second-task-ran"); return 0; })) {
+				match conc.spawn_blocking_on(b2w, "test.op", core.callback0(|| => { console.println("second-task-ran"); return 0; })) {
 					core.Result::Ok(_) => { console.println("second-submit-admitted"); },
 					core.Result::Err(e) => {
 						match e.kind == conc.CONCURRENCY_KIND_BUSY {

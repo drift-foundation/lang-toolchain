@@ -9,7 +9,7 @@ fn run() -> Int {
 	var fields = containers.hash_map<type String, json.JsonNode>();
 	fields.insert("a", json.JsonNode::Number("1"));
 	val n = json.JsonNode::Object(move fields);
-	val s = json.encode_with_config(&n, &cfg);
+	val s = json.encode_with_config(n, cfg);
 	if s.byte_length() <= 0 { return 1; }
 	return 0;
 }

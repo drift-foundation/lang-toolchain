@@ -1,6 +1,93 @@
 # Drift development history
 
-## 2026-07-29 (0.33.91: thin fn-pointer `&T` argument auto-borrow — bare-call miscompile fixed; ABI 22 unchanged)
+## 2026-07-29 (0.33.91: reject-redundant-call-borrows — `&` is never decoration; + thin fn-pointer `&T` bare-call miscompile fixed; ABI 22 unchanged)
+
+**SOURCE-COMPAT BREAK (language rule).** A source-written borrow in a call-
+argument position whose parameter is a DECLARED reference is now an error:
+
+```
+error: redundant borrow for parameter 'arg: &String'; pass 'name' directly
+       — the parameter declaration spells the borrow  [E_REDUNDANT_ARG_BORROW]
+```
+
+`read(&name)`, `edit(&mut buffer)`, `read(&mut buffer)`, `read(&r)` (already-
+`&T` value), and rvalue spellings `read(&"lit")` / `read(&mk())` all reject;
+the bare forms are THE spelling (rvalues materialize a scope-end temp exactly
+as the explicit form did — pinned byte-for-byte by the A/B gate under
+valgrind + ASan). The sole non-redundancy rejection: a mutable temporary has
+no argument spelling (`E_MUT_RVALUE_ARG_BINDING_REQUIRED` — bind to a `var`
+first). Overload sets identical after erasing a non-receiver parameter's mode
+{`T`, `&T`, `&mut T`} are definition-site errors
+(`E_OVERLOAD_PARAM_MODE_ONLY_DIFF`); receiver-mode overloading and
+concrete-vs-generic sets are unaffected.
+
+`&` in an argument now always does real work — the surviving contexts:
+coercion borrows (`use(&concrete)` at a declared `&Interface` formal),
+generic-by-value formals instantiated at references
+(`identity<type &String>(&name)`, `cb.call(&mut scope)` on FnN/CallbackN),
+thin function-pointer calls (`fp(&s)` — provenance-undecidable, both
+spellings legal), constructor fields, capture lists, and every non-argument
+position. Alias-declared references (`type Handle = &String`) count as
+declared (alias transparency).
+
+**Mechanism.** One shared declared-reference argument policy (W0): a single
+declaration-origin classifier + mask builder feeds every call family — free
+fns, methods, associated fns, interface dispatch, `std.mem` intrinsics
+(bare-place element inference added), trait-qualified statics, require-bound
+dispatch, and immediately-invoked lambdas — with source-written borrows
+carried as `HBorrow.source_written` provenance (never serialized into
+packages: pre-rule `.dmp` artifacts stay valid with no payload bump, and
+packaged bodies are source-policy-free). A typed-mode TOTALITY validator
+asserts every surviving source-written borrow argument carries a policy
+classification and no rejection class was accepted — new call families fail
+validation instead of silently drifting. Generic inference is auto-borrow-
+aware (declared `&X` formals unify with bare arguments; plain auto-borrow
+outranks `Borrow`-trait coercion for typevar-bearing inners when the
+argument's head constructor matches the formal's inner — mismatched heads
+retain the `Borrow`-trait view, e.g. `lock<T>(m: &Mutex<T>)` with an
+`Arc<Mutex<C>>` argument).
+
+**Five LANGUAGE_BUGs found and fixed by the rule's own tripwires** (all
+regression-first; the fn-pointer one below was the first family member):
+associated-function bare `&T` arguments miscompiled exactly like the
+fn-pointer path (accepted, then clang rejected the IR);
+`Array<T>.extend()` accepted a MISMATCHED source element type and executed
+(String payloads appended into an `Array<Int>`);
+`traits/world.py::normalize_type_key` stamped the caller's module onto
+module-less `Ref`/`RefMut`/`fn` TypeKeys, making
+`implement Taker<&String> for Sink` unreachable from
+`Taker<&String>::take(...)` while `Taker<Int>` worked; nested-index
+borrow arguments (`peek(make_matrix()[0][0])`) rejected the INNER index
+hop with a spurious element-copy error — the bare-argument parity layer
+suppressed the copy check only for the outermost index, and now walks the
+whole projection spine (never the index expressions themselves); and
+boxed-callback interface dispatch rejected the LEGAL generic-by-value
+spelling (`Callback1<&mut Scope, R>.call(&mut s)`, the rule's own row-10
+exemption) — the shared classifier's `param_index` exemption was gated on
+a `None` name, but builtin `Callback*` schemas carry `""`; `param_index`
+is now authoritative unconditionally.
+
+**MIGRATION (source-compat break).** Every site is a one-token deletion
+guided by the diagnostic (the in-tree sweep was compiler-span-driven, never
+regex): ≈4,900 sites across stdlib (~780), the e2e corpus (420 fixture
+files), Drift embedded in Python tests (~300 files), examples, tools, and
+doc samples, plus the regenerated `om_*` ownership matrix. Exceptions to
+one-token deletion: mutable-temporary arguments become bindings
+(`val p = &mut mk(...); touch(p);`), and mode-only overload sets need a
+rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
+dead). D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
+Python selector-test retirements (replaced by the four-shape R2 fixture), 23
+new fixtures. The frozen ownership-corpus baseline requires one reviewed
+promotion (426 content deltas + 23 additions, 0 removals, universe 1,269 →
+1,292, 0 expected partition flips).
+
+**Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
+fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —
+`DRIFT_RT_ABI_VERSION` stays 22** (front-end acceptance + checker/lowering
+surface only; the surviving spelling's IR is byte-identical to what the
+explicit forms emitted).
+
+### The fn-pointer half (landed first internally, commit 453a2f52)
 
 LANGUAGE_BUG fix (regression-first): calling a thin function-pointer value
 whose signature declares a reference parameter with a BARE place argument

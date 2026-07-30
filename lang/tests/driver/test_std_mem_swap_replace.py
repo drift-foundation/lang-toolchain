@@ -74,7 +74,7 @@ import std.mem as mem;
 		var x: Int = 1;
 		var y: Int = 2;
 		val r = &x;
-		mem.swap(&mut x, &mut y);
+		mem.swap(x, y);
 		return 0;
 	}
 """.lstrip(),

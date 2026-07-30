@@ -7,28 +7,28 @@ pub fn main() nothrow -> Int {
 
 	// Build 1: append and build
 	val s1 = "hello";
-	text.sb_append_string(&mut sb, &s1);
-	val r1 = text.sb_build(&mut sb);
+	text.sb_append_string(sb, s1);
+	val r1 = text.sb_build(sb);
 	if r1 != "hello" {
 		return 1;
 	}
 
 	// Build 2: repeated sb_build without new appends returns same content
-	val r2 = text.sb_build(&mut sb);
+	val r2 = text.sb_build(sb);
 	if r2 != "hello" {
 		return 2;
 	}
 
 	// Build 3: append after build extends existing content
 	val s2 = " world";
-	text.sb_append_string(&mut sb, &s2);
-	val r3 = text.sb_build(&mut sb);
+	text.sb_append_string(sb, s2);
+	val r3 = text.sb_build(sb);
 	if r3 != "hello world" {
 		return 3;
 	}
 
 	// Build 4: len reflects accumulated state
-	if text.sb_len(&sb) != 11 {
+	if text.sb_len(sb) != 11 {
 		return 4;
 	}
 

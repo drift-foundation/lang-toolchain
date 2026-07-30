@@ -94,7 +94,7 @@ fn binary_search<R, T>(r: &R, key: &T) nothrow -> Optional<Int>
 pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
-	val _i = binary_search<type Range, Key>(&r, &k);
+	val _i = binary_search<type Range, Key>(r, k);
 	return 0;
 }
 """,
@@ -202,7 +202,7 @@ fn binary_search<R, T>(r: &R, key: &T) nothrow -> Optional<Int>
 pub fn main() nothrow -> Int {
 	val r = Range(n = 0);
 	val k = Key(x = 1);
-	val _i = binary_search<type Range, Key>(&r, &k);
+	val _i = binary_search<type Range, Key>(r, k);
 	return 0;
 }
 """,
@@ -271,7 +271,7 @@ fn sort_in_place<R, T>(r: &mut R) nothrow -> Void
 
 pub fn main() nothrow -> Int {
 	var r = Range(n = 0);
-	val _ = sort_in_place<type Range, Key>(&mut r);
+	val _ = sort_in_place<type Range, Key>(r);
 	return 0;
 }
 """,

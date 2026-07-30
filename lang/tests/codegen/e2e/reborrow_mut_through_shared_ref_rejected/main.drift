@@ -10,5 +10,5 @@ fn bad(f: &Foo) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var f = Foo(x = 10);
-	return bad(&f);
+	return bad(f);
 }

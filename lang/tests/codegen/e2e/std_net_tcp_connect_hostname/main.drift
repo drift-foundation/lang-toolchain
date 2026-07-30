@@ -9,7 +9,7 @@ pub fn main() nothrow -> Int {
 
 	// Listen on 127.0.0.1 with ephemeral port.
 	var bind_addr = net.socket_addr("127.0.0.1", 0);
-	var lr = net.listen(&bind_addr, io_t);
+	var lr = net.listen(bind_addr, io_t);
 	match lr {
 		Ok(l) => {
 			val port = l.test_local_port();
@@ -17,14 +17,14 @@ pub fn main() nothrow -> Int {
 			// Connect via IP literal — should succeed (baseline).
 			var t_ip = conc.spawn(| | captures(copy port, copy io_t) => {
 				var a = net.socket_addr("127.0.0.1", port);
-				var cr = net.connect(&a, io_t);
+				var cr = net.connect(a, io_t);
 				match cr {
 					Ok(s) => { val _ = s.close(io_t); return 0; },
 					Err(_) => { return 1; },
 					default => { return 2; }
 				}
 			});
-			var ar1 = net.accept(&l, io_t);
+			var ar1 = net.accept(l, io_t);
 			match ar1 {
 				Ok(s2) => { val _ = s2.close(io_t); },
 				Err(_) => { return 10; },
@@ -40,14 +40,14 @@ pub fn main() nothrow -> Int {
 			// Connect via hostname "localhost" — the regression target.
 			var t_host = conc.spawn(| | captures(copy port, copy io_t) => {
 				var a = net.socket_addr("localhost", port);
-				var cr = net.connect(&a, io_t);
+				var cr = net.connect(a, io_t);
 				match cr {
 					Ok(s) => { val _ = s.close(io_t); return 0; },
 					Err(_) => { return 1; },
 					default => { return 2; }
 				}
 			});
-			var ar2 = net.accept(&l, io_t);
+			var ar2 = net.accept(l, io_t);
 			match ar2 {
 				Ok(s2) => { val _ = s2.close(io_t); },
 				Err(_) => { return 40; },

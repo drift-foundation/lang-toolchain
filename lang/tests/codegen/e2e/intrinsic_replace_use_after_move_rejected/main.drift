@@ -9,7 +9,7 @@ struct Box {
 pub fn main() nothrow -> Int {
 	var a = Box(x = "1");
 	var b = Box(x = "2");
-	val _ = mem.replace<type Box>(&mut a, b);
+	val _ = mem.replace<type Box>(a, b);
 	val _r = &b;
 	return 0;
 }

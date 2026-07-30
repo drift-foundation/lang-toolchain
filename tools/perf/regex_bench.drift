@@ -22,17 +22,17 @@ fn build_subject(target: Int, late_hit: Bool) nothrow -> String {
 	var cap = target;
 	if late_hit { cap = target - tail; }
 	while len + 28 <= cap {
-		text.sb_append_string(&mut sb, &"worker,tunnel,socket,buffer,");
+		text.sb_append_string(sb, "worker,tunnel,socket,buffer,");
 		len = len + 28;
 	}
 	while len < cap {
-		text.sb_append_string(&mut sb, &"x");
+		text.sb_append_string(sb, "x");
 		len = len + 1;
 	}
 	if late_hit {
-		text.sb_append_string(&mut sb, &",id42");
+		text.sb_append_string(sb, ",id42");
 	}
-	return text.sb_build(&mut sb);
+	return text.sb_build(sb);
 }
 
 fn find_len_loop(re: &regex.Regex, s: &String, reps: Int) nothrow -> Int {
@@ -63,8 +63,8 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 	bi = 0;
 	while bi < blocks {
 		val t0 = time.now_monotonic();
-		val r = find_len_loop(re1, &late_256, 8000);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = find_len_loop(re1, late_256, 8000);
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != 32000 { return 50; }
 		bi = bi + 1;
 	}
@@ -74,8 +74,8 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 	bi = 0;
 	while bi < blocks {
 		val t0 = time.now_monotonic();
-		val r = find_len_loop(re1, &late_4k, 500);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = find_len_loop(re1, late_4k, 500);
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != 2000 { return 51; }
 		bi = bi + 1;
 	}
@@ -85,8 +85,8 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 	bi = 0;
 	while bi < blocks {
 		val t0 = time.now_monotonic();
-		val r = find_len_loop(re1, &nomatch_256, 8000);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = find_len_loop(re1, nomatch_256, 8000);
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != 0 { return 52; }
 		bi = bi + 1;
 	}
@@ -96,8 +96,8 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 	bi = 0;
 	while bi < blocks {
 		val t0 = time.now_monotonic();
-		val r = find_len_loop(re1, &nomatch_4k, 500);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = find_len_loop(re1, nomatch_4k, 500);
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != 0 { return 53; }
 		bi = bi + 1;
 	}
@@ -107,8 +107,8 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 	bi = 0;
 	while bi < blocks {
 		val t0 = time.now_monotonic();
-		val r = find_len_loop(ralt, &alt_1k, 2000);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = find_len_loop(ralt, alt_1k, 2000);
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != 0 { return 54; }
 		bi = bi + 1;
 	}
@@ -118,13 +118,13 @@ fn run_all(re1: &regex.Regex, ralt: &regex.Regex) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Err(e) => { return 30; },
 		Ok(re1) => {
-			match regex.compile(&"(ab|ac|ad|ae|af|ag|ah|ai|aj|ak|al|am|an|ao|ap|aq)z") {
+			match regex.compile("(ab|ac|ad|ae|af|ag|ah|ai|aj|ak|al|am|an|ao|ap|aq)z") {
 				Err(e2) => { return 31; },
 				Ok(ralt) => {
-					return run_all(&re1, &ralt);
+					return run_all(re1, ralt);
 				}
 			}
 		}

@@ -6,25 +6,25 @@ import std.containers as containers;
 		var m = containers.hash_map<type Int, Int>();
 	val k1 = 1;
 	val k2 = 2;
-	val missing = m.remove(&k1);
+	val missing = m.remove(k1);
 	match missing {
 		None => { },
 		Some(_v) => { return 1; }
 	}
 	if m.len() != 0 { return 2; }
 	m.insert(1, 11);
-	val miss2 = m.remove(&k2);
+	val miss2 = m.remove(k2);
 	match miss2 {
 		None => { },
 		Some(_v) => { return 3; }
 	}
-	if not m.contains_key(&k1) { return 4; }
-	val gone = m.remove(&k1);
+	if not m.contains_key(k1) { return 4; }
+	val gone = m.remove(k1);
 	match gone {
 		None => { return 5; },
 		Some(v) => { if v != 11 { return 6; } }
 	}
-		if m.contains_key(&k1) { return 7; }
+		if m.contains_key(k1) { return 7; }
 		return 0;
 	}
 

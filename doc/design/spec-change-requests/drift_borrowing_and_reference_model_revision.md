@@ -135,6 +135,19 @@ New global call rules:
 
 The explicit forms `g(&v)` and `h(&mut v)` remain legal; they are just redundant for lvalues.
 
+> **Addendum (0.33.91, 2026-07-29 — this clause is REVERSED):** the
+> reject-redundant-call-borrows change repealed the sentence above. A
+> source-written borrow in argument position at a declared `&T`/`&mut T`
+> formal is now an error (`E_REDUNDANT_ARG_BORROW`); a mutable temporary
+> has no argument spelling at all (`E_MUT_RVALUE_ARG_BINDING_REQUIRED`,
+> bind to a `var` first); and overload sets differing only by a
+> non-receiver parameter's mode are definition-site errors
+> (`E_OVERLOAD_PARAM_MODE_ONLY_DIFF`). Coercion borrows
+> (`&Concrete → &Interface`), generic-by-value formals instantiated at
+> references, thin function-pointer calls, constructor fields, capture
+> lists, and all non-argument positions keep `&`. See
+> `doc/design/drift-lang-spec.md` §3.5-§3.6 for the current rule.
+
 This rule applies **everywhere**:
 
 * Free functions (`fn inspect(x: &File)`).

@@ -33,14 +33,14 @@ pub fn main() nothrow -> Int {
 	var entries: Array<Entry> = [];
 	entries.push(Entry(name = "alice", value = "one"));
 	entries.push(Entry(name = "bob", value = "two"));
-	val idx = find_by_name(&entries, "bob");
+	val idx = find_by_name(entries, "bob");
 	if idx != 1 { return 1; }
 
 	// Test 2: non-Copy field projection (data.len reads through borrow)
 	var items: Array<Nested> = [];
 	var d: Array<Byte> = [cast<Byte>(10), cast<Byte>(20), cast<Byte>(30)];
 	items.push(Nested(label = "first", data = move d));
-	val dlen = first_data_len(&items);
+	val dlen = first_data_len(items);
 	if dlen != 3 { return 2; }
 
 	return 0;

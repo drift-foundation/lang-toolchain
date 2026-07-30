@@ -5,15 +5,12 @@ import acme.lib as lib;
 pub fn main() nothrow -> Int {
 	val b = lib.make_bag(10);
 
-	// String overload (auto-borrow form)
+	// String overload — auto-borrow (the only call spelling)
 	if b.tag("hello") != 110 { return 1; }
-	// String overload (explicit form)
-	if b.tag(&"world") != 110 { return 2; }
 
 	// Array<String> overload
 	val segs: Array<String> = ["a", "b"];
 	if b.tag(segs) != 212 { return 3; }
-	if b.tag(&segs) != 212 { return 4; }
 
 	// Int overload
 	if b.tag(7) != 317 { return 5; }

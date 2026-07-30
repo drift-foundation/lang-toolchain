@@ -9,7 +9,7 @@ fn run() -> Int {
 	m.insert(1, 1);
 	var it = m.iter();
 	val k2 = 2;
-	var e0 = m.entry_mut(&k2);
+	var e0 = m.entry_mut(k2);
 	val _ins = e0.or_insert(2, 2);
 	val _v = it.next();
 	return 0;

@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 15 (W5): source-written &mut at an immediately-invoked lambda's declared &mut Int param is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'y: &mut Int'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'x' directly"
+    }
+  ]
+}

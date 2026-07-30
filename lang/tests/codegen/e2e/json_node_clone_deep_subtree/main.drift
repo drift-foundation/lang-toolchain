@@ -5,14 +5,14 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val text = "{\"child\":{\"a\":1,\"b\":[2,3]}}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
 			val k = "child";
-			match node.get(&k) {
+			match node.get(k) {
 				Optional::Some(sub) => {
 					val cloned = sub.clone_deep();
 					val ka = "a";
-					match cloned.get(&ka) {
+					match cloned.get(ka) {
 						Optional::Some(anode) => {
 							match anode.as_int() {
 								Optional::Some(v) => { if v != 1 { return 1; } },
@@ -22,7 +22,7 @@ pub fn main() nothrow -> Int {
 						Optional::None() => { return 3; }
 					}
 					val kb = "b";
-					match cloned.get(&kb) {
+					match cloned.get(kb) {
 						Optional::Some(bnode) => {
 							match bnode.as_array() {
 								Optional::Some(arr) => { if arr.len != 2 { return 4; } },

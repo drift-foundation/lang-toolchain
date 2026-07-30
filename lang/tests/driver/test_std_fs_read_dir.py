@@ -78,7 +78,7 @@ pub fn main() nothrow -> Int {
 \t\tOk(entries) => {
 \t\t\tvar i = 0;
 \t\t\twhile i < entries.len {
-\t\t\t\tcons.println(entries[i].name + ":" + _k(&entries[i].kind));
+\t\t\t\tcons.println(entries[i].name + ":" + _k(entries[i].kind));
 \t\t\t\ti = i + 1;
 \t\t\t}
 \t\t\treturn 0;
@@ -1098,7 +1098,7 @@ pub fn main() nothrow -> Int {
 \t\t\tval c = io.configure_file(&f, conc.Duration(millis = 30000));
 \t\t\tvar buf = io.buffer(8);
 \t\t\tready_r.get().store(1, _so());
-\t\t\tmatch c.read(&mut buf) { Ok(_) => { return 1; }, Err(e) => { return 0; }, default => { return 0; } }
+\t\t\tmatch c.read(buf) { Ok(_) => { return 1; }, Err(e) => { return 0; }, default => { return 0; } }
 \t\t})) {
 \t\t\tOk(rd) => {
 \t\t\t\tvar v = move rd;   // mutable handle (cancel/join take &mut self)

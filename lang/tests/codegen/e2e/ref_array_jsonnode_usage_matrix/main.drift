@@ -20,7 +20,7 @@ fn sum_ids(xs: &Array<json.JsonNode>) -> Int {
 	var total = 0;
 	for val item : xs {
 		var id_path = ["id"];
-		val id_node = item.expect_path(&id_path);
+		val id_node = item.expect_path(id_path);
 		total += id_node.expect_int("users", "id");
 	}
 	return total;
@@ -29,13 +29,13 @@ fn sum_ids(xs: &Array<json.JsonNode>) -> Int {
 fn run() -> Int {
 	val text = "{\"users\":[{\"id\":1},{\"id\":2}]}";
 	var root = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => { root = move v; },
 		core.Result::Err(_) => { return 100; }
 	}
 
 	var users_path = ["users"];
-	val users_node = root.expect_path(&users_path);
+	val users_node = root.expect_path(users_path);
 	val users = users_node.expect_array("users", "users");
 
 	if count_items(users) != 2 {

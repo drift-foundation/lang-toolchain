@@ -48,11 +48,11 @@ pub fn main() nothrow -> Int {
 
 	// ref field: true path
 	val t3 = Parsed(value = 5, flag = true);
-	if check_ref_field(&t3) != 1 { return 5; }
+	if check_ref_field(t3) != 1 { return 5; }
 
 	// ref field: false path
 	val f3 = Parsed(value = 6, flag = false);
-	if check_ref_field(&f3) != 0 { return 6; }
+	if check_ref_field(f3) != 0 { return 6; }
 
 	return 0;
 }

@@ -120,9 +120,9 @@ fn run(sess: &mut Session) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tvar sess: Session = Session(drops = 0);
-\tval n1: Int = run(&mut sess);
-\tval n2: Int = run(&mut sess);
-\tval n3: Int = run(&mut sess);
+\tval n1: Int = run(sess);
+\tval n2: Int = run(sess);
+\tval n3: Int = run(sess);
 \treturn n1 + n2 + n3;
 }
 """
@@ -169,9 +169,9 @@ fn run(sa: &mut Session, sb: &mut Session) nothrow -> Int {
 pub fn main() nothrow -> Int {
 \tvar sa: Session = Session(drops = 0);
 \tvar sb: Session = Session(drops = 0);
-\tval _ = run(&mut sa, &mut sb);
-\tval _ = run(&mut sa, &mut sb);
-\tval _ = run(&mut sa, &mut sb);
+\tval _ = run(sa, sb);
+\tval _ = run(sa, sb);
+\tval _ = run(sa, sb);
 \treturn 0;
 }
 """

@@ -111,8 +111,8 @@ fn put_entry(e: PoolEntry) nothrow -> Void { val _ = move e; }
 fn handle(reusable: Bool, result: PooledResult, conn: DestrThing) nothrow -> Int {
 	var r = move result;
 	var t = move conn;
-	val response = mem.replace<type String>(&mut r.response, _empty_str());
-	val remainder = mem.replace<type Array<Byte>>(&mut r.remainder, _empty_bytes());
+	val response = mem.replace<type String>(r.response, _empty_str());
+	val remainder = mem.replace<type Array<Byte>>(r.remainder, _empty_bytes());
 	if r.reusable == true {
 		val new_entry = PoolEntry(stream = move t, read_buf = move remainder);
 		put_entry(move new_entry);

@@ -7,14 +7,14 @@ import std.json as json;
 fn run() -> Int {
 	val text = "{\"a\":1,\"a\":2,\"b\":{\"x\":1,\"x\":2}}";
 	var node = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => { node = move v; },
 		core.Result::Err(_) => { return 10; }
 	}
 	var b = json.config_builder();
 	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = b.build();
-	console.println(json.encode_with_config(&node, &cfg));
+	console.println(json.encode_with_config(node, cfg));
 	return 0;
 }
 

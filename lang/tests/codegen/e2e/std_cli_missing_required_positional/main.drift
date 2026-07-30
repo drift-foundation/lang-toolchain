@@ -7,7 +7,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 	var p = cli.parser("tool", "0.1.0", "cli smoke");
 	val _ = p.positional("target", "target", true, false);
 	val _ = p.positional("mode", "mode", true, false);
-	match p.parse(&argv) {
+	match p.parse(argv) {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
 			if e.tag != "cli-missing-required-positional" {

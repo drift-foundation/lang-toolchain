@@ -41,7 +41,7 @@ pub fn main() -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	m.insert(1, 2);
 	val k: Int = 1;
-	val got = m.get(&k);
+	val got = m.get(k);
 	return match got {
 		None => { 0 },
 		Some(v) => { *v }
@@ -68,7 +68,7 @@ pub fn main() -> Int {
 	var m = containers.hash_map<type String, Int>();
 	m.insert("a", 7);
 	val k: String = "a";
-	val got = m.get(&k);
+	val got = m.get(k);
 	return match got {
 		None => { 0 },
 		Some(v) => { *v }

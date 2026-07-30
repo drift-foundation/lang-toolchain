@@ -8,5 +8,5 @@ fn bump(p: &mut Int, by: Int) nothrow -> Int {
 pub fn main() nothrow -> Int{
 	var x = 5;
 	val i = 2;
-	return (| | captures(copy i, move x) => { return bump(&mut x, i); })();
+	return (| | captures(copy i, move x) => { return bump(x, i); })();
 }

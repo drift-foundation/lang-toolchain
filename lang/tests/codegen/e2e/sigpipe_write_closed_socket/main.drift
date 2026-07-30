@@ -9,15 +9,15 @@ import std.io as io;
 pub fn main() nothrow -> Int {
 	val timeout = conc.Duration(millis = 2000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	var lr = net.listen(&addr, timeout);
+	var lr = net.listen(addr, timeout);
 	match lr {
 		Ok(listener) => {
 			val port = listener.test_local_port();
 			var caddr = net.socket_addr("127.0.0.1", port);
-			var cr = net.connect(&caddr, timeout);
+			var cr = net.connect(caddr, timeout);
 			match cr {
 				Ok(client) => {
-					var ar = net.accept(&listener, timeout);
+					var ar = net.accept(listener, timeout);
 					match ar {
 						Ok(accepted) => {
 							// Close server-side socket to simulate peer close.
@@ -26,13 +26,13 @@ pub fn main() nothrow -> Int {
 
 							// Create a buffer with data to write.
 							var buf = io.buffer(1024);
-							io.buffer_set_len(&mut buf, 1024);
+							io.buffer_set_len(buf, 1024);
 
 							// Write to client socket repeatedly — peer is closed.
 							// This MUST return an error, NOT kill the process with SIGPIPE.
 							var attempt = 0;
 							while attempt < 10 {
-								var wr = client.write(&buf, timeout);
+								var wr = client.write(buf, timeout);
 								match wr {
 									Err(_) => {
 										val _ = client.close(timeout);

@@ -173,7 +173,7 @@ pub fn main() nothrow -> Int {
 		// Reads only — never moves the capture out.  The env slot
 		// remains the owner; the flag stays 1; the env drop runs
 		// destroy exactly once.
-		return peek(&t);
+		return peek(t);
 	});
 	match vt.join() {
 		core.Result::Ok(v) => { match v == 42 { true => {}, false => { return 2; } } },

@@ -87,8 +87,8 @@ pub fn main() nothrow -> Int {
 	// SourcePos / SourceSpan / pos_zero / span helpers
 	val p: source.SourcePos = source.pos_zero();
 	val sp: source.SourceSpan = source.SourceSpan(source_id = "m", start = p, end = p);
-	val _len: Int = source.span_byte_len(&sp);
-	val _empty: Bool = source.span_is_empty(&sp);
+	val _len: Int = source.span_byte_len(sp);
+	val _empty: Bool = source.span_is_empty(sp);
 
 	// SourceCursor + constructors + methods
 	var cur: source.SourceCursor = source.source_cursor_from_string("hi", "m");
@@ -166,7 +166,7 @@ pub fn main() nothrow -> Int {
 	toks.push(parse.Token<type K>(kind = K::B(), span = sp));
 	var ts = parse.token_stream<type K>(move toks, sp);
 	val want = K::A();
-	match ts.expect(&want, "A") {
+	match ts.expect(want, "A") {
 		core.Result::Ok(_) => { },
 		core.Result::Err(_) => { return 1; }
 	}

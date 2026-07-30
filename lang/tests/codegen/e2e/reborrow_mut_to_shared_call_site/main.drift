@@ -29,35 +29,60 @@ fn identity_ref(f: &Foo) nothrow -> &Foo {
 	return f;
 }
 
+// The `&mut T → &T` reborrow coercion at the call boundary, exercised
+// via REFERENCE-TYPED VALUES passed bare (the borrow happens in a
+// binding position; the call argument carries no source-written `&` —
+// the only spelling the redundant-borrow rule leaves for this
+// mechanism).
 pub fn main() nothrow -> Int {
 	var f = Foo(x = 10);
 
-	// 1 - basic: pass &mut where & is expected.
-	val r1 = takes_shared_ref(&mut f);
-	if r1 != 10 { return 1; }
+	// 1 - basic: a &mut-typed value passed bare where & is expected.
+	{
+		val m1 = &mut f;
+		val r1 = takes_shared_ref(m1);
+		if r1 != 10 { return 1; }
+	}
 
-	// 2 - two args, both &mut.
+	// 2 - two args, both &mut-typed values.
 	var g = Foo(x = 20);
-	val r2 = takes_two_refs(&mut f, &mut g);
-	if r2 != 30 { return 2; }
+	{
+		val m2a = &mut f;
+		val m2b = &mut g;
+		val r2 = takes_two_refs(m2a, m2b);
+		if r2 != 30 { return 2; }
+	}
 
-	// 3 - mixed: one &, one &mut.
-	val r3 = takes_two_refs(&f, &mut g);
-	if r3 != 30 { return 3; }
+	// 3 - mixed: one &-typed value, one &mut-typed value.
+	{
+		val s3 = &f;
+		val m3 = &mut g;
+		val r3 = takes_two_refs(s3, m3);
+		if r3 != 30 { return 3; }
+	}
 
-	// 4 - &mut String where &String expected.
+	// 4 - &mut String value where &String expected.
 	var s = "hello";
-	val r4 = string_len(&mut s);
-	if r4 != 5 { return 4; }
+	{
+		val m4 = &mut s;
+		val r4 = string_len(m4);
+		if r4 != 5 { return 4; }
+	}
 
-	// 5 - &mut Request where &Request expected.
+	// 5 - &mut Request value where &Request expected.
 	var req = Request(path = "/api");
-	val r5 = handle_request(&mut req);
-	if r5 != 4 { return 5; }
+	{
+		val m5 = &mut req;
+		val r5 = handle_request(m5);
+		if r5 != 4 { return 5; }
+	}
 
-	// 6 - Return position: &mut Foo returned where &Foo expected.
-	val r6 = identity_ref(&mut f);
-	if r6.x != 10 { return 6; }
+	// 6 - Return position: &mut-typed value where &Foo expected.
+	{
+		val m6 = &mut f;
+		val r6 = identity_ref(m6);
+		if r6.x != 10 { return 6; }
+	}
 
 	return 0;
 }

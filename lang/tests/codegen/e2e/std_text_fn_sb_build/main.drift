@@ -19,17 +19,17 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	var sb = text.string_builder(16);
 	// Build empty → empty string
-	val empty = text.sb_build(&mut sb);
+	val empty = text.sb_build(sb);
 	val e1 = "";
-	if !str_eq(&empty, &e1) { return 1; }
+	if !str_eq(empty, e1) { return 1; }
 	// Build after append
-	text.sb_append_string(&mut sb, "test");
-	val s = text.sb_build(&mut sb);
+	text.sb_append_string(sb, "test");
+	val s = text.sb_build(sb);
 	val e2 = "test";
-	if !str_eq(&s, &e2) { return 2; }
+	if !str_eq(s, e2) { return 2; }
 	// Build again returns same content (not consumed)
-	val s2 = text.sb_build(&mut sb);
-	if !str_eq(&s2, &e2) { return 3; }
+	val s2 = text.sb_build(sb);
+	if !str_eq(s2, e2) { return 3; }
 
 	return 0;
 }

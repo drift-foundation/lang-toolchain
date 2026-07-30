@@ -60,7 +60,7 @@ module consumer;
 import std.crypto as crypto;
 pub fn main() nothrow -> Int {
 	var data: Array<Byte> = [cast<Byte>(104), cast<Byte>(105)];
-	val digest = crypto.sha256(&data);
+	val digest = crypto.sha256(data);
 	return digest.len;
 }
 """

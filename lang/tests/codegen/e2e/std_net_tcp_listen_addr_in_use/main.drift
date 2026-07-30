@@ -6,12 +6,12 @@ import std.concurrent as conc;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
 	val t = conc.Duration(millis = 1000);
-	val lr = net.listen(&addr, t);
+	val lr = net.listen(addr, t);
 	match lr {
 		Ok(l) => {
 			val port = l.test_local_port();
 			var addr2 = net.socket_addr("127.0.0.1", port);
-			val lr2 = net.listen(&addr2, t);
+			val lr2 = net.listen(addr2, t);
 			match lr2 {
 				Ok(_l2) => { return 2; },
 				Err(e) => {

@@ -8,11 +8,11 @@ fn bump(counter: &mut Int) nothrow -> Bool {
 fn run() -> Int {
   var counter = 0;
 
-  if false and bump(&mut counter) {
+  if false and bump(counter) {
     return 1;
   }
 
-  if true or bump(&mut counter) {
+  if true or bump(counter) {
   } else {
     return 2;
   }

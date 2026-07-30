@@ -18,11 +18,11 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 pub fn main() nothrow -> Int {
 	var sb = text.string_builder(16);
-	if text.sb_len(&sb) != 0 { return 1; }
-	text.sb_append_string(&mut sb, "abc");
-	if text.sb_len(&sb) != 3 { return 2; }
-	text.sb_append_string(&mut sb, "de");
-	if text.sb_len(&sb) != 5 { return 3; }
+	if text.sb_len(sb) != 0 { return 1; }
+	text.sb_append_string(sb, "abc");
+	if text.sb_len(sb) != 3 { return 2; }
+	text.sb_append_string(sb, "de");
+	if text.sb_len(sb) != 5 { return 3; }
 
 	return 0;
 }

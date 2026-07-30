@@ -106,7 +106,7 @@ pub fn main() nothrow -> Int {
 \tval cb: core.Callback0<String> = core.callback0(
 \t\t| | captures(move signal_for_cb) => {
 \t\t\tatomic.atomic_store_bool(
-\t\t\t\t&signal_for_cb.get().started, true, 2
+\t\t\t\tsignal_for_cb.get().started, true, 2
 \t\t\t);
 \t\t\tval _ = conc.sleep(conc.Duration(millis = 500));
 \t\t\treturn "uaf-canary-result-string-0123456789abcdef".clone();
@@ -122,7 +122,7 @@ pub fn main() nothrow -> Int {
 \t * so the upcoming drop takes the started-running branch of
 \t * vt_drop, not the pre-start cleanup branch. */
 \tvar spins: Int = 0;
-\twhile !atomic.atomic_load_bool(&signal.get().started, 1) {
+\twhile !atomic.atomic_load_bool(signal.get().started, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 1));
 \t\tspins = spins + 1;
 \t\tif spins > 5000 {

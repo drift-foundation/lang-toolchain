@@ -64,13 +64,13 @@ pub fn main() nothrow -> Int {
 	b.queue_limit(1);
 	b.timeout(conc.Duration(millis = 60000));
 	val ex = conc.build_blocking_executor(b.build(), "storage-demo");
-	match conc.spawn_blocking_on(&ex, "demo.stuck_op", core.callback0(|| => { return stuck_c_call(); })) {
+	match conc.spawn_blocking_on(ex, "demo.stuck_op", core.callback0(|| => { return stuck_c_call(); })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
 	val exw = ex;
 	val _w = conc.spawn_on_labeled(conc.default_executor(), "demo.submitter", core.callback0(|| captures(copy exw) => {
-		match conc.spawn_blocking_on(&exw, "demo.waiting_op", core.callback0(|| => { return 0; })) {
+		match conc.spawn_blocking_on(exw, "demo.waiting_op", core.callback0(|| => { return 0; })) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => {},
 		}
@@ -103,7 +103,7 @@ pub fn main() nothrow -> Int {
 	b.min_threads(1);
 	b.max_threads(1);
 	val ex = conc.build_blocking_executor(b.build(), "quick-demo");
-	match conc.run_blocking_on(&ex, "demo.quick_op", core.callback0(|| => { return quick_c_call(); })) {
+	match conc.run_blocking_on(ex, "demo.quick_op", core.callback0(|| => { return quick_c_call(); })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
@@ -155,7 +155,7 @@ pub fn main() nothrow -> Int {
 	// Hostile bytes in BOTH the executor name and the op label:
 	// quote, backslash, newline, tab.
 	val ex = conc.build_blocking_executor(b.build(), "sto\\"rage\\\\demo\\n");
-	match conc.spawn_blocking_on(&ex, "op\\"quote\\\\back\\nnl\\tt", core.callback0(|| => { return hold_ffi(); })) {
+	match conc.spawn_blocking_on(ex, "op\\"quote\\\\back\\nnl\\tt", core.callback0(|| => { return hold_ffi(); })) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(_) => { return 1; },
 	}
@@ -337,7 +337,7 @@ pub fn main() nothrow -> Int {
 	val ex = conc.build_blocking_executor(b.build(), "heap-" + "name");
 	var i = 0;
 	while i < 5 {
-		match conc.run_blocking_on(&ex, "heap." + "label", core.callback0(|| => { return 1; })) {
+		match conc.run_blocking_on(ex, "heap." + "label", core.callback0(|| => { return 1; })) {
 			core.Result::Ok(_) => {},
 			core.Result::Err(_) => { return 1; },
 		}

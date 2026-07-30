@@ -129,8 +129,8 @@ import std.concurrent as conc;
 pub fn main() nothrow -> Int{
 	val out = io.stdout_builder().timeout(conc.Duration(millis = 25)).build();
 	var b = io.buffer(1);
-	io.buffer_write(&mut b, 0, cast<Byte>(65));
-	val _ = out.write(&b);
+	io.buffer_write(b, 0, cast<Byte>(65));
+	val _ = out.write(b);
 	return 0;
 }
 	"""
@@ -150,10 +150,10 @@ import std.io as io;
 
 pub fn main() nothrow -> Int{
 	var b = io.buffer(3);
-	io.buffer_write(&mut b, 0, cast<Byte>(97));
-	io.buffer_write(&mut b, 1, cast<Byte>(98));
-	io.buffer_write(&mut b, 2, cast<Byte>(99));
-	val s = core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
+	io.buffer_write(b, 0, cast<Byte>(97));
+	io.buffer_write(b, 1, cast<Byte>(98));
+	io.buffer_write(b, 2, cast<Byte>(99));
+	val s = core.string_from_utf8_bytes(io.buffer_ptr(b), io.buffer_len(b));
 	if s.byte_length() != 3 {
 		return 2;
 	}
@@ -222,8 +222,8 @@ import std.concurrent as conc;
 pub fn main() nothrow -> Int{
 	val out = io.stdout_builder().timeout(conc.Duration(millis = 25)).build();
 	var b = io.buffer(1);
-	io.buffer_write(&mut b, 0, cast<Byte>(65));
-	val _ = out.write(&b);
+	io.buffer_write(b, 0, cast<Byte>(65));
+	val _ = out.write(b);
 	val opened = io.file_builder("tmp.bin").write(true).create(true).truncate(true).mode(io.FILE_MODE_DEFAULT).timeout(conc.Duration(millis = 25)).build();
 	match opened {
 		Ok(f) => {

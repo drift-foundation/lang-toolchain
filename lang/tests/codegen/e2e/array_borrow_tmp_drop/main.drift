@@ -15,7 +15,7 @@ fn array_sum(a: &Array<Int>) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int {
-	val s = array_sum(&make_array());
+	val s = array_sum(make_array());
 	if s != 60 {
 		return 1;
 	}

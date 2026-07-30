@@ -31,7 +31,7 @@ fn run_main() throws -> Int {
 		return 4;
 	}
 	val akey = "a";
-	match obj.get(&akey) {
+	match obj.get(akey) {
 		Some(v) => {
 			if not v.expect_bool("", "") {
 				return 5;
@@ -45,7 +45,7 @@ fn run_main() throws -> Int {
 	var cfgb = json.config_builder();
 	cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = cfgb.build();
-	val out = json.encode_with_config(&node, &cfg);
+	val out = json.encode_with_config(node, cfg);
 	if out != "{\"a\":true,\"b\":[1,\"ok\"]}" {
 		return 7;
 	}

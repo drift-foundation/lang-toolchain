@@ -459,7 +459,7 @@ implement<T> Cell<T> {
 	/// for the old value beyond what `ptr_write` does).
 	pub fn set(self: &Cell<T>, var value: T) nothrow -> Void {
 		unsafe {
-			val ptr = mem.ptr_from_ref<type T>(&self.value);
+			val ptr = mem.ptr_from_ref<type T>(self.value);
 			mem.ptr_write<type T>(ptr, move value);
 		}
 	}
@@ -792,7 +792,7 @@ implement<T> Destructible for box_mod.Box<T> {
 		// this destructor; the `_is_drained` guard short-circuits that re-drop so we
 		// never call `take` on a null cell.  `self` is consumed by `take`, so the
 		// ownership ledger does not re-drop the destructor's own `self`.
-		if box_mod._box_is_drained<type T>(&self) {
+		if box_mod._box_is_drained<type T>(self) {
 			return;
 		}
 		val value = self.take();
@@ -838,7 +838,7 @@ implement ErrorParamsView {
 	/// `e.params.get("present").is_null() == true` (when value was JSON `null`)
 	/// `e.params.get("count").as_int() == Optional::Some(42)`
 	pub fn get(self: &ErrorParamsView, key: String) nothrow -> JsonCursor {
-		return _params_cursor_get(&self.json_text, &key);
+		return _params_cursor_get(self.json_text, key);
 	}
 }
 
@@ -922,8 +922,8 @@ fn _byte_hex2(b: Byte) nothrow -> String {
 fn _byte_to_string(b: Byte) nothrow -> String {
 	unsafe {
 		var raw = mem.alloc_uninit<type Byte>(1);
-		mem.write<type Byte>(&mut raw, 0, b);
-		val out = string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.write<type Byte>(raw, 0, b);
+		val out = string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(raw), 1);
 		mem.dealloc<type Byte>(raw);
 		return out;
 	}
@@ -1349,7 +1349,7 @@ fn _json_match_literal(text: &String, p: Int, lit: String) nothrow -> Bool {
 	if p + m > n { return false; }
 	var i = 0;
 	while i < m {
-		if string_byte_at(text, p + i) != string_byte_at(&lit, i) {
+		if string_byte_at(text, p + i) != string_byte_at(lit, i) {
 			return false;
 		}
 		i = i + 1;

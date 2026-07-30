@@ -6,7 +6,7 @@ fn run() -> Int {
 	var m = containers.hash_map_with_capacity<type Int, Int>(0);
 	m.insert(1, 1);
 	val k = 1;
-	val v = match m.get_mut(&k) {
+	val v = match m.get_mut(k) {
 		None => { -1 },
 		Some(p) => { *p }
 	};

@@ -14,7 +14,7 @@ fn next_once<I>(it: &mut I) -> Int require I is iter.SinglePassIterator<containe
 fn run() -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	var it = m.iter();
-	return next_once(&mut it);
+	return next_once(it);
 }
 
 pub fn main() nothrow -> Int {

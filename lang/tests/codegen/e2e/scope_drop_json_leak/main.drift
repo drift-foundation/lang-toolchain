@@ -10,7 +10,7 @@ import std.format as fmt;
 
 fn test_json_parse_leak() nothrow -> Int {
 	val input = "{\"name\": \"test\", \"value\": 42}";
-	match json.parse(&input) {
+	match json.parse(input) {
 		core.Result::Err(_) => { return 1; },
 		core.Result::Ok(node) => {
 			// clone_deep creates a new JsonNode with HashMap internals.

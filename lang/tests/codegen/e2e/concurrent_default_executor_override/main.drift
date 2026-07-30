@@ -61,20 +61,20 @@ pub fn main() nothrow -> Int {
 	 * NOT parking, so it keeps `running == 1` while t2 is submitted. */
 	var t1 = conc.spawn_cb(core.callback0(
 		| | captures(move sigs_cb) nothrow => {
-			atomic.atomic_store_bool(&sigs_cb.get().started, true, 2);
+			atomic.atomic_store_bool(sigs_cb.get().started, true, 2);
 			/* Phase 1: occupy the worker, waiting for main to arm us
 			 * (about to submit t2) or release us early on a failure path.
 			 * NO deadline — main may be starved before it submits, and t1
 			 * must keep `running == 1` until then. */
-			while !atomic.atomic_load_bool(&sigs_cb.get().armed, 1) and !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+			while !atomic.atomic_load_bool(sigs_cb.get().armed, 1) and !atomic.atomic_load_bool(sigs_cb.get().release, 1) {
 			}
 			/* Phase 2: armed — keep occupying the worker across the t2
 			 * submit, hard-capped by a monotonic deadline that starts NOW. */
-			if atomic.atomic_load_bool(&sigs_cb.get().armed, 1) {
+			if atomic.atomic_load_bool(sigs_cb.get().armed, 1) {
 				val cb_deadline = thread.now_ms() + 20000;
-				while !atomic.atomic_load_bool(&sigs_cb.get().release, 1) {
+				while !atomic.atomic_load_bool(sigs_cb.get().release, 1) {
 					if thread.now_ms() > cb_deadline {
-						atomic.atomic_store_bool(&sigs_cb.get().timed_out, true, 2);
+						atomic.atomic_store_bool(sigs_cb.get().timed_out, true, 2);
 						break;
 					}
 				}
@@ -85,18 +85,18 @@ pub fn main() nothrow -> Int {
 
 	/* Wait until t1 is actually running on the worker (running == 1). */
 	var spins: Int = 0;
-	while !atomic.atomic_load_bool(&sigs.get().started, 1) {
+	while !atomic.atomic_load_bool(sigs.get().started, 1) {
 		val _ = conc.sleep(conc.Duration(millis = 2));
 		spins = spins + 1;
 		if spins > 1000 {
-			atomic.atomic_store_bool(&sigs.get().release, true, 2);
+			atomic.atomic_store_bool(sigs.get().release, true, 2);
 			var _j = t1.join();
 			return 81;
 		}
 	}
 
 	/* Arm t1 (start its deadline) immediately before the tested submit. */
-	atomic.atomic_store_bool(&sigs.get().armed, true, 2);
+	atomic.atomic_store_bool(sigs.get().armed, true, 2);
 
 	/* Worker occupied + queue_limit == 1 → this submit saturates the
 	 * overridden default executor → rejected.  Reaching the overridden
@@ -114,10 +114,10 @@ pub fn main() nothrow -> Int {
 	var res2 = t2.join_timeout(conc.Duration(millis = 500));
 
 	/* Release t1's spin and reap it. */
-	atomic.atomic_store_bool(&sigs.get().release, true, 2);
+	atomic.atomic_store_bool(sigs.get().release, true, 2);
 	var _ = t1.join();
 
-	if atomic.atomic_load_bool(&sigs.get().timed_out, 1) { return 95; }
+	if atomic.atomic_load_bool(sigs.get().timed_out, 1) { return 95; }
 
 	/* Only a deferred submit failure (FAILED) means t2 was rejected as
 	 * expected.  TIMEOUT = accepted-but-blocked; Ok = accepted-and-ran. */

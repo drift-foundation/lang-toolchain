@@ -1,0 +1,12 @@
+module main;
+
+pub fn main() nothrow -> Int {
+	var x: Int = 4;
+	val r = (|y: &mut Int| nothrow -> Int => {
+		*y = *y + 1;
+		return *y;
+	})(x);
+	if r != 5 { return 1; }
+	if x != 5 { return 2; }
+	return 0;
+}

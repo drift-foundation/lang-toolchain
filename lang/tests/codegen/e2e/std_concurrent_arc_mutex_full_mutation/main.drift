@@ -24,7 +24,7 @@ struct EventBus {
 
 implement EventBus {
 	pub fn emit(self: &EventBus, e: &mut Event) nothrow -> Void {
-		self.on_x.call(&mut *e);
+		self.on_x.call(*e);
 	}
 }
 
@@ -40,6 +40,6 @@ pub fn main() nothrow -> Int {
 	var sm = conc.arc(m);
 	var bus = EventBus(on_x = core.callback1(on_x));
 	var e = Event(v = 5, state = sm.clone());
-	bus.emit(&mut e);
+	bus.emit(e);
 	return e.v;
 }

@@ -17,7 +17,7 @@ import std.console as cons;
 
 pub fn main() nothrow -> Int {
 	val src: String = "ABC";
-	val bytes = core.string_to_utf8_bytes(&src);
+	val bytes = core.string_to_utf8_bytes(src);
 
 	// 1. Unannotated chained byte equality — the headline case.
 	val v3_ok =

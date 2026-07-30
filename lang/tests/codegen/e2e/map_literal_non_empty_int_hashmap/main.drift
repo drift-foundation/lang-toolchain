@@ -8,7 +8,7 @@ fn run() -> Int {
 		return 1;
 	}
 	val k1 = 1;
-	val v1 = match attrs.get(&k1) {
+	val v1 = match attrs.get(k1) {
 		None => {
 			-1
 		},
@@ -20,7 +20,7 @@ fn run() -> Int {
 		return 2;
 	}
 	val k2 = 2;
-	val v2 = match attrs.get(&k2) {
+	val v2 = match attrs.get(k2) {
 		None => {
 			-1
 		},

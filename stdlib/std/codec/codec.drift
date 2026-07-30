@@ -181,11 +181,11 @@ pub fn hex_encode(bytes: &Array<Byte>) nothrow -> String {
 		val u = _byte_u8(bytes[i]);
 		val hi = (u / 16) % 16;
 		val lo = u % 16;
-		io.buffer_write(&mut out, i * 2, _hex_digit_byte(hi));
-		io.buffer_write(&mut out, i * 2 + 1, _hex_digit_byte(lo));
+		io.buffer_write(out, i * 2, _hex_digit_byte(hi));
+		io.buffer_write(out, i * 2 + 1, _hex_digit_byte(lo));
 		i = i + 1;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), n * 2);
+	return core.string_from_utf8_bytes(io.buffer_ptr(out), n * 2);
 }
 
 /// Strict hex decode of `s` (no whitespace, no `0x` prefix).
@@ -228,22 +228,22 @@ pub fn base64_encode(bytes: &Array<Byte>) nothrow -> String {
 		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
 		val c2 = ((b1 % 16) * 4 + (b2 / 64)) % 64;
 		val c3 = b2 % 64;
-		io.buffer_write(&mut out, o, _b64_alphabet_byte(c0));
-		io.buffer_write(&mut out, o + 1, _b64_alphabet_byte(c1));
+		io.buffer_write(out, o, _b64_alphabet_byte(c0));
+		io.buffer_write(out, o + 1, _b64_alphabet_byte(c1));
 		if rem > 1 {
-			io.buffer_write(&mut out, o + 2, _b64_alphabet_byte(c2));
+			io.buffer_write(out, o + 2, _b64_alphabet_byte(c2));
 		} else {
-			io.buffer_write(&mut out, o + 2, cast<Byte>(61));
+			io.buffer_write(out, o + 2, cast<Byte>(61));
 		}
 		if rem > 2 {
-			io.buffer_write(&mut out, o + 3, _b64_alphabet_byte(c3));
+			io.buffer_write(out, o + 3, _b64_alphabet_byte(c3));
 		} else {
-			io.buffer_write(&mut out, o + 3, cast<Byte>(61));
+			io.buffer_write(out, o + 3, cast<Byte>(61));
 		}
 		i = i + 3;
 		o = o + 4;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+	return core.string_from_utf8_bytes(io.buffer_ptr(out), out_len);
 }
 
 /// Strict base64 decode of `s` (no whitespace, standard alphabet
@@ -294,46 +294,46 @@ pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
 		val c5 = (b3 / 4) % 32;
 		val c6 = ((b3 % 4) * 8 + (b4 / 32)) % 32;
 		val c7 = b4 % 32;
-		io.buffer_write(&mut out, o, _b32_alphabet_byte(c0));
-		io.buffer_write(&mut out, o + 1, _b32_alphabet_byte(c1));
+		io.buffer_write(out, o, _b32_alphabet_byte(c0));
+		io.buffer_write(out, o + 1, _b32_alphabet_byte(c1));
 		if rem == 1 {
-			io.buffer_write(&mut out, o + 2, cast<Byte>(61));
-			io.buffer_write(&mut out, o + 3, cast<Byte>(61));
-			io.buffer_write(&mut out, o + 4, cast<Byte>(61));
-			io.buffer_write(&mut out, o + 5, cast<Byte>(61));
-			io.buffer_write(&mut out, o + 6, cast<Byte>(61));
-			io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+			io.buffer_write(out, o + 2, cast<Byte>(61));
+			io.buffer_write(out, o + 3, cast<Byte>(61));
+			io.buffer_write(out, o + 4, cast<Byte>(61));
+			io.buffer_write(out, o + 5, cast<Byte>(61));
+			io.buffer_write(out, o + 6, cast<Byte>(61));
+			io.buffer_write(out, o + 7, cast<Byte>(61));
 		} else {
 			if rem == 2 {
-				io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
-				io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
-				io.buffer_write(&mut out, o + 4, cast<Byte>(61));
-				io.buffer_write(&mut out, o + 5, cast<Byte>(61));
-				io.buffer_write(&mut out, o + 6, cast<Byte>(61));
-				io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+				io.buffer_write(out, o + 2, _b32_alphabet_byte(c2));
+				io.buffer_write(out, o + 3, _b32_alphabet_byte(c3));
+				io.buffer_write(out, o + 4, cast<Byte>(61));
+				io.buffer_write(out, o + 5, cast<Byte>(61));
+				io.buffer_write(out, o + 6, cast<Byte>(61));
+				io.buffer_write(out, o + 7, cast<Byte>(61));
 			} else {
 				if rem == 3 {
-					io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
-					io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
-					io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
-					io.buffer_write(&mut out, o + 5, cast<Byte>(61));
-					io.buffer_write(&mut out, o + 6, cast<Byte>(61));
-					io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+					io.buffer_write(out, o + 2, _b32_alphabet_byte(c2));
+					io.buffer_write(out, o + 3, _b32_alphabet_byte(c3));
+					io.buffer_write(out, o + 4, _b32_alphabet_byte(c4));
+					io.buffer_write(out, o + 5, cast<Byte>(61));
+					io.buffer_write(out, o + 6, cast<Byte>(61));
+					io.buffer_write(out, o + 7, cast<Byte>(61));
 				} else {
 					if rem == 4 {
-						io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
-						io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
-						io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
-						io.buffer_write(&mut out, o + 5, _b32_alphabet_byte(c5));
-						io.buffer_write(&mut out, o + 6, _b32_alphabet_byte(c6));
-						io.buffer_write(&mut out, o + 7, cast<Byte>(61));
+						io.buffer_write(out, o + 2, _b32_alphabet_byte(c2));
+						io.buffer_write(out, o + 3, _b32_alphabet_byte(c3));
+						io.buffer_write(out, o + 4, _b32_alphabet_byte(c4));
+						io.buffer_write(out, o + 5, _b32_alphabet_byte(c5));
+						io.buffer_write(out, o + 6, _b32_alphabet_byte(c6));
+						io.buffer_write(out, o + 7, cast<Byte>(61));
 					} else {
-						io.buffer_write(&mut out, o + 2, _b32_alphabet_byte(c2));
-						io.buffer_write(&mut out, o + 3, _b32_alphabet_byte(c3));
-						io.buffer_write(&mut out, o + 4, _b32_alphabet_byte(c4));
-						io.buffer_write(&mut out, o + 5, _b32_alphabet_byte(c5));
-						io.buffer_write(&mut out, o + 6, _b32_alphabet_byte(c6));
-						io.buffer_write(&mut out, o + 7, _b32_alphabet_byte(c7));
+						io.buffer_write(out, o + 2, _b32_alphabet_byte(c2));
+						io.buffer_write(out, o + 3, _b32_alphabet_byte(c3));
+						io.buffer_write(out, o + 4, _b32_alphabet_byte(c4));
+						io.buffer_write(out, o + 5, _b32_alphabet_byte(c5));
+						io.buffer_write(out, o + 6, _b32_alphabet_byte(c6));
+						io.buffer_write(out, o + 7, _b32_alphabet_byte(c7));
 					}
 				}
 			}
@@ -341,7 +341,7 @@ pub fn base32_encode(bytes: &Array<Byte>) nothrow -> String {
 		i = i + 5;
 		o = o + 8;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+	return core.string_from_utf8_bytes(io.buffer_ptr(out), out_len);
 }
 
 /// Strict base32 decode of `s` (no whitespace, uppercase only).
@@ -387,10 +387,10 @@ pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
 		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
 		val c2 = ((b1 % 16) * 4 + (b2 / 64)) % 64;
 		val c3 = b2 % 64;
-		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
-		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
-		io.buffer_write(&mut out, o + 2, _b64url_alphabet_byte(c2));
-		io.buffer_write(&mut out, o + 3, _b64url_alphabet_byte(c3));
+		io.buffer_write(out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(out, o + 1, _b64url_alphabet_byte(c1));
+		io.buffer_write(out, o + 2, _b64url_alphabet_byte(c2));
+		io.buffer_write(out, o + 3, _b64url_alphabet_byte(c3));
 		i = i + 3;
 		o = o + 4;
 	}
@@ -398,8 +398,8 @@ pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
 		val b0 = _byte_u8(bytes[i]);
 		val c0 = (b0 / 4) % 64;
 		val c1 = ((b0 % 4) * 16) % 64;
-		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
-		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
+		io.buffer_write(out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(out, o + 1, _b64url_alphabet_byte(c1));
 	}
 	if rem == 2 {
 		val b0 = _byte_u8(bytes[i]);
@@ -407,11 +407,11 @@ pub fn base64url_encode(bytes: &Array<Byte>) nothrow -> String {
 		val c0 = (b0 / 4) % 64;
 		val c1 = ((b0 % 4) * 16 + (b1 / 16)) % 64;
 		val c2 = ((b1 % 16) * 4) % 64;
-		io.buffer_write(&mut out, o, _b64url_alphabet_byte(c0));
-		io.buffer_write(&mut out, o + 1, _b64url_alphabet_byte(c1));
-		io.buffer_write(&mut out, o + 2, _b64url_alphabet_byte(c2));
+		io.buffer_write(out, o, _b64url_alphabet_byte(c0));
+		io.buffer_write(out, o + 1, _b64url_alphabet_byte(c1));
+		io.buffer_write(out, o + 2, _b64url_alphabet_byte(c2));
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), out_len);
+	return core.string_from_utf8_bytes(io.buffer_ptr(out), out_len);
 }
 
 /// Decodes a URL-safe base64 string `s` to bytes.
@@ -941,10 +941,10 @@ fn _gzip_take_buffer(c_buf: mem.Ptr<Byte>, c_len: Int) nothrow -> Array<Byte> {
 		return move empty;
 	}
 	var out = unsafe { thread.array_byte_alloc_uninit(c_len) };
-	val dst = unsafe { thread.array_byte_as_mut_ptr(&mut out) };
+	val dst = unsafe { thread.array_byte_as_mut_ptr(out) };
 	unsafe { drift_codec_copy_bytes(dst, c_buf, c_len); }
 	unsafe { drift_codec_free(c_buf); }
-	unsafe { thread.array_byte_commit_init_len(&mut out, c_len); }
+	unsafe { thread.array_byte_commit_init_len(out, c_len); }
 	return move out;
 }
 
@@ -954,13 +954,13 @@ fn _gzip_encode_impl(bytes: &Array<Byte>, level: Int32) nothrow -> Array<Byte> {
 	val n = bytes.len;
 	var c_buf: mem.Ptr<Byte> = _null_byte_ptr();
 	var c_len: Int = 0;
-	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(&mut c_buf) };
-	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(&mut c_len) };
+	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(c_buf) };
+	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(c_len) };
 	var rc: Int32 = cast<Int32>(0);
 	if n == 0 {
 		rc = unsafe { drift_codec_gzip_encode(_null_byte_ptr(), 0, level, out_ptr_p, out_len_p) };
 	} else {
-		val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(&bytes[0]) };
+		val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(bytes[0]) };
 		rc = unsafe { drift_codec_gzip_encode(in_ptr, n, level, out_ptr_p, out_len_p) };
 	}
 	// Encode shim aborts on internal failure; only INVALID_LEVEL can come
@@ -1044,9 +1044,9 @@ pub fn gzip_decode(bytes: &Array<Byte>) nothrow -> core.Result<Array<Byte>, Code
 	}
 	var c_buf: mem.Ptr<Byte> = _null_byte_ptr();
 	var c_len: Int = 0;
-	val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(&bytes[0]) };
-	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(&mut c_buf) };
-	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(&mut c_len) };
+	val in_ptr = unsafe { mem.ptr_from_ref<type Byte>(bytes[0]) };
+	val out_ptr_p = unsafe { mem.ptr_from_ref_mut<type mem.Ptr<Byte> >(c_buf) };
+	val out_len_p = unsafe { mem.ptr_from_ref_mut<type Int>(c_len) };
 	val rc = unsafe {
 		drift_codec_gzip_decode(in_ptr, n, GZIP_DECODE_MAX_OUTPUT, out_ptr_p, out_len_p)
 	};

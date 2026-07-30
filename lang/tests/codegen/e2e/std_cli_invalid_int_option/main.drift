@@ -6,7 +6,7 @@ import std.cli as cli;
 pub fn main(argv: Array<String>) nothrow -> Int {
 	var p = cli.parser("tool", "0.1.0", "cli smoke");
 	val _ = p.option_int("port", "p", "PORT", "tcp port", true);
-	match p.parse(&argv) {
+	match p.parse(argv) {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
 			if e.tag != "cli-invalid-int" {

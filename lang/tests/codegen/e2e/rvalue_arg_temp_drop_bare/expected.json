@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows R-2 A/B gate (bare half): the temp materialized for a bare rvalue argument at a &Token formal drops at scope end, exactly once; drop count observed via a &mut Session counter (pairs with the programmatic-HIR explicit baseline driver test)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

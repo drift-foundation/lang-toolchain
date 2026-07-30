@@ -17,10 +17,10 @@ fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
 
 fn run() -> Int {
   val s = "{\n\"a\":}\n";
-  val a = mk(&s, "invalid-syntax", 6);
+  val a = mk(s, "invalid-syntax", 6);
   if a.line != 1 { return 1; }
   if a.tag != "invalid-syntax" { return 2; }
-  val b = mk(&s, "invalid-syntax", 7);
+  val b = mk(s, "invalid-syntax", 7);
   if b.line != 1 { return 3; }
   if b.tag != "invalid-syntax" { return 4; }
   return 0;

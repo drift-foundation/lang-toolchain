@@ -67,7 +67,7 @@ fn bad(x: &Int) nothrow -> &mut Int {
 
 pub fn main() nothrow -> Int {
 	val x = 1;
-	val _ = bad(&x);
+	val _ = bad(x);
 	return 0;
 }
 """,

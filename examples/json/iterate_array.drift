@@ -21,8 +21,8 @@ fn run() -> Int {
 			return 1;
 		}
 	}
-	val text = json.encode(&node);
-	match json.parse(&text) {
+	val text = json.encode(node);
+	match json.parse(text) {
 		core.Result::Ok(parsed) => {
 			match parsed.into_array() {
 				Some(v) => {

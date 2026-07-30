@@ -56,7 +56,7 @@ pub variant UserMsg {
 pub fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val r: UserMsg = UserMsg::Payload(t = make_token(&mut sess));
+		val r: UserMsg = UserMsg::Payload(t = make_token(sess));
 		// `match` is value-producing here, so its arms may not route
 		// control flow out of the function (post-#6 / E-MATCHEXPR-CONTROLFLOW).
 		// Record the in-arm liveness check into a non-escaping status flag and

@@ -35,7 +35,7 @@ fn lc(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void
 fn mk(text: &String, tag: String, offset: Int) nothrow -> E {
   var line = -1;
   var col = -1;
-  lc(text, offset, &mut line, &mut col);
+  lc(text, offset, line, col);
   return E(tag = tag, offset = offset, line = line, col = col, path = "", key = "");
 }
 
@@ -48,7 +48,7 @@ fn parse_like(text: &String) nothrow -> core.Result<Int, E> {
 
 fn run() -> Int {
   val t = "[1,\n2,\n]";
-  match parse_like(&t) {
+  match parse_like(t) {
     core.Result::Ok(_) => { return 1; },
     core.Result::Err(e) => {
       if e.line != 3 { return 2; }

@@ -23,10 +23,10 @@ pub fn main() nothrow -> Int {
 	val s = "hello world";
 
 	// Middle slice: "lo wo"
-	match text.substring(&s, 3, 5) {
+	match text.substring(s, 3, 5) {
 		core.Result::Ok(v) => {
 			val expect = "lo wo";
-			if !str_eq(&v, &expect) {
+			if !str_eq(v, expect) {
 				return 1;
 			}
 		},
@@ -34,10 +34,10 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Prefix: "hello"
-	match text.substring(&s, 0, 5) {
+	match text.substring(s, 0, 5) {
 		core.Result::Ok(v) => {
 			val expect = "hello";
-			if !str_eq(&v, &expect) {
+			if !str_eq(v, expect) {
 				return 3;
 			}
 		},
@@ -45,10 +45,10 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Suffix: "world"
-	match text.substring(&s, 6, 5) {
+	match text.substring(s, 6, 5) {
 		core.Result::Ok(v) => {
 			val expect = "world";
-			if !str_eq(&v, &expect) {
+			if !str_eq(v, expect) {
 				return 5;
 			}
 		},
@@ -56,10 +56,10 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Full string
-	match text.substring(&s, 0, 11) {
+	match text.substring(s, 0, 11) {
 		core.Result::Ok(v) => {
 			val expect = "hello world";
-			if !str_eq(&v, &expect) {
+			if !str_eq(v, expect) {
 				return 7;
 			}
 		},
@@ -67,10 +67,10 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Empty len=0
-	match text.substring(&s, 3, 0) {
+	match text.substring(s, 3, 0) {
 		core.Result::Ok(v) => {
 			val expect = "";
-			if !str_eq(&v, &expect) {
+			if !str_eq(v, expect) {
 				return 9;
 			}
 		},
@@ -78,24 +78,24 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Out-of-bounds: start + len > byte_length
-	match text.substring(&s, 8, 5) {
+	match text.substring(s, 8, 5) {
 		core.Result::Ok(_) => { return 11; },
 		core.Result::Err(e) => {
 			val tag_expect = "out-of-bounds";
-			if !str_eq(&e.tag, &tag_expect) {
+			if !str_eq(e.tag, tag_expect) {
 				return 12;
 			}
 		}
 	}
 
 	// Negative start
-	match text.substring(&s, 0 - 1, 3) {
+	match text.substring(s, 0 - 1, 3) {
 		core.Result::Ok(_) => { return 13; },
 		core.Result::Err(_) => { }
 	}
 
 	// Negative len
-	match text.substring(&s, 0, 0 - 1) {
+	match text.substring(s, 0, 0 - 1) {
 		core.Result::Ok(_) => { return 14; },
 		core.Result::Err(_) => { }
 	}

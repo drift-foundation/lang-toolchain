@@ -59,10 +59,10 @@ fn build_input(target_bytes: Int) nothrow -> String {
 	var total = 0;
 	val n = chunk.byte_length();
 	while total < target_bytes {
-		text.sb_append_string(&mut sb, &chunk);
+		text.sb_append_string(sb, chunk);
 		total = total + n;
 	}
-	return text.sb_build(&mut sb);
+	return text.sb_build(sb);
 }
 
 fn w1_byte_at(s: &String) nothrow -> Int {
@@ -130,7 +130,7 @@ fn w3_substring(s: &String) nothrow -> Int {
 					Ok(tok) => {
 						tokens = tokens + 1;
 						len_sum = len_sum + tok.byte_length();
-						first_sum = first_sum + cast<Int>(core.string_byte_at(&tok, 0));
+						first_sum = first_sum + cast<Int>(core.string_byte_at(tok, 0));
 					},
 					Err(e) => { }
 				}
@@ -157,7 +157,7 @@ fn w4_view(s: &String) nothrow -> Int {
 			if tl > 0 {
 				match text.byte_view(s, tok_start, tl) {
 					Ok(v) => {
-						val bs = text._byte_source(&v);
+						val bs = text._byte_source(v);
 						tokens = tokens + 1;
 						len_sum = len_sum + v.byte_length();
 						first_sum = first_sum + cast<Int>(bs.read(0));
@@ -272,7 +272,7 @@ fn w7_iter(s: &String) nothrow -> Int {
 // path (the engine/parser plumbing tier).
 fn w5b_source_reads(s: &String) nothrow -> Int {
 	val v = text.byte_view_all(s);
-	val src = text._byte_source(&v);
+	val src = text._byte_source(v);
 	val n = src.size();
 	var tokens = 0;
 	var len_sum = 0;
@@ -320,7 +320,7 @@ fn w6_view_bulk(s: &String) nothrow -> Int {
 			}
 			tokens * 1000000 + len_sum + first_sum
 		});
-	return text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&v, move scan);
+	return text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(v, move scan);
 }
 
 pub fn main() nothrow -> Int {
@@ -329,18 +329,18 @@ pub fn main() nothrow -> Int {
 
 	val iters = 5;
 
-	val c1 = w1_byte_at(&input);
-	val c2 = w2_with_bytes(&input);
-	val c3 = w3_substring(&input);
-	val c4 = w4_view(&input);
-	val c5 = w5_byte_at_reads(&input);
-	val c5a = w5a_string_byte_at(&input);
+	val c1 = w1_byte_at(input);
+	val c2 = w2_with_bytes(input);
+	val c3 = w3_substring(input);
+	val c4 = w4_view(input);
+	val c5 = w5_byte_at_reads(input);
+	val c5a = w5a_string_byte_at(input);
 	if c5a != c1 { return 24; }
-	val c5b = w5b_source_reads(&input);
+	val c5b = w5b_source_reads(input);
 	if c5b != c1 { return 21; }
-	val c7chk = w7_iter(&input);
+	val c7chk = w7_iter(input);
 	if c7chk == 0 { return 25; }
-	val c6 = w6_view_bulk(&input);
+	val c6 = w6_view_bulk(input);
 	if c1 != c2 { return 1; }
 	if c1 != c3 { return 2; }
 	if c1 != c4 { return 3; }
@@ -351,8 +351,8 @@ pub fn main() nothrow -> Int {
 	var k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w1_byte_at(&input);
-		line1 = line1 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w1_byte_at(input);
+		line1 = line1 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 10; }
 		k = k + 1;
 	}
@@ -362,8 +362,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w2_with_bytes(&input);
-		line2 = line2 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w2_with_bytes(input);
+		line2 = line2 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 11; }
 		k = k + 1;
 	}
@@ -373,8 +373,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w3_substring(&input);
-		line3 = line3 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w3_substring(input);
+		line3 = line3 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 12; }
 		k = k + 1;
 	}
@@ -384,8 +384,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w4_view(&input);
-		line4 = line4 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w4_view(input);
+		line4 = line4 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 13; }
 		k = k + 1;
 	}
@@ -395,8 +395,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w5_byte_at_reads(&input);
-		line5 = line5 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w5_byte_at_reads(input);
+		line5 = line5 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 14; }
 		k = k + 1;
 	}
@@ -406,8 +406,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w5a_string_byte_at(&input);
-		line5a = line5a + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w5a_string_byte_at(input);
+		line5a = line5a + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 26; }
 		k = k + 1;
 	}
@@ -417,8 +417,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w7_iter(&input);
-		line7 = line7 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w7_iter(input);
+		line7 = line7 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c7chk { return 27; }
 		k = k + 1;
 	}
@@ -428,8 +428,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w5b_source_reads(&input);
-		line5b = line5b + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w5b_source_reads(input);
+		line5b = line5b + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 23; }
 		k = k + 1;
 	}
@@ -439,8 +439,8 @@ pub fn main() nothrow -> Int {
 	k = 0;
 	while k < iters {
 		val t0 = time.now_monotonic();
-		val r = w6_view_bulk(&input);
-		line6 = line6 + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		val r = w6_view_bulk(input);
+		line6 = line6 + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != c1 { return 15; }
 		k = k + 1;
 	}

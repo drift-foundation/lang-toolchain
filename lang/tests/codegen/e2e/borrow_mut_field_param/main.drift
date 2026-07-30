@@ -11,7 +11,7 @@ fn set(w: &mut Wrap) nothrow -> Void {
 
 fn run() nothrow -> Int {
 	var w = Wrap(x = 1);
-	set(&mut w);
+	set(w);
 	return w.x;
 }
 

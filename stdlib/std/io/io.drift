@@ -602,8 +602,8 @@ pub struct Buffer {
 
 implement core.Destructible for Buffer {
 	pub fn destroy(var self: Buffer) nothrow -> Void {
-		val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
-		val cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+		val ptr = mem.rawbuffer_ptr<type Byte>(self.buf);
+		val cap = mem.rawbuffer_cap<type Byte>(self.buf);
 		var tmp = mem.rawbuffer_from_parts<type Byte>(ptr, cap);
 		mem.dealloc<type Byte>(tmp);
 	}
@@ -1101,7 +1101,7 @@ pub fn buffer_set_len(self: &mut Buffer, len: Int) nothrow -> Void {
 	if target > self.len {
 		var j = self.len;
 		while j < target {
-			mem.write<type Byte>(&mut self.buf, j, cast<Byte>(0));
+			mem.write<type Byte>(self.buf, j, cast<Byte>(0));
 			j = j + 1;
 		}
 	}
@@ -1140,13 +1140,13 @@ pub fn buffer_commit_read(self: &mut Buffer, len: Int) nothrow -> Void {
 /// deallocate the returned pointer; the `Buffer`'s destructor owns the
 /// allocation.
 pub fn buffer_ptr(self: &Buffer) nothrow -> mem.Ptr<Byte> {
-	return mem.rawbuffer_ptr<type Byte>(&self.buf);
+	return mem.rawbuffer_ptr<type Byte>(self.buf);
 }
 
 /// `&mut` form of `buffer_ptr`.  Equivalent semantics; exists for
 /// receiver-type compatibility.
 pub fn buffer_ptr_mut(self: &mut Buffer) nothrow -> mem.Ptr<Byte> {
-	return mem.rawbuffer_ptr<type Byte>(&self.buf);
+	return mem.rawbuffer_ptr<type Byte>(self.buf);
 }
 
 /// Writes byte `v` at index `i`.
@@ -1163,11 +1163,11 @@ pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
 	if i > self.len {
 		var j = self.len;
 		while j < i {
-			mem.write<type Byte>(&mut self.buf, j, cast<Byte>(0));
+			mem.write<type Byte>(self.buf, j, cast<Byte>(0));
 			j = j + 1;
 		}
 	}
-	mem.write<type Byte>(&mut self.buf, i, v);
+	mem.write<type Byte>(self.buf, i, v);
 	val new_len = i + 1;
 	if new_len > self.len {
 		self.len = new_len;
@@ -1182,7 +1182,7 @@ pub fn buffer_write(self: &mut Buffer, i: Int, v: Byte) nothrow -> Void {
 /// **Parameters:**
 /// - `i` — byte offset to read.
 pub fn buffer_read(self: &mut Buffer, i: Int) nothrow -> Byte {
-	return mem.read<type Byte>(&mut self.buf, i);
+	return mem.read<type Byte>(self.buf, i);
 }
 
 /// Appends every byte of `src` to the end of the buffer.
@@ -1196,7 +1196,7 @@ pub fn buffer_write_bytes(self: &mut Buffer, src: &Array<Byte>) nothrow -> Void 
 	val n = src.len;
 	var i = 0;
 	while i < n {
-		mem.write<type Byte>(&mut self.buf, self.len + i, src[i]);
+		mem.write<type Byte>(self.buf, self.len + i, src[i]);
 		i = i + 1;
 	}
 	self.len = self.len + n;
@@ -1214,7 +1214,7 @@ pub fn buffer_write_string(self: &mut Buffer, s: &String) nothrow -> Void {
 	val n = s.byte_length();
 	var i = 0;
 	while i < n {
-		mem.write<type Byte>(&mut self.buf, self.len + i, core.string_byte_at(s, i));
+		mem.write<type Byte>(self.buf, self.len + i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
 	self.len = self.len + n;
@@ -1445,7 +1445,7 @@ implement FileBuilder {
 	/// **Example:** `examples/file_io/read_file.drift`.
 	pub fn build(self: &FileBuilder) nothrow -> core.Result<ConfiguredFile, IoError> {
 		val opts = FileOpenOptions(read = self.opt_read, write = self.opt_write, create = self.opt_create, truncate = self.opt_truncate, append = self.opt_append, mode = self.opt_mode);
-		val opened = _file_open(self.path, &opts, self.timeout);
+		val opened = _file_open(self.path, opts, self.timeout);
 		match opened {
 			Ok(file) => {
 				return core.Result::Ok(ConfiguredFile(inner = move file, timeout = self.timeout));
@@ -1504,7 +1504,7 @@ pub fn input_read(self: &InputStream, buf: &mut Buffer, timeout: conc.Duration) 
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
-	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val ptr = mem.rawbuffer_ptr<type Byte>(buf.buf);
 	val len = buf.cap;
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -1554,7 +1554,7 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
-	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val ptr = mem.rawbuffer_ptr<type Byte>(buf.buf);
 	val len = buf.len;
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -1598,7 +1598,7 @@ pub fn output_write(self: &OutputStream, buf: &Buffer, timeout: conc.Duration) n
 /// **See also:** `input_read`, `ConfiguredInputStream.read`.
 pub fn configured_input_read(self: &ConfiguredInputStream, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
 	val stream = InputStream(fd = self.fd);
-	return input_read(&stream, buf, self.timeout);
+	return input_read(stream, buf, self.timeout);
 }
 
 /// Writes to the configured output stream using its bound timeout.
@@ -1615,7 +1615,7 @@ pub fn configured_input_read(self: &ConfiguredInputStream, buf: &mut Buffer) not
 /// **See also:** `output_write`, `ConfiguredOutputStream.write`.
 pub fn configured_output_write(self: &ConfiguredOutputStream, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
 	val stream = OutputStream(fd = self.fd);
-	return output_write(&stream, buf, self.timeout);
+	return output_write(stream, buf, self.timeout);
 }
 
 implement InputStream {
@@ -1676,7 +1676,7 @@ implement ConfiguredFile {
 	///
 	/// **See also:** `ConfiguredFile.write`, `ConfiguredFile.close`.
 	pub fn read(self: &ConfiguredFile, buf: &mut Buffer) nothrow -> core.Result<Int, IoError> {
-		return _file_read(&self.inner, buf, self.timeout);
+		return _file_read(self.inner, buf, self.timeout);
 	}
 
 	/// Writes `buf.len` bytes from `buf` to the file.
@@ -1691,7 +1691,7 @@ implement ConfiguredFile {
 	///
 	/// **See also:** `ConfiguredFile.read`, `ConfiguredFile.close`.
 	pub fn write(self: &ConfiguredFile, buf: &Buffer) nothrow -> core.Result<Int, IoError> {
-		return _file_write(&self.inner, buf, self.timeout);
+		return _file_write(self.inner, buf, self.timeout);
 	}
 
 	/// Closes the underlying file descriptor.
@@ -1703,7 +1703,7 @@ implement ConfiguredFile {
 	/// **Returns:** `Ok(void)` on success; `Err(IoError)` on close
 	/// failure.
 	pub fn close(self: &ConfiguredFile) nothrow -> core.Result<Void, IoError> {
-		return _file_close(&self.inner, self.timeout);
+		return _file_close(self.inner, self.timeout);
 	}
 }
 
@@ -1711,7 +1711,7 @@ fn _file_read(self: &File, buf: &mut Buffer, timeout: conc.Duration) nothrow -> 
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
-	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val ptr = mem.rawbuffer_ptr<type Byte>(buf.buf);
 	val len = buf.cap;
 	val deadline = _deadline_from_timeout(timeout);
 	while true {
@@ -1766,26 +1766,26 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 	var used = 0;
 	var got_any = false;
 	while true {
-		val r = configured_input_read(self, &mut one);
+		val r = configured_input_read(self, one);
 		match r {
 			Ok(n) => {
 				if n <= 0 {
 					if got_any {
-						val s = core.string_from_utf8_bytes(buffer_ptr(&line), used);
+						val s = core.string_from_utf8_bytes(buffer_ptr(line), used);
 						return core.Result::Ok(s);
 					}
 					return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_EOF));
 				}
 				got_any = true;
-				val b = buffer_read(&mut one, 0);
+				val b = buffer_read(one, 0);
 				if b == cast<Byte>(10) {
-					val s = core.string_from_utf8_bytes(buffer_ptr(&line), used);
+					val s = core.string_from_utf8_bytes(buffer_ptr(line), used);
 					return core.Result::Ok(s);
 				}
 				if used >= self.max_line_bytes {
 					return core.Result::Err(IoError(kind = IO_ERROR_KIND_ERRNO, code = IO_ERR_LINE_TOO_LONG));
 				}
-				buffer_write(&mut line, used, b);
+				buffer_write(line, used, b);
 				used += 1;
 				continue;
 			},
@@ -1819,14 +1819,14 @@ pub fn configured_input_read_line(self: &ConfiguredInputStream) nothrow -> core.
 /// **See also:** `InputStream.read_line`, `configured_input_read_line`.
 pub fn input_read_line(self: &InputStream, timeout: conc.Duration, max_line_bytes: Int) nothrow -> core.Result<String, IoError> {
 	val configured = ConfiguredInputStream(fd = self.fd, timeout = timeout, max_line_bytes = max_line_bytes);
-	return configured_input_read_line(&configured);
+	return configured_input_read_line(configured);
 }
 
 fn _file_write(self: &File, buf: &Buffer, timeout: conc.Duration) nothrow -> core.Result<Int, IoError> {
 	if thread.vt_current() == 0 {
 		return core.Result::Err(IoError(kind = IO_ERROR_KIND_REQUIRES_VTHREAD, code = -2));
 	}
-	val ptr = mem.rawbuffer_ptr<type Byte>(&buf.buf);
+	val ptr = mem.rawbuffer_ptr<type Byte>(buf.buf);
 	val len = buf.len;
 	val deadline = _deadline_from_timeout(timeout);
 	while true {

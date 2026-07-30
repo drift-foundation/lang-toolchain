@@ -6,6 +6,6 @@ fn bad(p: &Int) -> Int {
 
 pub fn main() nothrow -> Int{
 	var x = 1;
-	bad(&x);
+	bad(x);
 	return 0;
 }

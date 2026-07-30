@@ -11,10 +11,10 @@ fn _string_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	// Parse → to_string round-trip for a known canonical value.
 	val canonical: String = "550e8400-e29b-41d4-a716-446655440000";
-	match uuid.parse(&canonical) {
+	match uuid.parse(canonical) {
 		Ok(u) => {
-			val s = uuid.to_string(&u);
-			if not _string_eq(&s, &canonical) {
+			val s = uuid.to_string(u);
+			if not _string_eq(s, canonical) {
 				cons.eprintln("FAIL: parse/to_string round-trip");
 				return 1;
 			}
@@ -28,10 +28,10 @@ pub fn main() nothrow -> Int {
 	// Case-insensitive parse should normalize to lowercase output.
 	val upper: String = "550E8400-E29B-41D4-A716-446655440000";
 	val lower: String = "550e8400-e29b-41d4-a716-446655440000";
-	match uuid.parse(&upper) {
+	match uuid.parse(upper) {
 		Ok(u) => {
-			val s = uuid.to_string(&u);
-			if not _string_eq(&s, &lower) {
+			val s = uuid.to_string(u);
+			if not _string_eq(s, lower) {
 				cons.eprintln("FAIL: case-insensitive parse → lowercase output");
 				return 3;
 			}
@@ -55,9 +55,9 @@ pub fn main() nothrow -> Int {
 		bytes.push(cast<Byte>(raw_bytes[i]));
 		i = i + 1;
 	}
-	match uuid.from_bytes(&bytes) {
+	match uuid.from_bytes(bytes) {
 		Ok(u) => {
-			val out = uuid.to_bytes(&u);
+			val out = uuid.to_bytes(u);
 			if out.len != 16 {
 				cons.eprintln("FAIL: to_bytes length");
 				return 5;
@@ -71,8 +71,8 @@ pub fn main() nothrow -> Int {
 				j = j + 1;
 			}
 			// And the byte form should serialize to the canonical string too.
-			val s = uuid.to_string(&u);
-			if not _string_eq(&s, &lower) {
+			val s = uuid.to_string(u);
+			if not _string_eq(s, lower) {
 				cons.eprintln("FAIL: from_bytes -> to_string");
 				return 7;
 			}

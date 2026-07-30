@@ -103,7 +103,7 @@ fn skip_remaining(statement: &mut Statement) nothrow -> core.Result<Void, Int> {
 implement core.Destructible for Statement {
 	pub fn destroy(var self: Statement) nothrow -> Void {
 		if self.consumed_terminal { return; }
-		match skip_remaining(&mut self) {
+		match skip_remaining(self) {
 			core.Result::Ok(_) => { return; },
 			core.Result::Err(_) => { _mark_dead(self.session); return; }
 		}
@@ -115,7 +115,7 @@ fn _query_expect_ok(session: &mut WireSession, autocommit_off: Bool) nothrow -> 
 		core.Result::Ok(stmt) => {
 			var statement = move stmt;
 			while true {
-				match next_event(&mut statement) {
+				match next_event(statement) {
 					core.Result::Err(e) => { return core.Result::Err(e); },
 					core.Result::Ok(ev) => {
 						match ev {
@@ -135,11 +135,11 @@ fn set_autocommit(session: &mut WireSession, enabled: Bool) nothrow -> core.Resu
 }
 
 fn _exec_expect_ok(conn: &mut RpcConnection) nothrow -> core.Result<Void, Int> {
-	match query(&mut conn.wire_session, false) {
+	match query(conn.wire_session, false) {
 		core.Result::Ok(v) => {
 			var stmt = move v;
 			while true {
-				match next_event(&mut stmt) {
+				match next_event(stmt) {
 					core.Result::Err(e) => { return core.Result::Err(e); },
 					core.Result::Ok(ev) => {
 						match ev {
@@ -155,11 +155,11 @@ fn _exec_expect_ok(conn: &mut RpcConnection) nothrow -> core.Result<Void, Int> {
 
 fn connect() nothrow -> core.Result<RpcConnection, Int> {
 	var conn = RpcConnection(wire_session = WireSession(is_closed = false, active_statement = false, state = WireSessionState(autocommit_enabled = true, in_transaction = false, reusable = true, last_status_flags = cast<Uint>(0), last_warnings = cast<Uint>(0))), strict_reuse = true);
-	match _exec_expect_ok(&mut conn) {
+	match _exec_expect_ok(conn) {
 		core.Result::Ok(_) => {},
 		core.Result::Err(e) => { return core.Result::Err(e); }
 	}
-	match set_autocommit(&mut conn.wire_session, false) {
+	match set_autocommit(conn.wire_session, false) {
 		core.Result::Ok(_) => { return core.Result::Ok(move conn); },
 		core.Result::Err(e) => { return core.Result::Err(e); }
 	}
@@ -174,7 +174,7 @@ pub fn main() nothrow -> Int {
 		core.Result::Err(_) => { return 10; },
 		core.Result::Ok(v) => {
 			var conn = move v;
-			val st = session_state(&conn.wire_session);
+			val st = session_state(conn.wire_session);
 			if not st.reusable { return 21; }
 			if st.autocommit_enabled { return 22; }
 			if st.in_transaction { return 23; }

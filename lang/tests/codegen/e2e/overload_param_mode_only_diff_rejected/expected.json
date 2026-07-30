@@ -1,0 +1,18 @@
+{
+  "description": "R2 (reject-redundant-call-borrows): overload sets identical after erasing a non-receiver parameter's mode {T,&T,&mut T} are definition-site errors \u2014 all FOUR ratified shapes as uniquely named sets (free T/&T, free &/&mut, method T/&T, method &/&mut), four distinct diagnostics so subset matching cannot alias them. Replaces the retired &-as-selector driver tests.",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "message_contains": "overload set for 'free_tvref'"
+    },
+    {
+      "message_contains": "overload set for 'free_refmut'"
+    },
+    {
+      "message_contains": "overload set for 'meth_tvref'"
+    },
+    {
+      "message_contains": "overload set for 'meth_refmut'"
+    }
+  ]
+}

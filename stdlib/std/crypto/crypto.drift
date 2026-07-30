@@ -118,8 +118,8 @@ pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	}
 	val hi = bit_len >> cast<Uint>(32);
 	val lo = bit_len & U32_MASK;
-	_append_u32_be(&mut msg, hi);
-	_append_u32_be(&mut msg, lo);
+	_append_u32_be(msg, hi);
+	_append_u32_be(msg, lo);
 
 	var h0: Uint = cast<Uint>(1779033703);
 	var h1: Uint = cast<Uint>(3144134277);
@@ -196,14 +196,14 @@ pub fn sha256(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	}
 
 	var out = Array<type Byte>::with_capacity(32);
-	_append_u32_be(&mut out, h0);
-	_append_u32_be(&mut out, h1);
-	_append_u32_be(&mut out, h2);
-	_append_u32_be(&mut out, h3);
-	_append_u32_be(&mut out, h4);
-	_append_u32_be(&mut out, h5);
-	_append_u32_be(&mut out, h6);
-	_append_u32_be(&mut out, h7);
+	_append_u32_be(out, h0);
+	_append_u32_be(out, h1);
+	_append_u32_be(out, h2);
+	_append_u32_be(out, h3);
+	_append_u32_be(out, h4);
+	_append_u32_be(out, h5);
+	_append_u32_be(out, h6);
+	_append_u32_be(out, h7);
 	return move out;
 }
 
@@ -236,13 +236,13 @@ pub fn hmac_sha256(key: &Array<Byte>, msg: &Array<Byte>) nothrow -> Array<Byte> 
 		ipad_msg.push(msg[mi]);
 		mi = mi + 1;
 	}
-	val inner_hash = sha256(&ipad_msg);
+	val inner_hash = sha256(ipad_msg);
 	var hi = 0;
 	while hi < inner_hash.len {
 		opad_prefix.push(inner_hash[hi]);
 		hi = hi + 1;
 	}
-	return sha256(&opad_prefix);
+	return sha256(opad_prefix);
 }
 
 /// Computes the SHA-1 hash of `bytes`.
@@ -262,8 +262,8 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	}
 	val hi = bit_len >> cast<Uint>(32);
 	val lo = bit_len & U32_MASK;
-	_append_u32_be(&mut msg, hi);
-	_append_u32_be(&mut msg, lo);
+	_append_u32_be(msg, hi);
+	_append_u32_be(msg, lo);
 
 	var h0 = H0_INIT;
 	var h1 = H1_INIT;
@@ -340,11 +340,11 @@ pub fn sha1(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	}
 
 	var out = Array<type Byte>::with_capacity(20);
-	_append_u32_be(&mut out, h0);
-	_append_u32_be(&mut out, h1);
-	_append_u32_be(&mut out, h2);
-	_append_u32_be(&mut out, h3);
-	_append_u32_be(&mut out, h4);
+	_append_u32_be(out, h0);
+	_append_u32_be(out, h1);
+	_append_u32_be(out, h2);
+	_append_u32_be(out, h3);
+	_append_u32_be(out, h4);
 	return move out;
 }
 
@@ -420,8 +420,8 @@ fn _sha512_core(bytes: &Array<Byte>, iv0: Uint64, iv1: Uint64, iv2: Uint64, iv3:
 	while msg.len % 128 != 112 {
 		msg.push(cast<Byte>(0));
 	}
-	_append_u64_be(&mut msg, 0u64);
-	_append_u64_be(&mut msg, bit_len);
+	_append_u64_be(msg, 0u64);
+	_append_u64_be(msg, bit_len);
 
 	var h0 = iv0;
 	var h1 = iv1;
@@ -442,7 +442,7 @@ fn _sha512_core(bytes: &Array<Byte>, iv0: Uint64, iv1: Uint64, iv2: Uint64, iv3:
 		}
 		t = 0;
 		while t < 16 {
-			w[t] = _load_u64_be(&msg, chunk + t * 8);
+			w[t] = _load_u64_be(msg, chunk + t * 8);
 			t = t + 1;
 		}
 		t = 16;
@@ -514,7 +514,7 @@ pub fn sha512(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	var out = Array<type Byte>::with_capacity(64);
 	var si = 0;
 	while si < 8 {
-		_append_u64_be(&mut out, state[si]);
+		_append_u64_be(out, state[si]);
 		si = si + 1;
 	}
 	return move out;
@@ -531,7 +531,7 @@ pub fn sha384(bytes: &Array<Byte>) nothrow -> Array<Byte> {
 	var out = Array<type Byte>::with_capacity(48);
 	var si = 0;
 	while si < 6 {
-		_append_u64_be(&mut out, state[si]);
+		_append_u64_be(out, state[si]);
 		si = si + 1;
 	}
 	return move out;
@@ -553,7 +553,7 @@ pub fn hkdf_extract_sha256(salt: &Array<Byte>, ikm: &Array<Byte>) nothrow -> Arr
 			zero_salt.push(cast<Byte>(0));
 			zi = zi + 1;
 		}
-		return hmac_sha256(&zero_salt, ikm);
+		return hmac_sha256(zero_salt, ikm);
 	}
 	return hmac_sha256(salt, ikm);
 }
@@ -594,7 +594,7 @@ pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothr
 			ii = ii + 1;
 		}
 		hmac_input.push(cast<Byte>(counter));
-		val block = hmac_sha256(prk, &hmac_input);
+		val block = hmac_sha256(prk, hmac_input);
 		var bi = 0;
 		val remaining = len - okm.len;
 		var take = 32;
@@ -626,7 +626,7 @@ pub fn hkdf_expand_sha256(prk: &Array<Byte>, info: &Array<Byte>, len: Int) nothr
 /// **See also:** `hkdf_extract_sha256`, `hkdf_expand_sha256`.
 pub fn hkdf_sha256(salt: &Array<Byte>, ikm: &Array<Byte>, info: &Array<Byte>, len: Int) nothrow -> core.Result<Array<Byte>, CryptoError> {
 	val prk = hkdf_extract_sha256(salt, ikm);
-	return hkdf_expand_sha256(&prk, info, len);
+	return hkdf_expand_sha256(prk, info, len);
 }
 
 fn _load_u32_le(data: &Array<Byte>, off: Int) nothrow -> Uint {
@@ -658,14 +658,14 @@ fn _chacha20_block(key: &Array<Byte>, counter: Uint, nonce: &Array<Byte>) nothro
 
 	var round = 0;
 	while round < 10 {
-		_chacha20_quarter_round(&mut working, 0, 4, 8, 12);
-		_chacha20_quarter_round(&mut working, 1, 5, 9, 13);
-		_chacha20_quarter_round(&mut working, 2, 6, 10, 14);
-		_chacha20_quarter_round(&mut working, 3, 7, 11, 15);
-		_chacha20_quarter_round(&mut working, 0, 5, 10, 15);
-		_chacha20_quarter_round(&mut working, 1, 6, 11, 12);
-		_chacha20_quarter_round(&mut working, 2, 7, 8, 13);
-		_chacha20_quarter_round(&mut working, 3, 4, 9, 14);
+		_chacha20_quarter_round(working, 0, 4, 8, 12);
+		_chacha20_quarter_round(working, 1, 5, 9, 13);
+		_chacha20_quarter_round(working, 2, 6, 10, 14);
+		_chacha20_quarter_round(working, 3, 7, 11, 15);
+		_chacha20_quarter_round(working, 0, 5, 10, 15);
+		_chacha20_quarter_round(working, 1, 6, 11, 12);
+		_chacha20_quarter_round(working, 2, 7, 8, 13);
+		_chacha20_quarter_round(working, 3, 4, 9, 14);
 		round = round + 1;
 	}
 
@@ -894,15 +894,15 @@ fn _append_u64_le(out: &mut Array<Byte>, v: Uint64) nothrow -> Void {
 
 fn _poly1305_construct_data(aad: &Array<Byte>, ciphertext: &Array<Byte>) nothrow -> Array<Byte> {
 	var mac_data = aad.clone_with_capacity(aad.len + 16 + ciphertext.len + 16 + 16);
-	_pad16(&mut mac_data, aad.len);
+	_pad16(mac_data, aad.len);
 	var ci = 0;
 	while ci < ciphertext.len {
 		mac_data.push(ciphertext[ci]);
 		ci = ci + 1;
 	}
-	_pad16(&mut mac_data, ciphertext.len);
-	_append_u64_le(&mut mac_data, cast<Uint64>(aad.len));
-	_append_u64_le(&mut mac_data, cast<Uint64>(ciphertext.len));
+	_pad16(mac_data, ciphertext.len);
+	_append_u64_le(mac_data, cast<Uint64>(aad.len));
+	_append_u64_le(mac_data, cast<Uint64>(ciphertext.len));
 
 	return move mac_data;
 }
@@ -939,8 +939,8 @@ pub fn chacha20_poly1305_encrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &A
 		pki = pki + 1;
 	}
 	val ciphertext = _chacha20_encrypt(key, cast<Uint>(1), nonce, plaintext);
-	val mac_data = _poly1305_construct_data(aad, &ciphertext);
-	val tag = _poly1305_mac(&poly_key, &mac_data);
+	val mac_data = _poly1305_construct_data(aad, ciphertext);
+	val tag = _poly1305_mac(poly_key, mac_data);
 
 	var out = ciphertext.clone_with_capacity(ciphertext.len + 16);
 	var ti = 0;
@@ -1000,14 +1000,14 @@ pub fn chacha20_poly1305_decrypt(key: &Array<Byte>, nonce: &Array<Byte>, aad: &A
 		poly_key.push(poly_key_block[pki]);
 		pki = pki + 1;
 	}
-	val mac_data = _poly1305_construct_data(aad, &ciphertext);
-	val computed_tag = _poly1305_mac(&poly_key, &mac_data);
+	val mac_data = _poly1305_construct_data(aad, ciphertext);
+	val computed_tag = _poly1305_mac(poly_key, mac_data);
 
-	if !constant_time_eq(&computed_tag, &received_tag) {
+	if !constant_time_eq(computed_tag, received_tag) {
 		return core.Result::Err(CryptoError(tag = "auth-failed", errno = 0));
 	}
 
-	val plaintext = _chacha20_encrypt(key, cast<Uint>(1), nonce, &ciphertext);
+	val plaintext = _chacha20_encrypt(key, cast<Uint>(1), nonce, ciphertext);
 	return core.Result::Ok(move plaintext);
 }
 
@@ -1083,7 +1083,7 @@ pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
 		var m = Array<type Uint>::with_capacity(16);
 		var mi = 0;
 		while mi < 16 {
-			m.push(_load_u32_le(&msg, chunk + mi * 4));
+			m.push(_load_u32_le(msg, chunk + mi * 4));
 			mi = mi + 1;
 		}
 
@@ -1129,9 +1129,9 @@ pub fn md5(data: &Array<Byte>) nothrow -> Array<Byte> {
 	}
 
 	var out = Array<type Byte>::with_capacity(16);
-	_append_u32_le(&mut out, a0);
-	_append_u32_le(&mut out, b0);
-	_append_u32_le(&mut out, c0);
-	_append_u32_le(&mut out, d0);
+	_append_u32_le(out, a0);
+	_append_u32_le(out, b0);
+	_append_u32_le(out, c0);
+	_append_u32_le(out, d0);
 	return move out;
 }

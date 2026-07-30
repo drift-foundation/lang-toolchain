@@ -218,8 +218,8 @@ fn rawptr_round_trip() nothrow -> Int {
 	// Exercise RawPtr codegen: ptr_from_ref, ptr_offset, ptr_write, ptr_read.
 	var x = 100;
 	var y = 200;
-	val px = unsafe { mem.ptr_from_ref<type Int>(&x) };
-	val py = unsafe { mem.ptr_from_ref<type Int>(&y) };
+	val px = unsafe { mem.ptr_from_ref<type Int>(x) };
+	val py = unsafe { mem.ptr_from_ref<type Int>(y) };
 	val vx = mem.ptr_read<type Int>(px);
 	val vy = mem.ptr_read<type Int>(py);
 	return vx + vy;
@@ -228,7 +228,7 @@ fn rawptr_round_trip() nothrow -> Int {
 fn rawptr_write_back() nothrow -> Int {
 	// Exercise ptr_write and ptr_as_mut_ref.
 	var z = 0;
-	val pz = unsafe { mem.ptr_from_ref<type Int>(&z) };
+	val pz = unsafe { mem.ptr_from_ref<type Int>(z) };
 	val rz = mem.ptr_as_mut_ref<type Int>(pz);
 	*rz = 42;
 	return z;
@@ -237,7 +237,7 @@ fn rawptr_write_back() nothrow -> Int {
 pub fn main() nothrow -> Int {
 	val p = make_pair(3, 4);
 	val n = Nested(inner = p, label = "hello");
-	val s = nested_sum(&n);
+	val s = nested_sum(n);
 	val a = array_work();
 	val r = rawptr_round_trip();
 	val w = rawptr_write_back();

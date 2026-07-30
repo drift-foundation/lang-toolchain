@@ -31,7 +31,7 @@ fn run() -> Int {
 	var j = 0;
 	while j < 64 {
 		val key = BadKey(value = j);
-		val v = match m.get_mut(&key) {
+		val v = match m.get_mut(key) {
 			None => {
 				-1
 			},
@@ -48,7 +48,7 @@ fn run() -> Int {
 		j = j + 1;
 	}
 	val k10 = BadKey(value = 10);
-	val removed = m.remove(&k10);
+	val removed = m.remove(k10);
 	val rem_v = match removed {
 		None => {
 			-1
@@ -65,7 +65,7 @@ fn run() -> Int {
 	}
 	m.insert(BadKey(value = 100), 2000);
 	val k100 = BadKey(value = 100);
-	val v100 = match m.get_mut(&k100) {
+	val v100 = match m.get_mut(k100) {
 		None => {
 			-1
 		},
@@ -79,7 +79,7 @@ fn run() -> Int {
 	if v100 != 2000 {
 		return 6;
 	}
-	val still_missing = match m.get_mut(&k10) {
+	val still_missing = match m.get_mut(k10) {
 		None => {
 			true
 		},
@@ -91,7 +91,7 @@ fn run() -> Int {
 		return 7;
 	}
 	val k11 = BadKey(value = 11);
-	val v11 = match m.get_mut(&k11) {
+	val v11 = match m.get_mut(k11) {
 		None => {
 			-1
 		},

@@ -87,8 +87,8 @@ pub fn main() nothrow -> Int {
 	}
 
 	// 2. view byte_at — view-relative, its own container id.
-	var sub = text.byte_view_all(&s);
-	match text.byte_view(&s, 1, 2) { Ok(x) => { sub = move x; }, Err(e) => { return 9; } }
+	var sub = text.byte_view_all(s);
+	match text.byte_view(s, 1, 2) { Ok(x) => { sub = move x; }, Err(e) => { return 9; } }
 	match sub.byte_at(0) {
 		Ok(b) => { if cast<Int>(b) != 98 { return 10; } },
 		Err(e) => { return 11; }
@@ -125,12 +125,12 @@ pub fn main() nothrow -> Int {
 	if err_seen != 2 { return 21; }
 
 	// 6. the range-proven internal source path: nothrow, correct.
-	val src = text._byte_source(&sub);
+	val src = text._byte_source(sub);
 	if src.size() != 2 { return 22; }
 	if cast<Int>(src.read(1)) != 99 { return 23; }
 
 	// internal primitive, valid read.
-	if cast<Int>(core.string_byte_at(&s, 0)) != 97 { return 24; }
+	if cast<Int>(core.string_byte_at(s, 0)) != 97 { return 24; }
 
 	cons.println("byte access result OK");
 	return 0;
@@ -145,7 +145,7 @@ pub fn main() nothrow -> Int {
 	val s = "abc";
 	// documented-internal primitive: OOB is FAIL-CLOSED (abort with
 	// diagnostic), never a value, never an exception.
-	return cast<Int>(core.string_byte_at(&s, 9999));
+	return cast<Int>(core.string_byte_at(s, 9999));
 }
 """
 

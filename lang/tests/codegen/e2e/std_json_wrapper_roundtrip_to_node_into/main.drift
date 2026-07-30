@@ -21,7 +21,7 @@ fn run_main() throws -> Int {
 				return 1;
 			}
 			val k = "ok";
-			match o2.get(&k) {
+			match o2.get(k) {
 				Some(v) => {
 					if not v.expect_bool("", "") {
 						return 2;
@@ -32,7 +32,7 @@ fn run_main() throws -> Int {
 				}
 			}
 			val kitems = "items";
-			match o2.get(&kitems) {
+			match o2.get(kitems) {
 				Some(v) => {
 					val items = v.expect_array("", "");
 					if items.len != 2 {

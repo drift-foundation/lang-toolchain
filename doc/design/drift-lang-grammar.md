@@ -194,6 +194,14 @@ UnaryExpr    ::= PostfixExpr
               | "~" UnaryExpr
               | "&" "mut"? UnaryExpr
 
+Note: `& [mut] UnaryExpr` remains a plain unary production — the
+redundant-argument-borrow rule (0.33.91) is SEMANTIC, not grammatical: a
+source-written borrow in a call-argument slot whose formal is a declared
+`&T`/`&mut T` is rejected by the checker (`E_REDUNDANT_ARG_BORROW`;
+`E_MUT_RVALUE_ARG_BINDING_REQUIRED` for mutable temporaries), never by the
+parser. Non-argument positions, capture lists, coercion borrows,
+generic-by-value formals, and thin function-pointer calls are unaffected.
+
 PostfixExpr  ::= PrimaryExpr PostfixSuffix*
 PostfixSuffix ::= CallSuffix | AttrSuffix | ArrowSuffix | IndexSuffix | TypeAppSuffix | QualifiedSuffix
 CallSuffix   ::= CallTypeArgs? "(" CallArgs? ")"

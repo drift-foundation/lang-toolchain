@@ -91,14 +91,14 @@ fn run() nothrow -> Int {
 		Some(_v) => { return 3; },
 		None => {}
 	}
-	val outer_rc = _with_outer(&mut st);
+	val outer_rc = _with_outer(st);
 	if outer_rc != 0 {
 		return outer_rc;
 	}
 	if not st.is_empty() {
 		return 19;
 	}
-	val one_rc = _push_one(&mut st);
+	val one_rc = _push_one(st);
 	if one_rc != 0 {
 		return one_rc;
 	}

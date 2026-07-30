@@ -34,7 +34,7 @@ pub fn main() nothrow -> Int {
 			var g = cnt1.get().lock();
 			val c = g.get_mut();
 			while *c == 0 {
-				match cv1.get().wait<type Int>(&mut g) {
+				match cv1.get().wait<type Int>(g) {
 					core.Result::Ok(_) => { },
 					core.Result::Err(e) => {
 						if e.kind == conc.CONCURRENCY_KIND_CLOSED {
@@ -64,7 +64,7 @@ pub fn main() nothrow -> Int {
 			var g = cnt2.get().lock();
 			val c = g.get_mut();
 			while *c == 0 {
-				match cv2.get().wait<type Int>(&mut g) {
+				match cv2.get().wait<type Int>(g) {
 					core.Result::Ok(_) => { },
 					core.Result::Err(e) => {
 						if e.kind == conc.CONCURRENCY_KIND_CLOSED {

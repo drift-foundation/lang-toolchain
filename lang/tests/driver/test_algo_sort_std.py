@@ -60,7 +60,7 @@ implement iter.RandomAccessPermutable<Key> for Range {
 
 pub fn main() -> Int {
 	var r = Range(n = 0);
-	algo.sort_in_place<type Range, Key>(&mut r);
+	algo.sort_in_place<type Range, Key>(r);
 	return 0;
 }
 """,
@@ -87,7 +87,7 @@ implement iter.RandomAccessReadable<Key> for Range {
 
 pub fn main() -> Int {
 	var r = Range(n = 0);
-	algo.sort_in_place<type Range, Key>(&mut r);
+	algo.sort_in_place<type Range, Key>(r);
 	return 0;
 }
 """,

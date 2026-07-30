@@ -114,14 +114,14 @@ pub fn main() nothrow -> Int {
 	val doc = "__DOC__";
 	val cfg = json.permissive();
 	val n = 200000;
-	val _w1 = loop_iter(&doc, &cfg, 5000);
-	val _w2 = loop_orac(&doc, &cfg, 5000);
+	val _w1 = loop_iter(doc, cfg, 5000);
+	val _w2 = loop_orac(doc, cfg, 5000);
 	// Order A: iterative first, recursive second.
-	val ta0 = time.now_monotonic(); val a1 = loop_iter(&doc, &cfg, n); val ia = time.elapsed_micros(&ta0);
-	val ta1 = time.now_monotonic(); val b1 = loop_orac(&doc, &cfg, n); val oa = time.elapsed_micros(&ta1);
+	val ta0 = time.now_monotonic(); val a1 = loop_iter(doc, cfg, n); val ia = time.elapsed_micros(ta0);
+	val ta1 = time.now_monotonic(); val b1 = loop_orac(doc, cfg, n); val oa = time.elapsed_micros(ta1);
 	// Order B: recursive first, iterative second.
-	val tb0 = time.now_monotonic(); val b2 = loop_orac(&doc, &cfg, n); val ob = time.elapsed_micros(&tb0);
-	val tb1 = time.now_monotonic(); val a2 = loop_iter(&doc, &cfg, n); val ib = time.elapsed_micros(&tb1);
+	val tb0 = time.now_monotonic(); val b2 = loop_orac(doc, cfg, n); val ob = time.elapsed_micros(tb0);
+	val tb1 = time.now_monotonic(); val a2 = loop_iter(doc, cfg, n); val ib = time.elapsed_micros(tb1);
 	if a1 != b1 or a1 != a2 or b1 != b2 { cons.println("MISMATCH_OK"); return 2; }
 	// Report the ACTUAL success count so the test can assert valid shapes
 	// produced n successes and malformed shapes produced zero (a program
@@ -148,7 +148,7 @@ pub fn main() nothrow -> Int {
 	val cfg = json.permissive();
 	var ok = 0; var i = 0;
 	while i < __ITERS__ {
-		match json.__PARSE__(&doc, &cfg) { core.Result::Ok(_n) => { ok = ok + 1; }, core.Result::Err(_e) => { } }
+		match json.__PARSE__(doc, cfg) { core.Result::Ok(_n) => { ok = ok + 1; }, core.Result::Err(_e) => { } }
 		i = i + 1;
 	}
 	if ok != __ITERS__ { return 1; }
@@ -173,10 +173,10 @@ pub fn main() nothrow -> Int {
 	var ok = 0; var i = 0;
 	val t0 = time.now_monotonic();
 	while i < __ITERS__ {
-		match json.parse_with_config(&doc, &cfg) { core.Result::Ok(_n) => { ok = ok + 1; }, core.Result::Err(_e) => { } }
+		match json.parse_with_config(doc, cfg) { core.Result::Ok(_n) => { ok = ok + 1; }, core.Result::Err(_e) => { } }
 		i = i + 1;
 	}
-	val us = time.elapsed_micros(&t0);
+	val us = time.elapsed_micros(t0);
 	cons.println("large_us=" + fmt.format_int(us));
 	cons.println("large_ok=" + fmt.format_int(ok));
 	return 0;

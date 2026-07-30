@@ -77,8 +77,8 @@ pub fn main() nothrow -> Int {
 \tvar s: String = fmt.format_int(700);
 \tunsafe {
 \t\tvar slot = mem.maybe_uninit<type String>();
-\t\tmem.maybe_write<type String>(&mut slot, move s);
-\t\tval out: String = mem.maybe_assume_init_read<type String>(&mut slot);
+\t\tmem.maybe_write<type String>(slot, move s);
+\t\tval out: String = mem.maybe_assume_init_read<type String>(slot);
 \t\treturn out.byte_length();
 \t\t// `out` drops at scope exit, releasing the String allocation.
 \t\t// `slot` is `MaybeUninit<String>` (no-drop type) — no scope
@@ -104,8 +104,8 @@ pub fn main() nothrow -> Int {
 \tval p = conc.arc(Payload(s = fmt.format_int(700), tag = 7));
 \tunsafe {
 \t\tvar slot = mem.maybe_uninit<type conc.Arc<Payload>>();
-\t\tmem.maybe_write<type conc.Arc<Payload>>(&mut slot, move p);
-\t\tval out = mem.maybe_assume_init_read<type conc.Arc<Payload>>(&mut slot);
+\t\tmem.maybe_write<type conc.Arc<Payload>>(slot, move p);
+\t\tval out = mem.maybe_assume_init_read<type conc.Arc<Payload>>(slot);
 \t\tval ref_payload = out.get();
 \t\treturn ref_payload.tag;
 \t\t// `out` drops at scope exit, decrementing the Arc strong

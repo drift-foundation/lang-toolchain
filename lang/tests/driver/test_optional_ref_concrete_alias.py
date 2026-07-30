@@ -42,7 +42,7 @@ fn as_ref(b: &Box) nothrow -> Opt<&Box> {
 
 pub fn main() nothrow -> Int {
 	val b = Box(value = 7);
-	val got = as_ref(&b);
+	val got = as_ref(b);
 	match got {
 		Opt::Some(_v) => { return 0; },
 		Opt::None => { return 1; }

@@ -16,9 +16,9 @@ pub fn main() nothrow -> Int {
 		head = sync.atomic_uint(cast<Uint>(0)),
 		tail = sync.atomic_uint(cast<Uint>(0))
 	);
-	val a = producer_claim_tail(&q, cast<Uint>(0), cast<Uint>(1));
+	val a = producer_claim_tail(q, cast<Uint>(0), cast<Uint>(1));
 	if a != cast<Uint>(0) { return 1; }
-	val b = producer_claim_tail(&q, cast<Uint>(0), cast<Uint>(2));
+	val b = producer_claim_tail(q, cast<Uint>(0), cast<Uint>(2));
 	if b != cast<Uint>(1) { return 2; }
 	val c = q.tail.load(sync.MemoryOrder::Acquire());
 	if c != cast<Uint>(1) { return 3; }

@@ -132,7 +132,7 @@ fn classify(r: &core.Result<Int, MyError>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val r = maybe_fail(true);
-	val c = classify(&r);
+	val c = classify(r);
 	if c == 7 { return 0; }
 	return 1;
 }
@@ -173,7 +173,7 @@ fn classify(r: &core.Result<Int, MyError>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val r = maybe_fail(true);
-	return classify(&r);
+	return classify(r);
 }
 """
 
@@ -212,7 +212,7 @@ pub fn main() nothrow -> Int {
 	val v1 = V::One(x = 5);
 	val v2 = V::Two(x = 3, y = 4);
 	val v3 = V::Empty();
-	val r = use_v(&v1) + use_v(&v2) + use_v(&v3);
+	val r = use_v(v1) + use_v(v2) + use_v(v3);
 	if r == 12 { return 0; }
 	return 1;
 }
@@ -324,7 +324,7 @@ fn classify(r: &core.Result<Int, inner.MyError>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val r = errpkg.open("");
-	val c = classify(&r);
+	val c = classify(r);
 	if c == 7 { return 0; }
 	return 1;
 }
@@ -376,7 +376,7 @@ fn _take_err(e: &inner.MyError) nothrow -> Int { return e.code; }
 fn classify(r: &core.Result<Int, inner.MyError>) nothrow -> Int {
 	match r {
 		core.Result::Err(e) => {
-			return _take_err(&e);
+			return _take_err(e);
 		},
 		core.Result::Ok(_) => { return 0; }
 	}
@@ -384,7 +384,7 @@ fn classify(r: &core.Result<Int, inner.MyError>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val r = errpkg.open("");
-	val c = classify(&r);
+	val c = classify(r);
 	if c == 7 { return 0; }
 	return 1;
 }
@@ -457,7 +457,7 @@ fn _take(s: &String) nothrow -> Int { return s.byte_length(); }
 fn classify(r: &core.Result<Int, MyError>) nothrow -> Int {
 	match r {
 		core.Result::Err(e) => {
-			return _take(&e.tag);
+			return _take(e.tag);
 		},
 		core.Result::Ok(_) => { return 0; }
 	}
@@ -465,7 +465,7 @@ fn classify(r: &core.Result<Int, MyError>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val r = maybe_fail(true);
-	val n = classify(&r);
+	val n = classify(r);
 	if n == 4 { return 0; }
 	return 1;
 }

@@ -19,13 +19,13 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	var sb = text.string_builder(8);
 	// Builder starts empty
-	if text.sb_len(&sb) != 0 { return 1; }
+	if text.sb_len(sb) != 0 { return 1; }
 	// Minimum capacity is 16 even if requested less
-	text.sb_append_string(&mut sb, "hello");
-	if text.sb_len(&sb) != 5 { return 2; }
-	val s = text.sb_build(&mut sb);
+	text.sb_append_string(sb, "hello");
+	if text.sb_len(sb) != 5 { return 2; }
+	val s = text.sb_build(sb);
 	val e = "hello";
-	if !str_eq(&s, &e) { return 3; }
+	if !str_eq(s, e) { return 3; }
 
 	return 0;
 }

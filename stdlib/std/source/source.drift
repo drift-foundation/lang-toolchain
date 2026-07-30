@@ -334,10 +334,10 @@ fn _string_from_validated_bytes(bytes: &Array<Byte>) nothrow -> String {
 	var b = io.buffer(n);
 	var i = 0;
 	while i < n {
-		io.buffer_write(&mut b, i, bytes[i]);
+		io.buffer_write(b, i, bytes[i]);
 		i = i + 1;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b));
+	return core.string_from_utf8_bytes(io.buffer_ptr(b), io.buffer_len(b));
 }
 
 /// Constructs a cursor from raw loaded bytes, validating UTF-8 eagerly.
@@ -381,7 +381,7 @@ implement SourceCursor {
 		if self.at_end() {
 			return -1;
 		}
-		return _decode_at(&self.src, self.offset);
+		return _decode_at(self.src, self.offset);
 	}
 
 	/// Decodes and consumes the current Unicode scalar value, or `-1` at
@@ -392,8 +392,8 @@ implement SourceCursor {
 		if self.at_end() {
 			return -1;
 		}
-		val scalar = _decode_at(&self.src, self.offset);
-		self.offset = self.offset + _scalar_width(&self.src, self.offset);
+		val scalar = _decode_at(self.src, self.offset);
+		self.offset = self.offset + _scalar_width(self.src, self.offset);
 		if scalar == 10 {
 			self.line = self.line + 1;
 			self.column = 1;
@@ -438,14 +438,14 @@ implement SourceCursor {
 	pub fn slice(self: &SourceCursor, start: Int, end: Int) nothrow -> core.Result<String, SourceError> {
 		if start < 0 or end < start or end > self.len {
 			val at = (start < 0 or start > self.len) ? start : end;
-			return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, at));
+			return core.Result::Err(_err_at("invalid-slice-range", self.id, self.src, at));
 		}
-		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, end)))) {
-			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) ? start : end;
-			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, &self.src, at));
+		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, end)))) {
+			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, start)))) ? start : end;
+			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, self.src, at));
 		}
-		match text.substring(&self.src, start, end - start) {
-			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, start)); },
+		match text.substring(self.src, start, end - start) {
+			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, self.src, start)); },
 			core.Result::Ok(value) => { return core.Result::Ok(value); }
 		}
 	}
@@ -461,14 +461,14 @@ implement SourceCursor {
 	pub fn slice_view(self: &SourceCursor, start: Int, end: Int) nothrow -> core.Result<text.StringByteView, SourceError> {
 		if start < 0 or end < start or end > self.len {
 			val at = (start < 0 or start > self.len) ? start : end;
-			return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, at));
+			return core.Result::Err(_err_at("invalid-slice-range", self.id, self.src, at));
 		}
-		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, end)))) {
-			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(&self.src, start)))) ? start : end;
-			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, &self.src, at));
+		if (start < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, start)))) or (end < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, end)))) {
+			val at = (start < self.len and _is_continuation(_byte_value(core.string_byte_at(self.src, start)))) ? start : end;
+			return core.Result::Err(_err_at("slice-not-char-boundary", self.id, self.src, at));
 		}
-		match text.byte_view(&self.src, start, end - start) {
-			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, &self.src, start)); },
+		match text.byte_view(self.src, start, end - start) {
+			core.Result::Err(_) => { return core.Result::Err(_err_at("invalid-slice-range", self.id, self.src, start)); },
 			core.Result::Ok(v) => { return core.Result::Ok(move v); }
 		}
 	}

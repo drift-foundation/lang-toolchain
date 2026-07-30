@@ -65,23 +65,23 @@ fn inspect_key(c: &mut Connection) nothrow -> InspectResult {
 // Ok path: conditional move + return with owned locals in scope.
 fn s1() -> Int {
 	var c = create("s1-conn");
-	call_sp(&mut c, "CALL sp_claim(?)");
-	call_sp(&mut c, "CALL sp_complete(?)");
+	call_sp(c, "CALL sp_claim(?)");
+	call_sp(c, "CALL sp_complete(?)");
 	close(move c);
 	return 0;
 }
 
 fn s2() -> Int {
 	var c = create("s2-conn");
-	call_sp(&mut c, "CALL sp_claim(?)");
-	call_sp(&mut c, "CALL sp_fail(?)");
+	call_sp(c, "CALL sp_claim(?)");
+	call_sp(c, "CALL sp_fail(?)");
 	close(move c);
 	return 0;
 }
 
 fn s3() -> Int {
 	var c = create("s3-conn");
-	val ir = inspect_key(&mut c);
+	val ir = inspect_key(c);
 	if ir.found { close(move c); return 301; }
 	close(move c);
 	return 0;
@@ -91,7 +91,7 @@ fn s3() -> Int {
 // Exercises ConstructResultErr ordering relative to scope drops.
 fn s4_throw_with_owned_locals() -> Int {
 	var c = create("s4-conn");
-	call_sp(&mut c, "CALL sp_setup(?)");
+	call_sp(c, "CALL sp_setup(?)");
 	// Owned locals (c, plus call results) are live when throw escapes.
 	throw OpFailed("intentional failure");
 }
@@ -99,8 +99,8 @@ fn s4_throw_with_owned_locals() -> Int {
 // Err path: conditional throw with owned locals.
 fn s5_cond_throw(should_fail: Bool) -> Int {
 	var c = create("s5-conn");
-	call_sp(&mut c, "CALL sp_work(?)");
-	val ir = inspect_key(&mut c);
+	call_sp(c, "CALL sp_work(?)");
+	val ir = inspect_key(c);
 	if should_fail {
 		throw OpFailed("conditional failure");
 	}

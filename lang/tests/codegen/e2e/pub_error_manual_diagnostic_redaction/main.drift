@@ -75,11 +75,11 @@ pub fn main() nothrow -> Int {
 		val envelope = e.encode_compact();
 		val secret_str: String = "shhh-secret-token";
 		val public_str: String = "42";
-		if _str_contains(&envelope, &secret_str) {
+		if _str_contains(envelope, secret_str) {
 			console.print("LEAK: secret in envelope");
 			return 10;
 		}
-		if !_str_contains(&envelope, &public_str) {
+		if !_str_contains(envelope, public_str) {
 			console.print("MISSING: public user_id");
 			return 11;
 		}

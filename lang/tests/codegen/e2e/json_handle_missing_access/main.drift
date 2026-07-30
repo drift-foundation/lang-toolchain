@@ -5,21 +5,21 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val text = "{\"a\":1}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
 			val handle = json.share(move node);
 			// Missing key returns None.
 			val k1 = "missing";
-			match handle.get(&k1) {
+			match handle.get(k1) {
 				Optional::Some(_) => { return 1; },
 				Optional::None() => {}
 			}
 			// get on non-object (number node) returns None.
 			val k2 = "a";
-			match handle.get(&k2) {
+			match handle.get(k2) {
 				Optional::Some(h) => {
 					val k3 = "sub";
-					match h.get(&k3) {
+					match h.get(k3) {
 						Optional::Some(_) => { return 2; },
 						Optional::None() => {}
 					}

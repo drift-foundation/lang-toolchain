@@ -59,32 +59,40 @@ FIXED_WIDTH_TYPE_NAMES = {
 }
 def _ultimate_base_is_rvalue_call(rcv) -> bool:
 	"""Return True when `rcv` is `HCall`/`HMethodCall`/`HInvoke`, or a chain
-	of `HField` projections whose ultimate base is one of those.
+	of `HField`/`HIndex` projections (with an optional explicit deref
+	directly on the base) whose ultimate base is one of those.
 
 	Used by the SELF_BY_REF method-receiver autoborrow gates below to
-	recognize chained shapes like `w.get().handle.peek()` — non-addressable
-	field projections through a ref-returning rvalue base.  Without this,
-	the autoborrow path falls through to the value-copy check and rejects
-	with `cannot copy value of type 'T'` for any non-Copy projected field.
+	recognize chained shapes like `w.get().handle.peek()` and
+	`w.handles_ref()[i].peek()` — non-addressable projections through an
+	rvalue base.  Without this, the autoborrow path falls through to the
+	value-copy check and rejects with `cannot copy value of type 'T'` for
+	any non-Copy projected leaf.
 
-	Wrapping the chained receiver in `HBorrow(allow_rvalue=True)` lets
-	stage1 `borrow_materialize._split_lift_place_chain` lift the rvalue
-	base into a hidden temp, keeping the field projection as part of the
-	borrow's place expression — semantically identical to:
+	The gate wraps the chained receiver in `HBorrow(allow_rvalue=True)`.
+	That borrow is CHECKER-SYNTHESIZED, so stage1 `borrow_materialize`
+	(which only rewrites source-written borrows, and has already run)
+	never sees it; it lowers through the MIR-side twin
+	`stage2/hir_to_mir.py::_lift_rvalue_ref_base_for_borrow`, which lifts
+	the rvalue base once and projects against its pointer — semantically
+	identical to:
 
 	    val __tmp = w.get();      // &Inner
 	    __tmp.handle.peek();      // receiver borrowed as &Handle
 
-	**Scope: HField only.**  HIndex and HUnary(DEREF) over a ref-returning
-	rvalue base are intentionally excluded.  The MIR lowering for those
-	shapes (array-element borrow through a rvalue base; deref-of-rvalue
-	borrow through a method receiver) is not implemented in v1 — admitting
-	them at the type-check gate would only push the error from a clear
-	type-check diagnostic to a `NotImplementedError` inside hir_to_mir,
-	which is a worse UX.  When MIR coverage lands, widen this helper to
-	include those arms and add the matching e2e cases.  The explicit-
-	borrow form (`&w.handles_ref()[i]` / `&*w.inner_ref()`) already works
-	for HIndex and DEREF — see `borrow_chained_ref_projection_noncopy`.
+	**Scope: HField, HIndex, and HUnary(DEREF)-at-base.**  HIndex and
+	deref-at-base were excluded until reject-redundant-call-borrows
+	landed the MIR-side lowering for checker-synthesized borrows over
+	these chains (`stage2/hir_to_mir.py::_lift_rvalue_ref_base_for_borrow`
+	with index hops and deref-at-base; owned bases admitted for
+	index-bearing shared chains) — the shapes this gate admits are
+	exactly the shapes that lowering accepts, keeping the original
+	contract: no admission may push a type-check rejection into a
+	`NotImplementedError` inside hir_to_mir.  Receiver pins:
+	`autoborrow_method_receiver_through_ref_rvalue_chain` (field, index,
+	and deref receiver forms, compile+run).  The explicit-borrow BINDING
+	forms (`val r = &w.handles_ref()[i];` / `&*w.inner_ref()`) are pinned
+	by `borrow_chained_ref_projection_noncopy` §A.
 	"""
 	cur = rcv
 	while True:
@@ -93,6 +101,15 @@ def _ultimate_base_is_rvalue_call(rcv) -> bool:
 		if isinstance(cur, H.HField):
 			cur = cur.subject
 			continue
+		if isinstance(cur, H.HIndex):
+			cur = cur.subject
+			continue
+		if (
+			isinstance(cur, H.HUnary)
+			and cur.op is H.UnaryOp.DEREF
+			and isinstance(cur.expr, (H.HCall, H.HMethodCall, H.HInvoke))
+		):
+			return True
 		return False
 
 
@@ -3042,6 +3059,9 @@ class TypeChecker:
 			*,
 			span: Span,
 			skip_first: bool = False,
+			declared_ref_mask: list[bool] | None = None,
+			param_names: list[str | None] | None = None,
+			synth_cache: dict | None = None,
 		) -> tuple[list[TypeId], bool]:
 			def _can_autoborrow_mut(place_expr: H.HExpr, place: Place) -> bool:
 				has_deref = any(isinstance(p, DerefProj) for p in place.projections)
@@ -3104,6 +3124,107 @@ class TypeChecker:
 					return False
 				args[idx] = call_expr
 				updated_types[idx] = coerced_ty
+				return True
+
+			def _operand_source_text(borrow: "H.HBorrow") -> str | None:
+				# Slice the borrow's own span (& token through operand end) and
+				# strip the leading `&`/`&mut` — reliable for every operand
+				# shape (HField/HIndex carry no own loc). Falls back to the
+				# place's base name (package-decoded HIR has no SourceManager
+				# entry for producer sources).
+				sp = getattr(borrow, "loc", None)
+				text = None
+				if sp is not None:
+					try:
+						text = self.type_table.source_slice_from_span(sp)
+					except Exception:
+						text = None
+				if text:
+					t = text.strip()
+					if t.startswith("&"):
+						t = t[1:].lstrip()
+						if t.startswith("mut") and (len(t) == 3 or not (t[3].isalnum() or t[3] == "_")):
+							t = t[3:].lstrip()
+					if t:
+						return t
+				subj = getattr(borrow, "subject", None)
+				return getattr(getattr(subj, "base", None), "name", None)
+
+			def _policy_classify_source_borrow(
+				idx: int,
+				borrow: "H.HBorrow",
+				arg_ty: TypeId,
+				param_ty: TypeId,
+				ref_mut: bool,
+				inner: TypeId,
+			) -> bool:
+				"""W0 policy for a source-written borrow argument at a
+				syntactically declared `&`/`&mut` formal. Stamps
+				`policy_class`; returns True iff the argument was rejected.
+				Redundancy = deletion-equivalence: the operand alone would
+				satisfy the formal (bare auto-borrow, already-&T value, or
+				&mut-typed value reborrowing to a shared formal). Borrows
+				whose deletion changes typing (interface widening, Borrow-
+				trait coercions) classify as "coercion" and stay legal."""
+				if borrow.is_mut and getattr(borrow, "materialized_rvalue", False):
+					borrow.policy_class = "mut_rvalue_binding"
+					diagnostics.append(
+						_tc_diag(
+							message="mutable borrow of a temporary in argument position; bind it to a `var` first",
+							code="E_MUT_RVALUE_ARG_BINDING_REQUIRED",
+							severity="error",
+							phase="typecheck",
+							span=getattr(borrow, "loc", span),
+						)
+					)
+					return True
+				operand_ty = None
+				if arg_ty is not None:
+					adef = self.type_table.get(arg_ty)
+					if adef.kind is TypeKind.REF and adef.param_types:
+						operand_ty = adef.param_types[0]
+				redundant = False
+				if operand_ty is not None:
+					if operand_ty == inner or operand_ty == param_ty:
+						redundant = True
+					else:
+						odef = self.type_table.get(operand_ty)
+						if (
+							odef.kind is TypeKind.REF
+							and odef.param_types
+							and odef.param_types[0] == inner
+							and bool(odef.ref_mut)
+							and not ref_mut
+						):
+							redundant = True
+				if not redundant:
+					borrow.policy_class = "coercion"
+					return False
+				borrow.policy_class = "redundant"
+				operand = _operand_source_text(borrow)
+				pname = None
+				if param_names is not None and idx < len(param_names):
+					pname = param_names[idx]
+				pdef = self.type_table.get(param_ty)
+				if pdef.kind is TypeKind.REF and pdef.param_types:
+					_amp = "&mut " if bool(pdef.ref_mut) else "&"
+					pty = _amp + self._pretty_type_name(pdef.param_types[0], current_module=current_module_name)
+				else:
+					pty = self._pretty_type_name(param_ty, current_module=current_module_name)
+				slot = f"'{pname}: {pty}'" if pname else f"{idx + 1} of type '{pty}'"
+				remedy = f"pass '{operand}' directly" if operand else "drop the borrow and pass the value directly"
+				diagnostics.append(
+					_tc_diag(
+						message=(
+							f"redundant borrow for parameter {slot}; {remedy} "
+							f"— the parameter declaration spells the borrow"
+						),
+						code="E_REDUNDANT_ARG_BORROW",
+						severity="error",
+						phase="typecheck",
+						span=getattr(borrow, "loc", span),
+					)
+				)
 				return True
 
 			if len(args) != len(param_types) or len(arg_types) != len(param_types):
@@ -3215,6 +3336,10 @@ class TypeChecker:
 					# passes its address; the caller keeps ownership.
 					_view_target = _borrowed_iface_view_target(param_ty, arg_ty)
 					if _view_target is not None:
+						if isinstance(arg_expr, H.HBorrow) and getattr(arg_expr, "source_written", False):
+							# D7(a): borrow+widen — deletion would not
+							# type-check, so the borrow is NOT redundant.
+							arg_expr.policy_class = "coercion"
 						record_borrowed_iface_coercion(arg_expr, _view_target)
 						updated_types[idx] = param_ty
 						continue
@@ -3232,6 +3357,18 @@ class TypeChecker:
 						arg_def.kind is TypeKind.REF and arg_def.param_types
 						and arg_def.param_types[0] == param_ty
 					):
+						# Idempotency: re-resolution passes can hand us
+						# STALE arg_types against the already-mutated args
+						# list — the slot may already hold the deref /
+						# const_share wrap we synthesized (possibly REBUILT
+						# by normalize, so no node identity survives).
+						# Wrapping a second deref around a by-value node
+						# would then "deref a non-reference". Skip when the
+						# node's FRESH type already matches the formal.
+						if isinstance(arg_expr, (H.HUnary, H.HMethodCall, H.HVar)):
+							if type_expr(arg_expr, used_as_value=False) == param_ty:
+								updated_types[idx] = param_ty
+								continue
 						inner = param_ty
 						if self.type_table.copy_status(inner) is True or _proves_const_share(inner):
 							deref_expr = H.HUnary(op=H.UnaryOp.DEREF, expr=arg_expr)
@@ -3272,12 +3409,41 @@ class TypeChecker:
 									updated_types[idx] = wrap_ty
 					continue
 				ref_mut, inner = ref_info
+				if isinstance(arg_expr, H.HBorrow) and getattr(arg_expr, "source_written", False):
+					if declared_ref_mask is not None and idx < len(declared_ref_mask):
+						if declared_ref_mask[idx]:
+							if _policy_classify_source_borrow(idx, arg_expr, arg_ty, param_ty, ref_mut, inner):
+								had_error = True
+								continue
+						elif getattr(arg_expr, "policy_class", None) is None:
+							# Mask-known-False = a POSITIVELY classified
+							# generic-by-value formal — the borrow is the
+							# argument value, not a spelling. Paths with NO
+							# mask stamp nothing: an unclassified survivor
+							# trips the totality validator instead of being
+							# silently exempted.
+							arg_expr.policy_class = "exempt"
 				if arg_ty == param_ty:
 					continue
 				arg_def = self.type_table.get(arg_ty)
 				if arg_def.kind is TypeKind.REF and arg_def.param_types:
 					arg_inner = arg_def.param_types[0]
 					if arg_inner == param_ty:
+						# Idempotency: re-resolution passes can hand us
+						# STALE arg_types against the already-mutated
+						# args list — the slot already holds the deref
+						# we synthesized (possibly REBUILT by normalize,
+						# so no node marker survives), and wrapping a
+						# second deref around it would deref INTO the
+						# pointee (non-Copy pointees then fail the copy
+						# gate). Structural check: an existing deref
+						# that already types to the formal needs no
+						# further coercion. Also covers a SOURCE-written
+						# `f(*rr)` that already matches — same no-op.
+						if isinstance(arg_expr, H.HUnary) and arg_expr.op is H.UnaryOp.DEREF:
+							if type_expr(arg_expr) == param_ty:
+								updated_types[idx] = param_ty
+								continue
 						# Allow implicit single deref for nested refs in call arguments,
 						# e.g. passing &&T where &T is required.
 						deref_expr = H.HUnary(op=H.UnaryOp.DEREF, expr=arg_expr)
@@ -3324,8 +3490,31 @@ class TypeChecker:
 						)
 						had_error = True
 						continue
+				# Idempotent synthesis keyed on (call node, slot): calls can
+				# be resolved more than once (speculative + final passes), and
+				# a fresh HBorrow per pass would self-conflict in the
+				# same-statement borrow window. Distinct slots stay distinct so
+				# genuine same-place conflicts (f(a, a) at two &mut params)
+				# are still caught.
+				_cached = synth_cache.get(idx) if synth_cache is not None else None
+				if _cached is not None and _cached.is_mut == ref_mut:
+					args[idx] = _cached
+					updated_types[idx] = type_expr(_cached)
+					continue
 				borrow_expr = H.HBorrow(subject=place_expr, is_mut=ref_mut)
 				_assign_node_id(borrow_expr)
+				# Same-statement window identity: speculative resolution (UFCS
+				# probes, overload retries) clones call nodes but SHARES the
+				# argument children, so a fresh borrow per attempt would
+				# self-conflict. The window keys synthesized borrows by the
+				# ORIGINAL argument node — stable across probe clones, and
+				# still distinct for genuinely distinct arguments (f(a, a)
+				# has two HVar occurrences → two keys → conflict preserved).
+				_origin_id = getattr(arg_expr, "node_id", None)
+				if _origin_id is not None:
+					borrow_expr._ab_origin_arg = _origin_id
+				if synth_cache is not None:
+					synth_cache[idx] = borrow_expr
 				args[idx] = borrow_expr
 				updated_types[idx] = type_expr(borrow_expr)
 			return updated_types, had_error
@@ -5042,6 +5231,29 @@ class TypeChecker:
 				else:
 					name = ctx.param_names[idx] if ctx.param_names and idx < len(ctx.param_names) else None
 					origin = InferConstraintOrigin(kind="arg", index=idx, name=name)
+				# Auto-borrow-aware inference (top-level argument slots only,
+				# never nested, never ctor fields/receivers): a declared
+				# `&X`/`&mut X` formal unifies with a BARE argument by peeling
+				# the formal's reference — the parameter-directed borrow is
+				# synthesized after instantiation, so inference must see
+				# through it.  Also the implicit `&mut T → &T` reborrow.
+				if (
+					origin.kind == "arg"
+					and ctx.call_kind in ("free", "method", "ufcs")
+					and a is not None
+				):
+					_pd = self.type_table.get(p)
+					if _pd.kind is TypeKind.REF and _pd.param_types:
+						_ad = self.type_table.get(a)
+						if _ad.kind is not TypeKind.REF:
+							p = _pd.param_types[0]
+						elif (
+							_pd.ref_mut is False
+							and _ad.ref_mut is True
+							and _ad.param_types
+						):
+							p = _pd.param_types[0]
+							a = _ad.param_types[0]
 				constraints.append(
 					InferConstraint(lhs=p, rhs=a, origin=origin, span=ctx.span)
 				)
@@ -9004,6 +9216,10 @@ class TypeChecker:
 				expr_id = getattr(expr, "node_id", None)
 				if expr_id is None:
 					expr_id = id(expr)
+				if not getattr(expr, "source_written", False):
+					_origin = getattr(expr, "_ab_origin_arg", None)
+					if _origin is not None:
+						expr_id = ("ab-origin", _origin, bool(expr.is_mut))
 				if expr_id in borrow_expr_ids_in_stmt:
 					inner_ty = type_expr(expr.subject, used_as_value=False)
 					ref_ty = self.type_table.ensure_ref_mut(inner_ty) if expr.is_mut else self.type_table.ensure_ref(inner_ty)
@@ -9621,6 +9837,11 @@ class TypeChecker:
 				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
 				return resolve_call_expr(call_ctx, expr, expected_type, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
 			if isinstance(expr, getattr(H, "HInvoke", ())):
+				# D8(b): fn-value invocation is exempt from the redundant-
+				# borrow rule; stamp for W0 totality.
+				for _a in expr.args:
+					if isinstance(_a, H.HBorrow) and getattr(_a, "source_written", False):
+						_a.policy_class = "exempt"
 				if drift_debug.enabled("call"):
 					try:
 						import sys

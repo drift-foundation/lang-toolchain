@@ -35,7 +35,7 @@ fn connect(flag: &mut Bool) nothrow -> core.Result<Conn, Int> {
 
 pub fn main() nothrow -> Int {
 	var alive = false;
-	match connect(&mut alive) {
+	match connect(alive) {
 		core.Result::Err(_) => { return 10; },
 		core.Result::Ok(v) => {
 			var conn = move v;

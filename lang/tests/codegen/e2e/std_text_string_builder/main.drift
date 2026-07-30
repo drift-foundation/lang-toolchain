@@ -7,39 +7,39 @@ pub fn main() nothrow -> Int {
 	// Test 1: append string fragments and build
 	var sb = text.string_builder(32);
 	val s1 = "Hello";
-	text.sb_append_string(&mut sb, &s1);
+	text.sb_append_string(sb, s1);
 	val s2 = ", ";
-	text.sb_append_string(&mut sb, &s2);
+	text.sb_append_string(sb, s2);
 	val s3 = "world!";
-	text.sb_append_string(&mut sb, &s3);
-	if text.sb_len(&sb) != 13 {
+	text.sb_append_string(sb, s3);
+	if text.sb_len(sb) != 13 {
 		return 1;
 	}
-	val result = text.sb_build(&mut sb);
+	val result = text.sb_build(sb);
 	if result != "Hello, world!" {
 		return 2;
 	}
 
 	// Test 2: empty builder → empty String
 	var sb2 = text.string_builder(16);
-	val empty_result = text.sb_build(&mut sb2);
+	val empty_result = text.sb_build(sb2);
 	if empty_result != "" {
 		return 3;
 	}
-	if text.sb_len(&sb2) != 0 {
+	if text.sb_len(sb2) != 0 {
 		return 4;
 	}
 
 	// Test 3: empty string append is no-op
 	var sb3 = text.string_builder(16);
 	val h = "X";
-	text.sb_append_string(&mut sb3, &h);
+	text.sb_append_string(sb3, h);
 	val e = "";
-	text.sb_append_string(&mut sb3, &e);
-	if text.sb_len(&sb3) != 1 {
+	text.sb_append_string(sb3, e);
+	if text.sb_len(sb3) != 1 {
 		return 5;
 	}
-	val r3 = text.sb_build(&mut sb3);
+	val r3 = text.sb_build(sb3);
 	if r3 != "X" {
 		return 6;
 	}
@@ -47,11 +47,11 @@ pub fn main() nothrow -> Int {
 	// Test 4: multi-byte UTF-8 preserved through build (U+00E9 = "é")
 	var sb4 = text.string_builder(16);
 	val u = "café";
-	text.sb_append_string(&mut sb4, &u);
-	if text.sb_len(&sb4) != 5 {
+	text.sb_append_string(sb4, u);
+	if text.sb_len(sb4) != 5 {
 		return 7;
 	}
-	val r4 = text.sb_build(&mut sb4);
+	val r4 = text.sb_build(sb4);
 	if r4 != "café" {
 		return 8;
 	}
@@ -59,13 +59,13 @@ pub fn main() nothrow -> Int {
 	// Test 5: growth beyond initial capacity
 	var sb5 = text.string_builder(16);
 	val chunk = "abcdefghij";
-	text.sb_append_string(&mut sb5, &chunk);
-	text.sb_append_string(&mut sb5, &chunk);
-	text.sb_append_string(&mut sb5, &chunk);
-	if text.sb_len(&sb5) != 30 {
+	text.sb_append_string(sb5, chunk);
+	text.sb_append_string(sb5, chunk);
+	text.sb_append_string(sb5, chunk);
+	if text.sb_len(sb5) != 30 {
 		return 9;
 	}
-	val r5 = text.sb_build(&mut sb5);
+	val r5 = text.sb_build(sb5);
 	if r5 != "abcdefghijabcdefghijabcdefghij" {
 		return 10;
 	}

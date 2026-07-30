@@ -7,7 +7,7 @@ fn run() -> Int {
 	val text = "\"abc\"";
 	var i = 0;
 	while i < 1200 {
-		match json.parse(&text) {
+		match json.parse(text) {
 			core.Result::Ok(node) => {
 				core.drop_value<type json.JsonNode>(move node);
 			},

@@ -29,7 +29,7 @@ fn run() -> Int {
 	val b1 = [1, 2];
 	var it1 = iter.Iterable::iter(&a1);
 	var it2 = iter.Iterable::iter(&b1);
-	val ok1 = try equal(&mut it1, &mut it2) catch { false };
+	val ok1 = try equal(it1, it2) catch { false };
 	if ok1 { score = score + 1; }
 	val n1 = iter.SinglePassIterator::next(&mut it1);
 	val _ = match n1 {
@@ -41,7 +41,7 @@ fn run() -> Int {
 	val b2 = [1, 2];
 	var it3 = iter.Iterable::iter(&a2);
 	var it4 = iter.Iterable::iter(&b2);
-	val ok2 = try equal(&mut it3, &mut it4) catch { false };
+	val ok2 = try equal(it3, it4) catch { false };
 	if not ok2 { score = score + 4; }
 	val n2 = iter.SinglePassIterator::next(&mut it3);
 	val _ = match n2 {
@@ -53,7 +53,7 @@ fn run() -> Int {
 	val b3 = [1, 2];
 	var it5 = iter.Iterable::iter(&a3);
 	var it6 = iter.Iterable::iter(&b3);
-	val ok3 = try equal(&mut it5, &mut it6) catch { false };
+	val ok3 = try equal(it5, it6) catch { false };
 	if not ok3 { score = score + 16; }
 	val n3 = iter.SinglePassIterator::next(&mut it5);
 	val _ = match n3 {

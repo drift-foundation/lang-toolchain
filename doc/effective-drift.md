@@ -335,8 +335,8 @@ face it needs, with the concrete type inferred from the `Arc<T>` receiver.
 ## Runtime registry patterns (`std.runtime`)
 
 Use `global_registry()` for process-wide singletons. Reads are typed and safe via
-`contains<T>(&reg)` / `get<T>(&reg)`, and strict retrieval is available via
-`expect<T>(&reg, "missing-tag")` which throws `std.runtime:RegistryError`
+`contains<T>(reg)` / `get<T>(reg)`, and strict retrieval is available via
+`expect<T>(reg, "missing-tag")` which throws `std.runtime:RegistryError`
 with `tag: String`.
 
 ```drift
@@ -418,14 +418,14 @@ pub fn main(argv: Array<String>) nothrow -> Int {
     p.option_int("port", "p", "PORT", "control plane port", true);
     p.positional("target", "target directory", true, false);
 
-    match p.parse(&argv) {
+    match p.parse(argv) {
         core.Result::Ok(parsed) => {
             var port = 3306;
             var target = "";
-            if parsed.has_flag("verbose", &p) {
+            if parsed.has_flag("verbose", p) {
                 // ...
             }
-            match parsed.get_int("port", &p) {
+            match parsed.get_int("port", p) {
                 Some(v) => { port = v; },
                 None => { return 2; }
             }
@@ -463,8 +463,8 @@ fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
 	val f = io.file_builder("example.txt").read(true).write(false).timeout(t).build().or_throw();
 	var buf = io.buffer(1024);
-	val n = f.read(&mut buf).or_throw();
-	val _s = core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+	val n = f.read(buf).or_throw();
+	val _s = core.string_from_utf8_bytes(io.buffer_ptr(buf), n);
 	f.close().or_throw();
 	return 0;
 }
@@ -488,13 +488,13 @@ fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
 	val f = io.file_builder("example.txt").read(false).write(true).create(true).truncate(true).timeout(t).build().or_throw();
 	var buf = io.buffer(6);
-	io.buffer_write(&mut buf, 0, cast<Byte>(72));
-	io.buffer_write(&mut buf, 1, cast<Byte>(101));
-	io.buffer_write(&mut buf, 2, cast<Byte>(108));
-	io.buffer_write(&mut buf, 3, cast<Byte>(108));
-	io.buffer_write(&mut buf, 4, cast<Byte>(111));
-	io.buffer_write(&mut buf, 5, cast<Byte>(10));
-	val n = f.write(&buf).or_throw();
+	io.buffer_write(buf, 0, cast<Byte>(72));
+	io.buffer_write(buf, 1, cast<Byte>(101));
+	io.buffer_write(buf, 2, cast<Byte>(108));
+	io.buffer_write(buf, 3, cast<Byte>(108));
+	io.buffer_write(buf, 4, cast<Byte>(111));
+	io.buffer_write(buf, 5, cast<Byte>(10));
+	val n = f.write(buf).or_throw();
 	if n != 6 { return 2; }
 	f.close().or_throw();
 	return 0;
@@ -615,9 +615,9 @@ At call sites the resolver is invisible:
 ```drift
 logger.info("task-submitted");                                  // ambient ctx via resolver
 logger.info("task-submitted", {"size": 42});                    // ambient ctx + attrs (caller wins on key collision)
-logger.info("task-submitted", &caller_ctx);                     // explicit ctx — resolver SUPPRESSED
-logger.info("task-submitted", &caller_ctx, {"k": dv_value});    // explicit ctx + DV-typed override
-logger.info("task-submitted", &log.log_context());              // per-call opt-out: explicit empty context
+logger.info("task-submitted", caller_ctx);                     // explicit ctx — resolver SUPPRESSED
+logger.info("task-submitted", caller_ctx, {"k": dv_value});    // explicit ctx + DV-typed override
+logger.info("task-submitted", log.log_context());              // per-call opt-out: explicit empty context
 ```
 
 The rule: passing an explicit `&LogContext` (even an empty one) suppresses
@@ -718,13 +718,13 @@ Notes:
 ## JSON API + error tags (`std.json`)
 
 `std.json` is JSON-first and machine-oriented:
-- parse: `json.parse(&text) -> Result<JsonNode, JsonErrorData>`
+- parse: `json.parse(text) -> Result<JsonNode, JsonErrorData>`
 - encode: `json.encode(...)`, `json.encode_compact(...)`, and `..._with_config(...)`
 - key ordering policy: `JsonKeyOrder::Unordered()` (default) or `JsonKeyOrder::OrderedLexUtf8()`
 - parse duplicate keys: keep-last
 - shape mutation is wrapper-only:
 `json.new_array()/json.new_object()` with `JsonArray.push(...)` and `JsonObject.set(...)`
-- navigation: `get(&key)`, `get_path(&Array<String>)`
+- navigation: `get(key)`, `get_path(path)` (declared `&String` / `&Array<String>` formals — the call is bare)
 - object enumeration: `entries(&self) -> JsonEntriesIter` — borrowed `(key, value)` pairs
   (`item.key: &String`, `item.value: &JsonNode`; no cloning) via `SinglePassIterator`
   (`use trait std.iter.SinglePassIterator;` to call `.next()`). A non-object (or empty
@@ -745,7 +745,7 @@ pub fn main() nothrow -> Int {
 fn run() -> Int {
     val text = "{\"users\":[{\"id\":42},{\"id\":7}]}";
     var node = json.JsonNode::Null();
-    match json.parse(&text) {
+    match json.parse(text) {
         core.Result::Ok(v) => { node = move v; },
         core.Result::Err(e) => {
             // machine tag + positional context
@@ -757,10 +757,10 @@ fn run() -> Int {
     var cfgb = json.config_builder();
     cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
     val cfg = cfgb.build();
-    console.println(json.encode_with_config(&node, &cfg));
+    console.println(json.encode_with_config(node, cfg));
 
     var users_path = ["users"];
-    val users_node = node.expect_path(&users_path);
+    val users_node = node.expect_path(users_path);
     val users = users_node.expect_array("users", "users");
     if users.len != 2 { return 2; }
     return 0;
@@ -781,7 +781,7 @@ Loop ergonomics note:
 - manual iterator form is also valid, but trait methods require trait scope:
 `use trait iter.Iterable; use trait iter.SinglePassIterator;`
 
-See also: **Result to throwing flow** below — `json.parse(&text)` returns
+See also: **Result to throwing flow** below — `json.parse(text)` returns
 `Result<JsonNode, JsonErrorData>`, and the recommended idiom is to convert
 it to throwing flow with `.or_throw()` and catch once at the `nothrow`
 boundary, rather than nesting `match` per call.  `JsonErrorData` is a
@@ -828,9 +828,9 @@ longer a valid spelling, see "Obsolete forms" below).
 
 ```drift
 fn handle_request(req: &Request) throws -> Response {
-    val q = rest.require_query_param(req, &"q");
+    val q = rest.require_query_param(req, "q");
     //  q has type String, not Result<String, RestError>.
-    val order = repo.load(&q);
+    val order = repo.load(q);
     //  order has type Order; the Result<Order, DbError> is unwrapped.
     return rest.json_response(200, order.to_json());
 }
@@ -845,10 +845,10 @@ auto-try.
 
 ```drift
 fn handle_request(req: &Request) throws -> Response {
-    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, &"q");
+    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, "q");
     //  r has type core.Result<String, rest.RestError>.
     match r {
-        core.Result::Ok(q) => { return repo.lookup(&q); },
+        core.Result::Ok(q) => { return repo.lookup(q); },
         core.Result::Err(_) => { return rest.json_response(400, ...); },
     }
 }
@@ -864,7 +864,7 @@ inline on the rvalue. This is the cleanest spelling and works in any
 context (auto-try or not):
 
 ```drift
-val q = rest.require_query_param(req, &"q").or_throw();
+val q = rest.require_query_param(req, "q").or_throw();
 ```
 
 `or_throw()` is the single user-facing explicit-unwrap operation on
@@ -880,7 +880,7 @@ the binding is unwrapped before the explicit call:
 ```drift
 // PITFALL: this no longer compiles inside a throws function.
 fn handle(req: &Request) throws -> String {
-    val r = rest.require_query_param(req, &"q");
+    val r = rest.require_query_param(req, "q");
     val q = (move r).or_throw();
     //                ^^^^^^^^^^ error: no matching method 'or_throw'
     //                           for receiver String
@@ -895,12 +895,12 @@ to fix it:
 ```drift
 // Fix 1: drop the intermediate binding, use the inline explicit form.
 fn handle(req: &Request) throws -> String {
-    return rest.require_query_param(req, &"q").or_throw();
+    return rest.require_query_param(req, "q").or_throw();
 }
 
 // Fix 2: opt out of auto-try with an explicit Result annotation.
 fn handle(req: &Request) throws -> String {
-    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, &"q");
+    val r: core.Result<String, rest.RestError> = rest.require_query_param(req, "q");
     return (move r).or_throw();
 }
 ```
@@ -1088,8 +1088,8 @@ path:
 
 ```drift
 fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-    val id = rest.path_param(req, &"workOrderId").or_throw();
-    val order = repo.load_work_order(&id).or_throw();
+    val id = rest.path_param(req, "workOrderId").or_throw();
+    val order = repo.load_work_order(id).or_throw();
 
     return rest.json_response(200, order.to_json());
 }
@@ -1135,13 +1135,13 @@ The old free helper `core.or_throw(result)` is not the supported spelling.
 producer works because it returns an owned temporary:
 
 ```drift
-val id = rest.path_param(req, &"workOrderId").or_throw();
+val id = rest.path_param(req, "workOrderId").or_throw();
 ```
 
 A named local is also consumed by a by-value receiver:
 
 ```drift
-val id_result = rest.path_param(req, &"workOrderId");
+val id_result = rest.path_param(req, "workOrderId");
 val id = id_result.or_throw();
 ```
 
@@ -1149,7 +1149,7 @@ After that call, `id_result` has been moved. If you want to make the ownership
 transfer visually explicit, write the same operation with `move`:
 
 ```drift
-val id_result = rest.path_param(req, &"workOrderId");
+val id_result = rest.path_param(req, "workOrderId");
 val id = (move id_result).or_throw();
 ```
 
@@ -1236,8 +1236,8 @@ stays small:
 
 ```drift
 fn get_work_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
-    val id = rest.path_param(req, &"workOrderId").or_throw();
-    val order = rest.load_work_order(ctx, &id).or_throw();
+    val id = rest.path_param(req, "workOrderId").or_throw();
+    val order = rest.load_work_order(ctx, id).or_throw();
 
     return rest.json_response(200, order.to_json());
 }
@@ -1314,16 +1314,16 @@ implement core.Diagnostic for RestBadRequest {
             if i != 0 { fields_json = fields_json + ","; }
             val f = &self.fields[i];
             fields_json = fields_json
-                + "{\"field\":" + core.diagnostic_json_string(&f.field)
-                + ",\"code\":" + core.diagnostic_json_string(&f.code)
+                + "{\"field\":" + core.diagnostic_json_string(f.field)
+                + ",\"code\":" + core.diagnostic_json_string(f.code)
                 + "}";
             i = i + 1;
         }
         fields_json = fields_json + "]";
         return "{"
             + "\"fields\":" + fields_json
-            + ",\"message\":" + core.diagnostic_json_string(&self.message)
-            + ",\"tag\":" + core.diagnostic_json_string(&self.tag)
+            + ",\"message\":" + core.diagnostic_json_string(self.message)
+            + ",\"tag\":" + core.diagnostic_json_string(self.tag)
             + "}";
     }
 }
@@ -1347,7 +1347,7 @@ Two things to note:
 fn validate_signup(body: &SignupRequest) -> Result<Account, RestBadRequest> {
     var fields: Array<FieldError> = [];
 
-    if !is_valid_email(&body.email) {
+    if !is_valid_email(body.email) {
         fields.push(FieldError(field = "email", code = "invalid-format"));
     }
     if body.age < 0 {
@@ -1384,7 +1384,7 @@ fn dispatch(req: &rest.Request, ctx: &mut rest.Context) nothrow -> rest.Response
         // (the params object only — call `e.encode_compact()` if you want
         // the full envelope shape `{event_code, event_fqn, params, ...}`).
         val params_json = e.params.encode_compact();
-        return rest.validation_response_from_json(400, tag, message, &params_json);
+        return rest.validation_response_from_json(400, tag, message, params_json);
     } catch RestInternal(e) {
         return rest.error_response(500, e.tag, e.message);
     };
@@ -1424,7 +1424,7 @@ intermediate `Result` errors should leave through the same exception boundary.
 fn create_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
     val body: CreateOrder = rest.json_body(req);
     val account: Account = rest.require_account(ctx);
-    val order: Order = rest.create_order(ctx, &account, &body);
+    val order: Order = rest.create_order(ctx, account, body);
 
     return rest.json_response(201, order.to_json());
 }
@@ -1437,7 +1437,7 @@ conversion clearer, especially in examples or mixed code:
 fn create_order(req: &rest.Request, ctx: &mut rest.Context) throws -> rest.Response {
     val body = rest.json_body(req).or_throw();
     val account = rest.require_account(ctx).or_throw();
-    val order = rest.create_order(ctx, &account, &body).or_throw();
+    val order = rest.create_order(ctx, account, body).or_throw();
 
     return rest.json_response(201, order.to_json());
 }
@@ -1475,7 +1475,7 @@ fn extract_status(payload: &String) -> String {
 pub fn main() nothrow -> Int {
     val payload = "{\"meta\":{\"callback\":{\"status\":\"ok\"}}}";
 
-    val status = try extract_status(&payload) catch json:JsonErrorData(e) {
+    val status = try extract_status(payload) catch json:JsonErrorData(e) {
         ""
     } catch json:JsonPathError(e) {
         ""
@@ -1537,7 +1537,7 @@ fn parse_required(payload: &String, request_id: String) -> json.JsonNode {
 pub fn main() nothrow -> Int {
     val payload = "{...}";
 
-    val root = try parse_required(&payload, "req-123") catch ParseFailed(e) {
+    val root = try parse_required(payload, "req-123") catch ParseFailed(e) {
         return 1;
     };
 
@@ -1663,17 +1663,17 @@ pub fn main() nothrow -> Int {
 fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val sock = net.udp_bind(&addr).or_throw();
+	val sock = net.udp_bind(addr).or_throw();
 	val port = sock.local_port();
 	var to = net.socket_addr("127.0.0.1", port);
 	var buf = io.buffer(4);
-	io.buffer_write(&mut buf, 0, cast<Byte>(80));
-	io.buffer_write(&mut buf, 1, cast<Byte>(73));
-	io.buffer_write(&mut buf, 2, cast<Byte>(78));
-	io.buffer_write(&mut buf, 3, cast<Byte>(71));
-	sock.send_to(&to, &buf, t).or_throw();
+	io.buffer_write(buf, 0, cast<Byte>(80));
+	io.buffer_write(buf, 1, cast<Byte>(73));
+	io.buffer_write(buf, 2, cast<Byte>(78));
+	io.buffer_write(buf, 3, cast<Byte>(71));
+	sock.send_to(to, buf, t).or_throw();
 	var from = net.socket_addr("127.0.0.1", 0);
-	sock.recv_from(&mut from, &mut buf, t).or_throw();
+	sock.recv_from(from, buf, t).or_throw();
 	sock.close(t).or_throw();
 	return 0;
 }
@@ -1816,7 +1816,7 @@ implement Session {
     pub fn take_token(self: &mut Session) -> Optional<Token> {
         // Explicit generic on `mem.replace` avoids inference ambiguity
         // with the `&mut Optional<Token>` first argument.
-        return mem.replace<type Optional<Token> >(&mut self.token, _none_token());
+        return mem.replace<type Optional<Token> >(self.token, _none_token());
     }
 }
 
@@ -1872,7 +1872,7 @@ works on any field type and has zero runtime overhead beyond the swap.
 import std.mem as mem;
 
 fn rotate_buffer(s: &mut MySession, fresh: ByteBuffer) -> ByteBuffer {
-    return mem.replace(&mut s.buf, fresh);
+    return mem.replace(s.buf, fresh);
 }
 ```
 
@@ -2067,31 +2067,45 @@ The same one-name-per-method rule applies to `trait` declarations
 ## Call-site auto-borrow for `&T` parameters
 
 When a function or method parameter is declared `&T` (a shared borrow), the
-call site does not need an explicit `&` prefix. Both forms compile, and the
-bare form is the preferred style:
+call site never writes an `&` prefix — the parameter declaration spells the
+borrow, and a source-written borrow there is an error
+(`E_REDUNDANT_ARG_BORROW`). Never `&` as decoration:
 
 ```drift
 fn greet(name: &String) nothrow -> Void { ... }
 
-greet("alice")     // preferred — auto-borrow
-greet(&"alice")    // also valid — explicit borrow
+greet("alice")     // the only spelling — auto-borrow (rvalues included)
+greet(&"alice")    // error: redundant borrow; pass "alice" directly
 
-b.pick("hello")    // preferred
-b.pick(&"hello")   // also valid
+b.pick("hello")    // the only spelling
 ```
 
-The same applies to `&mut T` parameters: a `var` binding passed where the
-parameter is declared `&mut T` auto-borrows mutably, and the bare form is
-preferred — the parameter declaration, not the call site, is what spells
-the borrow:
+The same applies to `&mut T` parameters — a `var` binding passed where the
+parameter is declared `&mut T` auto-borrows mutably:
 
 ```drift
 fn fill(buf: &mut io.Buffer) nothrow -> Void { ... }
 
 var buf = io.buffer(16);
-fill(buf)          // preferred — auto-borrow (mutably, per the signature)
-fill(&mut buf)     // also valid — explicit borrow
+fill(buf)          // the only spelling — auto-borrow (mutably, per the signature)
+fill(&mut buf)     // error: redundant borrow; pass buf directly
 ```
+
+One asymmetry to know: a mutable TEMPORARY has no argument spelling. Bind it
+to a `var`-shaped reference first (`val p = &mut make(); fill2(p);`) — the
+argument form is rejected with `E_MUT_RVALUE_ARG_BINDING_REQUIRED`.
+
+Where `&` still appears in an argument, it is doing real work: coercion
+borrows (`use(&concrete)` at a declared `&Interface` parameter — borrow plus
+widen) stay legal, generic by-value parameters instantiated at references
+(`identity<type &String>(&name)`) take the reference AS the value, and thin
+function-pointer calls (`fp(&s)` on `Fn(&String) -> R`) accept both spellings.
+Reference-typed values always pass bare: `val r: &String = &name; greet(r);`.
+
+Because the call-site `&` no longer exists to select overloads, overload sets
+whose signatures differ only by a non-receiver parameter's mode (`T` vs `&T`
+vs `&mut T`) are rejected at definition site
+(`E_OVERLOAD_PARAM_MODE_ONLY_DIFF`) — rename or merge one of the overloads.
 
 ## Discarding call results
 
@@ -2165,7 +2179,7 @@ val scan: core.Callback2<mem.Ptr<Byte>, Int, Int> =
         }
         spaces
     });
-val n = ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&s, scan);
+val n = ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(s, scan);
 ```
 
 The base pointer is computed once and there is no retain traffic
@@ -2181,7 +2195,7 @@ mid-string would silently truncate what C sees):
 ```drift
 val call_c: core.Callback1<mem.Ptr<Byte>, Int> =
     core.callback1(|p: mem.Ptr<Byte>| => { /* call C with p */ 0 });
-val r = ffi.with_cstr<type Int, core.Callback1<mem.Ptr<Byte>, Int> >(&path, call_c);
+val r = ffi.with_cstr<type Int, core.Callback1<mem.Ptr<Byte>, Int> >(path, call_c);
 match r {
     core.Result::Ok(v) => { /* C ran */ },
     core.Result::Err(e) => {
@@ -2199,7 +2213,7 @@ match r {
 **Owned handoff** — when C keeps the bytes past the call:
 
 ```drift
-match ffi.to_owned_cstr(&name) {
+match ffi.to_owned_cstr(name) {
     core.Result::Ok(o) => {
         var owned = move o;              // frees on drop, or:
         val raw = owned.release();       // transfer to C
@@ -2224,7 +2238,7 @@ val run: core.Callback1<&mut ffi.CStringScope, Int> =
     core.callback1(|sc: &mut ffi.CStringScope| captures(copy input) => {
         // argv.vector() is a NULL-terminated char**, argv.count() its
         // argc; everything lives until the callback returns
-        match sc.argv(&["prog", "--fast", input]) {
+        match sc.argv(["prog", "--fast", input]) {
             core.Result::Ok(argv) => { argv.count() },
             core.Result::Err(e) => { -1 },
         }
@@ -2528,7 +2542,7 @@ pattern — both halves are load-bearing:
   FFI-resource-lifecycle rules).
 - Run foreign work on a **named** `BlockingExecutor`
   (`build_blocking_executor(policy, "storage-lmdb")`) via a **labeled**
-  `run_blocking_on(&ex, "lmdb.write_txn", …)` — never on cooperative carriers, and
+  `run_blocking_on(ex, "lmdb.write_txn", …)` — never on cooperative carriers, and
   never behind hand-rolled queues: the executor owns bounded admission.
 - Keep each submitted closure a structural batch (one transaction), with no
   cooperative operations inside while holding thread-affine C state.

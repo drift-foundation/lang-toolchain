@@ -14,7 +14,7 @@ pub fn main() nothrow -> Int {
 
 	// extend: Copy non-bitcopy bulk append
 	val src: Array<String> = ["x", "y"];
-	arr.extend(&src);
+	arr.extend(src);
 	if arr.len != 5 { return 3; }
 
 	// name still valid after all operations (String is Copy)

@@ -48,9 +48,9 @@ pub fn main() nothrow -> Int {
 	// 1. Views outlive their source binding's scope.
 	var held: Array<text.StringByteView> = [];
 	{
-		val tmp = heap(&"dyn-", &"backing-alpha,beta,gamma");
-		held.push(text.byte_view_all(&tmp));
-		match text.byte_view(&tmp, 4, 13) {
+		val tmp = heap("dyn-", "backing-alpha,beta,gamma");
+		held.push(text.byte_view_all(tmp));
+		match text.byte_view(tmp, 4, 13) {
 			Ok(v) => { held.push(move v); },
 			Err(e) => { return 1; }
 		}
@@ -60,12 +60,12 @@ pub fn main() nothrow -> Int {
 			Err(e) => { return 2; }
 		}
 	}
-	if not held[1].eq_string(&"backing-alpha") { return 3; }
-	if not held[2].eq_string(&"backing") { return 4; }
+	if not held[1].eq_string("backing-alpha") { return 3; }
+	if not held[2].eq_string("backing") { return 4; }
 
 	// 2. Forced-throw window balance (env + retain), 50 unwinds.
-	val subj = heap(&"throw-", &"subject");
-	val v = text.byte_view_all(&subj);
+	val subj = heap("throw-", "subject");
+	val v = text.byte_view_all(subj);
 	var caught = 0;
 	var k = 0;
 	while k < 50 {
@@ -75,7 +75,7 @@ pub fn main() nothrow -> Int {
 				0
 			});
 		try {
-			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(&v, move body);
+			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(v, move body);
 			return 5;
 		} catch Boom(e) {
 			caught = caught + 1;
@@ -89,22 +89,22 @@ pub fn main() nothrow -> Int {
 	// 3. split_views results outlive the split subject.
 	var fields: Array<text.StringByteView> = [];
 	{
-		val csv = heap(&"a1,", &"b22,c333,");
-		fields = text.split_views(&csv, &",");
+		val csv = heap("a1,", "b22,c333,");
+		fields = text.split_views(csv, ",");
 	}
 	if fields.len != 4 { return 8; }
-	if not fields[2].eq_string(&"c333") { return 9; }
+	if not fields[2].eq_string("c333") { return 9; }
 	if not fields[3].is_empty() { return 10; }
 
 	// 4. regex match views outlive their subjects.
-	var mv = text.byte_view_all(&"seed");
+	var mv = text.byte_view_all("seed");
 	{
-		val hay = heap(&"xx-", &"alpha77-yy");
-		match regex.compile(&"[a-z]+[0-9]+") {
+		val hay = heap("xx-", "alpha77-yy");
+		match regex.compile("[a-z]+[0-9]+") {
 			Ok(re) => {
-				match regex.find_first(&re, &hay) {
+				match regex.find_first(re, hay) {
 					Some(m) => {
-						match regex.match_view(m, &hay) {
+						match regex.match_view(m, hay) {
 							Ok(x) => { mv = move x; },
 							Err(e) => { return 11; }
 						}
@@ -115,7 +115,7 @@ pub fn main() nothrow -> Int {
 			Err(e) => { return 13; }
 		}
 	}
-	if not mv.eq_string(&"alpha77") { return 14; }
+	if not mv.eq_string("alpha77") { return 14; }
 
 	console.println("VIEW-LIFETIME-OK");
 	return 0;

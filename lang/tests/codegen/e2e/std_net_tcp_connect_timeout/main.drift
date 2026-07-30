@@ -6,7 +6,7 @@ import std.net as net;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("10.255.255.1", 1);
 	val t = conc.Duration(millis = 1);
-	val cr = net.connect(&addr, t);
+	val cr = net.connect(addr, t);
 	match cr {
 		Ok(s) => {
 			val _ = s.close(t);

@@ -28,7 +28,7 @@ fn _str_to_int(s: &String) nothrow -> Optional<Int> {
 
 fn check(op: err.IteratorOpId, expected: Int) nothrow -> Int {
 	val s = op.to_json_text();
-	match _str_to_int(&s) {
+	match _str_to_int(s) {
 		Some(v) => {
 			if v != expected {
 				return 20 + expected;

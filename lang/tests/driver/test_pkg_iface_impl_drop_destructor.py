@@ -75,7 +75,7 @@ interface Store { fn bump(self: &Self) nothrow -> Int; }
 struct Mem { state: conc.Mutex<MemState> }
 implement Store for Mem {
 \tpub fn bump(self: &Mem) nothrow -> Int {
-\t\tvar g = conc.lock(&self.state);
+\t\tvar g = conc.lock(self.state);
 \t\tval m = g.get_mut();
 \t\tm.n = m.n + 1;
 \t\treturn m.n;

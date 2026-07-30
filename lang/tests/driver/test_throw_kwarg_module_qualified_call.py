@@ -37,7 +37,7 @@ def test_throw_constructor_kw_value_resolves_module_qualified_call(tmp_path: Pat
 
 		implement core.Throw for MyError {
 			pub fn throw_self(self: MyError) throws {
-				throw err:ResultError(diag_json = core.diagnostic_json_string(&self.tag));
+				throw err:ResultError(diag_json = core.diagnostic_json_string(self.tag));
 			}
 		}
 

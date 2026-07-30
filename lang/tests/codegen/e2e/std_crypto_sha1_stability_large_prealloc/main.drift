@@ -23,14 +23,14 @@ pub fn main() nothrow -> Int {
 		payload.push(cast<Byte>(i % 251));
 		i = i + 1;
 	}
-	val baseline = crypto.sha1(&payload);
+	val baseline = crypto.sha1(payload);
 	if baseline.len != 20 {
 		return 1;
 	}
 	var run = 0;
 	while run < 64 {
-		val cur = crypto.sha1(&payload);
-		if not _eq_bytes(&baseline, &cur) {
+		val cur = crypto.sha1(payload);
+		if not _eq_bytes(baseline, cur) {
 			return 2;
 		}
 		run = run + 1;

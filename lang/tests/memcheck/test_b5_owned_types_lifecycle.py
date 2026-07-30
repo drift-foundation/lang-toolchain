@@ -39,14 +39,14 @@ pub fn main() nothrow -> Int {
 	val nul = "with\x00nul";
 
 	// OwnedCStr drop-only: destructor frees.
-	match ffi.to_owned_cstr(&s) {
+	match ffi.to_owned_cstr(s) {
 		core.Result::Ok(o) => { var owned = move o; },
 		core.Result::Err(e) => { return 1; },
 	}
 
 	// OwnedCStr release -> paired free; the drop after release must
 	// NOT double-free.
-	match ffi.to_owned_cstr(&s) {
+	match ffi.to_owned_cstr(s) {
 		core.Result::Ok(o) => {
 			var owned = move o;
 			val raw = owned.release();
@@ -56,12 +56,12 @@ pub fn main() nothrow -> Int {
 	}
 
 	// OwnedCBytes drop-only: destructor frees via the PAIRED cbytes free.
-	var ob = ffi.to_owned_cbytes(&nul);
+	var ob = ffi.to_owned_cbytes(nul);
 	val v = ob.get();
 	if v.size() != 8 { return 3; }
 
 	// OwnedCBytes release -> paired free.
-	var ob2 = ffi.to_owned_cbytes(&s);
+	var ob2 = ffi.to_owned_cbytes(s);
 	val rel = ob2.release();
 	ffi.cbytes_free(rel);
 
@@ -69,10 +69,10 @@ pub fn main() nothrow -> Int {
 	// argv vector — everything freed at scope exit.
 	val cbs: core.Callback1<&mut ffi.CStringScope, Int> =
 		core.callback1(|sc: &mut ffi.CStringScope| => {
-			val p1 = match sc.cstr(&"pin-a") { core.Result::Ok(p) => { 1 }, core.Result::Err(e) => { 0 }, };
-			val p2u = sc.cstr_unsafe(&"un\x00safe");
+			val p1 = match sc.cstr("pin-a") { core.Result::Ok(p) => { 1 }, core.Result::Err(e) => { 0 }, };
+			val p2u = sc.cstr_unsafe("un\x00safe");
 			val p2 = mem.ptr_is_null<type Byte>(p2u);
-			val av = match sc.argv(&["x", "yz", "argv-elem"]) {
+			val av = match sc.argv(["x", "yz", "argv-elem"]) {
 				core.Result::Ok(a) => { a.count() },
 				core.Result::Err(e) => { -1 },
 			};

@@ -115,7 +115,7 @@ implement BuildHasher for DefaultBuildHasher {
 pub fn hash_value<T>(v: &T) nothrow -> Uint64 require T is Hash<DefaultHasher> {
 	var b = default_build_hasher();
 	var h = BuildHasher::build(&b);
-	Hash<DefaultHasher>::hash(v, &mut h);
+	Hash<DefaultHasher>::hash(v, h);
 	return Hasher::finish(&h);
 }
 

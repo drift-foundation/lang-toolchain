@@ -111,7 +111,7 @@ fn check(pl: &Node) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val pl = parent();
-	return check(&pl);
+	return check(pl);
 }
 """
 

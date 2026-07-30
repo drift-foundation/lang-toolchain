@@ -315,7 +315,7 @@ fn read_via_ref(h: &Holder) -> Int {
 
 pub fn main() nothrow -> Int {
 	val h = build();
-	return read_via_ref(&h);
+	return read_via_ref(h);
 }
 """
 	diags = _error_diags(tmp_path, src_ref)

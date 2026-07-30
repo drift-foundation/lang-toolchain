@@ -36,10 +36,10 @@ pub fn main() nothrow -> Int {
 		tail = sync.atomic_handle(pack_handle(cast<Uint>(0), cast<Uint>(0)))
 	);
 
-	val old0 = producer_try_advance_tail(&q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(1), cast<Uint>(9)));
+	val old0 = producer_try_advance_tail(q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(1), cast<Uint>(9)));
 	if old0.to_uint() != pack_handle(cast<Uint>(0), cast<Uint>(0)).to_uint() { return 1; }
 
-	val old1 = producer_try_advance_tail(&q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(2), cast<Uint>(10)));
+	val old1 = producer_try_advance_tail(q, pack_handle(cast<Uint>(0), cast<Uint>(0)), pack_handle(cast<Uint>(2), cast<Uint>(10)));
 	if old1.to_uint() != pack_handle(cast<Uint>(1), cast<Uint>(9)).to_uint() { return 2; }
 
 	val cur = q.tail.load(sync.MemoryOrder::Acquire());

@@ -29,7 +29,7 @@ pub fn main() nothrow -> Int {
 		var g = m1.get().lock();
 		val v = g.get_mut();
 		while not *v {
-			match cv1.get().wait(&mut g) {
+			match cv1.get().wait(g) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(_) => { return 91; }
 			}

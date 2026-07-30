@@ -104,7 +104,7 @@ pub fn main() nothrow -> Int {
 	// runs record_side_effect first (slot 0), then Tracker.share
 	// at lambda construction (slot 1).
 	val side_slot = consume(
-		record_side_effect(&order),
+		record_side_effect(order),
 		core.callback0(| | captures(share tr) => {
 			// Body intentionally does not increment `order` — we
 			// want to observe the synthesized share's claim, not
@@ -116,7 +116,7 @@ pub fn main() nothrow -> Int {
 
 	// `side_slot` should be 0 (record_side_effect ran first).
 	// `share_slot.get().v` should be 1 (Tracker.share ran second).
-	val recorded_share_slot = read_int(&share_slot.get());
+	val recorded_share_slot = read_int(share_slot.get());
 	var bits = 0;
 	if side_slot != 0 {
 		// record_side_effect did NOT run first — share-call hoisted

@@ -92,8 +92,8 @@ import std.mem as mem;
 pub fn main() nothrow -> Int {
 \tunsafe {
 \t\tvar slot = mem.maybe_uninit<type Int>();
-\t\tmem.maybe_write<type Int>(&mut slot, 42);
-\t\tval out = mem.maybe_assume_init_read<type Int>(&mut slot);
+\t\tmem.maybe_write<type Int>(slot, 42);
+\t\tval out = mem.maybe_assume_init_read<type Int>(slot);
 \t\treturn out;
 \t}
 }
@@ -182,8 +182,8 @@ pub fn main() nothrow -> Int {
 \tval b = Box(n = 7);
 \tunsafe {
 \t\tvar slot = mem.maybe_uninit<type Box>();
-\t\tmem.maybe_write<type Box>(&mut slot, b);
-\t\tval b2 = mem.maybe_assume_init_read<type Box>(&mut slot);
+\t\tmem.maybe_write<type Box>(slot, b);
+\t\tval b2 = mem.maybe_assume_init_read<type Box>(slot);
 \t\tcore.drop_value<type Box>(b2);
 \t}
 \treturn 0;

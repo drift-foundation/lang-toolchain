@@ -38,8 +38,8 @@ fn run() -> Int {
 	}
 	val k3 = 3;
 	val k7 = 7;
-	val _r1 = m.remove(&k3);
-	val _r2 = m.remove(&k7);
+	val _r1 = m.remove(k3);
+	val _r2 = m.remove(k7);
 	m.insert(1, 10);
 	m.insert(9, 90);
 	val expected2 = [1, 2, 4, 5, 6, 8, 9];

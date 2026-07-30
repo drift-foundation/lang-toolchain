@@ -5,14 +5,14 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	var bytes: Array<Byte> = [cast<Byte>(120), cast<Byte>(226), cast<Byte>(130), cast<Byte>(172), cast<Byte>(121)];
-	match text.utf8_from_bytes_range(&bytes, 1, 4) {
+	match text.utf8_from_bytes_range(bytes, 1, 4) {
 		core.Result::Ok(s) => {
 			if s.byte_length() != 3 { return 1; }
 		},
 		core.Result::Err(_) => { return 2; }
 	}
 
-	match text.utf8_from_bytes_range(&bytes, 4, 4) {
+	match text.utf8_from_bytes_range(bytes, 4, 4) {
 		core.Result::Ok(s) => {
 			if s.byte_length() != 0 { return 3; }
 		},

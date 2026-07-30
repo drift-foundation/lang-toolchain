@@ -5,8 +5,8 @@ fn run() -> Int {
 	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = b.build();
 	val n = json.JsonNode::Number("1");
-	val s1 = json.encode_with_config(&n, &cfg);
-	val s2 = json.encode_with_config(&n, &cfg);
+	val s1 = json.encode_with_config(n, cfg);
+	val s2 = json.encode_with_config(n, cfg);
 	if s1 != "1" { return 1; }
 	if s2 != "1" { return 2; }
 	return 0;

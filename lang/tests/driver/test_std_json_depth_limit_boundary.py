@@ -74,16 +74,16 @@ pub fn main() nothrow -> Int {
 	val def = json.permissive();          // default max_depth = 128
 	val at_cap = nested(128);
 	val over_cap = nested(129);
-	cons.println("at128=" + fmt.format_int(outcome(&at_cap, &def)));
-	cons.println("over129=" + fmt.format_int(outcome(&over_cap, &def)));
+	cons.println("at128=" + fmt.format_int(outcome(at_cap, def)));
+	cons.println("over129=" + fmt.format_int(outcome(over_cap, def)));
 
 	// Unbounded opt-in (max_depth = None): 512 deep parses cleanly on the
 	// default fiber stack — heap frames, not native frames.
 	val ucfg = unlimited_cfg();
 	val deep = nested(512);
-	cons.println("deep512=" + fmt.format_int(outcome(&deep, &ucfg)));
+	cons.println("deep512=" + fmt.format_int(outcome(deep, ucfg)));
 	// And the default cap still rejects that same deep input.
-	cons.println("deep512_default=" + fmt.format_int(outcome(&deep, &def)));
+	cons.println("deep512_default=" + fmt.format_int(outcome(deep, def)));
 	return 0;
 }
 """

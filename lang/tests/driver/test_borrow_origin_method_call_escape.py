@@ -171,7 +171,7 @@ def test_explicit_borrow_return_of_local_correctly_rejected(
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 fn make_dangling_via_free_fn() nothrow -> View<Int> {
 \tvar c = Container<type Int>(x = 99);
-\treturn view_of(&c);
+\treturn view_of(c);
 }
 pub fn main() nothrow -> Int { return 0; }
 """)

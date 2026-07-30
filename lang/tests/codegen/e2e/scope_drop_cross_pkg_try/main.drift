@@ -26,10 +26,10 @@ fn process_request(input: &String) -> String {
 					result_obj.set("count", json.JsonNode::String(fmt.format_int(count)));
 					result_obj.set("s1", json.JsonNode::String(s1));
 					result_obj.set("s2", json.JsonNode::String(s2));
-					return json.encode(&result_obj.to_node());
+					return json.encode(result_obj.to_node());
 				},
 				None => {
-					return json.encode(&deep);
+					return json.encode(deep);
 				}
 			}
 		},
@@ -41,7 +41,7 @@ fn process_request(input: &String) -> String {
 
 fn handle() nothrow -> Int {
 	val input = "{\"a\": 1, \"b\": 2}";
-	val result = try process_request(&input) catch { "failed" };
+	val result = try process_request(input) catch { "failed" };
 	return result.byte_length();
 }
 

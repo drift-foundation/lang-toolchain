@@ -18,49 +18,49 @@ pub fn main() nothrow -> Int {
 
 	// 1. SHA-512 empty input -> 64 bytes
 	var empty: Array<Byte> = [];
-	val h512_0 = crypto.sha512(&empty);
+	val h512_0 = crypto.sha512(empty);
 	if h512_0.len != 64 { return 1; }
-	if codec.hex_encode(&h512_0) != "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" { return 2; }
+	if codec.hex_encode(h512_0) != "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e" { return 2; }
 
 	// 2. SHA-512 "abc"
 	var abc: Array<Byte> = [];
-	_push_ascii(&mut abc, "abc");
-	val h512_1 = crypto.sha512(&abc);
-	if codec.hex_encode(&h512_1) != "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" { return 3; }
+	_push_ascii(abc, "abc");
+	val h512_1 = crypto.sha512(abc);
+	if codec.hex_encode(h512_1) != "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f" { return 3; }
 
 	// 3. SHA-512 multi-block (56 bytes)
 	var multi: Array<Byte> = [];
-	_push_ascii(&mut multi, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
-	val h512_2 = crypto.sha512(&multi);
-	if codec.hex_encode(&h512_2) != "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445" { return 4; }
+	_push_ascii(multi, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+	val h512_2 = crypto.sha512(multi);
+	if codec.hex_encode(h512_2) != "204a8fc6dda82f0a0ced7beb8e08a41657c16ef468b228a8279be331a703c33596fd15c13b1b07f9aa1d3bea57789ca031ad85c7a71dd70354ec631238ca3445" { return 4; }
 
 	// 4. SHA-512 determinism
-	val h512_3 = crypto.sha512(&empty);
-	if codec.hex_encode(&h512_3) != codec.hex_encode(&h512_0) { return 5; }
+	val h512_3 = crypto.sha512(empty);
+	if codec.hex_encode(h512_3) != codec.hex_encode(h512_0) { return 5; }
 
 	// --- SHA-384 vectors (FIPS 180-4) ---
 
 	// 5. SHA-384 empty input -> 48 bytes
-	val h384_0 = crypto.sha384(&empty);
+	val h384_0 = crypto.sha384(empty);
 	if h384_0.len != 48 { return 6; }
-	if codec.hex_encode(&h384_0) != "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b" { return 7; }
+	if codec.hex_encode(h384_0) != "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b" { return 7; }
 
 	// 6. SHA-384 "abc"
-	val h384_1 = crypto.sha384(&abc);
-	if codec.hex_encode(&h384_1) != "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7" { return 8; }
+	val h384_1 = crypto.sha384(abc);
+	if codec.hex_encode(h384_1) != "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7" { return 8; }
 
 	// 7. SHA-384 multi-block
-	val h384_2 = crypto.sha384(&multi);
-	if codec.hex_encode(&h384_2) != "3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b" { return 9; }
+	val h384_2 = crypto.sha384(multi);
+	if codec.hex_encode(h384_2) != "3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b" { return 9; }
 
 	// 8. SHA-384 determinism
-	val h384_3 = crypto.sha384(&empty);
-	if codec.hex_encode(&h384_3) != codec.hex_encode(&h384_0) { return 10; }
+	val h384_3 = crypto.sha384(empty);
+	if codec.hex_encode(h384_3) != codec.hex_encode(h384_0) { return 10; }
 
 	// 9. Non-mutation: input unchanged after hashing
 	var check: Array<Byte> = [];
-	_push_ascii(&mut check, "abc");
-	val _ = crypto.sha512(&check);
+	_push_ascii(check, "abc");
+	val _ = crypto.sha512(check);
 	if check.len != 3 { return 11; }
 
 	return 0;

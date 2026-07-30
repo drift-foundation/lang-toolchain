@@ -359,6 +359,14 @@ def normalize_type_key(
 	if key.module is None:
 		if key.name in BUILTIN_TYPE_NAMES:
 			return key
+		if key.name in ("Ref", "RefMut", "fn"):
+			# Structural types have no home module: stamping the CALLER's
+			# module onto a reference/function type-arg made the call-side
+			# obligation key diverge from the impl-registration key, so
+			# `implement Taker<&String> for Sink` was unreachable from
+			# `Taker<&String>::take(...)` while `Taker<Int>` worked
+			# (LANGUAGE_BUG, found 2026-07-29 via the round-2 W0 pins).
+			return key
 		pkg = key.package_id or (module_packages or {}).get(module_name, default_package)
 		return TypeKey(package_id=pkg, module=module_name, name=key.name, args=key.args, fn_throws=key.fn_throws)
 	if key.package_id is None:

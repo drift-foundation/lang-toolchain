@@ -5,6 +5,6 @@ fn bump_first(a: &mut Array<Int>) nothrow -> Void {
 
 pub fn main() nothrow -> Int{
 	var arr = [1, 2];
-	bump_first(&mut arr);
+	bump_first(arr);
 	return arr[0];
 }

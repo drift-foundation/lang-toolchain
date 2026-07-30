@@ -43,7 +43,7 @@ fn case_named_subset_bind() nothrow -> Int {
 	var sess_a: Session = Session(drops = 0);
 	var sess_b: Session = Session(drops = 0);
 	{
-		val r: PairMsg = PairMsg::Pair(a = make_token(&mut sess_a), b = make_token(&mut sess_b));
+		val r: PairMsg = PairMsg::Pair(a = make_token(sess_a), b = make_token(sess_b));
 		// `match` is value-producing here, so its arms may not route
 		// control flow out of the function (post-#6 / E-MATCHEXPR-CONTROLFLOW).
 		// Record the in-arm liveness checks into a non-escaping status flag

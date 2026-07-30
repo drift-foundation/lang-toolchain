@@ -55,7 +55,7 @@ import std.mem as mem;
 pub fn main() nothrow -> Int {
 	unsafe {
 		var b = io.buffer(8);
-		val p = cast<mem.Ptr<Uint> >(io.buffer_ptr(&b));
+		val p = cast<mem.Ptr<Uint> >(io.buffer_ptr(b));
 	}
 	return 0;
 }
@@ -78,8 +78,8 @@ fn create(p: mem.Ptr<Byte>) nothrow -> Int { return 0; }
 pub fn main() nothrow -> Int {
 	unsafe {
 		var env_slot = io.buffer(8);
-		val rc1 = create(io.buffer_ptr(&env_slot));
-		val env = cast<RawPtr<Byte> >(mem.ptr_read<type Uint>(cast<mem.Ptr<Uint> >(io.buffer_ptr(&env_slot))));
+		val rc1 = create(io.buffer_ptr(env_slot));
+		val env = cast<RawPtr<Byte> >(mem.ptr_read<type Uint>(cast<mem.Ptr<Uint> >(io.buffer_ptr(env_slot))));
 		console.println("mapsize ok");
 	}
 	console.println("done");
@@ -103,7 +103,7 @@ import std.mem as mem;
 pub fn main() nothrow -> Int {
 	unsafe {
 		var b = io.buffer(8);
-		val sp = io.buffer_ptr(&b);
+		val sp = io.buffer_ptr(b);
 		val p = cast<mem.Ptr<Uint> >(sp);
 	}
 	return 0;

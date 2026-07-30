@@ -1,0 +1,8 @@
+module main;
+
+pub fn main() nothrow -> Int {
+	var dest: Array<Int> = [1, 2];
+	val wrong: Array<String> = ["a"];
+	dest.extend(wrong);
+	return dest.len;
+}

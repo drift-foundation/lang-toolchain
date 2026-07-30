@@ -6,14 +6,14 @@ fn run() -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	m.insert(1, 5);
 	val k = 1;
-	val r1 = match m.remove(&k) {
+	val r1 = match m.remove(k) {
 		None => { -1 },
 		Some(v) => { v }
 	};
 	if r1 != 5 {
 		return 1;
 	}
-	val r2 = match m.remove(&k) {
+	val r2 = match m.remove(k) {
 		None => { 0 },
 		Some(_v) => { 1 }
 	};

@@ -25,6 +25,6 @@ pub fn main() nothrow -> Int {
 	}
 	val lg = security(rt.global_registry());
 	var ctx = log.log_context();
-	lg.info("auth-failed", &ctx);
+	lg.info("auth-failed", ctx);
 	return 0;
 }

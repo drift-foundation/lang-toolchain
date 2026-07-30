@@ -24,11 +24,11 @@ fn do_work_throws(c: &mut Counter) -> Void {
 
 fn run() -> Int {
 	var c = Counter(n = 0);
-	do_work(&mut c);
+	do_work(c);
 	if c.n != 1 { return 1; }
-	do_work(&mut c);
+	do_work(c);
 	if c.n != 2 { return 2; }
-	do_work_throws(&mut c);
+	do_work_throws(c);
 	if c.n != 3 { return 3; }
 	return 0;
 }

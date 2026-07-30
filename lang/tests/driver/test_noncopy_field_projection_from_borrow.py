@@ -55,7 +55,7 @@ pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
-	val y = take(&w);
+	val y = take(w);
 	return y.xs.len;
 }
 """
@@ -85,7 +85,7 @@ fn take(w: &Wrapper) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val w = Wrapper(inner = Inner(n = 41));
-	return take(&w) + 1;
+	return take(w) + 1;
 }
 """
 	)
@@ -111,7 +111,7 @@ struct Wrapper {
 
 fn take(var w: Wrapper) nothrow -> Payload {
 	var empty: Array<Int> = [];
-	return mem.replace(&mut w.p, Payload(xs = move empty));
+	return mem.replace(w.p, Payload(xs = move empty));
 }
 
 pub fn main() nothrow -> Int {
@@ -154,7 +154,7 @@ pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val w = Wrapper(p = Payload(xs = move xs));
-	return take(&w);
+	return take(w);
 }
 """
 	)
@@ -216,7 +216,7 @@ struct Wrapper {
 
 fn take(var w: Wrapper) nothrow -> Int {
 	var empty: Array<Int> = [];
-	val ys = mem.replace(&mut w.p.xs, move empty);
+	val ys = mem.replace(w.p.xs, move empty);
 	return ys.len;
 }
 
@@ -257,7 +257,7 @@ pub fn main() nothrow -> Int {
 	var ps: Array<Payload> = [];
 	ps.push(Payload(xs = move xs));
 	val w = Wrapper(ps = move ps);
-	return take(&w);
+	return take(w);
 }
 """
 	)
@@ -299,7 +299,7 @@ fn f(a: &mut Array<Int>, b: &Array<Int>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
-	return f(&mut xs, &xs);
+	return f(xs, xs);
 }
 """
 	)

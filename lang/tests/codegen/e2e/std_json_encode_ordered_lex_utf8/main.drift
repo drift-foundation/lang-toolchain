@@ -12,11 +12,11 @@ fn run() -> Int {
 	var b = json.config_builder();
 	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = b.build();
-	val s = json.encode_with_config(&root, &cfg);
+	val s = json.encode_with_config(root, cfg);
 	if s != "{\"a\":2,\"m\":3,\"z\":1}" {
 		return 1;
 	}
-	val sc = json.encode_compact_with_config(&root, &cfg);
+	val sc = json.encode_compact_with_config(root, cfg);
 	if sc != "{\"a\":2,\"m\":3,\"z\":1}" {
 		return 2;
 	}

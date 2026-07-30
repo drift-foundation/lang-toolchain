@@ -59,7 +59,7 @@ fn make_consumer(cv_arc: core.Arc<conc.Condvar>, s_arc: core.Arc<Shared>, slot: 
 					done_now = *d;
 				}
 				if done_now { return consumed; }
-				match cv1.get().wait<type Int>(&mut g) {
+				match cv1.get().wait<type Int>(g) {
 					core.Result::Ok(_) => { },
 					core.Result::Err(_) => { return -91; }
 				}

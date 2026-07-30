@@ -4,6 +4,6 @@ fn inc(p: &mut Int) nothrow -> Void {
 
 pub fn main() nothrow -> Int{
 	var x = 41;
-	inc(&mut x);
+	inc(x);
 	return x;
 }

@@ -106,7 +106,7 @@ pub fn global_registry() nothrow -> &GlobalRegistry {
 	unsafe {
 		val p = thread.runtime_global_registry_ptr();
 		var raw = mem.rawbuffer_from_parts<type GlobalRegistry>(p, 1);
-		return mem.ptr_at_ref<type GlobalRegistry>(&raw, 0);
+		return mem.ptr_at_ref<type GlobalRegistry>(raw, 0);
 	}
 }
 
@@ -122,7 +122,7 @@ pub fn thread_registry() nothrow -> &ThreadRegistry {
 	unsafe {
 		val p = thread.runtime_thread_registry_ptr();
 		var raw = mem.rawbuffer_from_parts<type ThreadRegistry>(p, 1);
-		return mem.ptr_at_ref<type ThreadRegistry>(&raw, 0);
+		return mem.ptr_at_ref<type ThreadRegistry>(raw, 0);
 	}
 }
 
@@ -208,7 +208,7 @@ implement<T> core.Destructible for ScopeGuard<T> {
 			}
 			val p = cast<mem.Ptr<Byte> >(self.stack_ptr);
 			var raw = mem.rawbuffer_from_parts<type ScopedStack<T>>(p, 1);
-			val st = mem.ptr_at_mut<type ScopedStack<T>>(&mut raw, 0);
+			val st = mem.ptr_at_mut<type ScopedStack<T>>(raw, 0);
 			match st.pop() {
 				Some(v) => {
 					core.drop_value<type T>(move v);
@@ -241,12 +241,12 @@ implement GlobalRegistry {
 		val _ = self;
 		unsafe {
 			var raw = mem.alloc_uninit<type T>(1);
-			mem.write<type T>(&mut raw, 0, move value);
-			val p = mem.rawbuffer_ptr<type T>(&raw);
+			mem.write<type T>(raw, 0, move value);
+			val p = mem.rawbuffer_ptr<type T>(raw);
 			val dropper = core.callback1(_typebox_drop_impl<type T>);
 			val rc = thread.runtime_registry_set(core.type_id<type T>(), p, move dropper);
 			if rc != 1 {
-				val v = mem.read<type T>(&mut raw, 0);
+				val v = mem.read<type T>(raw, 0);
 				core.drop_value<type T>(move v);
 				mem.dealloc<type T>(move raw);
 				return false;
@@ -293,12 +293,12 @@ implement ThreadRegistry {
 		val _ = self;
 		unsafe {
 			var raw = mem.alloc_uninit<type T>(1);
-			mem.write<type T>(&mut raw, 0, move value);
-			val p = mem.rawbuffer_ptr<type T>(&raw);
+			mem.write<type T>(raw, 0, move value);
+			val p = mem.rawbuffer_ptr<type T>(raw);
 			val dropper = core.callback1(_typebox_drop_impl<type T>);
 			val rc = thread.runtime_thread_registry_set(core.type_id<type T>(), p, move dropper);
 			if rc != 1 {
-				val v = mem.read<type T>(&mut raw, 0);
+				val v = mem.read<type T>(raw, 0);
 				core.drop_value<type T>(move v);
 				mem.dealloc<type T>(move raw);
 				return false;
@@ -356,7 +356,7 @@ pub fn get<T>(reg: &GlobalRegistry) nothrow -> Optional<&T> {
 			return Optional<&T>::None();
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return Optional<&T>::Some(mem.ptr_at_ref<type T>(&raw, 0));
+		return Optional<&T>::Some(mem.ptr_at_ref<type T>(raw, 0));
 	}
 }
 
@@ -369,7 +369,7 @@ pub fn get<T>(reg: &ThreadRegistry) nothrow -> Optional<&T> {
 			return Optional<&T>::None();
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return Optional<&T>::Some(mem.ptr_at_ref<type T>(&raw, 0));
+		return Optional<&T>::Some(mem.ptr_at_ref<type T>(raw, 0));
 	}
 }
 
@@ -389,7 +389,7 @@ pub fn get_mut<T>(reg: &GlobalRegistry) nothrow -> Optional<&mut T> {
 			return Optional<&mut T>::None();
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(&mut raw, 0));
+		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(raw, 0));
 	}
 }
 
@@ -403,7 +403,7 @@ pub fn get_mut<T>(reg: &ThreadRegistry) nothrow -> Optional<&mut T> {
 			return Optional<&mut T>::None();
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(&mut raw, 0));
+		return Optional<&mut T>::Some(mem.ptr_at_mut<type T>(raw, 0));
 	}
 }
 
@@ -458,7 +458,7 @@ pub fn expect_mut<T>(reg: &GlobalRegistry, tag: String) -> &mut T {
 			throw RegistryError(tag = tag);
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return mem.ptr_at_mut<type T>(&mut raw, 0);
+		return mem.ptr_at_mut<type T>(raw, 0);
 	}
 }
 
@@ -471,7 +471,7 @@ pub fn expect_mut<T>(reg: &ThreadRegistry, tag: String) -> &mut T {
 			throw RegistryError(tag = tag);
 		}
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		return mem.ptr_at_mut<type T>(&mut raw, 0);
+		return mem.ptr_at_mut<type T>(raw, 0);
 	}
 }
 
@@ -510,7 +510,7 @@ pub struct TypeBox {
 fn _typebox_drop_impl<T>(p: mem.Ptr<Byte>) nothrow -> Void {
 	unsafe {
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		val value = mem.read<type T>(&mut raw, 0);
+		val value = mem.read<type T>(raw, 0);
 		core.drop_value<type T>(move value);
 		mem.dealloc<type T>(move raw);
 	}
@@ -531,9 +531,9 @@ fn _typebox_drop_impl<T>(p: mem.Ptr<Byte>) nothrow -> Void {
 pub fn type_box<T>(value: T) nothrow -> TypeBox {
 	unsafe {
 		var raw = mem.alloc_uninit<type T>(1);
-		mem.write<type T>(&mut raw, 0, move value);
-		val p = mem.rawbuffer_ptr<type T>(&raw);
-		val c = mem.rawbuffer_cap<type T>(&raw);
+		mem.write<type T>(raw, 0, move value);
+		val p = mem.rawbuffer_ptr<type T>(raw);
+		val c = mem.rawbuffer_cap<type T>(raw);
 		val b = mem.rawbuffer_from_parts<type Byte>(p, c);
 		val dropper = core.callback1(_typebox_drop_impl<type T>);
 		return TypeBox(tag = core.type_id<type T>(), buf = move b, dropper = move dropper);
@@ -551,9 +551,9 @@ pub fn downcast<T>(self: &TypeBox) nothrow -> Optional<&T> {
 		return Optional<&T>::None();
 	}
 	unsafe {
-		val p = mem.rawbuffer_ptr<type Byte>(&self.buf);
+		val p = mem.rawbuffer_ptr<type Byte>(self.buf);
 		var raw = mem.rawbuffer_from_parts<type T>(p, 1);
-		val v = mem.ptr_at_ref<type T>(&raw, 0);
+		val v = mem.ptr_at_ref<type T>(raw, 0);
 		return Optional::Some(v);
 	}
 }
@@ -610,15 +610,15 @@ pub fn take<T>(var self: TypeBox) nothrow -> Optional<T> {
 		return Optional<T>::None();
 	}
 	unsafe {
-		val p = mem.rawbuffer_ptr<type Byte>(&self.buf);
+		val p = mem.rawbuffer_ptr<type Byte>(self.buf);
 		var raw_t = mem.rawbuffer_from_parts<type T>(p, 1);
-		val value = mem.read<type T>(&mut raw_t, 0);
+		val value = mem.read<type T>(raw_t, 0);
 		// Mark the box as drained BEFORE freeing the typed view.
 		// `old_buf` aliases the same allocation as `raw_t`, but
 		// `RawBuffer` has no destructor — binding to `_` is a true
 		// no-op.  `dealloc<T>` then frees the backing exactly once.
 		val _old_buf = mem.replace<type mem.RawBuffer<Byte>>(
-			&mut self.buf,
+			self.buf,
 			mem.rawbuffer_empty<type Byte>()
 		);
 		mem.dealloc<type T>(move raw_t);
@@ -668,13 +668,13 @@ implement core.Destructible for TypeBox {
 	pub fn destroy(self: TypeBox) nothrow -> Void {
 		var is_null = false;
 		unsafe {
-			val p = mem.rawbuffer_ptr<type Byte>(&self.buf);
+			val p = mem.rawbuffer_ptr<type Byte>(self.buf);
 			is_null = mem.ptr_is_null<type Byte>(p);
 		}
 		if is_null {
 			return;
 		}
-		val p = mem.rawbuffer_ptr<type Byte>(&self.buf);
+		val p = mem.rawbuffer_ptr<type Byte>(self.buf);
 		self.dropper.call(p);
 		return;
 	}

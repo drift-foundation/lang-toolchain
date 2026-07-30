@@ -19,22 +19,14 @@ implement Box {
 pub fn main() nothrow -> Int {
 	val b = Box(v = 10);
 
-	// String overload — explicit & form.
-	val by_str_explicit = b.pick(&"hello");
-	if by_str_explicit != 110 { return 1; }
+	// String overload — auto-borrow (the only call spelling).
+	val by_str = b.pick("world");
+	if by_str != 110 { return 2; }
 
-	// String overload — auto-borrow form (preferred style).
-	val by_str_auto = b.pick("world");
-	if by_str_auto != 110 { return 2; }
-
-	// Array<String> overload — explicit & form.
+	// Array<String> overload — auto-borrow on a local.
 	val segs: Array<String> = ["a", "b", "c"];
-	val by_arr_explicit = b.pick(&segs);
-	if by_arr_explicit != 213 { return 3; }
-
-	// Array<String> overload — auto-borrow form on a local var.
-	val by_arr_auto = b.pick(segs);
-	if by_arr_auto != 213 { return 4; }
+	val by_arr = b.pick(segs);
+	if by_arr != 213 { return 4; }
 
 	return 0;
 }

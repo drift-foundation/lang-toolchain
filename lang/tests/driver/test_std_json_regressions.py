@@ -43,7 +43,7 @@ pub fn main() -> Int {
 	m.insert("a", json.JsonNode::Number("1"));
 	val n = json.JsonNode::Object(move m);
 	val k = "a";
-	match n.get(&k) {
+	match n.get(k) {
 		Some(_v) => {
 		},
 		None => {

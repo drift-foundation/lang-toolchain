@@ -187,7 +187,7 @@ pub fn read_dir(path: String, timeout: conc.Duration) nothrow -> core.Result<Arr
 	}
 	val _ = thread.fs_result_free(h);
 
-	_sort_by_name(&mut entries);
+	_sort_by_name(entries);
 	return core.Result::Ok(move entries);
 }
 
@@ -203,8 +203,8 @@ fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> core.Resul
 	var buf = io.buffer(READ_CHUNK_BYTES);
 	var more = true;
 	while more {
-		io.buffer_set_len(&mut buf, 0);
-		val rr = f.read(&mut buf);
+		io.buffer_set_len(buf, 0);
+		val rr = f.read(buf);
 		match rr {
 			core.Result::Ok(n) => {
 				if n <= 0 {
@@ -223,7 +223,7 @@ fn _read_all_capped(f: &io.ConfiguredFile, max_bytes: Int) nothrow -> core.Resul
 					}
 					var k = 0;
 					while k < n {
-						acc.push(io.buffer_read(&mut buf, k));
+						acc.push(io.buffer_read(buf, k));
 						k = k + 1;
 					}
 					total = total + n;
@@ -276,7 +276,7 @@ pub fn read_to_bytes(path: String, max_bytes: Int, timeout: conc.Duration) nothr
 	val br = io.file_builder(path).read(true).write(false).timeout(timeout).build();
 	return match br {
 		core.Result::Ok(f) => {
-			val rr = _read_all_capped(&f, max_bytes);
+			val rr = _read_all_capped(f, max_bytes);
 			val cr = f.close();
 			match rr {
 				core.Result::Ok(bytes) => {
@@ -314,7 +314,7 @@ pub fn read_to_string(path: String, max_bytes: Int, timeout: conc.Duration) noth
 	val br = io.file_builder(path).read(true).write(false).timeout(timeout).build();
 	return match br {
 		core.Result::Ok(f) => {
-			val rr = _read_all_capped(&f, max_bytes);
+			val rr = _read_all_capped(f, max_bytes);
 			match rr {
 				core.Result::Err(re) => {
 					// Read / too-large failure wins; close result discarded.
@@ -322,7 +322,7 @@ pub fn read_to_string(path: String, max_bytes: Int, timeout: conc.Duration) noth
 					core.Result::Err(move re)
 				},
 				core.Result::Ok(bytes) => {
-					match text.utf8_from_bytes(&bytes) {
+					match text.utf8_from_bytes(bytes) {
 						core.Result::Ok(s) => {
 							// Read + decode OK: a close failure now wins.
 							match f.close() {

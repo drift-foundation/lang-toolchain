@@ -10,7 +10,7 @@ fn _make_input() nothrow -> Array<Byte> {
 	val n = s.byte_length();
 	var i = 0;
 	while i < n {
-		b.push(core.string_byte_at(&s, i));
+		b.push(core.string_byte_at(s, i));
 		i = i + 1;
 	}
 	return move b;
@@ -18,7 +18,7 @@ fn _make_input() nothrow -> Array<Byte> {
 
 fn _expect_err_invalid_level(level: Int) nothrow -> Bool {
 	val input = _make_input();
-	match codec.gzip_encode_level(&input, level) {
+	match codec.gzip_encode_level(input, level) {
 		Ok(b) => {
 			return false;
 		},
@@ -31,9 +31,9 @@ fn _expect_err_invalid_level(level: Int) nothrow -> Bool {
 
 fn _expect_ok_round_trip_at_level(level: Int) nothrow -> Bool {
 	val input = _make_input();
-	match codec.gzip_encode_level(&input, level) {
+	match codec.gzip_encode_level(input, level) {
 		Ok(encoded) => {
-			match codec.gzip_decode(&encoded) {
+			match codec.gzip_decode(encoded) {
 				Ok(decoded) => {
 					if decoded.len != input.len {
 						return false;

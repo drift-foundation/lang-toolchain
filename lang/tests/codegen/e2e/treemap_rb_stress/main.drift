@@ -30,7 +30,7 @@ fn run() -> Int {
 	while j < 200 {
 		seed = lcg_next(seed);
 		val k2 = (seed % 200) - 100;
-		val _v = m.remove(&k2);
+		val _v = m.remove(k2);
 		if not m.__test_validate() {
 			return 2;
 		}

@@ -8,7 +8,7 @@ fn run() nothrow -> Int {
 	if b.type_id() != core.type_id<type Int>() {
 		return 1;
 	}
-	match rt.downcast<type Int>(&b) {
+	match rt.downcast<type Int>(b) {
 		Some(v) => {
 			if *v != 42 {
 				return 2;
@@ -16,7 +16,7 @@ fn run() nothrow -> Int {
 		},
 		None => { return 3; }
 	}
-	match rt.downcast<type String>(&b) {
+	match rt.downcast<type String>(b) {
 		Some(_v) => { return 4; },
 		None => {}
 	}

@@ -190,14 +190,14 @@ pub struct Cell {
 
 implement Incrementer for Cell {
 	pub fn inc(self: &Cell) nothrow -> Void {
-		val _ = atomic.atomic_fetch_add_int(&self.v, 1, 0);
+		val _ = atomic.atomic_fetch_add_int(self.v, 1, 0);
 		return;
 	}
 }
 
 implement Reader for Cell {
 	pub fn read(self: &Cell) nothrow -> Int {
-		return atomic.atomic_load_int(&self.v, 0);
+		return atomic.atomic_load_int(self.v, 0);
 	}
 }
 
@@ -306,15 +306,15 @@ fn run_permutation_last_face_is_interface(counter: &conc.Arc<atomic.AtomicInt>) 
 pub fn main() nothrow -> Int {
 	val counter = conc.arc(atomic.atomic_int(0));
 
-	run_permutation_arc_v1_v2(&counter);
+	run_permutation_arc_v1_v2(counter);
 	val p1 = atomic.atomic_load_int(counter.get(), 0);
 	if p1 != 1 { return 10 + p1; }
 
-	run_permutation_nested_scopes(&counter);
+	run_permutation_nested_scopes(counter);
 	val p2 = atomic.atomic_load_int(counter.get(), 0);
 	if p2 != 1 { return 20 + p2; }
 
-	run_permutation_last_face_is_interface(&counter);
+	run_permutation_last_face_is_interface(counter);
 	val p3 = atomic.atomic_load_int(counter.get(), 0);
 	if p3 != 1 { return 30 + p3; }
 

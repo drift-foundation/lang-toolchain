@@ -15,7 +15,7 @@ fn handler1(f: &Foo, n: Int) nothrow -> Int {
 
 fn dispatch1(cb: core.Callback2<&Foo, Int, Int>) nothrow -> Int {
 	var f = Foo(x = 10);
-	return cb.call(&mut f, 5);
+	return cb.call(f, 5);
 }
 
 // 2 - Callback2 with two ref params, one &mut passed where & expected.
@@ -27,7 +27,7 @@ fn handler2(req: &Request, resp: &mut Response) nothrow -> Int {
 fn dispatch2(cb: core.Callback2<&Request, &mut Response, Int>) nothrow -> Int {
 	var req = Request(path = "/api");
 	var resp = Response(status = 0);
-	val r = cb.call(&mut req, &mut resp);
+	val r = cb.call(req, resp);
 	return r + resp.status;
 }
 
@@ -38,13 +38,13 @@ fn handler3(f: &Foo) nothrow -> Int {
 
 fn dispatch3(cb: core.Callback1<&Foo, Int>) nothrow -> Int {
 	var f = Foo(x = 7);
-	return cb.call(&mut f);
+	return cb.call(f);
 }
 
 // 4 - Nested: dispatch function itself takes callback by value.
 fn dispatch4(cb: core.Callback2<&Foo, Int, Int>) nothrow -> Int {
 	var f = Foo(x = 3);
-	return cb.call(&mut f, 100);
+	return cb.call(f, 100);
 }
 
 pub fn main() nothrow -> Int {

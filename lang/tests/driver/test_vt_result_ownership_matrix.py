@@ -213,7 +213,7 @@ pub fn main() nothrow -> Int {
 \tval cb: core.Callback0<String> = core.callback0(
 \t\t| | captures(move signal_for_cb) => {
 \t\t\tatomic.atomic_store_bool(
-\t\t\t\t&signal_for_cb.get().started, true, 2
+\t\t\t\tsignal_for_cb.get().started, true, 2
 \t\t\t);
 \t\t\tval _ = conc.sleep(conc.Duration(millis = 50));
 \t\t\tval a: String = "cancel-discarded-result-";
@@ -228,7 +228,7 @@ pub fn main() nothrow -> Int {
 \t/* Wait for cb to mark 'started' so vt_cancel succeeds
 \t * (cancelled transitions 0 → 1; self.cancelled = true). */
 \tvar spins: Int = 0;
-\twhile !atomic.atomic_load_bool(&signal.get().started, 1) {
+\twhile !atomic.atomic_load_bool(signal.get().started, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 1));
 \t\tspins = spins + 1;
 \t\tif spins > 5000 {
@@ -288,7 +288,7 @@ pub fn main() nothrow -> Int {
 \tval cb: core.Callback0<String> = core.callback0(
 \t\t| | captures(move signal_for_cb) => {
 \t\t\tatomic.atomic_store_bool(
-\t\t\t\t&signal_for_cb.get().started, true, 2
+\t\t\t\tsignal_for_cb.get().started, true, 2
 \t\t\t);
 \t\t\tval _ = conc.sleep(conc.Duration(millis = 50));
 \t\t\tval a: String = "cancel-discarded-jt-";
@@ -301,7 +301,7 @@ pub fn main() nothrow -> Int {
 \tconsole.eprintln("repro:spawned");
 
 \tvar spins: Int = 0;
-\twhile !atomic.atomic_load_bool(&signal.get().started, 1) {
+\twhile !atomic.atomic_load_bool(signal.get().started, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 1));
 \t\tspins = spins + 1;
 \t\tif spins > 5000 {
@@ -453,15 +453,15 @@ pub fn main() nothrow -> Int {
 \tval blocker_cb: core.Callback0<Int> = core.callback0(
 \t\t| | captures(move sigs_for_blocker) => {
 \t\t\tatomic.atomic_store_bool(
-\t\t\t\t&sigs_for_blocker.get().blocker_started, true, 2
+\t\t\t\tsigs_for_blocker.get().blocker_started, true, 2
 \t\t\t);
 \t\t\tval deadline = thread.now_ms() + 20000;
 \t\t\twhile !atomic.atomic_load_bool(
-\t\t\t\t&sigs_for_blocker.get().blocker_stop, 1
+\t\t\t\tsigs_for_blocker.get().blocker_stop, 1
 \t\t\t) {
 \t\t\t\tif thread.now_ms() > deadline {
 \t\t\t\t\tatomic.atomic_store_bool(
-\t\t\t\t\t\t&sigs_for_blocker.get().blocker_timed_out, true, 2
+\t\t\t\t\t\tsigs_for_blocker.get().blocker_timed_out, true, 2
 \t\t\t\t\t);
 \t\t\t\t\tbreak;
 \t\t\t\t}
@@ -481,11 +481,11 @@ pub fn main() nothrow -> Int {
 \t * never-starts regression into a distinct exit code (10), and always
 \t * releases the blocker first so its spin cannot outlive main. */
 \tvar spins: Int = 0;
-\twhile !atomic.atomic_load_bool(&sigs.get().blocker_started, 1) {
+\twhile !atomic.atomic_load_bool(sigs.get().blocker_started, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 5));
 \t\tspins = spins + 1;
 \t\tif spins > 5000 {
-\t\t\tatomic.atomic_store_bool(&sigs.get().blocker_stop, true, 2);
+\t\t\tatomic.atomic_store_bool(sigs.get().blocker_stop, true, 2);
 \t\t\tval _j = blocker.join();
 \t\t\treturn 10;
 \t\t}
@@ -510,11 +510,11 @@ pub fn main() nothrow -> Int {
 
 \t/* Release the blocker so the carrier is freed to process the
 \t * cancelled target's cancel-drop branch. */
-\tatomic.atomic_store_bool(&sigs.get().blocker_stop, true, 2);
+\tatomic.atomic_store_bool(sigs.get().blocker_stop, true, 2);
 \tval _ = blocker.join();
 \tconsole.eprintln("repro:blocker-joined");
 
-\tif atomic.atomic_load_bool(&sigs.get().blocker_timed_out, 1) {
+\tif atomic.atomic_load_bool(sigs.get().blocker_timed_out, 1) {
 \t\tconsole.eprintln("repro:blocker-timed-out");
 \t\treturn 5;
 \t}

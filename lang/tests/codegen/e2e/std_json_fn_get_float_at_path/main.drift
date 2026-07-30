@@ -6,7 +6,7 @@ import std.json as json;
 pub fn main() nothrow -> Int {
 	val text = "{\"cfg\":{\"ratio\":1.5,\"count\":42,\"name\":\"x\"}}";
 
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Err(_) => { return 100; },
 		core.Result::Ok(root) => {
 			match root.get_float_at_path("cfg.ratio") {

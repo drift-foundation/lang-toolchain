@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 6 (the proposal's motivating case): & of a literal at a &String formal is redundant \u2014 the bare literal auto-borrows via an identical scope-end temp",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass '\"hello\"' directly"
+    }
+  ]
+}

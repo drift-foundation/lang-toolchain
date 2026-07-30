@@ -116,7 +116,7 @@ import std.format as fmt;
 pub fn main() nothrow -> Int {
 \tvar s: String = fmt.format_int(700);
 \tval new_s: String = fmt.format_int(800);
-\tval old_s = mem.replace<type String>(&mut s, move new_s);
+\tval old_s = mem.replace<type String>(s, move new_s);
 \tval total = old_s.byte_length() + s.byte_length();
 \treturn total;
 }
@@ -144,7 +144,7 @@ pub fn main() nothrow -> Int {
 \tvar i = 0;
 \twhile i < arr.len {
 \t\tval new_s = fmt.format_int(i + 800);
-\t\tval old_s = mem.replace<type String>(&mut arr[i], move new_s);
+\t\tval old_s = mem.replace<type String>(arr[i], move new_s);
 \t\ttotal = total + old_s.byte_length();
 \t\ti = i + 1;
 \t\t// old_s drops at end of iteration; arr now holds rotated
@@ -181,7 +181,7 @@ struct Payload {
 pub fn main() nothrow -> Int {
 \tvar a = conc.arc(Payload(s = fmt.format_int(700), tag = 7));
 \tval b = conc.arc(Payload(s = fmt.format_int(800), tag = 8));
-\tval old_a = mem.replace<type conc.Arc<Payload>>(&mut a, move b);
+\tval old_a = mem.replace<type conc.Arc<Payload>>(a, move b);
 \tval old_payload_ref = old_a.get();
 \tval new_payload_ref = a.get();
 \treturn old_payload_ref.tag + new_payload_ref.tag;
@@ -213,7 +213,7 @@ struct Wrap {
 pub fn main() nothrow -> Int {
 \tvar w: Wrap = Wrap(s = fmt.format_int(700), tag = 7);
 \tval new_w: Wrap = Wrap(s = fmt.format_int(800), tag = 8);
-\tval old_w = mem.replace<type Wrap>(&mut w, move new_w);
+\tval old_w = mem.replace<type Wrap>(w, move new_w);
 \tval total = old_w.s.byte_length() + w.s.byte_length() + old_w.tag + w.tag;
 \treturn total;
 \t// old_w drops here (structural drop releases its String).

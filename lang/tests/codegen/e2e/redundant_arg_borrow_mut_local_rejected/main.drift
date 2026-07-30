@@ -1,0 +1,10 @@
+module main;
+
+fn edit(arg: &mut String) nothrow -> Int {
+	return arg.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	var buffer: String = "hello";
+	return edit(&mut buffer);
+}

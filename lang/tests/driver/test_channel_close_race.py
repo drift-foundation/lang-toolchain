@@ -68,7 +68,7 @@ pub struct Payload
 
 implement core.Destructible for Payload {
 \tpub fn destroy(var self: Payload) nothrow -> Void {
-\t\tval _ = atomic.atomic_fetch_add_int(&self.bookkeeping.get(), 1, 2);
+\t\tval _ = atomic.atomic_fetch_add_int(self.bookkeeping.get(), 1, 2);
 \t}
 }
 
@@ -113,7 +113,7 @@ pub fn main() nothrow -> Int {
 \t\t| | captures(move p1_send, move p1_dest, move p1_prod, copy per_producer) => {
 \t\t\tvar i: Int = 0;
 \t\t\twhile i < per_producer {
-\t\t\t\tval _ = atomic.atomic_fetch_add_int(&p1_prod.get(), 1, 2);
+\t\t\t\tval _ = atomic.atomic_fetch_add_int(p1_prod.get(), 1, 2);
 \t\t\t\tval p = Payload(id = i, bookkeeping = p1_dest.clone());
 \t\t\t\tval _ = p1_send.get().send(p);
 \t\t\t\ti = i + 1;
@@ -130,7 +130,7 @@ pub fn main() nothrow -> Int {
 \t\t| | captures(move p2_send, move p2_dest, move p2_prod, copy per_producer) => {
 \t\t\tvar i: Int = 0;
 \t\t\twhile i < per_producer {
-\t\t\t\tval _ = atomic.atomic_fetch_add_int(&p2_prod.get(), 1, 2);
+\t\t\t\tval _ = atomic.atomic_fetch_add_int(p2_prod.get(), 1, 2);
 \t\t\t\tval p = Payload(id = 1000 + i, bookkeeping = p2_dest.clone());
 \t\t\t\tval _ = p2_send.get().send(p);
 \t\t\t\ti = i + 1;
@@ -147,7 +147,7 @@ pub fn main() nothrow -> Int {
 \t\t| | captures(move p3_send, move p3_dest, move p3_prod, copy per_producer) => {
 \t\t\tvar i: Int = 0;
 \t\t\twhile i < per_producer {
-\t\t\t\tval _ = atomic.atomic_fetch_add_int(&p3_prod.get(), 1, 2);
+\t\t\t\tval _ = atomic.atomic_fetch_add_int(p3_prod.get(), 1, 2);
 \t\t\t\tval p = Payload(id = 2000 + i, bookkeeping = p3_dest.clone());
 \t\t\t\tval _ = p3_send.get().send(p);
 \t\t\t\ti = i + 1;
@@ -164,7 +164,7 @@ pub fn main() nothrow -> Int {
 \t\t| | captures(move p4_send, move p4_dest, move p4_prod, copy per_producer) => {
 \t\t\tvar i: Int = 0;
 \t\t\twhile i < per_producer {
-\t\t\t\tval _ = atomic.atomic_fetch_add_int(&p4_prod.get(), 1, 2);
+\t\t\t\tval _ = atomic.atomic_fetch_add_int(p4_prod.get(), 1, 2);
 \t\t\t\tval p = Payload(id = 3000 + i, bookkeeping = p4_dest.clone());
 \t\t\t\tval _ = p4_send.get().send(p);
 \t\t\t\ti = i + 1;
@@ -181,7 +181,7 @@ pub fn main() nothrow -> Int {
 \tval kill_cb: core.Callback0<Int> = core.callback0(
 \t\t| | captures(move sigs_killer) => {
 \t\t\tval _ = conc.sleep(conc.Duration(millis = 15));
-\t\t\tatomic.atomic_store_bool(&sigs_killer.get().kill, true, 2);
+\t\t\tatomic.atomic_store_bool(sigs_killer.get().kill, true, 2);
 \t\t\treturn 0;
 \t\t}
 \t);
@@ -189,7 +189,7 @@ pub fn main() nothrow -> Int {
 
 \t/* Main: wait for killer's signal, then drop receiver. */
 \tvar spins: Int = 0;
-\twhile !atomic.atomic_load_bool(&sigs.get().kill, 1) {
+\twhile !atomic.atomic_load_bool(sigs.get().kill, 1) {
 \t\tval _ = conc.sleep(conc.Duration(millis = 2));
 \t\tspins = spins + 1;
 \t\tif spins > 2000 { return 90; }
@@ -197,7 +197,7 @@ pub fn main() nothrow -> Int {
 
 \t/* Drop the receiver, draining whatever's queued. */
 \tvar receiver_taken = mem.replace(
-\t\t&mut receiver_opt,
+\t\treceiver_opt,
 \t\tOptional<type conc.Receiver<Payload>>::None()
 \t);
 \tmatch receiver_taken {
@@ -225,8 +225,8 @@ pub fn main() nothrow -> Int {
 \t * Arc<Sender> clone; those drop when the cbs return, which
 \t * already happened by the .join() above.) */
 
-\tval produced = atomic.atomic_load_int(&produced_count.get(), 1);
-\tval destroyed = atomic.atomic_load_int(&destroyed_count.get(), 1);
+\tval produced = atomic.atomic_load_int(produced_count.get(), 1);
+\tval destroyed = atomic.atomic_load_int(destroyed_count.get(), 1);
 \tconsole.eprintln("done");
 \tif produced != destroyed {
 \t\t/* Overshoot ≥ +1 (double-release) → exit 50+drift;

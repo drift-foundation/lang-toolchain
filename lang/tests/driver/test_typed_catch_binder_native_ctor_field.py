@@ -151,7 +151,7 @@ variant Node { Tagged(s: String), Empty }
 fn mk(s: &String) -> Node { return Node::Tagged(s); }
 pub fn main() nothrow -> Int {
 	val owned = "hi";
-	val n = mk(&owned);
+	val n = mk(owned);
 	var r = 1;
 	match n { Node::Tagged(_) => { r = 0; }, Node::Empty => { r = 2; } }
 	return r;

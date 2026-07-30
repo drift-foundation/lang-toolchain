@@ -54,7 +54,7 @@ fn _expected_bytes() nothrow -> Array<Byte> {
 	val n = msg.byte_length();
 	var i = 0;
 	while i < n {
-		b.push(core.string_byte_at(&msg, i));
+		b.push(core.string_byte_at(msg, i));
 		i = i + 1;
 	}
 	return move b;
@@ -62,7 +62,7 @@ fn _expected_bytes() nothrow -> Array<Byte> {
 
 pub fn main() nothrow -> Int {
 	val gz = _fixture();
-	match codec.gzip_decode(&gz) {
+	match codec.gzip_decode(gz) {
 		Ok(decoded) => {
 			val expected = _expected_bytes();
 			if decoded.len != expected.len {

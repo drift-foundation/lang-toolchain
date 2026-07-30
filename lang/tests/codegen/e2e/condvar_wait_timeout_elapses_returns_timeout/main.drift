@@ -23,7 +23,7 @@ pub fn main() nothrow -> Int {
 		// Single-shot wait_timeout — do NOT loop on spurious wake,
 		// because we want the deadline-elapses path to be the only
 		// outcome (no signal will arrive in this test).
-		match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 50)) {
+		match cv1.get().wait_timeout<type Bool>(g, conc.Duration(millis = 50)) {
 			core.Result::Ok(_) => { return 91; },  // unexpected wake
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }

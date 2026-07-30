@@ -22,7 +22,7 @@ fn _make_input() nothrow -> Array<Byte> {
 	val n = s.byte_length();
 	var i = 0;
 	while i < n {
-		b.push(core.string_byte_at(&s, i));
+		b.push(core.string_byte_at(s, i));
 		i = i + 1;
 	}
 	return move b;
@@ -34,16 +34,16 @@ fn _append_byte(b: &mut Array<Byte>, v: Int) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 	val input = _make_input();
-	val valid = codec.gzip_encode(&input);
+	val valid = codec.gzip_encode(input);
 
 	// Concatenate valid gzip + 4 trailing bytes (a non-gzip suffix).
 	var corrupted = valid.clone_with_capacity(valid.len + 4);
-	_append_byte(&mut corrupted, 0x41);  // 'A'
-	_append_byte(&mut corrupted, 0x42);  // 'B'
-	_append_byte(&mut corrupted, 0x43);  // 'C'
-	_append_byte(&mut corrupted, 0x44);  // 'D'
+	_append_byte(corrupted, 0x41);  // 'A'
+	_append_byte(corrupted, 0x42);  // 'B'
+	_append_byte(corrupted, 0x43);  // 'C'
+	_append_byte(corrupted, 0x44);  // 'D'
 
-	match codec.gzip_decode(&corrupted) {
+	match codec.gzip_decode(corrupted) {
 		Ok(b) => {
 			cons.eprintln("FAIL: trailing garbage accepted");
 			return 1;
@@ -58,7 +58,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Sanity check: the unmodified valid gzip still decodes.
-	match codec.gzip_decode(&valid) {
+	match codec.gzip_decode(valid) {
 		Ok(decoded) => {
 			if decoded.len != input.len {
 				cons.eprintln("FAIL: valid decode length mismatch");
@@ -80,7 +80,7 @@ pub fn main() nothrow -> Int {
 		two_members.push(valid[k]);
 		k = k + 1;
 	}
-	match codec.gzip_decode(&two_members) {
+	match codec.gzip_decode(two_members) {
 		Ok(b) => {
 			cons.eprintln("FAIL: two members accepted");
 			return 5;

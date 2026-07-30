@@ -115,6 +115,14 @@ def _to_jsonable(obj: Any) -> Any:
 		out: dict[str, Any] = {"_type": type_name}
 		normalize_file = type_name in _LOC_FILE_DATACLASSES
 		for f in dataclasses.fields(obj):
+			# D9 (reject-redundant-call-borrows): source-spelling provenance
+			# is a SOURCE-only concept — canonical DMIR is typed/desugared
+			# with formatting metadata stripped, so packaged bodies are never
+			# subject to the redundant-borrow rule. Never encode it (decoders
+			# default the fields to False/None, which also keeps every
+			# pre-rule package valid with no payload-version bump).
+			if type_name == "HBorrow" and f.name in ("source_written", "policy_class", "materialized_rvalue"):
+				continue
 			val = getattr(obj, f.name)
 			if normalize_file and f.name == "file":
 				out[f.name] = _normalize_emitted_loc_file(val)

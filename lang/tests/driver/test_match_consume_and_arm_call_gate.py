@@ -215,9 +215,9 @@ import std.io as io;
 
 pub fn main() nothrow -> Int {
 	val wb = io.IoError(kind = io.IO_ERROR_KIND_ERRNO, code = io.IO_ERR_WOULD_BLOCK);
-	if io.is_eof_error(&wb) { return 1; }
-	if io.is_would_block_error(&wb) {
-		if io.io_error_code(&wb) == io.IO_ERR_WOULD_BLOCK { return 0; }
+	if io.is_eof_error(wb) { return 1; }
+	if io.is_would_block_error(wb) {
+		if io.io_error_code(wb) == io.IO_ERR_WOULD_BLOCK { return 0; }
 		return 2;
 	}
 	return 3;

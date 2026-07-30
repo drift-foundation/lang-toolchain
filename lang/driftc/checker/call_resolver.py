@@ -893,6 +893,88 @@ def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_s
 	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id, required_trait_key=required_trait_key)
 
 
+def declared_ref_formal(
+	type_expr: object,
+	resolved_tid: TypeId | None,
+	type_table: object,
+	*,
+	generic_param_names: frozenset[str] | set[str] = frozenset(),
+) -> bool:
+	"""W0 declaration-origin classification, shared by every call family.
+
+	A formal is a DECLARED reference iff its RESOLVED type is REF and its
+	declared syntax is not a bare generic-parameter name — so alias-declared
+	references (`type Handle = &String`, D6 transparency) count as declared,
+	while `x: T` with `T` a trait/method/interface type parameter stays
+	generic-by-value even when instantiated at a reference type.
+	"""
+	if resolved_tid is None:
+		return False
+	try:
+		if type_table.get(resolved_tid).kind is not TypeKind.REF:
+			return False
+	except Exception:
+		return False
+	# Interface-schema type-param references carry `param_index`, and it is
+	# AUTHORITATIVE: when present, name/args are ignored (see
+	# core/generic_type_expr.py — producers differ in what they leave in
+	# `name`: None, or "" for the builtin Callback* schemas. LANGUAGE_BUG
+	# #5: gating this exemption on `name is None` made
+	# `Callback1<&mut Scope, R>.call(&mut s)` read its generic slot as a
+	# DECLARED `&mut` formal).
+	if getattr(type_expr, "param_index", None) is not None:
+		return False
+	name = getattr(type_expr, "name", None)
+	args = getattr(type_expr, "args", None) or []
+	if name is not None and not args and name in generic_param_names:
+		return False
+	return True
+
+
+def _generic_param_name(tp: object) -> str | None:
+	return tp if isinstance(tp, str) else getattr(tp, "name", None)
+
+
+def sig_generic_param_names(sig: object) -> frozenset[str]:
+	"""Generic-parameter names of a FnSignature (own + impl-level)."""
+	names = [
+		_generic_param_name(tp)
+		for tp in (list(getattr(sig, "type_params", []) or []) + list(getattr(sig, "impl_type_params", []) or []))
+	]
+	return frozenset(n for n in names if n) | frozenset(["Self"])
+
+
+def build_declared_ref_mask(
+	raw_type_exprs: list | None,
+	resolved_param_ids: list,
+	type_table: object,
+	*,
+	generic_param_names: frozenset[str] | set[str] = frozenset(),
+	param_names: list | None = None,
+	receiver_slot_exempt: bool = True,
+) -> list[bool]:
+	"""THE single W0 mask constructor. Every call family builds its
+	declared-reference mask here (or, for fixed-signature builtins whose
+	formals are the hardcoded declaration itself, documents why not).
+	Slot 0 is forced False when it is the receiver (`self`) — receiver
+	position is outside the rule."""
+	mask: list[bool] = []
+	for i, pid in enumerate(resolved_param_ids):
+		te = raw_type_exprs[i] if raw_type_exprs is not None and i < len(raw_type_exprs) else None
+		if (
+			receiver_slot_exempt
+			and i == 0
+			and param_names
+			and param_names[0] == "self"
+		):
+			mask.append(False)
+			continue
+		mask.append(
+			declared_ref_formal(te, pid, type_table, generic_param_names=generic_param_names)
+		)
+	return mask
+
+
 def make_call_ctx(**kwargs) -> CallResolverContext:
 	ctx = CallResolverContext(**kwargs)
 	_require_preseed_type_params(ctx)
@@ -2127,6 +2209,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	recv_nominal = _unwrap_ref_type(recv_ty)
 	recv_nominal_def = ctx.type_table.get(recv_nominal)
 	if expr.method_name == "call" and recv_nominal_def.kind is TypeKind.FUNCTION:
+		# D8(b): fn-value invocation is exempt from the redundant-borrow rule;
+		# stamp for W0 totality.
+		for _a in expr.args:
+			if isinstance(_a, H.HBorrow) and getattr(_a, "source_written", False):
+				_a.policy_class = "exempt"
 		if call_type_args:
 			diagnostics.append(_tc_diag(message="function call does not accept type arguments", severity="error", span=call_type_args_span or getattr(expr, "loc", Span())))
 			return MethodCallResult(ctx.unknown_ty, None)
@@ -2194,6 +2281,31 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			ret_ty = ctx.type_table._eval_generic_type_expr(method_schema.return_type, type_args, module_id=ctx.type_table.interface_bases.get(owner_id).module_id if ctx.type_table.interface_bases.get(owner_id) is not None else schema.module_id)
 		if len(arg_types) != len(param_types):
 			diagnostics.append(_tc_diag(message=f"{schema.name}.{expr.method_name} expects {len(param_types)} argument(s)", severity="error", span=getattr(expr, "loc", Span())))
+			return MethodCallResult(ctx.unknown_ty, None)
+		# W2: parameter-directed borrowing on interface dispatch, via the same
+		# W0 engine as direct calls. Declared mask from the schema shape: a
+		# formal is declared-& iff it EVALUATES to REF and its type_expr is
+		# not a bare interface-type-param reference (generic-by-value
+		# exemption); alias-resolved REF counts per D6.
+		_non_self_params = [p for p in method_schema.params if p.name != "self"]
+		_iface_param_names = [getattr(_p, "name", None) for _p in _non_self_params]
+		_declared_ref_mask = build_declared_ref_mask(
+			[_p.type_expr for _p in _non_self_params],
+			list(param_types),
+			ctx.type_table,
+			param_names=_iface_param_names,
+		)
+		updated_types, _had_ab_err = ctx.apply_autoborrow_args(
+			expr.args,
+			arg_types,
+			list(param_types),
+			span=getattr(expr, "loc", Span()),
+			declared_ref_mask=_declared_ref_mask,
+			param_names=_iface_param_names,
+			synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+		)
+		arg_types = list(updated_types)
+		if _had_ab_err:
 			return MethodCallResult(ctx.unknown_ty, None)
 		for idx, (arg_ty, param_ty) in enumerate(zip(arg_types, param_types)):
 			if arg_ty is not None and arg_ty != param_ty and ctx.type_table.get(param_ty).kind is not TypeKind.UNKNOWN:
@@ -2285,6 +2397,43 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				if not copy_status:
 					diagnostics.append(_tc_diag(message="Array<T>.extend() requires element type to be Copy", severity="error", span=getattr(expr, "loc", Span())))
 					return MethodCallResult(ctx.unknown_ty, None)
+				# D2: extend's builtin formal is `src: &Array<T>` — run the
+				# W0 engine so bare sources auto-borrow and source-written
+				# borrows reject as redundant.
+				if len(expr.args) == 1 and arg_types and arg_types[0] is not None:
+					# The DECLARED formal is `src: &Array<recv-elem>` — built
+					# from the receiver's element type, never from the actual
+					# (a wrong-typed explicit borrow must fall through to the
+					# type-mismatch diagnostics, not read as redundant).
+					_e_updated, _e_err = ctx.apply_autoborrow_args(
+						expr.args,
+						arg_types,
+						[ctx.type_table.ensure_ref(ctx.type_table.new_array(elem_ty))],
+						span=getattr(expr, "loc", Span()),
+						declared_ref_mask=[True],
+						synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+					)
+					arg_types = list(_e_updated)
+					if _e_err:
+						return MethodCallResult(ctx.unknown_ty, None)
+					# LANGUAGE_BUG fix (2026-07-29, found in D2 review): the
+					# source's element type was never checked — a mismatched
+					# array lowered as a raw append (String payloads into an
+					# Int array executed). Reject at typecheck.
+					_want_src = ctx.type_table.ensure_ref(ctx.type_table.new_array(elem_ty))
+					if arg_types and arg_types[0] is not None and arg_types[0] != _want_src:
+						_got_d = ctx.type_table.get(arg_types[0])
+						_got_inner = _got_d.param_types[0] if (_got_d.kind is TypeKind.REF and _got_d.param_types) else arg_types[0]
+						diagnostics.append(_tc_diag(
+							message=(
+								f"Array<T>.extend() source element type mismatch: expected "
+								f"'&{_label_typeid(ctx.type_table.new_array(elem_ty))}', got "
+								f"'{_label_typeid(_got_inner)}'"
+							),
+							severity="error",
+							span=getattr(expr.args[0], "loc", getattr(expr, "loc", Span())),
+						))
+						return MethodCallResult(ctx.unknown_ty, None)
 			# Cycle guard: same unguarded-deep-walk shape as the
 			# `_has_owner_typevar` RecursionError (self-referential
 			# structs make `param_types` cyclic); revisits return False.
@@ -2793,6 +2942,42 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			call_target = CallTarget.direct(direct_fn_id) if direct_fn_id is not None else CallTarget.trait(trait_key, expr.method_name)
 			_call_can_throw = not bool(getattr(method_sig, "declared_nothrow", False))
 			_call_terminal = bool(getattr(method_sig, "declared_terminal_throws", False))
+			# W0 wiring, require-bound trait dispatch: the TRAIT DECL's param
+			# type_exprs are the declared shapes — `&`/`&mut`-named nodes are
+			# declared formals (policy applies); bare trait-type-param names
+			# (e.g. Fn1's `a: A`) are generic-by-value (exempt). Same engine
+			# as every other family.
+			_ns_pairs = [
+				(p, pid)
+				for p, pid in zip(list(getattr(method_sig, "params", []) or []), param_type_ids)
+				if p.name != "self"
+			]
+			if len(_ns_pairs) == len(expr.args):
+				_tr_generic_names = frozenset(
+					[(tp if isinstance(tp, str) else getattr(tp, "name", None)) for tp in (list(getattr(trait_def, "type_params", []) or []) + list(getattr(method_sig, "type_params", []) or []))]
+					+ ["Self"]
+				) - {None}
+				_tr_mask = build_declared_ref_mask(
+					[p.type_expr for p, _pid in _ns_pairs],
+					[_pid for _p, _pid in _ns_pairs],
+					ctx.type_table,
+					generic_param_names=_tr_generic_names,
+					param_names=[p.name for p, _pid in _ns_pairs],
+				)
+				_tr_names = [p.name for p, _pid in _ns_pairs]
+				_tr_params = [pid for _p, pid in _ns_pairs]
+				_tr_updated, _tr_err = ctx.apply_autoborrow_args(
+					expr.args,
+					arg_types,
+					_tr_params,
+					span=getattr(expr, "loc", Span()),
+					declared_ref_mask=_tr_mask,
+					param_names=_tr_names,
+					synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+				)
+				arg_types = list(_tr_updated)
+				if _tr_err:
+					return MethodCallResult(ctx.unknown_ty, None)
 			info = CallInfo(target=call_target, sig=CallSig(param_types=tuple(param_type_ids), user_ret_type=ret_id, can_throw=_call_can_throw, declared_terminal_throws=_call_terminal))
 			return MethodCallResult(ret_id, info)
 		else:
@@ -3785,6 +3970,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 				ret_id = apply_subst(ret_id, subst_for_receiver, ctx.type_table)
 				if param_type_ids:
 					param_type_ids = [apply_subst(p, subst_for_receiver, ctx.type_table) for p in param_type_ids]
+			_ab_params_rotated = False
 			if param_type_ids:
 				recv_nom = _unwrap_ref_type(recv_ty)
 				first_nom = _unwrap_ref_type(param_type_ids[0])
@@ -3794,13 +3980,47 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 					last_base, _ = _struct_base_and_args(last_nom)
 					if last_base is not None and recv_base == last_base:
 						param_type_ids = [param_type_ids[-1]] + list(param_type_ids[:-1])
+						_ab_params_rotated = True
 			all_args = [expr.receiver] + list(expr.args)
+			# W0 declared-reference mask from the TEMPLATE signature (typevar
+			# formals False — generic-by-value exemption; alias-resolved REF
+			# counts per D6). fn_sig keeps method-level typevars unsubstituted,
+			# which is exactly the discriminator needed. Receiver slot is
+			# forced False — receiver position is outside the rule.
+			_declared_ref_mask = None
+			_tmpl_param_names = None
+			if fn_sig is not None and getattr(fn_sig, "param_type_ids", None):
+				_tmpl_ids = list(fn_sig.param_type_ids)
+				if len(_tmpl_ids) == len(all_args):
+					_raw_tes = list(getattr(fn_sig, "param_types", None) or []) or None
+					if _ab_params_rotated:
+						_tmpl_ids = [_tmpl_ids[-1]] + list(_tmpl_ids[:-1])
+						if _raw_tes is not None and len(_raw_tes) == len(all_args):
+							_raw_tes = [_raw_tes[-1]] + list(_raw_tes[:-1])
+					_names = list(getattr(fn_sig, "param_names", None) or [])
+					if len(_names) == len(all_args):
+						if _ab_params_rotated:
+							_names = [_names[-1]] + list(_names[:-1])
+						_tmpl_param_names = _names
+					_declared_ref_mask = build_declared_ref_mask(
+						_raw_tes if (_raw_tes is not None and len(_raw_tes) == len(all_args)) else None,
+						_tmpl_ids,
+						ctx.type_table,
+						generic_param_names=sig_generic_param_names(fn_sig),
+						param_names=_tmpl_param_names,
+					)
+					# Receiver slot is slot 0 on the method path regardless
+					# of the recorded param name.
+					_declared_ref_mask[0] = False
 			updated_arg_types, had_autoborrow_error = ctx.apply_autoborrow_args(
 				all_args,
 				[recv_ty] + arg_types,
 				param_type_ids,
 				span=getattr(expr, "loc", Span()),
 				skip_first=True,
+				declared_ref_mask=_declared_ref_mask,
+				param_names=_tmpl_param_names,
+				synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
 			)
 			expr.receiver = all_args[0]
 			expr.args = list(all_args[1:])
@@ -4772,6 +4992,38 @@ def resolve_call_expr(
 			ref_mut, inner = ref_info
 			if arg_ty == param_ty or arg_ty == inner:
 				continue
+			# Plain parameter-directed auto-borrow beats the Borrow-trait
+			# coercion for typevar-bearing `&X<T>`/`&T` formals — but ONLY
+			# when the borrowed view can actually unify, i.e. the formal's
+			# inner is a bare typevar (`&T` binds T:=arg) or the arg's head
+			# constructor matches the inner's (`&mut MutexGuard<T>` with a
+			# MutexGuard<Counter> arg). A head MISMATCH (`&Mutex<T>` with an
+			# Arc<Mutex<Counter>> arg) must keep the Borrow-trait rewrite:
+			# wrapping the raw arg would pin the conflict it's meant to fix.
+			# Borrow-trait rewriting also stays for concrete-inner formals
+			# (`&T` with T concrete, arg Arc<T> etc.).
+			if ctx.type_table.has_typevar(inner) and ctx.type_table.get(arg_ty).kind is not TypeKind.REF:
+				_inner_def = ctx.type_table.get(inner)
+				_head_ok = _inner_def.kind is TypeKind.TYPEVAR
+				if not _head_ok and _inner_def.kind is ctx.type_table.get(arg_ty).kind:
+					if _inner_def.kind is TypeKind.STRUCT:
+						_ii = ctx.type_table.get_struct_instance(inner)
+						_ai = ctx.type_table.get_struct_instance(arg_ty)
+						_head_ok = (
+							_ii is not None and _ai is not None and _ii.base_id == _ai.base_id
+						) or (_ii is None and _ai is None and _inner_def.name == ctx.type_table.get(arg_ty).name)
+					elif _inner_def.kind is TypeKind.VARIANT:
+						_iv = ctx.type_table.get_variant_instance(inner) if hasattr(ctx.type_table, "get_variant_instance") else None
+						_av = ctx.type_table.get_variant_instance(arg_ty) if hasattr(ctx.type_table, "get_variant_instance") else None
+						_head_ok = (
+							_iv is not None and _av is not None and _iv.base_id == _av.base_id
+						) or (_iv is None and _av is None and _inner_def.name == ctx.type_table.get(arg_ty).name)
+					else:
+						# ARRAY/FUNCTION/etc.: same kind is head-compatible.
+						_head_ok = True
+				if _head_ok:
+					out[idx] = ctx.type_table.ensure_ref_mut(arg_ty) if ref_mut else ctx.type_table.ensure_ref(arg_ty)
+					continue
 			trait_name = "BorrowMut" if ref_mut else "Borrow"
 			trait_key = trait_key_from_expr(
 				parser_ast.TypeExpr(name=trait_name, module_id="std.core"),
@@ -4811,7 +5063,25 @@ def resolve_call_expr(
 		if kw_pairs:
 			diagnostics.append(_tc_diag(message="keyword arguments are not supported on lambda calls in v1", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
-		fn_params = [t if t is not None else ctx.unknown_ty for t in arg_types]
+		# Expected param types: the lambda's own DECLARATIONS win over
+		# arg-derived types (a bare place arg at a declared `&`/`&mut`
+		# param would otherwise force a value-typed expectation and fail
+		# lambda typing before auto-borrow can run — W5).
+		fn_params = []
+		_lam_decl_params = list(getattr(expr.fn, "params", []) or [])
+		for _pi, _at in enumerate(arg_types):
+			_decl_ty = None
+			if _pi < len(_lam_decl_params):
+				_dte = getattr(_lam_decl_params[_pi], "type", None)
+				if _dte is not None:
+					try:
+						_decl_ty = resolve_opaque_type(_dte, ctx.type_table, module_id=current_module_name, type_params=type_param_map)
+					except Exception:
+						_decl_ty = None
+			if _decl_ty is not None and _decl_ty != ctx.unknown_ty:
+				fn_params.append(_decl_ty)
+			else:
+				fn_params.append(_at if _at is not None else ctx.unknown_ty)
 		fn_ret = expected_type if expected_type is not None else ctx.unknown_ty
 		callee_expected = ctx.type_table.ensure_function(fn_params, fn_ret, can_throw=True)
 		expr.fn.allow_capture_invoke = True
@@ -4831,6 +5101,32 @@ def resolve_call_expr(
 		fn_sig_ret = callee_def.param_types[-1] if callee_def.param_types else ctx.unknown_ty
 		if len(fn_sig_params) != len(arg_types):
 			diagnostics.append(_tc_diag(message=f"function value expects {len(fn_sig_params)} arguments, got {len(arg_types)}", severity="error", span=getattr(expr, "loc", Span())))
+			return record_expr(expr, fn_sig_ret)
+		# W5: immediately-invoked lambdas — the lambda literal's param
+		# declarations ARE the template (no typevars possible), so every
+		# REF param is syntactically declared; same W0 engine as direct
+		# calls (bare place auto-borrows; source-written borrow rejected).
+		_lam_decl = list(getattr(expr.fn, "params", []) or [])
+		_lam_names = [getattr(_p, "name", None) for _p in _lam_decl]
+		if len(_lam_names) != len(fn_sig_params):
+			_lam_names = None
+		_lam_mask = build_declared_ref_mask(
+			[getattr(_p, "type", None) for _p in _lam_decl] if len(_lam_decl) == len(fn_sig_params) else None,
+			list(fn_sig_params),
+			ctx.type_table,
+			param_names=_lam_names,
+		)
+		updated_types, _had_ab_err = ctx.apply_autoborrow_args(
+			expr.args,
+			arg_types,
+			list(fn_sig_params),
+			span=getattr(expr, "loc", Span()),
+			declared_ref_mask=_lam_mask,
+			param_names=_lam_names,
+			synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+		)
+		arg_types = list(updated_types)
+		if _had_ab_err:
 			return record_expr(expr, fn_sig_ret)
 		for want, have in zip(fn_sig_params, arg_types):
 			if have is not None and want != have:
@@ -4949,6 +5245,59 @@ def resolve_call_expr(
 		call_type_args = getattr(expr, "type_args", None) or []
 		type_arg_ids = [resolve_opaque_type(t, ctx.type_table, module_id=current_module_name, type_params=type_param_map) for t in call_type_args]
 		arg_types_local = [type_expr(a, used_as_value=False) for a in expr.args]
+		# W3: parameter-directed borrowing on the std.mem strict-typed path.
+		# The intrinsic formals below are syntactically declared `&`/`&mut`
+		# in stdlib/std/mem/mem.drift; pre-normalize BEFORE the per-intrinsic
+		# ad-hoc checks so (a) bare places auto-borrow (and the downstream
+		# element-type inference that leans on ref-typed args keeps working)
+		# and (b) source-written borrows get the W0 policy (redundant /
+		# mut-rvalue-binding rejection). `swap`'s legacy structural
+		# `&mut`-node requirement is retired by the same normalization
+		# (type-based, 0.31.81 `replace` precedent).
+		_MEM_REF_FORMAL_MODES: dict[str, tuple[str | None, ...]] = {
+			"replace": ("mut", None),
+			"swap": ("mut", "mut"),
+			"write": ("mut", None, None),
+			"read": ("mut", None),
+			"ptr_at_ref": ("shared", None),
+			"ptr_at_mut": ("mut", None),
+			"rawbuffer_ptr": ("shared",),
+			"rawbuffer_cap": ("shared",),
+			"capacity": ("shared",),
+			"ptr_from_ref": ("shared",),
+			"ptr_from_ref_mut": ("mut",),
+			"maybe_write": ("mut", None),
+			"maybe_assume_init_ref": ("shared",),
+			"maybe_assume_init_mut": ("mut",),
+			"maybe_assume_init_read": ("mut",),
+		}
+		_mem_modes = _MEM_REF_FORMAL_MODES.get(expr.fn.name)
+		if _mem_modes and len(expr.args) == len(_mem_modes):
+			_synth_params: list[TypeId] = []
+			_mem_mask: list[bool] = []
+			for _mi, _mode in enumerate(_mem_modes):
+				_at = arg_types_local[_mi]
+				if _mode is None or _at is None:
+					_synth_params.append(_at if _at is not None else ctx.unknown_ty)
+					_mem_mask.append(False)
+					continue
+				_atd = ctx.type_table.get(_at)
+				_inner = _atd.param_types[0] if (_atd.kind is TypeKind.REF and _atd.param_types) else _at
+				_synth_params.append(
+					ctx.type_table.ensure_ref_mut(_inner) if _mode == "mut" else ctx.type_table.ensure_ref(_inner)
+				)
+				_mem_mask.append(True)
+			_updated, _had_mem_ab_err = ctx.apply_autoborrow_args(
+				expr.args,
+				arg_types_local,
+				_synth_params,
+				span=getattr(expr, "loc", Span()),
+				declared_ref_mask=_mem_mask,
+				synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+			)
+			arg_types_local = list(_updated)
+			if _had_mem_ab_err:
+				return record_expr(expr, ctx.unknown_ty)
 		ret_ty: TypeId | None = None
 		param_types: list[TypeId] = []
 		intrinsic_kind: IntrinsicKind | None = None
@@ -5311,6 +5660,29 @@ def resolve_call_expr(
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} does not accept type arguments", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
 		arg_types_local = [type_expr(a) for a in expr.args]
+				# D2 (builtin formals count as declared): the ref-taking slots of
+		# the string builtins run the same W0 engine — bare places
+		# auto-borrow, source-written borrows are rejected as redundant.
+		if expr.fn.name in ("byte_length", "string_byte_at", "string_bytes_base") and expr.args and arg_types_local and arg_types_local[0] is not None:
+			# The DECLARED formal is fixed `&String` — never derived from the
+			# actual (a wrong-typed explicit borrow is a type mismatch, not a
+			# redundancy).
+			_sb_params = [ctx.type_table.ensure_ref(ctx.string_ty)] + [
+				(_t if _t is not None else ctx.unknown_ty) for _t in arg_types_local[1:]
+			]
+			_sb_mask = [True] + [False] * (len(expr.args) - 1)
+			if len(_sb_params) == len(expr.args):
+				_updated, _sb_err = ctx.apply_autoborrow_args(
+					expr.args,
+					arg_types_local,
+					_sb_params,
+					span=getattr(expr, "loc", Span()),
+					declared_ref_mask=_sb_mask,
+					synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+				)
+				arg_types_local = list(_updated)
+				if _sb_err:
+					return record_expr(expr, ctx.unknown_ty)
 		if expr.fn.name == "byte_length":
 			if not (isinstance(current_module_name, str) and current_module_name.startswith("std.")):
 				diagnostics.append(_tc_diag(message="global byte_length(...) is not exposed; use s.byte_length()", severity="error", span=getattr(expr, "loc", Span())))
@@ -5901,6 +6273,135 @@ def resolve_call_expr(
 					method_res.resolution,
 				)
 		if method_res is not None and method_res.call_info is not None:
+			# W0 wiring for associated calls (`Type::fn(args)`): pre-rule this
+			# path neither borrowed nor rejected a bare `T` at a declared
+			# `&T` formal — viability accepted it and lowering emitted the
+			# value where the signature needs ptr (e8d-class miscompile,
+			# assoc flavor). Same engine + template mask as direct calls;
+			# arity mismatch (UFCS shapes) skips the mask.
+			if len(method_res.call_info.sig.param_types) == len(expr.args) and (
+				method_res.call_info.target.kind is CallTargetKind.DIRECT
+				or method_res.call_info.target.kind is CallTargetKind.TRAIT
+			):
+				_assoc_mask = None
+				_assoc_names = None
+				_direct_trait_key = None
+				if method_res.call_info.target.kind is CallTargetKind.DIRECT:
+					_assoc_fn_id = method_res.call_info.target.symbol
+					if _assoc_fn_id is not None and signatures_by_id is not None:
+						_assoc_tmpl = signatures_by_id.get(_assoc_fn_id)
+						_itm = getattr(_assoc_tmpl, "impl_trait_module", None) if _assoc_tmpl is not None else None
+						_itn = getattr(_assoc_tmpl, "impl_trait_name", None) if _assoc_tmpl is not None else None
+						if _itn is None and ctx.callable_registry is not None:
+							_reg_decl = ctx.callable_registry.get_by_fn_id(_assoc_fn_id)
+							if _reg_decl is not None and getattr(getattr(_reg_decl, "kind", None), "name", "") == "METHOD_TRAIT":
+								_rt_id = getattr(_reg_decl, "trait_id", None)
+								if _rt_id is not None and ctx.trait_key_for_id is not None:
+									_direct_trait_key = ctx.trait_key_for_id(_rt_id)
+						if _direct_trait_key is None and _itn is not None:
+							# TRAIT-IMPL method resolved directly: the call-
+							# site contract is the TRAIT declaration — an
+							# impl's concrete `&X` written for a generic
+							# trait formal `v: V` must NOT read as declared
+							# (mirror of the D6 generic-by-value exemption).
+							from lang.driftc.traits.world import TraitKey as _TraitKey
+							_direct_trait_key = _TraitKey(package_id=None, module=_itm, name=_itn)
+						elif _assoc_tmpl is not None and getattr(_assoc_tmpl, "param_type_ids", None):
+							_tmpl_ids = list(_assoc_tmpl.param_type_ids)
+							if len(_tmpl_ids) == len(expr.args):
+								_names = list(getattr(_assoc_tmpl, "param_names", None) or [])
+								if len(_names) == len(expr.args):
+									_assoc_names = _names
+								# UFCS shape: `Type::method(recv, …)` — the
+								# builder exempts a `self`-named slot 0.
+								_assoc_mask = build_declared_ref_mask(
+									list(getattr(_assoc_tmpl, "param_types", None) or []) or None,
+									_tmpl_ids,
+									ctx.type_table,
+									generic_param_names=sig_generic_param_names(_assoc_tmpl),
+									param_names=_assoc_names or _names or None,
+								)
+				if _direct_trait_key is not None or method_res.call_info.target.kind is CallTargetKind.TRAIT:
+					# Trait-qualified static (`Trait::method(recv, …)`) or a
+					# directly-resolved trait-impl method: the TRAIT DECL's
+					# param type_exprs are the declared shapes; the `self`
+					# slot is receiver position (exempt), bare
+					# trait-type-param names are generic-by-value (exempt).
+					_tk = _direct_trait_key if _direct_trait_key is not None else getattr(method_res.call_info.target, "trait_key", None)
+					_mn = getattr(method_res.call_info.target, "method_name", None) or qm.member
+					_td = ctx.trait_index.traits_by_id.get(_tk) if (ctx.trait_index is not None and _tk is not None) else None
+					if _td is None and ctx.trait_index is not None and _tk is not None:
+						# Synthesized keys may lack package_id/module (the
+						# signature stores only the trait NAME); match by
+						# name, refining by module when both sides carry one.
+						_want_mod = getattr(_tk, "module", None)
+						_matches = [
+							(_k2, _v2)
+							for _k2, _v2 in ctx.trait_index.traits_by_id.items()
+							if getattr(_k2, "name", None) == getattr(_tk, "name", None)
+							and (_want_mod is None or getattr(_k2, "module", None) == _want_mod)
+						]
+						if len(_matches) > 1:
+							# One trait def can be registered under several keys
+							# (per-world registration in harness pipelines) —
+							# dedup by definition identity.
+							_seen_defs = set()
+							_deduped = []
+							for _k2, _v2 in _matches:
+								if id(_v2) in _seen_defs:
+									continue
+								_seen_defs.add(id(_v2))
+								_deduped.append((_k2, _v2))
+							_matches = _deduped
+						if len(_matches) > 1 and _want_mod is None:
+							# Still ambiguous with a module-less key: prefer the
+							# trait declared in the DIRECT impl fn own module
+							# (declaration provenance follows the resolved impl).
+							_impl_mod = getattr(getattr(method_res.call_info.target, "symbol", None), "module", None)
+							if _impl_mod is not None:
+								_by_impl_mod = [
+									(_k2, _v2) for _k2, _v2 in _matches
+									if getattr(_k2, "module", None) == _impl_mod
+								]
+								if len(_by_impl_mod) == 1:
+									_matches = _by_impl_mod
+						if len(_matches) == 1:
+							_td = _matches[0][1]
+					_msig = None
+					if _td is not None and _mn:
+						_msig = next((m for m in getattr(_td, "methods", []) or [] if getattr(m, "name", None) == _mn), None)
+					_tparams = list(getattr(_msig, "params", []) or []) if _msig is not None else []
+					if _tparams and len(_tparams) == len(expr.args):
+						_tq_generic_names = frozenset(
+							[(tp if isinstance(tp, str) else getattr(tp, "name", None)) for tp in (list(getattr(_td, "type_params", []) or []) + list(getattr(_msig, "type_params", []) or []))]
+							+ ["Self"]
+						) - {None}
+						_sig_ptypes = list(method_res.call_info.sig.param_types)
+						_assoc_names = [p.name for p in _tparams]
+						_assoc_mask = build_declared_ref_mask(
+							[p.type_expr for p in _tparams],
+							_sig_ptypes[: len(_tparams)],
+							ctx.type_table,
+							generic_param_names=_tq_generic_names,
+							param_names=_assoc_names,
+						)
+						# Trait `self` can appear at any slot name; exempt
+						# every self-named slot, not only slot 0.
+						for _pi, _p in enumerate(_tparams):
+							if _p.name == "self" and _pi < len(_assoc_mask):
+								_assoc_mask[_pi] = False
+				_updated, _had_assoc_ab_err = _apply_autoborrow_args(
+					expr.args,
+					arg_types,
+					list(method_res.call_info.sig.param_types),
+					span=getattr(expr, "loc", Span()),
+					declared_ref_mask=_assoc_mask,
+					param_names=_assoc_names,
+					synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
+				)
+				arg_types = list(_updated)
+				if _had_assoc_ab_err:
+					return record_expr(expr, ctx.unknown_ty)
 			intent.arg_expected_types = _expected_arg_types_for_call(list(method_res.call_info.sig.param_types), len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)
 			setattr(expr, "_resolved_method_call_info", (list(method_res.call_info.sig.param_types), method_res.return_type, bool(method_res.call_info.sig.can_throw), method_res.call_info.target, bool(getattr(method_res.call_info.sig, "declared_terminal_throws", False))))
@@ -6131,11 +6632,19 @@ def resolve_call_expr(
 					# recording the call with unchecked args miscompiled
 					# (indirect call received the value where the signature
 					# needs ptr; clang rejected the module).
+					# D8(b): fn-pointer invokes are EXEMPT from the redundant-
+					# borrow rule (provenance undecidable — Fn(&T) vs generic
+					# Fn(T) at &T are the same TypeId). Stamp the W0 class for
+					# validator totality; no declared_ref_mask is passed.
+					for _a in expr.args:
+						if isinstance(_a, H.HBorrow) and getattr(_a, "source_written", False):
+							_a.policy_class = "exempt"
 					updated_types, had_autoborrow_error = ctx.apply_autoborrow_args(
 						expr.args,
 						arg_types,
 						param_types,
 						span=getattr(expr, "loc", Span()),
+						synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
 					)
 					arg_types = list(updated_types)
 					if had_autoborrow_error:
@@ -7272,11 +7781,34 @@ def resolve_call_expr(
 				_sig_param_types[_bi] = arg_types[_bi]
 		if tuple(_sig_param_types) != sig_inst.param_types:
 			sig_inst = CallableSignature(param_types=tuple(_sig_param_types), result_type=sig_inst.result_type)
+		# W0 declared-reference mask: syntactic &/&mut in the TEMPLATE
+		# signature (typevar formals stay False — generic-by-value exemption;
+		# alias-resolved REF counts as declared per D6).
+		_declared_ref_mask = None
+		_tmpl_param_names = None
+		if decl.fn_id is not None and signatures_by_id is not None:
+			_tmpl_sig = signatures_by_id.get(decl.fn_id)
+			if _tmpl_sig is not None and getattr(_tmpl_sig, "param_type_ids", None):
+				_tmpl_ids = list(_tmpl_sig.param_type_ids)
+				if len(_tmpl_ids) == len(expr.args):
+					_names = list(getattr(_tmpl_sig, "param_names", None) or [])
+					if len(_names) == len(expr.args):
+						_tmpl_param_names = _names
+					_declared_ref_mask = build_declared_ref_mask(
+						list(getattr(_tmpl_sig, "param_types", None) or []) or None,
+						_tmpl_ids,
+						ctx.type_table,
+						generic_param_names=sig_generic_param_names(_tmpl_sig),
+						param_names=_tmpl_param_names,
+					)
 		updated_types, had_autoborrow_error = _apply_autoborrow_args(
 			expr.args,
 			arg_types,
 			list(sig_inst.param_types),
 			span=getattr(expr, "loc", Span()),
+			declared_ref_mask=_declared_ref_mask,
+			param_names=_tmpl_param_names,
+			synth_cache=expr.__dict__.setdefault("_ab_synth_cache", {}),
 		)
 		arg_types = list(updated_types)
 		if had_autoborrow_error:

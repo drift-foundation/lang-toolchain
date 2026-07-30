@@ -243,10 +243,96 @@ def find_impl_method_conflicts(
 	return conflicts
 
 
+def find_param_mode_overload_conflicts(
+	*,
+	callable_registry: object,
+	signatures_by_id: Dict[FunctionId, object],
+	type_table: TypeTable,
+) -> List[Diagnostic]:
+	"""R2 (reject-redundant-call-borrows): two concrete overloads whose
+	signatures are identical after erasing each NON-RECEIVER parameter's
+	outer mode among {T, &T, &mut T} are rejected at definition site —
+	call-site `&` no longer selects overloads, so such sets are
+	uncallable (bare calls are ambiguous). Receiver (`self`) modes stay
+	out of the erasure: receiver-mode overloading is a separate, legal
+	mechanism (the receiver slot is dropped from the key; sets differing
+	ONLY in receiver mode never group as R2 conflicts because their
+	non-receiver erased keys are identical AND their modes tuples are
+	identical). Generic candidates are exempt per D4 — concrete-beats-
+	generic handles mixed sets."""
+	by_id = getattr(callable_registry, "_by_id", None)
+	if not isinstance(by_id, dict):
+		return []
+	groups: Dict[tuple, list] = {}
+	for decl in by_id.values():
+		if getattr(decl, "is_generic", False):
+			continue
+		sig = getattr(decl, "signature", None)
+		param_ids = list(getattr(sig, "param_types", ()) or ())
+		name = getattr(decl, "name", None)
+		if not name or not param_ids and getattr(decl, "kind", None) is None:
+			continue
+		kind = getattr(decl, "kind", None)
+		kind_name = getattr(kind, "name", "")
+		is_method = kind_name in ("METHOD_INHERENT", "METHOD_TRAIT")
+		slots = param_ids[1:] if is_method and param_ids else list(param_ids)
+		recv_key = param_ids[0] if is_method and param_ids else None
+		erased = []
+		modes = []
+		for pid in slots:
+			td = type_table.get(pid)
+			if td.kind is TypeKind.REF and td.param_types:
+				erased.append(td.param_types[0])
+				modes.append("mut" if td.ref_mut else "ref")
+			else:
+				erased.append(pid)
+				modes.append("val")
+		groups.setdefault(
+			(
+				getattr(decl, "module_id", None),
+				getattr(decl, "impl_target_type_id", None),
+				recv_key,
+				name,
+				len(slots),
+				tuple(erased),
+			),
+			[],
+		).append((decl, tuple(modes)))
+	out: list[Diagnostic] = []
+	for (_mod, _tgt, _recv, name, _n, _key), cands in groups.items():
+		if len(cands) < 2:
+			continue
+		if len({m for _d, m in cands}) < 2:
+			continue  # identical modes = exact duplicate; other checks own it
+		span = None
+		for decl, _m in cands:
+			fnid = getattr(decl, "fn_id", None)
+			s = signatures_by_id.get(fnid) if fnid is not None else None
+			span = getattr(s, "loc", None) if s is not None else None
+			if span is not None:
+				break
+		shapes = sorted({"(" + ", ".join(m) + ")" for _d, m in cands})
+		out.append(
+			_impl_diag(
+				message=(
+					f"overload set for '{name}' differs only by parameter mode "
+					f"(T vs &T vs &mut T) on non-receiver parameters ({' vs '.join(shapes)}); "
+					f"call-site `&` no longer selects overloads, so this set is "
+					f"uncallable — rename or merge one overload"
+				),
+				code="E_OVERLOAD_PARAM_MODE_ONLY_DIFF",
+				severity="error",
+				span=span,
+			)
+		)
+	return out
+
+
 __all__ = [
 	"ImplMeta",
 	"ImplMethodMeta",
 	"ImplMethodCandidate",
 	"GlobalImplIndex",
 	"find_impl_method_conflicts",
+	"find_param_mode_overload_conflicts",
 ]

@@ -8,8 +8,8 @@ fn run() -> Int {
 	m.insert("a", 2);
 	val k1 = "ab";
 	val k2 = "a";
-	val v1 = match m.get_mut(&k1) { None => { -1 }, Some(v) => { *v } };
-	val v2 = match m.get_mut(&k2) { None => { -1 }, Some(v) => { *v } };
+	val v1 = match m.get_mut(k1) { None => { -1 }, Some(v) => { *v } };
+	val v2 = match m.get_mut(k2) { None => { -1 }, Some(v) => { *v } };
 	if v1 == -1 {
 		return 1;
 	}
@@ -22,14 +22,14 @@ fn run() -> Int {
 	if v2 != 2 {
 		return 4;
 	}
-	val r1 = match m.remove(&k1) { None => { -1 }, Some(v) => { v } };
+	val r1 = match m.remove(k1) { None => { -1 }, Some(v) => { v } };
 	if r1 == -1 {
 		return 5;
 	}
 	if r1 != 1 {
 		return 6;
 	}
-	if m.contains_key(&k1) {
+	if m.contains_key(k1) {
 		return 7;
 	}
 	return 0;

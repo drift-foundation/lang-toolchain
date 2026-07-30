@@ -85,7 +85,7 @@ fn check(p: &Node) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val pl = parent();
-	return check(&pl);
+	return check(pl);
 }
 """
 
@@ -117,7 +117,7 @@ fn check(p: &Node) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val pl = parent();
-	return check(&pl);
+	return check(pl);
 }
 """
 
@@ -150,7 +150,7 @@ fn check(p: &Node) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val pl = parent();
-	return check(&pl);
+	return check(pl);
 }
 """
 

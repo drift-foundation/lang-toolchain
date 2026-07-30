@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.is_match(&re, input);
+			val got = regex.is_match(re, input);
 			if got != expected { return fail_code; }
 			return 0;
 		},
@@ -18,66 +18,66 @@ pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- §1: empty pattern matches everything ---
-	rc = check(&"", &"", true, 1);
+	rc = check("", "", true, 1);
 	if rc != 0 { return rc; }
 
-	rc = check(&"", &"abc", true, 3);
+	rc = check("", "abc", true, 3);
 	if rc != 0 { return rc; }
 
 	// --- §1: literal not in empty input ---
-	rc = check(&"a", &"", false, 5);
+	rc = check("a", "", false, 5);
 	if rc != 0 { return rc; }
 
 	// --- §1: literal match ---
-	rc = check(&"a", &"a", true, 7);
+	rc = check("a", "a", true, 7);
 	if rc != 0 { return rc; }
 
 	// --- §1: search semantics — match anywhere in input ---
-	rc = check(&"a", &"ba", true, 9);
+	rc = check("a", "ba", true, 9);
 	if rc != 0 { return rc; }
 
-	rc = check(&"a", &"bca", true, 11);
+	rc = check("a", "bca", true, 11);
 	if rc != 0 { return rc; }
 
-	rc = check(&"a", &"abc", true, 13);
+	rc = check("a", "abc", true, 13);
 	if rc != 0 { return rc; }
 
 	// --- §1: no match ---
-	rc = check(&"a", &"bcd", false, 15);
+	rc = check("a", "bcd", false, 15);
 	if rc != 0 { return rc; }
 
 	// --- multi-char literal ---
-	rc = check(&"abc", &"xabcy", true, 17);
+	rc = check("abc", "xabcy", true, 17);
 	if rc != 0 { return rc; }
 
-	rc = check(&"abc", &"xabXc", false, 19);
+	rc = check("abc", "xabXc", false, 19);
 	if rc != 0 { return rc; }
 
 	// --- dot matches any byte ---
-	rc = check(&"a.c", &"abc", true, 21);
+	rc = check("a.c", "abc", true, 21);
 	if rc != 0 { return rc; }
 
-	rc = check(&"a.c", &"axc", true, 23);
+	rc = check("a.c", "axc", true, 23);
 	if rc != 0 { return rc; }
 
-	rc = check(&"a.c", &"ac", false, 25);
+	rc = check("a.c", "ac", false, 25);
 	if rc != 0 { return rc; }
 
 	// --- alternation search ---
-	rc = check(&"cat|dog", &"I have a cat", true, 27);
+	rc = check("cat|dog", "I have a cat", true, 27);
 	if rc != 0 { return rc; }
 
-	rc = check(&"cat|dog", &"I have a dog", true, 29);
+	rc = check("cat|dog", "I have a dog", true, 29);
 	if rc != 0 { return rc; }
 
-	rc = check(&"cat|dog", &"I have a bird", false, 31);
+	rc = check("cat|dog", "I have a bird", false, 31);
 	if rc != 0 { return rc; }
 
 	// --- grouped sub-expression ---
-	rc = check(&"(ab)+", &"xababx", true, 33);
+	rc = check("(ab)+", "xababx", true, 33);
 	if rc != 0 { return rc; }
 
-	rc = check(&"(ab)+", &"xax", false, 35);
+	rc = check("(ab)+", "xax", false, 35);
 	if rc != 0 { return rc; }
 
 	return 0;

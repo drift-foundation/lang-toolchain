@@ -31,7 +31,7 @@ import std.core as core;
 import std.format as fmt;
 
 fn do_work(code: Int) nothrow -> Int {
-\tval _projected: String = core.diagnostic_json_string(&fmt.format_int(code));
+\tval _projected: String = core.diagnostic_json_string(fmt.format_int(code));
 \treturn code;
 }
 

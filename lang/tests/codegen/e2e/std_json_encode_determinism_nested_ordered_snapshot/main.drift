@@ -49,8 +49,8 @@ fn run() -> Int {
 	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = b.build();
 
-	val s1 = json.encode_with_config(&build_one(), &cfg);
-	val s2 = json.encode_with_config(&build_two(), &cfg);
+	val s1 = json.encode_with_config(build_one(), cfg);
+	val s2 = json.encode_with_config(build_two(), cfg);
 	if s1 != s2 {
 		return 10;
 	}

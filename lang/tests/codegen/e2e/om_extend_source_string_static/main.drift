@@ -41,7 +41,7 @@ fn scenario_hvar_local() nothrow -> Int {
 	var src_arr: Array<String> = [];
 	src_arr.push("xAAAA");
 	var dest: Array<String> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 { return 1; }
 	if (dest[0]).byte_length() != 5 { return 1; }
 	if src_arr.len != 1 { return 4; }
@@ -50,7 +50,7 @@ fn scenario_hvar_local() nothrow -> Int {
 fn scenario_hcall_rvalue() nothrow -> Int {
 	val src_arr: Array<String> = make_one_element_array();
 	var dest: Array<String> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 { return 1; }
 	if (dest[0]).byte_length() != 5 { return 1; }
 	if src_arr.len != 1 { return 4; }
@@ -60,7 +60,7 @@ fn scenario_projection() nothrow -> Int {
 	var bag_items: Array<String> = arr_lit_factory();
 	val bag: ArrBag<String> = ArrBag(items = move bag_items);
 	var dest: Array<String> = [];
-	dest.extend(&bag.items);
+	dest.extend(bag.items);
 	if dest.len != 1 { return 1; }
 	if (dest[0]).byte_length() != 5 { return 1; }
 	if bag.items.len != 1 { return 4; }

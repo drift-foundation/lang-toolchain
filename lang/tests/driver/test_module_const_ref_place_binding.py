@@ -20,7 +20,7 @@ fn f(s: &String) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int {
-	return f(&S);
+	return f(S);
 }
 """
 	)
@@ -71,7 +71,7 @@ fn mk(h: &Hello) nothrow -> Req {
 
 pub fn main() nothrow -> Int {
 	val h = Hello(plugin = "mysql_native_password");
-	val r = mk(&h);
+	val r = mk(h);
 	if r.user == "root" and r.plugin == "mysql_native_password" {
 		return 0;
 	}

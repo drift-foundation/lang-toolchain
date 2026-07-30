@@ -139,7 +139,7 @@ fn dup<T>(x: &T) nothrow -> T require T is shareable.ConstShare {
 
 pub fn main() nothrow -> Int {
 \tval h = Holder(handle = core.const_arc<type Int>(42));
-\tval h2 = dup<type Holder>(&h);
+\tval h2 = dup<type Holder>(h);
 \treturn 0;
 }
 """)

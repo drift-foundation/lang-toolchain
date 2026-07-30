@@ -62,16 +62,16 @@ pub fn main() nothrow -> Int {
 		core.callback2(|p: mem.Ptr<Byte>, q: mem.Ptr<Byte>| => { 7 });
 
 	// LEFT-TO-RIGHT: first failing argument wins, ordinal + byte index.
-	val a = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(&bad1, &bad2, cb2a));
+	val a = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(bad1, bad2, cb2a));
 	if a != 1101 { console.println("FAIL lr-first"); return 1; }        // arg 1, index 1
-	val b = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(&ok, &bad2, cb2b));
+	val b = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(ok, bad2, cb2b));
 	if b != 1210 { console.println("FAIL lr-second"); return 2; }       // arg 2, index 10
-	val c = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(&ok, &ok, cb2c));
+	val c = code_of(ffi.with_cstr2<type Int, core.Callback2<mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(ok, ok, cb2c));
 	if c != 7 { console.println("FAIL lr-ok"); return 3; }
 
 	val cb4: core.Callback4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, Int> =
 		core.callback4(|p: mem.Ptr<Byte>, q: mem.Ptr<Byte>, r: mem.Ptr<Byte>, s: mem.Ptr<Byte>| => { 9 });
-	val d = code_of(ffi.with_cstr4<type Int, core.Callback4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(&ok, &ok, &ok, &bad1, cb4));
+	val d = code_of(ffi.with_cstr4<type Int, core.Callback4<mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, mem.Ptr<Byte>, Int> >(ok, ok, ok, bad1, cb4));
 	if d != 1401 { console.println("FAIL lr-fourth"); return 4; }       // arg 4, index 1
 
 	// Canonical empty: zero-copy C string reads as "" (base -> NUL).
@@ -81,7 +81,7 @@ pub fn main() nothrow -> Int {
 			val b0 = mem.ptr_read<type Byte>(p);
 			cast<Int>(b0)
 		});
-	val e = code_of(ffi.with_cstr<type Int, core.Callback1<mem.Ptr<Byte>, Int> >(&empty, cbe));
+	val e = code_of(ffi.with_cstr<type Int, core.Callback1<mem.Ptr<Byte>, Int> >(empty, cbe));
 	if e != 0 { console.println("FAIL empty-cstr"); return 5; }
 	if empty.byte_length() != 0 { console.println("FAIL empty-len"); return 6; }
 
@@ -89,13 +89,13 @@ pub fn main() nothrow -> Int {
 	// pointer compiles; it is documented-invalid after return (not used here).
 	val cbp: core.Callback1<mem.Ptr<Byte>, mem.Ptr<Byte> > =
 		core.callback1(|p: mem.Ptr<Byte>| => { p });
-	var escaped = ffi.with_cstr_unsafe<type mem.Ptr<Byte>, core.Callback1<mem.Ptr<Byte>, mem.Ptr<Byte> > >(&ok, cbp);
+	var escaped = ffi.with_cstr_unsafe<type mem.Ptr<Byte>, core.Callback1<mem.Ptr<Byte>, mem.Ptr<Byte> > >(ok, cbp);
 	val esc_null = mem.ptr_is_null<type Byte>(escaped);
 	if esc_null { console.println("FAIL escape-null"); return 7; }
 
 	// OwnedCStr: release-then-drop is safe; the released block is freed
 	// with the PAIRED deallocator (real paired-free coverage).
-	match ffi.to_owned_cstr(&ok) {
+	match ffi.to_owned_cstr(ok) {
 		core.Result::Ok(o) => {
 			var owned = move o;
 			val raw = owned.release();
@@ -110,7 +110,7 @@ pub fn main() nothrow -> Int {
 	// affect the source String (decision 7 copy-isolation, actually
 	// mutated here).
 	val iso_src = "copy-me";
-	match ffi.to_owned_cstr(&iso_src) {
+	match ffi.to_owned_cstr(iso_src) {
 		core.Result::Ok(o2) => {
 			var owned2 = move o2;
 			val raw2 = owned2.release();
@@ -126,7 +126,7 @@ pub fn main() nothrow -> Int {
 
 	// OwnedCBytes: drop-only path (no release) — destructor frees via the
 	// PAIRED cbytes deallocator.
-	var ob = ffi.to_owned_cbytes(&bad1);
+	var ob = ffi.to_owned_cbytes(bad1);
 	val view = ob.get();
 	if view.size() != 3 { console.println("FAIL cbytes-size"); return 10; }
 	val mid = mem.ptr_read<type Byte>(mem.ptr_offset<type Byte>(view.data(), 1));
@@ -134,7 +134,7 @@ pub fn main() nothrow -> Int {
 
 	// OwnedCBytes: RELEASE path — receiver frees with the paired
 	// cbytes_free (real paired-free coverage).
-	var ob2 = ffi.to_owned_cbytes(&ok);
+	var ob2 = ffi.to_owned_cbytes(ok);
 	val rel = ob2.release();
 	if rel.size() != 2 { console.println("FAIL cbytes-rel-size"); return 17; }
 	val rb0 = mem.ptr_read<type Byte>(rel.data());
@@ -144,17 +144,17 @@ pub fn main() nothrow -> Int {
 	// Scope: argv element ordinal on failure; success path counts.
 	val cbs: core.Callback1<&mut ffi.CStringScope, Int> =
 		core.callback1(|sc: &mut ffi.CStringScope| => {
-			val bad_av = match sc.argv(&["fine", "al\x00so", "x"]) {
+			val bad_av = match sc.argv(["fine", "al\x00so", "x"]) {
 				core.Result::Ok(v) => { 0 },
 				core.Result::Err(e3) => {
 					match e3 { ffi.CStringError::InteriorNul(arg, index) => { 1000 + arg * 100 + index }, }
 				},
 			};
-			val good_av = match sc.argv(&["a", "bc"]) {
+			val good_av = match sc.argv(["a", "bc"]) {
 				core.Result::Ok(v) => { v.count() },
 				core.Result::Err(e4) => { -1 },
 			};
-			val pin = match sc.cstr(&"pinned") { core.Result::Ok(p) => { 1 }, core.Result::Err(e5) => { 0 }, };
+			val pin = match sc.cstr("pinned") { core.Result::Ok(p) => { 1 }, core.Result::Err(e5) => { 0 }, };
 			bad_av * 10 + good_av + pin
 		});
 	val s = ffi.with_cstring_scope<type Int, core.Callback1<&mut ffi.CStringScope, Int> >(cbs);

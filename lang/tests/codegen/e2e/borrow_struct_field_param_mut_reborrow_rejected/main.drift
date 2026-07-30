@@ -9,6 +9,6 @@ fn bad(p: &Point) nothrow -> Void {
 
 pub fn main() nothrow -> Int{
 	var p = Point(0, 0);
-	bad(&p);
+	bad(p);
 	return 0;
 }

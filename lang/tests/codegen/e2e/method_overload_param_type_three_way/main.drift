@@ -22,14 +22,12 @@ pub fn main() nothrow -> Int {
 	val b = Bag(v = 7);
 
 	if b.tag("hello") != 8 { return 1; }
-	if b.tag(&"world") != 8 { return 2; }
 
 	if b.tag(5) != 57 { return 3; }
 	if b.tag(0) != 7 { return 4; }
 
 	val segs: Array<String> = ["a", "b", "c", "d"];
 	if b.tag(segs) != 407 { return 5; }
-	if b.tag(&segs) != 407 { return 6; }
 
 	return 0;
 }

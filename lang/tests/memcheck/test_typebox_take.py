@@ -175,7 +175,7 @@ pub fn main() nothrow -> Int {
 	val k_str: Uint64 = core.type_id<type String>();
 	val _ = m.insert(k_resp, rt.type_box(Resp(body = fmt.format_int(700), status = 200)));
 	val _ = m.insert(k_str, rt.type_box(fmt.format_int(800)));
-	match m.remove(&k_resp) {
+	match m.remove(k_resp) {
 		Some(box) => {
 			match rt.take<type Resp>(move box) {
 				Some(r) => {
@@ -210,7 +210,7 @@ import std.format as fmt;
 pub fn main() nothrow -> Int {
 	val b = rt.type_box(fmt.format_int(700));
 	var sum = 0;
-	match rt.downcast<type String>(&b) {
+	match rt.downcast<type String>(b) {
 		Some(s_ref) => {
 			sum = sum + s_ref.byte_length();
 		},
@@ -218,7 +218,7 @@ pub fn main() nothrow -> Int {
 			return 99;
 		}
 	}
-	match rt.downcast<type Int>(&b) {
+	match rt.downcast<type Int>(b) {
 		Some(_v) => {
 			return 98;
 		},
@@ -245,11 +245,11 @@ import std.mem as mem;
 
 pub fn main() nothrow -> Int {
 	val empty = mem.rawbuffer_empty<type Byte>();
-	if mem.capacity<type Byte>(&empty) != 0 {
+	if mem.capacity<type Byte>(empty) != 0 {
 		return 1;
 	}
 	unsafe {
-		val p = mem.rawbuffer_ptr<type Byte>(&empty);
+		val p = mem.rawbuffer_ptr<type Byte>(empty);
 		if not mem.ptr_is_null<type Byte>(p) {
 			return 2;
 		}
@@ -295,8 +295,8 @@ import std.core as core;
 pub fn main() nothrow -> Int {
 	unsafe {
 		var raw = mem.alloc_uninit<type String>(1);
-		mem.write<type String>(&mut raw, 0, fmt.format_int(700));
-		val v = mem.read<type String>(&mut raw, 0);
+		mem.write<type String>(raw, 0, fmt.format_int(700));
+		val v = mem.read<type String>(raw, 0);
 		val n = v.byte_length();
 		core.drop_value<type String>(move v);
 		mem.dealloc<type String>(move raw);

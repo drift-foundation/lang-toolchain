@@ -10,12 +10,12 @@ import std.mem as mem;
 // to memcheck.
 fn make_owned_string() nothrow -> String {
 	var b = io.buffer(5);
-	io.buffer_write(&mut b, 0, cast<Byte>(104));  // 'h'
-	io.buffer_write(&mut b, 1, cast<Byte>(101));  // 'e'
-	io.buffer_write(&mut b, 2, cast<Byte>(108));  // 'l'
-	io.buffer_write(&mut b, 3, cast<Byte>(108));  // 'l'
-	io.buffer_write(&mut b, 4, cast<Byte>(111));  // 'o'
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 5);
+	io.buffer_write(b, 0, cast<Byte>(104));  // 'h'
+	io.buffer_write(b, 1, cast<Byte>(101));  // 'e'
+	io.buffer_write(b, 2, cast<Byte>(108));  // 'l'
+	io.buffer_write(b, 3, cast<Byte>(108));  // 'l'
+	io.buffer_write(b, 4, cast<Byte>(111));  // 'o'
+	return core.string_from_utf8_bytes(io.buffer_ptr(b), 5);
 }
 
 // Returns "" via the same control-flow shape that triggered the

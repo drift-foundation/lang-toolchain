@@ -25,7 +25,7 @@ pub fn main() nothrow -> Int {
 	val m1 = pred_lock.clone();
 	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
 		var g = m1.get().lock();
-		match cv1.get().wait(&mut g) {
+		match cv1.get().wait(g) {
 			core.Result::Ok(_) => { return 91; },
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }

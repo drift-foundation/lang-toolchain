@@ -34,7 +34,7 @@ fn take_via_helper(slot: &mut Optional<Resource>) nothrow -> Optional<Resource> 
 pub fn main() nothrow -> Int {
 	var b = Box(x = Optional<Resource>::Some(Resource(id = 77)));
 
-	val taken = take_via_helper(&mut b.x);
+	val taken = take_via_helper(b.x);
 	match taken {
 		Some(r) => {
 			if r.id != 77 {
@@ -58,7 +58,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Second take through the helper must return None.
-	val taken_again = take_via_helper(&mut b.x);
+	val taken_again = take_via_helper(b.x);
 	match taken_again {
 		Some(r) => {
 			cons.eprintln("FAIL: second take should be None");

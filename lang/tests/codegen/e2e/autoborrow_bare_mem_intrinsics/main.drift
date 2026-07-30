@@ -1,0 +1,15 @@
+module main;
+
+import std.mem as mem;
+
+pub fn main() nothrow -> Int {
+	var a: Int = 3;
+	var b: Int = 4;
+	mem.swap(a, b);
+	if a != 4 { return 1; }
+	if b != 3 { return 2; }
+	val old = mem.replace(a, 9);
+	if old != 4 { return 3; }
+	if a != 9 { return 4; }
+	return 0;
+}

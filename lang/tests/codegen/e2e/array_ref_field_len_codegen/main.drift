@@ -6,5 +6,5 @@ fn len_of(bytes: &Array<Byte>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var xs: Array<Byte> = [cast<Byte>(1), cast<Byte>(2), cast<Byte>(3)];
-	return len_of(&xs);
+	return len_of(xs);
 }

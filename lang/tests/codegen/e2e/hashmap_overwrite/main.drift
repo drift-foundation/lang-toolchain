@@ -18,7 +18,7 @@ fn run() -> Int {
 	}
 	if m.len() != 1 { return 4; }
 	val k1 = 1;
-	val got = m.get_mut(&k1);
+	val got = m.get_mut(k1);
 	match got {
 		None => { return 5; },
 		Some(v) => {

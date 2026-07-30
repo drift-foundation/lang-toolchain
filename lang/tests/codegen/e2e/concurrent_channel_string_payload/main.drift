@@ -34,11 +34,11 @@ pub fn main() nothrow -> Int {
 		var sender = halves.take_sender();
 		var receiver = halves.take_receiver();
 		val payload = heap_str(0);
-		val expected = ascii_sum(&payload);
+		val expected = ascii_sum(payload);
 		val _ = sender.send(payload);
 		match receiver.recv() {
 			Ok(got) => {
-				val got_sum = ascii_sum(&got);
+				val got_sum = ascii_sum(got);
 				if got_sum != expected { return 10; }
 				/* got drops at arm end → drift_string_release */
 			},
@@ -85,7 +85,7 @@ pub fn main() nothrow -> Int {
 		while got_count < 3 {
 			match receiver.recv() {
 				Ok(s) => {
-					if ascii_sum(&s) <= 0 { return 30; }
+					if ascii_sum(s) <= 0 { return 30; }
 					got_count = got_count + 1;
 				},
 				Err(_) => { return 31; },

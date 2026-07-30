@@ -1,0 +1,43 @@
+module main;
+
+// Shape 1: free fn, T vs &T.
+fn free_tvref(s: &String) nothrow -> Int {
+	return 1;
+}
+
+fn free_tvref(s: String) nothrow -> Int {
+	return 2;
+}
+
+// Shape 2: free fn, &T vs &mut T.
+fn free_refmut(a: &Int) nothrow -> Int {
+	return 3;
+}
+
+fn free_refmut(a: &mut Int) nothrow -> Int {
+	return 4;
+}
+
+struct Box { tag: Int }
+
+implement Box {
+	// Shape 3: method, T vs &T (non-receiver slot).
+	pub fn meth_tvref(self: &Box, s: &String) nothrow -> Int {
+		return 5;
+	}
+	pub fn meth_tvref(self: &Box, s: String) nothrow -> Int {
+		return 6;
+	}
+
+	// Shape 4: method, &T vs &mut T (non-receiver slot).
+	pub fn meth_refmut(self: &Box, a: &Int) nothrow -> Int {
+		return 7;
+	}
+	pub fn meth_refmut(self: &Box, a: &mut Int) nothrow -> Int {
+		return 8;
+	}
+}
+
+pub fn main() nothrow -> Int {
+	return 0;
+}

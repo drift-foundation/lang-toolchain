@@ -6,11 +6,11 @@ import std.time as time;
 fn expect_roundtrip(raw: String, micros: Int, canon: String) -> Int {
 	match time.parse_iso8601_utc(raw) {
 		core.Result::Ok(ts) => {
-			if time.utc_unix_micros(&ts) != micros { return 1; }
-			if time.format_iso8601_utc(&ts) != canon { return 2; }
+			if time.utc_unix_micros(ts) != micros { return 1; }
+			if time.format_iso8601_utc(ts) != canon { return 2; }
 			match time.parse_iso8601_utc(canon) {
 				core.Result::Ok(ts2) => {
-					if time.utc_unix_micros(&ts2) != micros { return 3; }
+					if time.utc_unix_micros(ts2) != micros { return 3; }
 				},
 				core.Result::Err(_) => { return 4; }
 			}
@@ -26,19 +26,19 @@ fn run() -> Int {
 	if expect_roundtrip("1969-12-31T23:59:59.999999Z", -1, "1969-12-31T23:59:59.999999Z") != 0 { return 12; }
 
 	val direct = time.utc_from_unix_micros(123456);
-	if time.utc_unix_micros(&direct) != 123456 { return 13; }
-	if time.format_iso8601_utc(&direct) != "1970-01-01T00:00:00.123456Z" { return 14; }
+	if time.utc_unix_micros(direct) != 123456 { return 13; }
+	if time.format_iso8601_utc(direct) != "1970-01-01T00:00:00.123456Z" { return 14; }
 
 	val negative = time.utc_from_unix_micros(-1);
-	if time.utc_unix_micros(&negative) != -1 { return 15; }
-	if time.format_iso8601_utc(&negative) != "1969-12-31T23:59:59.999999Z" { return 16; }
+	if time.utc_unix_micros(negative) != -1 { return 15; }
+	if time.format_iso8601_utc(negative) != "1969-12-31T23:59:59.999999Z" { return 16; }
 
 	val start = time.now_monotonic();
-	val elapsed = time.elapsed_micros(&start);
+	val elapsed = time.elapsed_micros(start);
 	if elapsed < 0 { return 17; }
 
 	val now = time.now_utc();
-	if time.utc_unix_micros(&now) <= 0 { return 18; }
+	if time.utc_unix_micros(now) <= 0 { return 18; }
 	return 0;
 }
 

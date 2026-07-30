@@ -38,7 +38,7 @@ implement core.Diagnostic for Wrap {
 	pub fn to_json_text(self: &Wrap) nothrow -> String {
 		// User reads the heap field directly through `&self.tag`.
 		return "{\"count\":" + core.diagnostic_json_int(self.count)
-			+ ",\"tag\":" + core.diagnostic_json_string(&self.tag) + "}";
+			+ ",\"tag\":" + core.diagnostic_json_string(self.tag) + "}";
 	}
 }
 
@@ -77,7 +77,7 @@ fn _check_one(tag: String, count: Int) nothrow -> Int {
 	} catch e {
 		val envelope = e.encode_compact();
 		val needle: String = "heap-tag-payload";
-		if !_str_contains(&envelope, &needle) {
+		if !_str_contains(envelope, needle) {
 			console.print("MISSING: tag in envelope");
 			return 10;
 		}

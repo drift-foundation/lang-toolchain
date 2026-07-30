@@ -5,7 +5,7 @@ import std.json as json;
 
 fn build() nothrow -> String {
 	val text = "{\"k\":\"v\"}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
 			// deep is owned. Moved on None, retained on Some.
 			// Scope-exit must destroy deep on the Some path.

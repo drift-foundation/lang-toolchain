@@ -8,14 +8,14 @@ fn _make_string(bytes: &Array<Byte>) nothrow -> String {
 	val n = bytes.len;
 	var buf = io.buffer(n);
 	var i = 0;
-	while i < n { io.buffer_write(&mut buf, i, bytes[i]); i = i + 1; }
-	return core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+	while i < n { io.buffer_write(buf, i, bytes[i]); i = i + 1; }
+	return core.string_from_utf8_bytes(io.buffer_ptr(buf), n);
 }
 
 // Pattern 1: throw with heap-allocated string field (UAF regression)
 fn throw_heap_string() -> Int {
 	var bytes: Array<Byte> = [cast<Byte>(104), cast<Byte>(101), cast<Byte>(108), cast<Byte>(108), cast<Byte>(111)];
-	val s = _make_string(&bytes);
+	val s = _make_string(bytes);
 	throw Fail(s, "static");
 }
 

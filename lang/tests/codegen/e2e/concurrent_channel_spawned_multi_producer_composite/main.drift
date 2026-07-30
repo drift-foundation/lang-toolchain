@@ -14,7 +14,7 @@ pub struct Tracked
 
 implement core.Destructible for Tracked {
 	pub fn destroy(var self: Tracked) nothrow -> Void {
-		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+		val _ = atomic.atomic_fetch_add_int(self.destruct_count.get(), 1, 2);
 	}
 }
 
@@ -124,7 +124,7 @@ pub fn main() nothrow -> Int {
 	}
 	{ val _ = move receiver; }
 
-	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	val n = atomic.atomic_load_int(ctr.get(), 1);
 	/* Expected: 1 (the single Tracked, dropped at arm end after recv). */
 	if n != 1 { return 100 + n; }
 	return 0;

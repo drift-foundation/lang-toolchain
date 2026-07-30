@@ -23,35 +23,35 @@ fn _push_repeat(out: &mut Array<Byte>, b: Byte, count: Int) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 	var key1: Array<Byte> = [];
-	_push_repeat(&mut key1, cast<Byte>(11), 20);
+	_push_repeat(key1, cast<Byte>(11), 20);
 	var data1: Array<Byte> = [];
-	_push_ascii(&mut data1, "Hi There");
-	val h1 = crypto.hmac_sha256(&key1, &data1);
-	if codec.hex_encode(&h1) != "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" {
+	_push_ascii(data1, "Hi There");
+	val h1 = crypto.hmac_sha256(key1, data1);
+	if codec.hex_encode(h1) != "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7" {
 		return 1;
 	}
 
 	var key2: Array<Byte> = [];
-	_push_ascii(&mut key2, "Jefe");
+	_push_ascii(key2, "Jefe");
 	var data2: Array<Byte> = [];
-	_push_ascii(&mut data2, "what do ya want for nothing?");
-	val h2 = crypto.hmac_sha256(&key2, &data2);
-	if codec.hex_encode(&h2) != "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" {
+	_push_ascii(data2, "what do ya want for nothing?");
+	val h2 = crypto.hmac_sha256(key2, data2);
+	if codec.hex_encode(h2) != "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" {
 		return 2;
 	}
 
 	var key3: Array<Byte> = [];
-	_push_repeat(&mut key3, cast<Byte>(170), 131);
+	_push_repeat(key3, cast<Byte>(170), 131);
 	var data3: Array<Byte> = [];
-	_push_ascii(&mut data3, "Test Using Larger Than Block-Size Key - Hash Key First");
-	val h3 = crypto.hmac_sha256(&key3, &data3);
-	if codec.hex_encode(&h3) != "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54" {
+	_push_ascii(data3, "Test Using Larger Than Block-Size Key - Hash Key First");
+	val h3 = crypto.hmac_sha256(key3, data3);
+	if codec.hex_encode(h3) != "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54" {
 		return 3;
 	}
 
 	var empty_key: Array<Byte> = [];
 	var empty_msg: Array<Byte> = [];
-	val h4 = crypto.hmac_sha256(&empty_key, &empty_msg);
+	val h4 = crypto.hmac_sha256(empty_key, empty_msg);
 	if h4.len != 32 {
 		return 4;
 	}

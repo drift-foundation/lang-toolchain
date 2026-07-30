@@ -63,14 +63,14 @@ pub fn main() nothrow -> Int {
 	s = s + "world and moon";   // heap-backed, non-static
 
 	// construction + bounds
-	var v = text.byte_view_all(&s);
-	match text.byte_view(&s, 6, 5) {
+	var v = text.byte_view_all(s);
+	match text.byte_view(s, 6, 5) {
 		Ok(x) => { v = move x; },
 		Err(e) => { return 1; }
 	}
 	if v.byte_length() != 5 { return 2; }
 	if v.is_empty() { return 3; }
-	match text.byte_view(&s, 6, 999) { Ok(x) => { return 4; }, Err(e) => {
+	match text.byte_view(s, 6, 999) { Ok(x) => { return 4; }, Err(e) => {
 		if e.offset != 6 { return 5; }
 	} }
 
@@ -83,25 +83,25 @@ pub fn main() nothrow -> Int {
 	if cast<Int>(b0) != 119 { return 7; }
 
 	// subview + dup + eq + search
-	val all = text.byte_view_all(&s);
-	var v2 = text.byte_view_all(&s);
+	val all = text.byte_view_all(s);
+	var v2 = text.byte_view_all(s);
 	match all.subview(6, 5) {
 		Ok(x) => { v2 = move x; },
 		Err(e) => { return 8; }
 	}
-	if not v.eq_view(&v2) { return 9; }
-	if not v.eq_string(&"world") { return 10; }
-	if not all.starts_with(&"hello") { return 11; }
-	if not all.ends_with(&"moon") { return 12; }
-	if all.index_of(&"world") != 6 { return 13; }
-	if all.index_of_view(&v) != 6 { return 14; }
+	if not v.eq_view(v2) { return 9; }
+	if not v.eq_string("world") { return 10; }
+	if not all.starts_with("hello") { return 11; }
+	if not all.ends_with("moon") { return 12; }
+	if all.index_of("world") != 6 { return 13; }
+	if all.index_of_view(v) != 6 { return 14; }
 	val d = v.dup();
-	if not d.eq_view(&v) { return 15; }
+	if not d.eq_view(v) { return 15; }
 
 	// to_string
 	val owned = v.to_string();
 	if owned != "world" { return 16; }
-	var empty = text.byte_view_all(&s);
+	var empty = text.byte_view_all(s);
 	match all.subview(3, 0) {
 		Ok(x) => { empty = move x; },
 		Err(e) => { return 17; }
@@ -123,10 +123,10 @@ pub fn main() nothrow -> Int {
 	// _byte_source window (EXPORTED-INTERNAL matcher/parser plumbing):
 	// range-guarded reads, borrows only — bounded by the VIEW, not the
 	// backing.
-	val bsrc = text._byte_source(&v);
+	val bsrc = text._byte_source(v);
 	if bsrc.size() != 5 { return 20; }
 	if cast<Int>(bsrc.read(0)) != 119 { return 21; }
-	val ball = text._byte_source_all(&s);
+	val ball = text._byte_source_all(s);
 	if ball.size() != s.byte_length() { return 32; }
 
 	// bulk window
@@ -140,22 +140,22 @@ pub fn main() nothrow -> Int {
 			}
 			acc
 		});
-	val bulk = text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&v, move body);
+	val bulk = text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(v, move body);
 	if bulk != 552 { return 22; }
 
 	// split_views parity
-	val parts = text.split_views(&s, &" ");
+	val parts = text.split_views(s, " ");
 	if parts.len != 4 { return 23; }
-	if not parts[0].eq_string(&"hello") { return 24; }
-	if not parts[3].eq_string(&"moon") { return 25; }
-	val none = text.split_views(&s, &"zzz");
+	if not parts[0].eq_string("hello") { return 24; }
+	if not parts[3].eq_string("moon") { return 25; }
+	val none = text.split_views(s, "zzz");
 	if none.len != 1 { return 26; }
-	if not none[0].eq_string(&s) { return 27; }
+	if not none[0].eq_string(s) { return 27; }
 	val emptyin = "";
-	val ei = text.split_views(&emptyin, &",");
+	val ei = text.split_views(emptyin, ",");
 	if ei.len != 1 { return 28; }
 	if not ei[0].is_empty() { return 29; }
-	val perbyte = text.split_views(&"ab", &"");
+	val perbyte = text.split_views("ab", "");
 	if perbyte.len != 2 { return 30; }
 
 	// lifetime: views outlive the original binding's scope
@@ -163,9 +163,9 @@ pub fn main() nothrow -> Int {
 	{
 		var tmp = "dyn ";
 		tmp = tmp + "amic";
-		held.push(text.byte_view_all(&tmp));
+		held.push(text.byte_view_all(tmp));
 	}
-	if not held[0].eq_string(&"dyn amic") { return 31; }
+	if not held[0].eq_string("dyn amic") { return 31; }
 
 	cons.println("view smoke OK");
 	return 0;
@@ -189,34 +189,34 @@ pub fn main() nothrow -> Int {
 	s = s + "12345,x=alpha77,y=-42";
 
 	// ── parse_*_view + §6a offsets ──
-	var pv = text.byte_view_all(&s);
-	var v_num = text.byte_view_all(&s);
-	match text.byte_view(&s, 4, 5) { Ok(x) => { v_num = move x; }, Err(e) => { return 1; } }
-	match parse.parse_int_view(&v_num) {
+	var pv = text.byte_view_all(s);
+	var v_num = text.byte_view_all(s);
+	match text.byte_view(s, 4, 5) { Ok(x) => { v_num = move x; }, Err(e) => { return 1; } }
+	match parse.parse_int_view(v_num) {
 		Ok(n) => { if n != 12345 { return 2; } },
 		Err(e) => { return 3; }
 	}
 	// invalid digit at view-relative 5 ("12345," view of len 6)
-	var v_bad = text.byte_view_all(&s);
-	match text.byte_view(&s, 4, 6) { Ok(x) => { v_bad = move x; }, Err(e) => { return 4; } }
-	match parse.parse_int_view(&v_bad) {
+	var v_bad = text.byte_view_all(s);
+	match text.byte_view(s, 4, 6) { Ok(x) => { v_bad = move x; }, Err(e) => { return 4; } }
+	match parse.parse_int_view(v_bad) {
 		Ok(n) => { return 5; },
 		Err(e) => { if e.tag != "invalid-digit" or e.offset != 5 { return 6; } }
 	}
 	// negative to unsigned: invalid-datatype at 0
-	var v_neg = text.byte_view_all(&s);
-	match text.byte_view(&s, s.byte_length() - 3, 3) { Ok(x) => { v_neg = move x; }, Err(e) => { return 7; } }
-	match parse.parse_uint_view(&v_neg) {
+	var v_neg = text.byte_view_all(s);
+	match text.byte_view(s, s.byte_length() - 3, 3) { Ok(x) => { v_neg = move x; }, Err(e) => { return 7; } }
+	match parse.parse_uint_view(v_neg) {
 		Ok(n) => { return 8; },
 		Err(e) => { if e.tag != "invalid-datatype" or e.offset != 0 { return 9; } }
 	}
 	// §6a byte-range forms now relative
-	var bytes = core.string_to_utf8_bytes(&s);
-	match parse.parse_int_bytes(&bytes, 4, 10) {
+	var bytes = core.string_to_utf8_bytes(s);
+	match parse.parse_int_bytes(bytes, 4, 10) {
 		Ok(n) => { return 10; },
 		Err(e) => { if e.tag != "invalid-digit" or e.offset != 5 { return 11; } }
 	}
-	match parse.parse_int_bytes(&bytes, 90, 95) {
+	match parse.parse_int_bytes(bytes, 90, 95) {
 		Ok(n) => { return 12; },
 		Err(e) => { if e.tag != "invalid-range" or e.offset != 0 { return 13; } }
 	}
@@ -226,7 +226,7 @@ pub fn main() nothrow -> Int {
 	src_txt = src_txt + "answer;";
 	val cur = source.source_cursor_from_string(src_txt.clone(), "m");
 	match cur.slice_view(8, 14) {
-		Ok(v) => { if not v.eq_string(&"answer") { return 14; } },
+		Ok(v) => { if not v.eq_string("answer") { return 14; } },
 		Err(e) => { return 15; }
 	}
 	match cur.slice_view(8, 999) {
@@ -236,18 +236,18 @@ pub fn main() nothrow -> Int {
 
 	// ── json raw_view / byte_range_view + fast-path equivalence ──
 	var doc_txt = "{\"name\": \"widget\", \"esc\": \"a\\nb\", \"n\": 7}";
-	match json.parse_located(&doc_txt, &json.permissive()) {
+	match json.parse_located(doc_txt, json.permissive()) {
 		Ok(doc) => {
-			match doc.at_pointer(&"/name") {
+			match doc.at_pointer("/name") {
 				Ok(c) => {
 					val rv = c.raw_view();
 					// span covers the raw token including quotes
-					if not rv.eq_string(&"\"widget\"") { return 18; }
+					if not rv.eq_string("\"widget\"") { return 18; }
 				},
 				Err(e) => { return 19; }
 			}
 			match doc.byte_range_view(1, 6) {
-				Ok(v) => { if not v.eq_string(&"\"name\"") { return 20; } },
+				Ok(v) => { if not v.eq_string("\"name\"") { return 20; } },
 				Err(e) => { return 21; }
 			}
 			match doc.byte_range_view(1, 9999) {
@@ -258,18 +258,18 @@ pub fn main() nothrow -> Int {
 		Err(e) => { return 23; }
 	}
 	// escape-free fast path + escaped fallback both correct
-	match json.parse(&doc_txt) {
+	match json.parse(doc_txt) {
 		Ok(node) => {
 			match node {
 				Object(fields) => {
-					match fields.get(&"name") {
+					match fields.get("name") {
 						Some(nv) => { match nv {
 							String(sv) => { if sv != "widget" { return 24; } },
 							default => { return 25; }
 						} },
 						None() => { return 26; }
 					}
-					match fields.get(&"esc") {
+					match fields.get("esc") {
 						Some(ev) => { match ev {
 							String(sv) => { if sv.byte_length() != 3 { return 27; } },
 							default => { return 28; }
@@ -284,57 +284,57 @@ pub fn main() nothrow -> Int {
 	}
 
 	// ── regex view surface ──
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
 			// subject view over "x=alpha77" region: alpha77 at rel 2
-			var vv = text.byte_view_all(&s);
-			match text.byte_view(&s, 10, 9) { Ok(x) => { vv = move x; }, Err(e) => { return 32; } }
-			if not regex.is_match_view(&re, &vv) { return 33; }
-			match regex.find_first_view(&re, &vv) {
+			var vv = text.byte_view_all(s);
+			match text.byte_view(s, 10, 9) { Ok(x) => { vv = move x; }, Err(e) => { return 32; } }
+			if not regex.is_match_view(re, vv) { return 33; }
+			match regex.find_first_view(re, vv) {
 				Some(m) => {
 					if m.start != 2 or m.end != 9 { return 34; }   // VIEW-relative
-					match regex.match_subview(m, &vv) {
-						Ok(mv) => { if not mv.eq_string(&"alpha77") { return 35; } },
+					match regex.match_subview(m, vv) {
+						Ok(mv) => { if not mv.eq_string("alpha77") { return 35; } },
 						Err(e) => { return 36; }
 					}
 				},
 				None() => { return 37; }
 			}
 			// String-form parity untouched
-			match regex.find_first(&re, &s) {
+			match regex.find_first(re, s) {
 				Some(m) => {
-					match regex.match_view(m, &s) {
-						Ok(mv) => { if not mv.eq_string(&"alpha77") { return 38; } },
+					match regex.match_view(m, s) {
+						Ok(mv) => { if not mv.eq_string("alpha77") { return 38; } },
 						Err(e) => { return 39; }
 					}
 				},
 				None() => { return 40; }
 			}
 			// fabricated matches: checked, never UB
-			match regex.match_view(regex.RegexMatch(start = 5, end = 2), &s) {
+			match regex.match_view(regex.RegexMatch(start = 5, end = 2), s) {
 				Ok(mv) => { return 41; },
 				Err(e) => { if e.offset != 5 { return 42; } }
 			}
-			match regex.match_view(regex.RegexMatch(start = 0 - 3, end = 2), &s) {
+			match regex.match_view(regex.RegexMatch(start = 0 - 3, end = 2), s) {
 				Ok(mv) => { return 43; },
 				Err(e) => { }
 			}
-			match regex.match_view(regex.RegexMatch(start = 0, end = 99999), &s) {
+			match regex.match_view(regex.RegexMatch(start = 0, end = 99999), s) {
 				Ok(mv) => { return 44; },
 				Err(e) => { }
 			}
 			// empty match span -> valid empty view
-			match regex.match_view(regex.RegexMatch(start = 3, end = 3), &s) {
+			match regex.match_view(regex.RegexMatch(start = 3, end = 3), s) {
 				Ok(mv) => { if not mv.is_empty() { return 45; } },
 				Err(e) => { return 46; }
 			}
 			// anchors bind to view boundaries
-			match regex.compile(&"^alpha77$") {
+			match regex.compile("^alpha77$") {
 				Ok(re2) => {
-					var av = text.byte_view_all(&s);
-					match text.byte_view(&s, 12, 7) { Ok(x) => { av = move x; }, Err(e) => { return 47; } }
-					if not regex.is_match_view(&re2, &av) { return 48; }
-					if regex.is_match(&re2, &s) { return 49; }   // whole string: anchored fails
+					var av = text.byte_view_all(s);
+					match text.byte_view(s, 12, 7) { Ok(x) => { av = move x; }, Err(e) => { return 47; } }
+					if not regex.is_match_view(re2, av) { return 48; }
+					if regex.is_match(re2, s) { return 49; }   // whole string: anchored fails
 				},
 				Err(e) => { return 50; }
 			}
@@ -382,55 +382,55 @@ pub fn main() nothrow -> Int {
 	// 33..52:"99999999999999999999" 53:' ' 54:'-' 55:' ' 56:'+'
 	var s = "+x ";
 	s = s + "-9223372036854775809 -5 12a34 99999999999999999999 - +";
-	var b = core.string_to_utf8_bytes(&s);
+	var b = core.string_to_utf8_bytes(s);
 
 	// invalid start/end -> invalid-range @0 (positionless)
-	var r = check_bytes_int(&b, 0 - 1, 2, &"invalid-range", 0, 10); if r != 0 { return r; }
-	r = check_bytes_int(&b, 5, 2, &"invalid-range", 0, 12); if r != 0 { return r; }
-	r = check_bytes_int(&b, 0, 9999, &"invalid-range", 0, 14); if r != 0 { return r; }
+	var r = check_bytes_int(b, 0 - 1, 2, "invalid-range", 0, 10); if r != 0 { return r; }
+	r = check_bytes_int(b, 5, 2, "invalid-range", 0, 12); if r != 0 { return r; }
+	r = check_bytes_int(b, 0, 9999, "invalid-range", 0, 14); if r != 0 { return r; }
 	// empty range -> invalid-syntax @0
-	r = check_bytes_int(&b, 3, 3, &"invalid-syntax", 0, 16); if r != 0 { return r; }
+	r = check_bytes_int(b, 3, 3, "invalid-syntax", 0, 16); if r != 0 { return r; }
 	// sign-only -> invalid-syntax @1
-	r = check_bytes_int(&b, 0, 1, &"invalid-syntax", 1, 18); if r != 0 { return r; }
+	r = check_bytes_int(b, 0, 1, "invalid-syntax", 1, 18); if r != 0 { return r; }
 	// invalid digit at k -> k - start   ("+x": fails at rel 1)
-	r = check_bytes_int(&b, 0, 2, &"invalid-digit", 1, 20); if r != 0 { return r; }
+	r = check_bytes_int(b, 0, 2, "invalid-digit", 1, 20); if r != 0 { return r; }
 	// "12a34" at 27..32: invalid digit at rel 2
-	r = check_bytes_int(&b, 27, 32, &"invalid-digit", 2, 22); if r != 0 { return r; }
+	r = check_bytes_int(b, 27, 32, "invalid-digit", 2, 22); if r != 0 { return r; }
 	// underflow: "-9223372036854775809" at 3..23 trips at rel 19
-	r = check_bytes_int(&b, 3, 23, &"underflow", 19, 24); if r != 0 { return r; }
+	r = check_bytes_int(b, 3, 23, "underflow", 19, 24); if r != 0 { return r; }
 	// overflow: "99999999999999999999" at 33..53 — the guard fires
 	// BEFORE consuming the 19th digit (0-based rel 18)
-	r = check_bytes_int(&b, 33, 53, &"overflow", 18, 26); if r != 0 { return r; }
+	r = check_bytes_int(b, 33, 53, "overflow", 18, 26); if r != 0 { return r; }
 	// negative to unsigned -> invalid-datatype @0 ("-5" at 24..26)
-	match parse.parse_uint_bytes(&b, 24, 26) {
+	match parse.parse_uint_bytes(b, 24, 26) {
 		Ok(n) => { return 28; },
 		Err(er) => { if er.tag != "invalid-datatype" or er.offset != 0 { return 29; } }
 	}
 
 	// view family: same rows (no invalid-range; empty view -> invalid-syntax@0)
-	var v = text.byte_view_all(&s);
-	match text.byte_view(&s, 3, 0) { Ok(x) => { v = move x; }, Err(e) => { return 30; } }
-	r = check_view_int(&v, &"invalid-syntax", 0, 31); if r != 0 { return r; }
-	match text.byte_view(&s, 0, 1) { Ok(x) => { v = move x; }, Err(e) => { return 33; } }
-	r = check_view_int(&v, &"invalid-syntax", 1, 34); if r != 0 { return r; }
-	match text.byte_view(&s, 0, 2) { Ok(x) => { v = move x; }, Err(e) => { return 36; } }
-	r = check_view_int(&v, &"invalid-digit", 1, 37); if r != 0 { return r; }
-	match text.byte_view(&s, 27, 5) { Ok(x) => { v = move x; }, Err(e) => { return 39; } }
-	r = check_view_int(&v, &"invalid-digit", 2, 40); if r != 0 { return r; }
-	match text.byte_view(&s, 3, 20) { Ok(x) => { v = move x; }, Err(e) => { return 42; } }
-	r = check_view_int(&v, &"underflow", 19, 43); if r != 0 { return r; }
-	match text.byte_view(&s, 33, 20) { Ok(x) => { v = move x; }, Err(e) => { return 45; } }
-	r = check_view_int(&v, &"overflow", 18, 46); if r != 0 { return r; }
-	match text.byte_view(&s, 24, 2) { Ok(x) => { v = move x; }, Err(e) => { return 48; } }
-	match parse.parse_uint_view(&v) {
+	var v = text.byte_view_all(s);
+	match text.byte_view(s, 3, 0) { Ok(x) => { v = move x; }, Err(e) => { return 30; } }
+	r = check_view_int(v, "invalid-syntax", 0, 31); if r != 0 { return r; }
+	match text.byte_view(s, 0, 1) { Ok(x) => { v = move x; }, Err(e) => { return 33; } }
+	r = check_view_int(v, "invalid-syntax", 1, 34); if r != 0 { return r; }
+	match text.byte_view(s, 0, 2) { Ok(x) => { v = move x; }, Err(e) => { return 36; } }
+	r = check_view_int(v, "invalid-digit", 1, 37); if r != 0 { return r; }
+	match text.byte_view(s, 27, 5) { Ok(x) => { v = move x; }, Err(e) => { return 39; } }
+	r = check_view_int(v, "invalid-digit", 2, 40); if r != 0 { return r; }
+	match text.byte_view(s, 3, 20) { Ok(x) => { v = move x; }, Err(e) => { return 42; } }
+	r = check_view_int(v, "underflow", 19, 43); if r != 0 { return r; }
+	match text.byte_view(s, 33, 20) { Ok(x) => { v = move x; }, Err(e) => { return 45; } }
+	r = check_view_int(v, "overflow", 18, 46); if r != 0 { return r; }
+	match text.byte_view(s, 24, 2) { Ok(x) => { v = move x; }, Err(e) => { return 48; } }
+	match parse.parse_uint_view(v) {
 		Ok(n) => { return 49; },
 		Err(er) => { if er.tag != "invalid-datatype" or er.offset != 0 { return 50; } }
 	}
 
 	// happy paths across families agree
-	match parse.parse_int_bytes(&b, 24, 26) { Ok(n) => { if n != 0 - 5 { return 51; } }, Err(e) => { return 52; } }
-	match text.byte_view(&s, 24, 2) { Ok(x) => { v = move x; }, Err(e) => { return 53; } }
-	match parse.parse_int_view(&v) { Ok(n) => { if n != 0 - 5 { return 54; } }, Err(e) => { return 55; } }
+	match parse.parse_int_bytes(b, 24, 26) { Ok(n) => { if n != 0 - 5 { return 51; } }, Err(e) => { return 52; } }
+	match text.byte_view(s, 24, 2) { Ok(x) => { v = move x; }, Err(e) => { return 53; } }
+	match parse.parse_int_view(v) { Ok(n) => { if n != 0 - 5 { return 54; } }, Err(e) => { return 55; } }
 
 	return 0;
 }
@@ -449,7 +449,7 @@ error Boom { at: Int }
 pub fn main() nothrow -> Int {
 	var s = "abc";
 	s = s + "defgh";
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 
 	// forced throw mid-window: unwinds cleanly, program continues,
 	// and the view/backing remain fully usable afterwards.
@@ -462,7 +462,7 @@ pub fn main() nothrow -> Int {
 				0
 			});
 		try {
-			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(&v, move body);
+			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(v, move body);
 			return 1;
 		} catch Boom(e) {
 			caught = caught + 1;
@@ -472,7 +472,7 @@ pub fn main() nothrow -> Int {
 		k = k + 1;
 	}
 	if caught != 100 { return 2; }
-	if not v.eq_string(&s) { return 3; }
+	if not v.eq_string(s) { return 3; }
 	val owned = v.to_string();
 	if owned != s { return 4; }
 	cons.println("throw path OK");
@@ -499,28 +499,28 @@ pub fn main() nothrow -> Int {
 	// fabricated EXTREME spans: full validation happens BEFORE the
 	// length subtraction, so these return checked errors instead of
 	// overflowing.
-	match regex.match_view(regex.RegexMatch(start = int_min, end = int_max), &s) {
+	match regex.match_view(regex.RegexMatch(start = int_min, end = int_max), s) {
 		Ok(v) => { return 1; },
 		Err(e) => { if e.tag != "out-of-bounds" { return 2; } }
 	}
-	match regex.match_view(regex.RegexMatch(start = int_min, end = 0), &s) {
+	match regex.match_view(regex.RegexMatch(start = int_min, end = 0), s) {
 		Ok(v) => { return 3; },
 		Err(e) => { }
 	}
-	match regex.match_view(regex.RegexMatch(start = 0, end = int_max), &s) {
+	match regex.match_view(regex.RegexMatch(start = 0, end = int_max), s) {
 		Ok(v) => { return 4; },
 		Err(e) => { }
 	}
-	match regex.match_view(regex.RegexMatch(start = int_max, end = int_min), &s) {
+	match regex.match_view(regex.RegexMatch(start = int_max, end = int_min), s) {
 		Ok(v) => { return 5; },
 		Err(e) => { }
 	}
-	val whole = text.byte_view_all(&s);
-	match regex.match_subview(regex.RegexMatch(start = int_min, end = int_max), &whole) {
+	val whole = text.byte_view_all(s);
+	match regex.match_subview(regex.RegexMatch(start = int_min, end = int_max), whole) {
 		Ok(v) => { return 6; },
 		Err(e) => { if e.offset != int_min { return 7; } }
 	}
-	match regex.match_subview(regex.RegexMatch(start = 2, end = int_max), &whole) {
+	match regex.match_subview(regex.RegexMatch(start = 2, end = int_max), whole) {
 		Ok(v) => { return 8; },
 		Err(e) => { }
 	}
@@ -556,7 +556,7 @@ pub fn main() nothrow -> Int {
 	t = t + "}";
 	// Corrupted-span invariant: the raw_view enforcer must ABORT (fail
 	// closed), never substitute content.
-	val v = json._span_view_or_abort(&t, 2, 9999);
+	val v = json._span_view_or_abort(t, 2, 9999);
 	// unreachable:
 	return 4;
 }
@@ -572,7 +572,7 @@ fn use_twice(a: text.StringByteView, b: text.StringByteView) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val s = "move-only";
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 	return use_twice(v, v);
 }
 """

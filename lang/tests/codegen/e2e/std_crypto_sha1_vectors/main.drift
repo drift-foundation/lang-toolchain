@@ -15,9 +15,9 @@ fn _ascii_bytes(s: &String) nothrow -> Array<Byte> {
 }
 
 fn _check_sha1_ascii(s: String, expected_hex: String, code: Int) nothrow -> Int {
-	val bytes = _ascii_bytes(&s);
-	val dig = crypto.sha1(&bytes);
-	val got = codec.hex_encode(&dig);
+	val bytes = _ascii_bytes(s);
+	val dig = crypto.sha1(bytes);
+	val got = codec.hex_encode(dig);
 	if got != expected_hex {
 		return code;
 	}

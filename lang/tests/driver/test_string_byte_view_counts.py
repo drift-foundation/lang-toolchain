@@ -87,7 +87,7 @@ pub fn op_construct(s: String) nothrow -> Int {
 	var acc = 0;
 	var k = 0;
 	while k < 100 {
-		val v = text.byte_view_all(&s);
+		val v = text.byte_view_all(s);
 		acc = acc + v.byte_length();
 		k = k + 1;
 	}
@@ -95,7 +95,7 @@ pub fn op_construct(s: String) nothrow -> Int {
 }
 
 pub fn op_dup_subview(s: String) nothrow -> Int {
-	val base = text.byte_view_all(&s);
+	val base = text.byte_view_all(s);
 	var acc = 0;
 	var k = 0;
 	while k < 100 {
@@ -110,7 +110,7 @@ pub fn op_dup_subview(s: String) nothrow -> Int {
 }
 
 pub fn op_reads(s: String) nothrow -> Int {
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 	// needles hoisted so the loop body contains ONLY view reads (a
 	// literal temp per iteration would add counted no-op releases).
 	val nope = "nope";
@@ -127,15 +127,15 @@ pub fn op_reads(s: String) nothrow -> Int {
 			}
 			i = i + 1;
 		}
-		if v.eq_string(&nope) { acc = acc - 1; }
-		acc = acc + v.index_of(&pay);
+		if v.eq_string(nope) { acc = acc - 1; }
+		acc = acc + v.index_of(pay);
 		k = k + 1;
 	}
 	return acc;
 }
 
 pub fn op_to_string_nonempty(s: String) nothrow -> Int {
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 	var acc = 0;
 	var k = 0;
 	while k < 100 {
@@ -147,7 +147,7 @@ pub fn op_to_string_nonempty(s: String) nothrow -> Int {
 }
 
 pub fn op_to_string_empty(s: String) nothrow -> Int {
-	var v = text.byte_view_all(&s);
+	var v = text.byte_view_all(s);
 	match v.subview(2, 0) {
 		Ok(e) => { v = move e; },
 		Err(x) => { return 0 - 1; }
@@ -163,7 +163,7 @@ pub fn op_to_string_empty(s: String) nothrow -> Int {
 }
 
 pub fn op_bulk(s: String) nothrow -> Int {
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 	val body: core.Callback2<mem.Ptr<Byte>, Int, Int> =
 		core.callback2(|p: mem.Ptr<Byte>, n: Int| => {
 			var acc = 0;
@@ -174,11 +174,11 @@ pub fn op_bulk(s: String) nothrow -> Int {
 			}
 			acc
 		});
-	return text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&v, move body);
+	return text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(v, move body);
 }
 
 pub fn op_throw_balance(s: String) nothrow -> Int {
-	val v = text.byte_view_all(&s);
+	val v = text.byte_view_all(s);
 	var caught = 0;
 	var k = 0;
 	while k < 100 {
@@ -188,7 +188,7 @@ pub fn op_throw_balance(s: String) nothrow -> Int {
 				0
 			});
 		try {
-			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(&v, move body);
+			val x = text.with_view_bytes_throw<type Int, core.CallbackThrow2<mem.Ptr<Byte>, Int, Int> >(v, move body);
 			caught = caught - 1000;
 		} catch Boom(e) {
 			caught = caught + 1;
@@ -201,19 +201,19 @@ pub fn op_throw_balance(s: String) nothrow -> Int {
 }
 
 pub fn op_regex_compile_only(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+-[a-z]+") {
+	match regex.compile("[a-z]+-[a-z]+") {
 		Ok(re) => { return 1; },
 		Err(e) => { return 0 - 1; }
 	}
 }
 
 pub fn op_regex_match_string(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+-[a-z]+") {
+	match regex.compile("[a-z]+-[a-z]+") {
 		Ok(re) => {
 			var acc = 0;
 			var k = 0;
 			while k < 100 {
-				if regex.is_match(&re, &s) { acc = acc + 1; }
+				if regex.is_match(re, s) { acc = acc + 1; }
 				k = k + 1;
 			}
 			return acc;
@@ -223,13 +223,13 @@ pub fn op_regex_match_string(s: String) nothrow -> Int {
 }
 
 pub fn op_regex_match_view(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+-[a-z]+") {
+	match regex.compile("[a-z]+-[a-z]+") {
 		Ok(re) => {
-			val v = text.byte_view_all(&s);
+			val v = text.byte_view_all(s);
 			var acc = 0;
 			var k = 0;
 			while k < 100 {
-				if regex.is_match_view(&re, &v) { acc = acc + 1; }
+				if regex.is_match_view(re, v) { acc = acc + 1; }
 				k = k + 1;
 			}
 			return acc;
@@ -240,9 +240,9 @@ pub fn op_regex_match_view(s: String) nothrow -> Int {
 
 // Baseline for the conversion delta: compile + find, NO conversions.
 pub fn op_match_find_only(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+-[a-z]+") {
+	match regex.compile("[a-z]+-[a-z]+") {
 		Ok(re) => {
-			match regex.find_first(&re, &s) {
+			match regex.find_first(re, s) {
 				Some(m) => { return m.end - m.start; },
 				None() => { return 0 - 1; }
 			}
@@ -255,19 +255,19 @@ pub fn op_match_find_only(s: String) nothrow -> Int {
 // DELTA vs op_match_find_only must be exactly 201 (100 + 100 + the
 // one whole-view construction the subviews derive from).
 pub fn op_match_conversions(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+-[a-z]+") {
+	match regex.compile("[a-z]+-[a-z]+") {
 		Ok(re) => {
-			match regex.find_first(&re, &s) {
+			match regex.find_first(re, s) {
 				Some(m) => {
-					val whole = text.byte_view_all(&s);
+					val whole = text.byte_view_all(s);
 					var acc = 0;
 					var k = 0;
 					while k < 100 {
-						match regex.match_view(m, &s) {
+						match regex.match_view(m, s) {
 							Ok(v) => { acc = acc + v.byte_length(); },
 							Err(e) => { return 0 - 1; }
 						}
-						match regex.match_subview(m, &whole) {
+						match regex.match_subview(m, whole) {
 							Ok(v) => { acc = acc + v.byte_length(); },
 							Err(e) => { return 0 - 1; }
 						}
@@ -285,7 +285,7 @@ pub fn op_match_conversions(s: String) nothrow -> Int {
 // split_views: one retain PER ELEMENT ("count-subject-payload" on
 // "-" -> exactly 3 elements -> exactly 3 retains).
 pub fn op_split_views(s: String) nothrow -> Int {
-	val parts = text.split_views(&s, &"-");
+	val parts = text.split_views(s, "-");
 	return parts.len;
 }
 

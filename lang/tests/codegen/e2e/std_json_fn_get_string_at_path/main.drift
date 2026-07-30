@@ -18,7 +18,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val text = "{\"meta\":{\"name\":\"alice\",\"count\":7,\"ok\":true},\"items\":[1,2]}";
 
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Err(_) => { return 100; },
 		core.Result::Ok(root) => {
 
@@ -26,7 +26,7 @@ pub fn main() nothrow -> Int {
 			match root.get_string_at_path("meta.name") {
 				Optional::Some(s) => {
 					val want = "alice";
-					if !str_eq(&s, &want) { return 1; }
+					if !str_eq(s, want) { return 1; }
 				},
 				Optional::None() => { return 2; }
 			}
@@ -57,13 +57,13 @@ pub fn main() nothrow -> Int {
 
 			// Single-segment happy path.
 			val text2 = "{\"who\":\"bob\"}";
-			match json.parse(&text2) {
+			match json.parse(text2) {
 				core.Result::Err(_) => { return 101; },
 				core.Result::Ok(root2) => {
 					match root2.get_string_at_path("who") {
 						Optional::Some(s) => {
 							val want = "bob";
-							if !str_eq(&s, &want) { return 40; }
+							if !str_eq(s, want) { return 40; }
 						},
 						Optional::None() => { return 41; }
 					}

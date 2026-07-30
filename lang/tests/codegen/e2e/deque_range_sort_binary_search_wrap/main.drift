@@ -21,9 +21,9 @@ var dq = containers.deque<type Int>();
 	dq.push_back(2);
 	dq.push_back(1);
 	var rm = dq.range_mut();
-	algo.sort_in_place<type containers.DequeRangeMut<Int>, Int>(&mut rm);
+	algo.sort_in_place<type containers.DequeRangeMut<Int>, Int>(rm);
 	var r = dq.range();
-	val idx = algo.binary_search<type containers.DequeRange<Int>, Int>(&r, &3);
+	val idx = algo.binary_search<type containers.DequeRange<Int>, Int>(r, 3);
 	var found_idx = -1;
 	match idx {
 		Some(i) => { found_idx = i; },

@@ -6,7 +6,7 @@ import std.json as json;
 pub fn main() nothrow -> Int {
 	val text = "{\"flags\":{\"on\":true,\"off\":false,\"name\":\"x\"}}";
 
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Err(_) => { return 100; },
 		core.Result::Ok(root) => {
 			match root.get_bool_at_path("flags.on") {

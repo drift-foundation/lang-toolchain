@@ -5,7 +5,7 @@ import std.core as core;
 
 fn run() -> Int {
 	val text = "{\"a\":}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(_) => {
 			return 1;
 		},

@@ -23,7 +23,7 @@ fn _parse_array_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, s
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(91) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
-	if _over_limit(&ctx.cfg.limits.max_depth, depth) {
+	if _over_limit(ctx.cfg.limits.max_depth, depth) {
 		return core.Result::Err(_err_parse(text, "limit-depth", arr_start));
 	}
 	*idx = *idx + 1;
@@ -40,11 +40,11 @@ fn _parse_array_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, s
 	while true {
 		val elem_start = *idx;
 		// Enforce the item limit BEFORE consuming the (max+1)th element.
-		if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+		if _over_limit(ctx.cfg.limits.max_array_items, values.len + 1) {
 			return core.Result::Err(_err_parse(text, "limit-array-items", elem_start));
 		}
 		var child_sp: Optional<_SpanTree> = Optional::None();
-		match _parse_value_rec(text, idx, ctx, depth + 1, &mut child_sp) {
+		match _parse_value_rec(text, idx, ctx, depth + 1, child_sp) {
 			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => { values.push(move v); }
 		}
@@ -82,7 +82,7 @@ fn _parse_object_throwing_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, dep
 	if *idx >= n or core.string_byte_at(text, *idx) != cast<Byte>(123) {
 		return core.Result::Err(_err_parse(text, "invalid-syntax", *idx));
 	}
-	if _over_limit(&ctx.cfg.limits.max_depth, depth) {
+	if _over_limit(ctx.cfg.limits.max_depth, depth) {
 		return core.Result::Err(_err_parse(text, "limit-depth", obj_start));
 	}
 	*idx = *idx + 1;
@@ -117,7 +117,7 @@ fn _parse_object_throwing_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, dep
 		// parsed (one contains_key probe; immediate failure at `key_start`).
 		match ctx.cfg.duplicate_keys {
 			DuplicateKeyPolicy::Reject() => {
-				if fields.contains_key(&key) {
+				if fields.contains_key(key) {
 					return core.Result::Err(_err_parse_key(text, "duplicate-key", key_start, move key));
 				}
 			},
@@ -125,7 +125,7 @@ fn _parse_object_throwing_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, dep
 		}
 		// Enforce the field-occurrence limit BEFORE consuming this member's value.
 		member_count = member_count + 1;
-		if _over_limit(&ctx.cfg.limits.max_object_fields, member_count) {
+		if _over_limit(ctx.cfg.limits.max_object_fields, member_count) {
 			return core.Result::Err(_err_parse(text, "limit-object-fields", key_start));
 		}
 		_skip_ws(text, idx);
@@ -135,7 +135,7 @@ fn _parse_object_throwing_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, dep
 		*idx = *idx + 1;
 		_skip_ws(text, idx);
 		var child_sp: Optional<_SpanTree> = Optional::None();
-		match _parse_value_rec(text, idx, ctx, depth + 1, &mut child_sp) {
+		match _parse_value_rec(text, idx, ctx, depth + 1, child_sp) {
 			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(v) => {
 				match ctx.cfg.duplicate_keys {
@@ -238,20 +238,20 @@ fn _parse_value_rec(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, s
 
 // Recursive twin of `_parse_document` (calls `_parse_value_rec`).
 fn _parse_document_rec(text: &String, ctx: &_ParseCtx, root_sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	if _over_limit(&ctx.cfg.limits.max_document_bytes, text.byte_length()) {
+	if _over_limit(ctx.cfg.limits.max_document_bytes, text.byte_length()) {
 		return core.Result::Err(_err_parse(text, "limit-document-bytes", 0));
 	}
 	var idx = 0;
-	_skip_ws(text, &mut idx);
+	_skip_ws(text, idx);
 	val root_start = idx;
-	match _parse_value_rec(text, &mut idx, ctx, 1, root_sp) {
+	match _parse_value_rec(text, idx, ctx, 1, root_sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(v) => {
-			_skip_ws(text, &mut idx);
+			_skip_ws(text, idx);
 			if idx != text.byte_length() {
 				return core.Result::Err(_err_parse(text, "invalid-syntax", idx));
 			}
-			match _check_top_level(&v, ctx, root_start, text) {
+			match _check_top_level(v, ctx, root_start, text) {
 				Optional::Some(e) => { return core.Result::Err(move e); },
 				Optional::None() => { }
 			}
@@ -262,25 +262,25 @@ fn _parse_document_rec(text: &String, ctx: &_ParseCtx, root_sp: &mut Optional<_S
 
 /// TEST ORACLE: recursive parse under an explicit config (non-located).
 pub fn _oracle_parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	match _validate_limits(&cfg.limits) {
+	match _validate_limits(cfg.limits) {
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
 	var sp: Optional<_SpanTree> = Optional::None();
-	return _parse_document_rec(text, &ctx, &mut sp);
+	return _parse_document_rec(text, ctx, sp);
 }
 
 /// TEST ORACLE: recursive parse WITH location (span tree), mirroring
 /// `parse_located` — returns a JsonDoc so span trees can be compared.
 pub fn _oracle_parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonDoc, JsonErrorData> {
-	match _validate_limits(&cfg.limits) {
+	match _validate_limits(cfg.limits) {
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
 	var sp: Optional<_SpanTree> = Optional::None();
-	match _parse_document_rec(text, &ctx, &mut sp) {
+	match _parse_document_rec(text, ctx, sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(node) => {
 			match sp {

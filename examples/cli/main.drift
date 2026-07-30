@@ -12,7 +12,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 	p.option_string("mode", "m", "MODE", "Backup mode: full or diff.", false);
 	p.positional("target", "Target directory.", true, false);
 	p.positional("paths", "Additional relative paths.", false, true);
-	match p.parse(&argv) {
+	match p.parse(argv) {
 		core.Result::Ok(parsed) => {
 			var target = "";
 			var port = 3306;
@@ -21,15 +21,15 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 				Some(v) => { target = *v; },
 				None => { return 2; }
 			}
-			match parsed.get_int("port", &p) {
+			match parsed.get_int("port", p) {
 				Some(v) => { port = v; },
 				None => { return 3; }
 			}
-			match parsed.get_string("mode", &p) {
+			match parsed.get_string("mode", p) {
 				Some(v) => { mode = *v; },
 				None => { }
 			}
-			if parsed.has_flag("verbose", &p) {
+			if parsed.has_flag("verbose", p) {
 				console.println("verbose=true");
 			}
 			console.println("target=" + target);

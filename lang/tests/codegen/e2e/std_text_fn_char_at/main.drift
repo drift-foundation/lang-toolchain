@@ -20,14 +20,14 @@ pub fn main() nothrow -> Int {
 	match text.char_at("hello", 0) {
 		core.Result::Ok(v) => {
 			val e = "h";
-			if !str_eq(&v, &e) { return 1; }
+			if !str_eq(v, e) { return 1; }
 		},
 		core.Result::Err(_) => { return 2; }
 	}
 	match text.char_at("hello", 4) {
 		core.Result::Ok(v) => {
 			val e = "o";
-			if !str_eq(&v, &e) { return 3; }
+			if !str_eq(v, e) { return 3; }
 		},
 		core.Result::Err(_) => { return 4; }
 	}

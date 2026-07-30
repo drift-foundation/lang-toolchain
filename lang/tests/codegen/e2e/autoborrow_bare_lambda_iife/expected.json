@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows W5: bare place at an immediately-invoked lambda's declared &mut Int param auto-borrows; the write is visible in the caller",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

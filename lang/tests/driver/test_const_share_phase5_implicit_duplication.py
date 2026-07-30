@@ -371,7 +371,7 @@ fn read_ref(r: &core.ConstArc<String>) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval a = core.const_arc<type String>("hi");
-\tval n = read_ref(&a);
+\tval n = read_ref(a);
 \tval r: &String = a.get();
 \treturn n + r.byte_length();
 }

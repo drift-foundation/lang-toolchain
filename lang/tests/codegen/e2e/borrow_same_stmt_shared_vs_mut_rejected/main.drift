@@ -4,6 +4,6 @@ fn takes(a: &Int, b: &mut Int) -> Int {
 
 pub fn main() nothrow -> Int{
 	var x = 0;
-	takes(&x, &mut x);
+	takes(x, x);
 	return 0;
 }

@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 14 (W2): source-written & at an interface method's declared &String formal is redundant (interface dispatch auto-borrows)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'rec: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 's' directly"
+    }
+  ]
+}

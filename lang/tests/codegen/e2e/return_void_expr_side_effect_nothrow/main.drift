@@ -18,9 +18,9 @@ fn do_work(c: &mut Counter) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 	var c = Counter(n = 0);
-	do_work(&mut c);
+	do_work(c);
 	if c.n != 1 { return 1; }
-	do_work(&mut c);
+	do_work(c);
 	if c.n != 2 { return 2; }
 	return 0;
 }

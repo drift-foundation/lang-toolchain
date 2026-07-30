@@ -19,70 +19,70 @@ pub fn main() nothrow -> Int {
 	// ── trim ────────────────────────────────────────────────────
 	val t1 = text.trim("  hello  ");
 	val e1 = "hello";
-	if !str_eq(&t1, &e1) { return 1; }
+	if !str_eq(t1, e1) { return 1; }
 
 	// tabs and newlines
 	val t2 = text.trim("\t\nhello\r\n");
 	val e2 = "hello";
-	if !str_eq(&t2, &e2) { return 2; }
+	if !str_eq(t2, e2) { return 2; }
 
 	// no whitespace
 	val t3 = text.trim("hello");
 	val e3 = "hello";
-	if !str_eq(&t3, &e3) { return 3; }
+	if !str_eq(t3, e3) { return 3; }
 
 	// all whitespace
 	val t4 = text.trim("   ");
 	val e4 = "";
-	if !str_eq(&t4, &e4) { return 4; }
+	if !str_eq(t4, e4) { return 4; }
 
 	// empty
 	val t5 = text.trim("");
 	val e5 = "";
-	if !str_eq(&t5, &e5) { return 5; }
+	if !str_eq(t5, e5) { return 5; }
 
 	// ── trim_start ──────────────────────────────────────────────
 	val ts1 = text.trim_start("  hello  ");
 	val es1 = "hello  ";
-	if !str_eq(&ts1, &es1) { return 10; }
+	if !str_eq(ts1, es1) { return 10; }
 
 	val ts2 = text.trim_start("hello");
 	val es2 = "hello";
-	if !str_eq(&ts2, &es2) { return 11; }
+	if !str_eq(ts2, es2) { return 11; }
 
 	// ── trim_end ────────────────────────────────────────────────
 	val te1 = text.trim_end("  hello  ");
 	val ee1 = "  hello";
-	if !str_eq(&te1, &ee1) { return 20; }
+	if !str_eq(te1, ee1) { return 20; }
 
 	val te2 = text.trim_end("hello");
 	val ee2 = "hello";
-	if !str_eq(&te2, &ee2) { return 21; }
+	if !str_eq(te2, ee2) { return 21; }
 
 	// ── strip ───────────────────────────────────────────────────
 	val s1 = text.strip("##hello##", "#");
 	val x1 = "hello";
-	if !str_eq(&s1, &x1) { return 30; }
+	if !str_eq(s1, x1) { return 30; }
 
 	// strip multiple chars
 	val s2 = text.strip("<[hello]>", "<>[]");
 	val x2 = "hello";
-	if !str_eq(&s2, &x2) { return 31; }
+	if !str_eq(s2, x2) { return 31; }
 
 	// nothing to strip
 	val s3 = text.strip("hello", "#");
 	val x3 = "hello";
-	if !str_eq(&s3, &x3) { return 32; }
+	if !str_eq(s3, x3) { return 32; }
 
 	// empty chars → unchanged
 	val s4 = text.strip("hello", "");
 	val x4 = "hello";
-	if !str_eq(&s4, &x4) { return 33; }
+	if !str_eq(s4, x4) { return 33; }
 
 	// strip everything
 	val s5 = text.strip("###", "#");
 	val x5 = "";
-	if !str_eq(&s5, &x5) { return 34; }
+	if !str_eq(s5, x5) { return 34; }
 
 	return 0;
 }

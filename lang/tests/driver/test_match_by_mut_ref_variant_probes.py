@@ -216,7 +216,7 @@ pub fn main() nothrow -> Int {
 \t\tcore.Result::Ok(x) => { x.status = 7; 0 },
 \t\tcore.Result::Err(_) => { 0 }
 \t};
-\treturn read_status(&r);
+\treturn read_status(r);
 }
 """)
 	assert rc == 0, (
@@ -361,7 +361,7 @@ pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
-\t\tcore.Result::Ok(x) => { store(&mut leaked, x); 0 },
+\t\tcore.Result::Ok(x) => { store(leaked, x); 0 },
 \t\tcore.Result::Err(_) => { 0 }
 \t};
 \tr = make_err();
@@ -402,7 +402,7 @@ pub fn main() nothrow -> Int {
 \tvar r = make_ok();
 \tvar leaked: Optional<&mut Resp> = Optional<&mut Resp>::None();
 \tval _ = match &mut r {
-\t\tcore.Result::Ok(x) => { store(&mut leaked, x); 0 },
+\t\tcore.Result::Ok(x) => { store(leaked, x); 0 },
 \t\tcore.Result::Err(_) => { 0 }
 \t};
 \tval _ = match &r {

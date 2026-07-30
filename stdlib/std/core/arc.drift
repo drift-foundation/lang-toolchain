@@ -119,7 +119,7 @@ pub struct Arc<T> {
 fn _arc_drop_thunk_for<T>(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 	unsafe {
 		var buf = mem.rawbuffer_from_parts<type ArcBox<T>>(ctrl, 1);
-		var inner = mem.read<type ArcBox<T>>(&mut buf, 0);
+		var inner = mem.read<type ArcBox<T>>(buf, 0);
 		drop_value<type ArcBox<T>>(inner);
 		mem.dealloc<type ArcBox<T>>(buf);
 	}
@@ -145,7 +145,7 @@ pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 			drop_thunk = _arc_drop_thunk_for<type T>
 		);
 		var box = ArcBox<type T>(header = move header, value = move value);
-		mem.write<type ArcBox<T>>(&mut buf, 0, move box);
+		mem.write<type ArcBox<T>>(buf, 0, move box);
 		return Arc<type T>(buf = move buf);
 	}
 }
@@ -180,8 +180,8 @@ pub fn arc<T>(var value: T) nothrow -> Arc<T> {
 fn _arc_fat_bump_strong_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 	unsafe {
 		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-		val _ = atomic.atomic_fetch_add_int(&slot.strong, 1, 0);
+		val slot = mem.ptr_at_ref<type ArcHeader>(header_buf, 0);
+		val _ = atomic.atomic_fetch_add_int(slot.strong, 1, 0);
 	}
 	return;
 }
@@ -201,14 +201,14 @@ fn _arc_fat_drop_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 	var prev = 0;
 	unsafe {
 		val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-		val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-		prev = atomic.atomic_fetch_sub_int(&slot.strong, 1, 2);
+		val slot = mem.ptr_at_ref<type ArcHeader>(header_buf, 0);
+		prev = atomic.atomic_fetch_sub_int(slot.strong, 1, 2);
 	}
 	if prev == 1 {
 		unsafe {
 			val header_buf = mem.rawbuffer_from_parts<type ArcHeader>(ctrl, 1);
-			val slot = mem.ptr_at_ref<type ArcHeader>(&header_buf, 0);
-			val _ = atomic.atomic_load_int(&slot.strong, 1);
+			val slot = mem.ptr_at_ref<type ArcHeader>(header_buf, 0);
+			val _ = atomic.atomic_load_int(slot.strong, 1);
 			val thunk = slot.drop_thunk;
 			thunk(ctrl);
 		}
@@ -233,17 +233,17 @@ fn _arc_fat_drop_via_ctrl(ctrl: mem.Ptr<Byte>) nothrow -> Void {
 
 fn _arc_clone_impl<T>(self: &Arc<T>) nothrow -> Arc<T> {
 	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-		val _ = atomic.atomic_fetch_add_int(&slot.header.strong, 1, 0);
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(self.buf, 0);
+		val _ = atomic.atomic_fetch_add_int(slot.header.strong, 1, 0);
 	}
-	val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
-	val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(&self.buf);
+	val buf_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(self.buf);
+	val buf_cap = mem.rawbuffer_cap<type ArcBox<T>>(self.buf);
 	return Arc<type T>(buf = mem.rawbuffer_from_parts<type ArcBox<T>>(buf_ptr, buf_cap));
 }
 
 fn _arc_get_impl<T>(self: &Arc<T>) nothrow -> &T {
 	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(self.buf, 0);
 		return &slot.value;
 	}
 }
@@ -252,23 +252,23 @@ fn _arc_destroy_impl<T>(var self: Arc<T>) nothrow -> Void {
 	unsafe {
 		// Moved-from Arc values are represented as zero/raw-null buffers.
 		// Dropping that sentinel must be a no-op.
-		val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+		val ptr = mem.rawbuffer_ptr<type ArcBox<T>>(self.buf);
 		if mem.ptr_is_null<type Byte>(ptr) {
 			return;
 		}
 	}
 	var prev = 0;
 	unsafe {
-		val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-		prev = atomic.atomic_fetch_sub_int(&slot.header.strong, 1, 2);
+		val slot = mem.ptr_at_ref<type ArcBox<T>>(self.buf, 0);
+		prev = atomic.atomic_fetch_sub_int(slot.header.strong, 1, 2);
 	}
 	if prev == 1 {
 		// Route last-drop through the stored erased drop_thunk.
 		unsafe {
-			val slot = mem.ptr_at_ref<type ArcBox<T>>(&self.buf, 0);
-			val _ = atomic.atomic_load_int(&slot.header.strong, 1);
+			val slot = mem.ptr_at_ref<type ArcBox<T>>(self.buf, 0);
+			val _ = atomic.atomic_load_int(slot.header.strong, 1);
 			val thunk = slot.header.drop_thunk;
-			val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(&self.buf);
+			val ctrl_ptr = mem.rawbuffer_ptr<type ArcBox<T>>(self.buf);
 			thunk(ctrl_ptr);
 		}
 	}
@@ -299,7 +299,7 @@ implement<T> Arc<T> {
 	/// obtain a guarded `&mut T`.
 	pub fn get_mut(self: &mut Arc<T>) nothrow -> &mut T {
 		unsafe {
-			val slot = mem.ptr_at_mut<type ArcBox<T>>(&mut self.buf, 0);
+			val slot = mem.ptr_at_mut<type ArcBox<T>>(self.buf, 0);
 			return &mut slot.value;
 		}
 	}

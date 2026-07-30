@@ -32,7 +32,7 @@ import std.json as json;
 
 fn build() nothrow -> String {
 \tval text = "{\\"k\\":\\"v\\"}";
-\tmatch json.parse(&text) {
+\tmatch json.parse(text) {
 \t\tcore.Result::Ok(node) => {
 \t\t\tval deep = node.clone_deep();
 \t\t\tmatch node.into_object() {

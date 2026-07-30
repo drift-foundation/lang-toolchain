@@ -50,7 +50,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 
 pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
-	match query(&mut sess) {
+	match query(sess) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1; }
 	}
@@ -81,7 +81,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 
 pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
-	match query(&mut sess) {
+	match query(sess) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 1; }
 	}
@@ -158,7 +158,7 @@ fn bad(a: &Int, b: &Int) nothrow -> PairRefs {
 pub fn main() nothrow -> Int {
 	val x = 1;
 	val y = 2;
-	val _ = bad(&x, &y);
+	val _ = bad(x, y);
 	return 0;
 }
 """,

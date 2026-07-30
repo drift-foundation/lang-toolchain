@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows W2: bare place at a declared &String formal of an interface method auto-borrows through dynamic dispatch",
+  "exit_code": 5,
+  "stderr": "",
+  "stdout": ""
+}

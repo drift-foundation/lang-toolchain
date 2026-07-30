@@ -41,7 +41,7 @@ module main;
 
 fn main() -> Int {
 	var x: Int = 1;
-	return (|y: &mut Int| => { return x; })(&mut x);
+	return (|y: &mut Int| => { return x; })(x);
 }
 """,
 		tmp_path=tmp_path,
@@ -56,7 +56,7 @@ module main;
 
 fn main() -> Int {
 	var x: Int = 1;
-	return (|y: &Int| => { x = 2; return 0; })(&x);
+	return (|y: &Int| => { x = 2; return 0; })(x);
 }
 """,
 		tmp_path=tmp_path,
@@ -72,7 +72,7 @@ module main;
 struct S(f: Int, g: Int);
 fn main() -> Int {
 	var s: S = S(1, 2);
-	return (|y: &mut Int| => { return s.f; })(&mut s.f);
+	return (|y: &mut Int| => { return s.f; })(s.f);
 }
 """,
 		tmp_path=tmp_path,
@@ -88,7 +88,7 @@ module main;
 struct S(f: Int, g: Int);
 fn main() -> Int {
 	var s: S = S(1, 2);
-	return (|y: &mut Int| => { return s.f; })(&mut s.g);
+	return (|y: &mut Int| => { return s.f; })(s.g);
 }
 """,
 		tmp_path=tmp_path,

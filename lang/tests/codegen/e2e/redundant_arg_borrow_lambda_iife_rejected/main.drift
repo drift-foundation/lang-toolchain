@@ -1,0 +1,10 @@
+module main;
+
+pub fn main() nothrow -> Int {
+	var x: Int = 4;
+	val r = (|y: &mut Int| nothrow -> Int => {
+		*y = *y + 1;
+		return *y;
+	})(&mut x);
+	return r;
+}

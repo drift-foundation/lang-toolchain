@@ -9,7 +9,7 @@ use trait iter.SinglePassIterator;
 fn run() -> Int {
 	val t = "{\"a\":1,\"b\":2}";
 	var node = json.JsonNode::Null();
-	match json.parse(&t) {
+	match json.parse(t) {
 		core.Result::Ok(v) => { node = move v; },
 		core.Result::Err(e) => { if e.tag == "x" { return 98; } return 10; }
 	}
@@ -41,7 +41,7 @@ fn run() -> Int {
 	}
 
 	// empty object -> iterator yields nothing
-	match json.parse(&"{}") {
+	match json.parse("{}") {
 		core.Result::Ok(eo) => {
 			var ite = eo.entries();
 			match ite.next() {
@@ -54,7 +54,7 @@ fn run() -> Int {
 
 	// leak-clean EARLY iterator drop: take one entry, abandon the rest; the
 	// iterator drops (in early_drop's scope) while `node` is still alive.
-	if early_drop(&node) != 0 { return 40; }
+	if early_drop(node) != 0 { return 40; }
 
 	return 0;
 }

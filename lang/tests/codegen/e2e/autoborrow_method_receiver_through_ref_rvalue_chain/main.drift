@@ -25,13 +25,18 @@ module main;
 // over HCall/HMethodCall/HInvoke bases), the existing
 // `_split_lift_place_chain` handles the lift cleanly.
 //
-// Scope cut (out of slice): the HIndex variant
-// `w.handles_ref()[i].method()` hits a separate v1 MIR-lowering
-// limitation in `_visit_expr_HIndex` ("array index read requires
-// Copy element type; borrow not supported in v1"); the explicit form
-// `&w.handles_ref()[i]` works (sibling e2e covers it), but the
-// implicit autoborrow form needs MIR work beyond this slice. Filed as
-// a separate follow-up.
+// Receiver HIndex/DEREF parity (closed with reject-redundant-call-
+// borrows): the HIndex variant `w.handles_ref()[i].peek()` and the
+// deref-at-base variant `(*w.inner_ref()).peek()` were originally
+// scope-cut because MIR lowering for borrowed-array-element/deref
+// through an rvalue base did not exist ("array index read requires
+// Copy element type; borrow not supported in v1").  That lowering now
+// exists (`stage2/hir_to_mir.py::_lift_rvalue_ref_base_for_borrow`
+// with index hops, deref-at-base, and owned index-bearing bases), and
+// `_ultimate_base_is_rvalue_call` was widened to match — the receiver
+// gate admits exactly what lowering accepts.  This file pins the
+// receiver forms (n4-n6 below); the argument forms are pinned by
+// `borrow_chained_ref_projection_noncopy` §B.
 
 import std.core as core;
 import std.console as cons;
@@ -49,13 +54,26 @@ implement core.Destructible for Inner {
 	pub fn destroy(var self: Inner) nothrow -> Void { return; }
 }
 
-pub struct Wrapper { pub inner: Inner }
+pub struct Wrapper { pub inner: Inner, pub handles: Array<Handle> }
 implement core.Destructible for Wrapper {
 	pub fn destroy(var self: Wrapper) nothrow -> Void { return; }
 }
 
 implement Wrapper {
 	pub fn get(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+	pub fn inner_ref(self: &Wrapper) nothrow -> &Inner { return &self.inner; }
+	pub fn handles_ref(self: &Wrapper) nothrow -> &Array<Handle> { return &self.handles; }
+}
+
+// Owned-returning array builder: the owned-base + index receiver form
+// (`mk_handles()[i].peek()`) exercises the owned-base admission of the
+// MIR lifted chain (materialize the owned Array into a drop-registered
+// temp, then project the element address).
+fn mk_handles() nothrow -> Array<Handle> {
+	var a: Array<Handle> = [];
+	a.push(Handle(raw = 11));
+	a.push(Handle(raw = 22));
+	return move a;
 }
 
 // Bare ref-returning function — proves the bug is about the ref-rvalue
@@ -63,7 +81,10 @@ implement Wrapper {
 pub fn get_inner_ref(i: &Inner) nothrow -> &Inner { return i; }
 
 pub fn main() nothrow -> Int {
-	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)));
+	var hs: Array<Handle> = [];
+	hs.push(Handle(raw = 10));
+	hs.push(Handle(raw = 20));
+	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)), handles = move hs);
 
 	// === Customer-critical shape: HField on HMethodCall returning &T ===
 	// w.get() -> &Inner; .handle projects &Handle; .peek() autoborrows.
@@ -72,7 +93,7 @@ pub fn main() nothrow -> Int {
 
 	// === Bare ref-returning function — stack-only, no methods on the base.
 	val inner = Inner(handle = Handle(raw = 7));
-	val n2 = get_inner_ref(&inner).handle.peek();
+	val n2 = get_inner_ref(inner).handle.peek();
 	if n2 != 7 { return 2; }
 
 	// === Lowering-equivalent baseline still compiles ===
@@ -81,6 +102,24 @@ pub fn main() nothrow -> Int {
 	val r = w.get();
 	val n3 = r.handle.peek();
 	if n3 != 42 { return 3; }
+
+	// === Receiver HIndex through ref-returning rvalue base ===
+	// handles_ref() -> &Array<Handle>; [i] projects the element;
+	// .peek() autoborrows the element place.
+	val n4 = w.handles_ref()[1].peek();
+	if n4 != 20 { return 4; }
+
+	// === Receiver deref-at-base ===
+	// inner_ref() -> &Inner; `*` peels the ref; .handle.peek()
+	// projects and autoborrows through the dereffed base.
+	val n5 = (*w.inner_ref()).handle.peek();
+	if n5 != 42 { return 5; }
+
+	// === Receiver HIndex through OWNED rvalue base ===
+	// mk_handles() returns Array<Handle> BY VALUE; the lifted chain
+	// materializes the owned base into a drop-registered temp.
+	val n6 = mk_handles()[0].peek();
+	if n6 != 11 { return 6; }
 
 	cons.println("ok");
 	return 0;

@@ -60,14 +60,14 @@ fn mk_fill(n: Int) nothrow -> String {
 	var sb = text.string_builder(n + 32);
 	var len = 0;
 	while len + 28 <= n {
-		text.sb_append_string(&mut sb, &"worker,tunnel,socket,buffer,");
+		text.sb_append_string(sb, "worker,tunnel,socket,buffer,");
 		len = len + 28;
 	}
 	while len < n {
-		text.sb_append_string(&mut sb, &"x");
+		text.sb_append_string(sb, "x");
 		len = len + 1;
 	}
-	return text.sb_build(&mut sb);
+	return text.sb_build(sb);
 }
 
 pub fn mk_small() nothrow -> String {
@@ -82,21 +82,21 @@ pub fn mk_carrier() nothrow -> String {
 	var sb = text.string_builder(4200);
 	var k = 0;
 	while k < 90 {
-		text.sb_append_string(&mut sb, &"alpha,bravo12,charlie345,dd,");
+		text.sb_append_string(sb, "alpha,bravo12,charlie345,dd,");
 		k = k + 1;
 	}
-	return text.sb_build(&mut sb);
+	return text.sb_build(sb);
 }
 
 pub fn op_compile_only(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => { return 1; },
 		Err(e) => { return 0 - 1; }
 	}
 }
 
 pub fn op_compile_anchor_only(s: String) nothrow -> Int {
-	match regex.compile(&"^[a-z,x]+$") {
+	match regex.compile("^[a-z,x]+$") {
 		Ok(re) => { return 1; },
 		Err(e) => { return 0 - 1; }
 	}
@@ -104,12 +104,12 @@ pub fn op_compile_anchor_only(s: String) nothrow -> Int {
 
 // one top-level find per rep, x100
 pub fn op_find_nomatch_x100(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
 			var acc = 0;
 			var k = 0;
 			while k < 100 {
-				match regex.find_first(&re, &s) {
+				match regex.find_first(re, s) {
 					Some(m) => { return 0 - 1; },
 					None() => { acc = acc + 1; }
 				}
@@ -122,13 +122,13 @@ pub fn op_find_nomatch_x100(s: String) nothrow -> Int {
 }
 
 pub fn op_find_view_x100(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
-			val v = text.byte_view_all(&s);
+			val v = text.byte_view_all(s);
 			var acc = 0;
 			var k = 0;
 			while k < 100 {
-				match regex.find_first_view(&re, &v) {
+				match regex.find_first_view(re, v) {
 					Some(m) => { return 0 - 1; },
 					None() => { acc = acc + 1; }
 				}
@@ -141,12 +141,12 @@ pub fn op_find_view_x100(s: String) nothrow -> Int {
 }
 
 pub fn op_is_match_x100(s: String) nothrow -> Int {
-	match regex.compile(&"^[a-z,x]+$") {
+	match regex.compile("^[a-z,x]+$") {
 		Ok(re) => {
 			var acc = 0;
 			var k = 0;
 			while k < 100 {
-				if regex.is_match(&re, &s) { acc = acc + 1; }
+				if regex.is_match(re, s) { acc = acc + 1; }
 				k = k + 1;
 			}
 			return acc;
@@ -158,13 +158,13 @@ pub fn op_is_match_x100(s: String) nothrow -> Int {
 // manual advance-past-match scan over the compat wrapper: exactly
 // (matches + 1) workspace allocations per full scan
 pub fn op_scan_all(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
 			var count = 0;
 			var cursor = 0;
 			val n = s.byte_length();
 			while cursor <= n {
-				match regex._find_from(&re, &s, cursor) {
+				match regex._find_from(re, s, cursor) {
 					Some(m) => {
 						count = count + 1;
 						if m.end == m.start {
@@ -184,9 +184,9 @@ pub fn op_scan_all(s: String) nothrow -> Int {
 
 // one workspace for the WHOLE replace_all (plus its string building)
 pub fn op_replace_all(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
-			val out = regex.replace_all(&re, &s, &"#");
+			val out = regex.replace_all(re, s, "#");
 			return out.byte_length();
 		},
 		Err(e) => { return 0 - 1; }
@@ -197,17 +197,17 @@ pub fn op_replace_all(s: String) nothrow -> Int {
 // multi-attempt search (reset fires on the FIRST epoch advance and
 // the search keeps advancing epochs across attempts/bytes)
 pub fn op_gen_saturated_equal(s: String) nothrow -> Int {
-	match regex.compile(&"[a-z]+[0-9]+") {
+	match regex.compile("[a-z]+[0-9]+") {
 		Ok(re) => {
 			var normal_start = 0 - 1;
 			var normal_end = 0 - 1;
-			match regex._find_from(&re, &s, 0) {
+			match regex._find_from(re, s, 0) {
 				Some(m) => { normal_start = m.start; normal_end = m.end; },
 				None() => { }
 			}
 			var sat_start = 0 - 1;
 			var sat_end = 0 - 1;
-			match regex._find_from_gen_saturated(&re, &s, 0) {
+			match regex._find_from_gen_saturated(re, s, 0) {
 				Some(m) => { sat_start = m.start; sat_end = m.end; },
 				None() => { }
 			}

@@ -56,8 +56,8 @@ fn _write_all_stream(out: &io.ConfiguredOutputStream, text: String, with_newline
 		val rem = total_len - offset;
 		val chunk_len = _min(rem, CONSOLE_CHUNK_BYTES);
 		var chunk = io.buffer(chunk_len);
-		_fill_chunk(&mut chunk, &text, offset, text_len, with_newline);
-		val r = out.write(&chunk);
+		_fill_chunk(chunk, text, offset, text_len, with_newline);
+		val r = out.write(chunk);
 		match r {
 			Ok(n) => {
 				if n <= 0 {
@@ -86,7 +86,7 @@ pub fn print(text: String) nothrow -> Void {
 	val b = io.stdout_builder();
 	val b2 = b.timeout(_write_timeout());
 	val out = b2.build();
-	_write_all_stream(&out, text, false);
+	_write_all_stream(out, text, false);
 	return;
 }
 
@@ -99,7 +99,7 @@ pub fn println(text: String) nothrow -> Void {
 	val b = io.stdout_builder();
 	val b2 = b.timeout(_write_timeout());
 	val out = b2.build();
-	_write_all_stream(&out, text, true);
+	_write_all_stream(out, text, true);
 	return;
 }
 
@@ -112,7 +112,7 @@ pub fn eprint(text: String) nothrow -> Void {
 	val b = io.stderr_builder();
 	val b2 = b.timeout(_write_timeout());
 	val err = b2.build();
-	_write_all_stream(&err, text, false);
+	_write_all_stream(err, text, false);
 	return;
 }
 
@@ -125,6 +125,6 @@ pub fn eprintln(text: String) nothrow -> Void {
 	val b = io.stderr_builder();
 	val b2 = b.timeout(_write_timeout());
 	val err = b2.build();
-	_write_all_stream(&err, text, true);
+	_write_all_stream(err, text, true);
 	return;
 }

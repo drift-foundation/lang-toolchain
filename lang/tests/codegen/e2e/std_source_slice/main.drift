@@ -72,8 +72,8 @@ pub fn main() nothrow -> Int {
 	other.advance();   // 'h'
 	other.advance();   // 'é' -> offset 3, so span_from(pos_zero) is [0,3)
 	val span_b = other.span_from(source.pos_zero());   // source_id = "b", non-empty
-	if source.span_byte_len(&span_b) == 0 { return 25; }   // guard: span IS non-empty
-	match cur.slice_span(&span_b) {
+	if source.span_byte_len(span_b) == 0 { return 25; }   // guard: span IS non-empty
+	match cur.slice_span(span_b) {
 		core.Result::Ok(_) => { return 14; },
 		core.Result::Err(e) => {
 			if e.code != "span-source-mismatch" { return 15; }
@@ -87,7 +87,7 @@ pub fn main() nothrow -> Int {
 	var cur2 = source.source_cursor_from_string("héllo", "a");
 	cur2.advance();   // consume 'h' -> offset 1
 	val span_a = cur2.span_from(source.pos_zero());   // [0,1) on "a"
-	match cur.slice_span(&span_a) {
+	match cur.slice_span(span_a) {
 		core.Result::Ok(s) => { if s != "h" { return 16; } },
 		core.Result::Err(_) => { return 17; }
 	}

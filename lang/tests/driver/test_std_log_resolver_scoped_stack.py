@@ -163,7 +163,7 @@ pub fn main() nothrow -> Int {
 			// the resolver for this one emit.  No language restriction
 			// on holding the guard and an explicit empty ctx in the
 			// same scope.
-			logger.info("inside-request-opt-out", &log.log_context());
+			logger.info("inside-request-opt-out", log.log_context());
 
 			// `guard` drops at the end of this arm — its Destructible
 			// impl pops the LogContext off the stack.

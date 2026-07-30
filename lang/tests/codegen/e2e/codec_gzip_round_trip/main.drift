@@ -42,7 +42,7 @@ fn _check_round_trip(input: &Array<Byte>) nothrow -> Bool {
 	if _byte_u8(encoded[1]) != 139 {
 		return false;
 	}
-	match codec.gzip_decode(&encoded) {
+	match codec.gzip_decode(encoded) {
 		Ok(decoded) => {
 			if decoded.len != input.len {
 				return false;
@@ -65,21 +65,21 @@ fn _check_round_trip(input: &Array<Byte>) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	// Tiny input
 	val small = _seq_bytes(43);
-	if not _check_round_trip(&small) {
+	if not _check_round_trip(small) {
 		return _fail(1);
 	}
 
 	// Mid input — crosses the IO chunk boundary inside the shim's read loop
 	// (chunk is 1 MiB; mid is much smaller, but exercises non-trivial size)
 	val mid = _seq_bytes(8192);
-	if not _check_round_trip(&mid) {
+	if not _check_round_trip(mid) {
 		return _fail(2);
 	}
 
 	// Larger input — 256 KiB, exercises the decode buffer grow loop
 	// (initial cap 4 KiB, geometric growth to ≥ output size).
 	val large = _seq_bytes(262144);
-	if not _check_round_trip(&large) {
+	if not _check_round_trip(large) {
 		return _fail(3);
 	}
 

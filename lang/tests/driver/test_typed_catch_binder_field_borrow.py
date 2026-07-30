@@ -16,6 +16,7 @@ Pre-fix shape:
   catch <Err>(e) {
     val t: String = e.tag;          // OK (HField fast-path)
     val u: String = _take(&e.tag);  // FAILED: E-AUTO-69eb9f81
+                                    // (pre-rule spelling, as written then)
   }
 
 **Root cause** (pre-fix):
@@ -195,8 +196,8 @@ fn run() -> Int {
 		do_throw();
 		return 1;
 	} catch LocalError(e) {
-		val t: String = _take(&e.tag);
-		val m: String = _take(&e.message);
+		val t: String = _take(e.tag);
+		val m: String = _take(e.message);
 		if t.byte_length() > 0 and m.byte_length() > 0 { return 0; }
 		return 2;
 	}
@@ -347,7 +348,7 @@ pub fn main() nothrow -> Int {
 		return v;
 	} catch inner:ManagedError(e) {
 		val t_value: String = e.tag;
-		val t_borrow: String = _take_tag(&e.tag);
+		val t_borrow: String = _take_tag(e.tag);
 		if t_value.byte_length() > 0 and t_borrow.byte_length() > 0 { return 0; }
 		return 3;
 	}
@@ -433,11 +434,11 @@ fn run() -> Int {
 	} catch LocalError(e) {
 		// Repeated borrow of the same field -- storage must be
 		// reused (single materialization), not re-decoded.
-		val a: String = _take(&e.tag);
-		val b: String = _take(&e.tag);
+		val a: String = _take(e.tag);
+		val b: String = _take(e.tag);
 		// Borrow of a second field -- different field index on the
 		// same storage struct.
-		val c: String = _take(&e.message);
+		val c: String = _take(e.message);
 		if a.byte_length() > 0
 				and b.byte_length() > 0
 				and c.byte_length() > 0
@@ -534,7 +535,7 @@ fn run() -> Int {
 		do_throw();
 		return 1;
 	} catch Outer(e) {
-		val t: String = _take(&e.tag);
+		val t: String = _take(e.tag);
 		if t.byte_length() > 0 { return 0; }
 		return 2;
 	}

@@ -225,7 +225,7 @@ fn _eq_ascii_ci_slice(s: &String, start: Int, lit: String) nothrow -> Bool {
 	var i = 0;
 	while i < m {
 		val a = _to_lower_ascii(core.string_byte_at(s, start + i));
-		val b = _to_lower_ascii(core.string_byte_at(&lit, i));
+		val b = _to_lower_ascii(core.string_byte_at(lit, i));
 		if a != b {
 			return false;
 		}
@@ -290,7 +290,7 @@ pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
 	}
 	var i = 0;
 	var neg = false;
-	val first = core.string_byte_at(&s, 0);
+	val first = core.string_byte_at(s, 0);
 	if first == cast<Byte>(45) {
 		neg = true;
 		i = 1;
@@ -304,7 +304,7 @@ pub fn parse_int(s: String) nothrow -> core.Result<Int, ParseError> {
 	}
 	var acc = 0;
 	while i < len {
-		val b = core.string_byte_at(&s, i);
+		val b = core.string_byte_at(s, i);
 		if not _is_digit(b) {
 			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
 		}
@@ -339,7 +339,7 @@ pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = 0));
 	}
 	var i = 0;
-	val first = core.string_byte_at(&s, 0);
+	val first = core.string_byte_at(s, 0);
 	if first == cast<Byte>(43) {
 		i = 1;
 	}
@@ -352,7 +352,7 @@ pub fn parse_uint(s: String) nothrow -> core.Result<Uint, ParseError> {
 	val uint_max: Uint = cast<Uint>(18446744073709551615);
 	var acc: Uint = cast<Uint>(0);
 	while i < len {
-		val b = core.string_byte_at(&s, i);
+		val b = core.string_byte_at(s, i);
 		if not _is_digit(b) {
 			return core.Result::Err(ParseError(tag = "invalid-digit", offset = i));
 		}
@@ -381,7 +381,7 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 	}
 	var i = 0;
 	var neg = false;
-	val first = core.string_byte_at(&s, 0);
+	val first = core.string_byte_at(s, 0);
 	if first == cast<Byte>(45) {
 		neg = true;
 		i = 1;
@@ -393,14 +393,14 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 	if i >= len {
 		return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
 	}
-	if _eq_ascii_ci_slice(&s, i, "nan") {
+	if _eq_ascii_ci_slice(s, i, "nan") {
 		var nan = 0.0 / 0.0;
 		if neg {
 			nan = -nan;
 		}
 		return core.Result::Ok(nan);
 	}
-	if _eq_ascii_ci_slice(&s, i, "inf") or _eq_ascii_ci_slice(&s, i, "infinity") {
+	if _eq_ascii_ci_slice(s, i, "inf") or _eq_ascii_ci_slice(s, i, "infinity") {
 		var inf = 1.0 / 0.0;
 		if neg {
 			inf = -inf;
@@ -410,7 +410,7 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 	var saw_int_digit = false;
 	var value: Float = 0.0;
 	while i < len {
-		val b = core.string_byte_at(&s, i);
+		val b = core.string_byte_at(s, i);
 		if not _is_digit(b) {
 			break;
 		}
@@ -419,7 +419,7 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 		i = i + 1;
 	}
 	if i < len {
-		if core.string_byte_at(&s, i) == cast<Byte>(46) {
+		if core.string_byte_at(s, i) == cast<Byte>(46) {
 			i = i + 1;
 			if i >= len {
 				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
@@ -427,7 +427,7 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 			var saw_frac_digit = false;
 			var div: Float = 10.0;
 			while i < len {
-				val b = core.string_byte_at(&s, i);
+				val b = core.string_byte_at(s, i);
 				if not _is_digit(b) {
 					break;
 				}
@@ -442,14 +442,14 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 		}
 	}
 	if i < len {
-		val eb = core.string_byte_at(&s, i);
+		val eb = core.string_byte_at(s, i);
 		if eb == cast<Byte>(101) or eb == cast<Byte>(69) {
 			i = i + 1;
 			if i >= len {
 				return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
 			}
 			var exp_neg = false;
-			val sb = core.string_byte_at(&s, i);
+			val sb = core.string_byte_at(s, i);
 			if sb == cast<Byte>(45) {
 				exp_neg = true;
 				i = i + 1;
@@ -464,7 +464,7 @@ pub fn parse_float(s: String) nothrow -> core.Result<Float, ParseError> {
 			var exp = 0;
 			var saw_exp_digit = false;
 			while i < len {
-				val b = core.string_byte_at(&s, i);
+				val b = core.string_byte_at(s, i);
 				if not _is_digit(b) {
 					return core.Result::Err(ParseError(tag = "invalid-syntax", offset = i));
 				}

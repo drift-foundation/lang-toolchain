@@ -31,7 +31,7 @@ pub fn main() nothrow -> Int {
 	src.push(name);
 
 	var dest: Array<String> = [];
-	dest.extend(&src);
+	dest.extend(src);
 
 	// After extend: src must still own its three elements.
 	if src.len != 3 { return 1; }

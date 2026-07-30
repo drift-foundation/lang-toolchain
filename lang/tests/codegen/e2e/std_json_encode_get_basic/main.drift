@@ -19,15 +19,15 @@ fn run() -> Int {
 	}
 	val k = "a";
 	val path = [k];
-	val node = root.expect_path(&path);
+	val node = root.expect_path(path);
 	if node.expect_int("", "a") != 1 {
 		return 4;
 	}
 	val s = json.JsonNode::String("a\"b");
-	if json.encode(&s) != "\"a\\\"b\"" {
+	if json.encode(s) != "\"a\\\"b\"" {
 		return 5;
 	}
-	if json.encode_compact(&root) != "{\"a\":1}" {
+	if json.encode_compact(root) != "{\"a\":1}" {
 		return 6;
 	}
 	return 0;

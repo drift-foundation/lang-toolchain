@@ -7,8 +7,7 @@ fn byte_len_ref(s: &String) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int{
-	val s = "abc";
-	val n = byte_len_ref(&s);
+	val n = byte_len_ref("abc");
 	if n == 3 {
 		return 3;
 	}

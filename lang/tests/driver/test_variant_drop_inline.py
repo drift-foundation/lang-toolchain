@@ -79,7 +79,7 @@ pub fn main() nothrow -> Int {
 	var acc = 0;
 	var i = 0;
 	while i < 10000 {
-		match make(i, &payload) {
+		match make(i, payload) {
 			Ok(v) => { acc = acc + v; },
 			Err(e) => { return 1; }
 		}
@@ -92,7 +92,7 @@ pub fn main() nothrow -> Int {
 	var errs = 0;
 	i = 0;
 	while i < 100 {
-		match make(0 - i - 1, &payload) {
+		match make(0 - i - 1, payload) {
 			Ok(v) => { return 3; },
 			Err(e) => {
 				if e.msg != payload { return 4; }
@@ -104,14 +104,14 @@ pub fn main() nothrow -> Int {
 	if errs != 100 { return 5; }
 
 	// Early-return path with a live Err Result.
-	if early(99, &payload) != 100 { return 6; }
-	if early(1, &payload) != 0 - 1 { return 7; }
+	if early(99, payload) != 100 { return 6; }
+	if early(1, payload) != 0 - 1 { return 7; }
 
 	// Loop-carried droppable Result with break.
 	var last = 0;
 	i = 0;
 	while i < 50 {
-		val r = make(0 - 5, &payload);
+		val r = make(0 - 5, payload);
 		if i == 25 {
 			match r { Ok(v) => { last = v; }, Err(e) => { last = e.code; } }
 			break;

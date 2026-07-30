@@ -52,7 +52,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 		// Wedge the single worker inside the C call for 10 minutes and
 		// park a second labeled submission in admission, then idle so
 		// an operator can `kill -USR2` this pid.
-		match conc.spawn_blocking_on(&ex, "demo.stuck_op", core.callback0(|| => {
+		match conc.spawn_blocking_on(ex, "demo.stuck_op", core.callback0(|| => {
 			return slow_add_ffi(1, 2, 600000);
 		})) {
 			core.Result::Ok(_) => {},
@@ -60,7 +60,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 		}
 		val exw = ex;
 		val _w = conc.spawn_cb(|| captures(copy exw) => {
-			match conc.spawn_blocking_on(&exw, "demo.waiting_op", core.callback0(|| => { return 0; })) {
+			match conc.spawn_blocking_on(exw, "demo.waiting_op", core.callback0(|| => { return 0; })) {
 				core.Result::Ok(_) => {},
 				core.Result::Err(_) => {},
 			}
@@ -73,7 +73,7 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 
 	// 2+3. Labeled operation running the named wrapper on the blocking
 	// executor.  The calling VT parks; its carrier stays free.
-	match conc.run_blocking_on(&ex, "demo.slow_add", core.callback0(|| => {
+	match conc.run_blocking_on(ex, "demo.slow_add", core.callback0(|| => {
 		return slow_add_ffi(20, 22, 50);
 	})) {
 		core.Result::Ok(v) => {

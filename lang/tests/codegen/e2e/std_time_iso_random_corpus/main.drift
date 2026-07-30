@@ -74,13 +74,13 @@ fn build_iso(year: Int, month: Int, day: Int, hh: Int, mm: Int, ss: Int, micros:
 fn check_one(raw: String, expected: String) -> Int {
 	match time.parse_iso8601_utc(raw) {
 		core.Result::Ok(ts) => {
-			val out = time.format_iso8601_utc(&ts);
+			val out = time.format_iso8601_utc(ts);
 			if out != expected {
 				return 1;
 			}
 			match time.parse_iso8601_utc(out) {
 				core.Result::Ok(ts2) => {
-					if time.format_iso8601_utc(&ts2) != expected {
+					if time.format_iso8601_utc(ts2) != expected {
 						return 2;
 					}
 					return 0;
@@ -96,15 +96,15 @@ fn run() -> Int {
 	var state: Int = 123456789;
 	var i: Int = 0;
 	while i < 3000 {
-		val year = 1600 + rand_range(&mut state, 1400);
-		val month = 1 + rand_range(&mut state, 12);
+		val year = 1600 + rand_range(state, 1400);
+		val month = 1 + rand_range(state, 12);
 		val max_day = days_in_month(year, month);
-		val day = 1 + rand_range(&mut state, max_day);
-		val hh = rand_range(&mut state, 24);
-		val mm = rand_range(&mut state, 60);
-		val ss = rand_range(&mut state, 60);
-		val micros = rand_range(&mut state, 1000000);
-		val with_fraction = (rand_range(&mut state, 2) == 0);
+		val day = 1 + rand_range(state, max_day);
+		val hh = rand_range(state, 24);
+		val mm = rand_range(state, 60);
+		val ss = rand_range(state, 60);
+		val micros = rand_range(state, 1000000);
+		val with_fraction = (rand_range(state, 2) == 0);
 		val raw = build_iso(year, month, day, hh, mm, ss, micros, with_fraction);
 		var micros_expected = 0;
 		if with_fraction {
@@ -118,14 +118,14 @@ fn run() -> Int {
 	}
 	var j: Int = 0;
 	while j < 1000 {
-		var year2: Int = 1600 + rand_range(&mut state, 1400);
+		var year2: Int = 1600 + rand_range(state, 1400);
 		if is_leap(year2) {
 			year2 = year2 + 1;
 		}
-		val hh2 = rand_range(&mut state, 24);
-		val mm2 = rand_range(&mut state, 60);
-		val ss2 = rand_range(&mut state, 60);
-		val micros2 = rand_range(&mut state, 1000000);
+		val hh2 = rand_range(state, 24);
+		val mm2 = rand_range(state, 60);
+		val ss2 = rand_range(state, 60);
+		val micros2 = rand_range(state, 1000000);
 		val bad = build_iso(year2, 2, 29, hh2, mm2, ss2, micros2, true);
 		match time.parse_iso8601_utc(bad) {
 			core.Result::Ok(_) => { return 11; },

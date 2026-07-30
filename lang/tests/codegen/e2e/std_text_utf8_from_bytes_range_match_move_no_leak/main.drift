@@ -21,11 +21,11 @@ pub fn main() nothrow -> Int {
 	var a = "";
 	var b = "";
 
-	match decode_wrap(&bytes, 0, 3, "a") {
+	match decode_wrap(bytes, 0, 3, "a") {
 		core.Result::Ok(s) => { a = move s; },
 		core.Result::Err(_) => { return 11; }
 	}
-	match decode_wrap(&bytes, 4, 5, "b") {
+	match decode_wrap(bytes, 4, 5, "b") {
 		core.Result::Ok(s) => { b = move s; },
 		core.Result::Err(_) => { return 12; }
 	}

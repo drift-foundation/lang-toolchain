@@ -83,7 +83,7 @@ fn capture(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "hello";
-	return capture(&src);
+	return capture(src);
 }
 """.lstrip(),
 	)
@@ -107,7 +107,7 @@ fn capture(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 41;
-	return capture(&src);
+	return capture(src);
 }
 """.lstrip(),
 	)
@@ -136,7 +136,7 @@ fn extract(s: &String) nothrow -> String {
 
 pub fn main() nothrow -> Int {
 	val src: String = "ok";
-	val out = extract(&src);
+	val out = extract(src);
 	return out.byte_length();
 }
 """.lstrip(),
@@ -157,7 +157,7 @@ fn extract(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 7;
-	return extract(&src);
+	return extract(src);
 }
 """.lstrip(),
 	)
@@ -193,7 +193,7 @@ fn match_lit(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "hello";
-	return match_lit(&src);
+	return match_lit(src);
 }
 """.lstrip(),
 	)
@@ -217,7 +217,7 @@ fn match_lit(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "world";
-	return match_lit(&src);
+	return match_lit(src);
 }
 """.lstrip(),
 	)
@@ -242,7 +242,7 @@ fn differs(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "different";
-	return differs(&src);
+	return differs(src);
 }
 """.lstrip(),
 	)
@@ -266,7 +266,7 @@ fn under_limit(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 42;
-	return under_limit(&src);
+	return under_limit(src);
 }
 """.lstrip(),
 	)
@@ -291,7 +291,7 @@ fn under_limit(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 42;
-	return under_limit(&src);
+	return under_limit(src);
 }
 """.lstrip(),
 	)
@@ -315,7 +315,7 @@ fn at_or_below(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 42;
-	return at_or_below(&src);
+	return at_or_below(src);
 }
 """.lstrip(),
 	)
@@ -340,7 +340,7 @@ fn ceiling_ok(n: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: Int = 42;
-	return ceiling_ok(&src);
+	return ceiling_ok(src);
 }
 """.lstrip(),
 	)
@@ -366,7 +366,7 @@ fn match_lit(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "different";
-	return match_lit(&src);
+	return match_lit(src);
 }
 """.lstrip(),
 	)

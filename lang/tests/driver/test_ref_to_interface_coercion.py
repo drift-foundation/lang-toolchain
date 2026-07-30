@@ -58,7 +58,7 @@ _OWNED_LOCAL_SOURCE = _COMMON + """
 fn via_owned_local() nothrow -> String {
 \tval e = EnglishGreeter(name = "Ann");
 \tval g: Greeter = move e;
-\treturn use_ref(&g);
+\treturn use_ref(g);
 }
 
 pub fn main() nothrow -> Int {
@@ -88,7 +88,7 @@ fn via_passthrough(e: &EnglishGreeter) nothrow -> String {
 
 pub fn main() nothrow -> Int {
 \tval e = EnglishGreeter(name = "Cid");
-\tif via_passthrough(&e) == "Hello, Cid" { return 0; }
+\tif via_passthrough(e) == "Hello, Cid" { return 0; }
 \treturn 1;
 }
 """
@@ -140,7 +140,7 @@ fn via_repeat(e: &EnglishGreeter) nothrow -> String {
 
 pub fn main() nothrow -> Int {
 \tval e = EnglishGreeter(name = "Dot");
-\tval both = via_repeat(&e);
+\tval both = via_repeat(e);
 \tval again = e.name + "";
 \tif both == "Hello, DotHello, Dot" {
 \t\tif again == "Dot" { return 0; }
@@ -426,8 +426,8 @@ pub fn main() nothrow -> Int {
 \tval s1: Sink<Int> = move b1;
 \tval b2 = Box(n = 40);
 \tval s2: Sink<String> = move b2;
-\tval r1 = use_int_sink(&s1);
-\tval r2 = use_str_sink(&s2);
+\tval r1 = use_int_sink(s1);
+\tval r2 = use_str_sink(s2);
 \tif r1 == 42 {
 \t\tif r2 == 4000 { return 0; }
 \t\treturn 2;
@@ -556,7 +556,7 @@ fn use_int_sink(s: &Sink<Int>) nothrow -> Int {
 pub fn main() nothrow -> Int {
 \tval b = Box(n = 40);
 \tval s: Sink<Int> = move b;
-\tif use_int_sink(&s) == 42 { return 0; }
+\tif use_int_sink(s) == 42 { return 0; }
 \treturn 1;
 }
 """

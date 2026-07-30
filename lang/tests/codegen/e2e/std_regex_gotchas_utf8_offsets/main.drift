@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -34,8 +34,8 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 fn check_replace_first(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_first(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_code; }
+			val got = regex.replace_first(re, input, repl);
+			if !str_eq(got, expected) { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -45,8 +45,8 @@ fn check_replace_first(pattern: &String, input: &String, repl: &String, expected
 fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_all(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_code; }
+			val got = regex.replace_all(re, input, repl);
+			if !str_eq(got, expected) { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -83,21 +83,21 @@ pub fn main() nothrow -> Int {
 	if cafe.byte_length() != 5 { return 1; }
 
 	// Pattern "f." matches f + first byte of é at byte offsets 2..4.
-	rc = check_match(&"f.", &cafe, 2, 4, 10);
+	rc = check_match("f.", cafe, 2, 4, 10);
 	if rc != 0 { return rc; }
 
 	// Pattern "f.." matches f + both bytes of é at byte offsets 2..5.
-	rc = check_match(&"f..", &cafe, 2, 5, 14);
+	rc = check_match("f..", cafe, 2, 5, 14);
 	if rc != 0 { return rc; }
 
 	// Literal "f" match: byte offset 2..3.
-	rc = check_match(&"f", &cafe, 2, 3, 18);
+	rc = check_match("f", cafe, 2, 3, 18);
 	if rc != 0 { return rc; }
 
 	// "^..$" on a 2-byte char string: ü = U+00FC = 0xC3 0xBC (2 bytes).
 	// ".." matches exactly 2 bytes (the whole string).
 	val uu = "\xC3\xBC";
-	rc = check_match(&"^..$", &uu, 0, 2, 22);
+	rc = check_match("^..$", uu, 0, 2, 22);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -109,7 +109,7 @@ pub fn main() nothrow -> Int {
 	if zhong.byte_length() != 3 { return 2; }
 
 	// "..." matches 3 bytes = entire character.
-	rc = check_match(&"^...$", &zhong, 0, 3, 30);
+	rc = check_match("^...$", zhong, 0, 3, 30);
 	if rc != 0 { return rc; }
 
 	// "A中B" = A(1) + 中(3) + B(1) = 5 bytes. "B" is at byte 4.
@@ -117,11 +117,11 @@ pub fn main() nothrow -> Int {
 	if azhongb.byte_length() != 5 { return 3; }
 
 	// Match "B" → at byte offset 4..5.
-	rc = check_match(&"B", &azhongb, 4, 5, 34);
+	rc = check_match("B", azhongb, 4, 5, 34);
 	if rc != 0 { return rc; }
 
 	// Match "A..." → A + 3 bytes of 中 → 0..4.
-	rc = check_match(&"A...", &azhongb, 0, 4, 38);
+	rc = check_match("A...", azhongb, 0, 4, 38);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -135,17 +135,17 @@ pub fn main() nothrow -> Int {
 	if hw.byte_length() != 11 { return 4; }
 
 	// "lo" matches at byte 3..5.
-	rc = check_match(&"lo", &hw, 3, 5, 42);
+	rc = check_match("lo", hw, 3, 5, 42);
 	if rc != 0 { return rc; }
 
 	// ".+" greedy matches all 11 bytes → 0..11.
-	rc = check_match(&".+", &hw, 0, 11, 46);
+	rc = check_match(".+", hw, 0, 11, 46);
 	if rc != 0 { return rc; }
 
 	// "^.{5}" matches "hello" (5 ASCII bytes) → 0..5.
 	// Wait — Drift v1 regex doesn't support {n} quantifiers.
 	// Instead: "^....." (5 dots) matches 5 bytes → 0..5.
-	rc = check_match(&"^.....", &hw, 0, 5, 50);
+	rc = check_match("^.....", hw, 0, 5, 50);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -154,21 +154,21 @@ pub fn main() nothrow -> Int {
 
 	// Replace "f" in "café" with "F": result = "caFé" (still 5 bytes).
 	// "caF" (3 bytes) + é (2 bytes) = 5 bytes.
-	rc = check_replace_first(&"f", &cafe, &"F", &"caF\xC3\xA9", 60);
+	rc = check_replace_first("f", cafe, "F", "caF\xC3\xA9", 60);
 	if rc != 0 { return rc; }
 
 	// Replace "f.." (f + 2 bytes of é) with "X": result = "caX" (3 bytes).
-	rc = check_replace_first(&"f..", &cafe, &"X", &"caX", 62);
+	rc = check_replace_first("f..", cafe, "X", "caX", 62);
 	if rc != 0 { return rc; }
 
 	// Replace "." (first byte) with "Z" in "ü": result = "Z" + second byte of ü.
 	// This produces invalid UTF-8, which is fine — regex operates on bytes.
-	match regex.compile(&".") {
+	match regex.compile(".") {
 		core.Result::Ok(re_dot) => {
-			val uu_replaced = regex.replace_first(&re_dot, &uu, &"Z");
+			val uu_replaced = regex.replace_first(re_dot, uu, "Z");
 			// Result should be 2 bytes: 'Z' (0x5A) + 0xBC (continuation byte).
 			if uu_replaced.byte_length() != 2 { return 65; }
-			if core.string_byte_at(&uu_replaced, 0) != cast<Byte>(90) { return 66; }
+			if core.string_byte_at(uu_replaced, 0) != cast<Byte>(90) { return 66; }
 		},
 		core.Result::Err(_) => { return 64; }
 	}
@@ -178,15 +178,15 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// Replace all "." in "中" (3 bytes) with "X": "XXX" (3 X's).
-	rc = check_replace_all(&".", &zhong, &"X", &"XXX", 70);
+	rc = check_replace_all(".", zhong, "X", "XXX", 70);
 	if rc != 0 { return rc; }
 
 	// Replace all "A" in "A中B" with "_": "_中B" (still 5 bytes).
-	rc = check_replace_all(&"A", &azhongb, &"_", &"_\xE4\xB8\xADB", 72);
+	rc = check_replace_all("A", azhongb, "_", "_\xE4\xB8\xADB", 72);
 	if rc != 0 { return rc; }
 
 	// Replace "B" at end: "A中_" (still 5 bytes).
-	rc = check_replace_all(&"B", &azhongb, &"_", &"A\xE4\xB8\xAD_", 74);
+	rc = check_replace_all("B", azhongb, "_", "A\xE4\xB8\xAD_", 74);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -196,14 +196,14 @@ pub fn main() nothrow -> Int {
 	// Empty pattern on "ü" (2 bytes): inserts between each byte + at ends.
 	// 3 insertions: "-" + byte0 + "-" + byte1 + "-"
 	// = "-\xC3-\xBC-" (5 bytes total).
-	match regex.compile(&"") {
+	match regex.compile("") {
 		core.Result::Ok(re_empty) => {
-			val uu_empty_repl = regex.replace_all(&re_empty, &uu, &"-");
+			val uu_empty_repl = regex.replace_all(re_empty, uu, "-");
 			if uu_empty_repl.byte_length() != 5 { return 77; }
 			// Check: first byte should be '-' (0x2D).
-			if core.string_byte_at(&uu_empty_repl, 0) != cast<Byte>(45) { return 78; }
+			if core.string_byte_at(uu_empty_repl, 0) != cast<Byte>(45) { return 78; }
 			// Second byte should be 0xC3 (first byte of ü).
-			if core.string_byte_at(&uu_empty_repl, 1) != cast<Byte>(195) { return 79; }
+			if core.string_byte_at(uu_empty_repl, 1) != cast<Byte>(195) { return 79; }
 		},
 		core.Result::Err(_) => { return 76; }
 	}
@@ -217,17 +217,17 @@ pub fn main() nothrow -> Int {
 	if emoji.byte_length() != 4 { return 5; }
 
 	// "...." matches all 4 bytes → 0..4.
-	rc = check_match(&"^....$", &emoji, 0, 4, 80);
+	rc = check_match("^....$", emoji, 0, 4, 80);
 	if rc != 0 { return rc; }
 
 	// "X" + emoji + "Y" = 6 bytes. "Y" at byte 5.
 	val xey = "X\xF0\x9F\x98\x80Y";
 	if xey.byte_length() != 6 { return 6; }
-	rc = check_match(&"Y", &xey, 5, 6, 84);
+	rc = check_match("Y", xey, 5, 6, 84);
 	if rc != 0 { return rc; }
 
 	// ".+" on emoji string → matches all 4 bytes.
-	rc = check_match(&".+", &emoji, 0, 4, 88);
+	rc = check_match(".+", emoji, 0, 4, 88);
 	if rc != 0 { return rc; }
 
 	return 0;

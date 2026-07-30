@@ -6,7 +6,7 @@ import std.core as core;
 fn run() -> Int {
 	val text = "{\"n\":1e10001}";
 	var root = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => {
 			root = move v;
 		},
@@ -15,7 +15,7 @@ fn run() -> Int {
 		}
 	}
 	val k = "n";
-	match root.get(&k) {
+	match root.get(k) {
 		Some(node) => {
 			match node.as_number_raw() {
 				Some(raw) => {

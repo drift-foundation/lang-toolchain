@@ -92,7 +92,7 @@ struct Holder {
 
 fn make(prepare: core.CallbackThrow2<&String, Bool, Holder>) -> Holder {
 	val payload = "hello-" + "payload";
-	val h = try prepare.call(&payload, true) catch {
+	val h = try prepare.call(payload, true) catch {
 		Holder(cb = core.callback0(| | => { return "call-err"; }))
 	};
 	return move h;
@@ -235,7 +235,7 @@ fn build(s: &String) -> core.Callback0<String> {
 
 pub fn main() nothrow -> Int {
 	val owned = "x-" + "y";
-	val cb = build(&owned);
+	val cb = build(owned);
 	val r = cb.call();
 	if r == "x-y" { return 0; }
 	return 1;
@@ -262,7 +262,7 @@ fn build(s: &String) -> core.Callback0<String> {
 
 pub fn main() nothrow -> Int {
 	val owned = "x-" + "y";
-	val cb = build(&owned);
+	val cb = build(owned);
 	val r = cb.call();
 	if r == "x-y" { return 0; }
 	return 1;
@@ -286,7 +286,7 @@ struct Holder {
 
 fn make(prepare: core.CallbackThrow2<&mut Int, Bool, Holder>) -> Holder {
 	var counter = 41;
-	val h = try prepare.call(&mut counter, true) catch {
+	val h = try prepare.call(counter, true) catch {
 		Holder(cb = core.callback0(| | => { return -1; }))
 	};
 	return move h;
@@ -378,7 +378,7 @@ pub fn main() nothrow -> Int {
 			return tag.clone() + ":" + req.method.clone();
 		});
 	val req = Req(method = "GET");
-	val out = dispatch(move cb, &req);
+	val out = dispatch(move cb, req);
 	if out == "t-1:GET" { return 0; }
 	return 1;
 }

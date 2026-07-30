@@ -63,7 +63,7 @@ pub fn main() nothrow -> Int {{
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = 1000003, token = 0, want_read = true, want_write = false));
 	val start = thr.now_ms();
-	val res = io.poll_many(&es, conc.Duration(millis = {to}));
+	val res = io.poll_many(es, conc.Duration(millis = {to}));
 	val el = thr.now_ms() - start;
 	match res {{
 		core.Result::Ok(rd) => {{ return 2; }},
@@ -96,7 +96,7 @@ import std.io as io;
 import std.concurrent as conc;
 pub fn main() nothrow -> Int {
 	var es: Array<io.PollEntry> = [];
-	match io.poll_many(&es, conc.Duration(millis = 1000)) {
+	match io.poll_many(es, conc.Duration(millis = 1000)) {
 		core.Result::Ok(rd) => { return 2; },
 		core.Result::Err(e) => { return (e.kind + "") == "invalid-argument" ? 0 : 3; }
 	}
@@ -117,7 +117,7 @@ import lang.thread as thr;
 
 fn connector(port: Int) nothrow -> Int {
 	val t = conc.Duration(millis = 5000);
-	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+	match net.connect(net.socket_addr("127.0.0.1", port), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(cs) => {
 {conn}
@@ -128,7 +128,7 @@ fn connector(port: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 5000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 100; },
 		core.Result::Ok(lis) => {
 			val port = lis.local_port();
@@ -151,8 +151,8 @@ pub fn main() nothrow -> Int {
 
 _CONN_WRITE_DELAYED = (
 	"\t\t\tval _s0 = conc.sleep(conc.Duration(millis = 120));\n"
-	"\t\t\tvar buf = io.buffer(8); io.buffer_write_string(&mut buf, &\"x\"); io.buffer_set_len(&mut buf, 1);\n"
-	"\t\t\tval _w = cs.write(&buf, t);\n"
+	"\t\t\tvar buf = io.buffer(8); io.buffer_write_string(buf, \"x\"); io.buffer_set_len(buf, 1);\n"
+	"\t\t\tval _w = cs.write(buf, t);\n"
 	"\t\t\tval _s1 = conc.sleep(conc.Duration(millis = 400));\n"
 	"\t\t\tval _c = cs.close(t);"
 )
@@ -175,7 +175,7 @@ def test_poll_many_readiness_one_fd(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 77, want_read = true, want_write = false));
-					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+					match io.poll_many(es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { r = (rd.len() == 1 and rd[0].readable and rd[0].fd == fd and rd[0].token == 77) ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
 					}"""
@@ -190,7 +190,7 @@ def test_poll_many_timeout_leaves_no_token(tmp_path: Path) -> None:
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var ok = false;
-					match io.poll_many(&es, conc.Duration(millis = 200)) {
+					match io.poll_many(es, conc.Duration(millis = 200)) {
 						core.Result::Ok(rd) => { ok = false; },
 						core.Result::Err(e) => { ok = (e.kind + "") == "timeout"; }
 					}
@@ -206,7 +206,7 @@ def test_poll_many_peer_close_hangup(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
-					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+					match io.poll_many(es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { r = (rd.len() == 1 and (rd[0].hangup or rd[0].readable)) ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
 					}"""
@@ -226,7 +226,7 @@ import std.concurrent as conc;
 pub fn main() nothrow -> Int {{
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = 0, token = 0, want_read = false, want_write = false));
-	match io.poll_many(&es, conc.Duration(millis = {to})) {{
+	match io.poll_many(es, conc.Duration(millis = {to})) {{
 		core.Result::Ok(rd) => {{ return 2; }},
 		core.Result::Err(e) => {{ return (e.kind + "") == "invalid-argument" ? 0 : 3; }}
 	}}
@@ -246,17 +246,17 @@ def test_block_on_io_no_stale_pending_spin(tmp_path: Path) -> None:
 	# stays open & idle (conc.sleep, no reactor_wait_park) so the probe delta is
 	# attributable to the server's 2nd read.
 	conn = (
-		"\t\t\tvar buf = io.buffer(8); io.buffer_write_string(&mut buf, &\"x\"); io.buffer_set_len(&mut buf, 1);\n"
-		"\t\t\tval _w = cs.write(&buf, t);\n"
+		"\t\t\tvar buf = io.buffer(8); io.buffer_write_string(buf, \"x\"); io.buffer_set_len(buf, 1);\n"
+		"\t\t\tval _w = cs.write(buf, t);\n"
 		"\t\t\tval _s = conc.sleep(conc.Duration(millis = 1500));\n"
 		"\t\t\tval _c = cs.close(t);"
 	)
 	body = """\
 					var rb = io.buffer(16);
-					val _r1 = ss.read(&mut rb, conc.Duration(millis = 2000));   // gets "x"
+					val _r1 = ss.read(rb, conc.Duration(millis = 2000));   // gets "x"
 					val p0 = thr.reactor_park_blocks();
 					var rb2 = io.buffer(16);
-					val r2 = ss.read(&mut rb2, conc.Duration(millis = 400));     // no data -> must PARK then time out
+					val r2 = ss.read(rb2, conc.Duration(millis = 400));     // no data -> must PARK then time out
 					val p1 = thr.reactor_park_blocks();
 					match r2 {
 						core.Result::Ok(nn) => { r = 2; },        // unexpected data/EOF
@@ -274,17 +274,17 @@ def test_poll_many_hup_non_consuming(tmp_path: Path) -> None:
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var h1 = false;
-					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+					match io.poll_many(es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { h1 = rd.len() == 1 and (rd[0].hangup or rd[0].readable); },
 						core.Result::Err(e) => { h1 = false; }
 					}
 					// drain any EOF byte so only the sticky HUP remains for poll #2
 					var db = io.buffer(16);
-					val _d = ss.read(&mut db, conc.Duration(millis = 50));
+					val _d = ss.read(db, conc.Duration(millis = 50));
 					var es2: Array<io.PollEntry> = [];
 					es2.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
 					var h2 = false;
-					match io.poll_many(&es2, conc.Duration(millis = 500)) {
+					match io.poll_many(es2, conc.Duration(millis = 500)) {
 						core.Result::Ok(rd) => { h2 = rd.len() == 1 and (rd[0].hangup or rd[0].readable); },
 						core.Result::Err(e) => { h2 = false; }
 					}
@@ -309,7 +309,7 @@ import std.concurrent as conc;
 fn waiter(fd: Int) nothrow -> Int {
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
-	match io.poll_many(&es, conc.Duration(millis = 0)) {   // no deadline = park until ready
+	match io.poll_many(es, conc.Duration(millis = 0)) {   // no deadline = park until ready
 		core.Result::Ok(rd) => { return 1; },
 		core.Result::Err(e) => { return 0; }
 	}
@@ -317,7 +317,7 @@ fn waiter(fd: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 5000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 100; },
 		core.Result::Ok(lis) => {
 			val fd = lis.raw_fd();
@@ -363,7 +363,7 @@ pub fn main() nothrow -> Int {
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = 5, token = 1, want_read = true, want_write = false));
 	es.push(io.PollEntry(fd = 5, token = 2, want_read = false, want_write = true));
-	match io.poll_many(&es, conc.Duration(millis = 1000)) {
+	match io.poll_many(es, conc.Duration(millis = 1000)) {
 		core.Result::Ok(rd) => { return 2; },
 		core.Result::Err(e) => { return (e.kind + "") == "invalid-argument" ? 0 : 3; }
 	}
@@ -386,7 +386,7 @@ def test_partial_drain_single_wake(tmp_path: Path) -> None:
 		"\t\t\twhile bi < 16384 { arr.push(cast<Byte>(65)); bi = bi + 1; }\n"
 		"\t\t\tvar off = 0;\n"
 		"\t\t\twhile off < 16384 {\n"
-		"\t\t\t\tmatch cs.write_bytes(&mut arr, off, 16384 - off, t) {\n"
+		"\t\t\t\tmatch cs.write_bytes(arr, off, 16384 - off, t) {\n"
 		"\t\t\t\t\tcore.Result::Ok(nn) => { off = off + nn; },\n"
 		"\t\t\t\t\tcore.Result::Err(e) => { off = 16384; }\n"
 		"\t\t\t\t}\n"
@@ -398,13 +398,13 @@ def test_partial_drain_single_wake(tmp_path: Path) -> None:
 					val _w = conc.sleep(conc.Duration(millis = 200));   // let all 16 KiB buffer
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
-					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+					match io.poll_many(es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => {
 							var total = 0;
 							var draining = true;
 							while draining {
 								var rb = io.buffer(4096);
-								match ss.read(&mut rb, conc.Duration(millis = 0)) {
+								match ss.read(rb, conc.Duration(millis = 0)) {
 									core.Result::Ok(nn) => { if nn == 0 { draining = false; } else { total = total + nn; } },
 									core.Result::Err(e) => {
 										// Drain ends ONLY on WOULD_BLOCK (the contract);
@@ -439,12 +439,12 @@ import std.concurrent as conc;
 
 fn connector(port: Int) nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+	match net.connect(net.socket_addr("127.0.0.1", port), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(cs) => {
 			val _w = conc.sleep(conc.Duration(millis = 60));   // send AFTER main registers the fd
-			var b = io.buffer(8); io.buffer_write_string(&mut b, &"ABCDEFGH"); io.buffer_set_len(&mut b, 8);
-			val _s = cs.write(&b, t);
+			var b = io.buffer(8); io.buffer_write_string(b, "ABCDEFGH"); io.buffer_set_len(b, 8);
+			val _s = cs.write(b, t);
 			val _h = conc.sleep(conc.Duration(millis = 2000));  // stay open + silent
 			val _c = cs.close(t); return 0;
 		}
@@ -454,7 +454,7 @@ fn connector(port: Int) nothrow -> Int {
 fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
-	match io.poll_many(&es, conc.Duration(millis = ms)) {
+	match io.poll_many(es, conc.Duration(millis = ms)) {
 		core.Result::Ok(rd) => { return rd.len() >= 1 and rd[0].readable; },
 		core.Result::Err(e) => { return false; }
 	}
@@ -462,13 +462,13 @@ fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(lis) => {
 			val port = lis.local_port();
 			var cvt = conc.spawn(| | captures(move port) => { return connector(port); });
 			var rc = 1;
-			match net.accept(&lis, t) {
+			match net.accept(lis, t) {
 				core.Result::Err(e) => { rc = 1; },
 				core.Result::Ok(ss) => {
 					val fd = ss.raw_fd();
@@ -482,7 +482,7 @@ pub fn main() nothrow -> Int {
 					//    is provably drained — a short read would leave bytes buffered and a
 					//    later readable would be legitimate, not the bug.
 					var rb = io.buffer(8);
-					match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+					match ss.read(rb, conc.Duration(millis = 1000)) {
 						core.Result::Err(e) => { rc = 2; },
 						core.Result::Ok(n) => {
 							if n != 8 { rc = 2; }
@@ -525,12 +525,12 @@ import std.concurrent as conc;
 
 fn connector(port: Int) nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+	match net.connect(net.socket_addr("127.0.0.1", port), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(cs) => {
 			val _w = conc.sleep(conc.Duration(millis = 60));
-			var b = io.buffer(16); io.buffer_write_string(&mut b, &"0123456789ABCDEF"); io.buffer_set_len(&mut b, 16);
-			val _s = cs.write(&b, t);   // send 16 bytes at once
+			var b = io.buffer(16); io.buffer_write_string(b, "0123456789ABCDEF"); io.buffer_set_len(b, 16);
+			val _s = cs.write(b, t);   // send 16 bytes at once
 			val _h = conc.sleep(conc.Duration(millis = 2000));
 			val _c = cs.close(t); return 0;
 		}
@@ -540,7 +540,7 @@ fn connector(port: Int) nothrow -> Int {
 fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
-	match io.poll_many(&es, conc.Duration(millis = ms)) {
+	match io.poll_many(es, conc.Duration(millis = ms)) {
 		core.Result::Ok(rd) => { return rd.len() >= 1 and rd[0].readable; },
 		core.Result::Err(e) => { return false; }
 	}
@@ -548,13 +548,13 @@ fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(lis) => {
 			val port = lis.local_port();
 			var cvt = conc.spawn(| | captures(move port) => { return connector(port); });
 			var rc = 1;
-			match net.accept(&lis, t) {
+			match net.accept(lis, t) {
 				core.Result::Err(e) => { rc = 1; },
 				core.Result::Ok(ss) => {
 					val fd = ss.raw_fd();
@@ -562,7 +562,7 @@ pub fn main() nothrow -> Int {
 					val _s = conc.sleep(conc.Duration(millis = 250));  // all 16 bytes arrive + latch
 					// read EXACTLY 8 (buffer capacity 8) and STOP — 8 bytes remain buffered.
 					var rb = io.buffer(8);
-					match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+					match ss.read(rb, conc.Duration(millis = 1000)) {
 						core.Result::Err(e) => { rc = 2; },
 						core.Result::Ok(n) => {
 							if n != 8 { rc = 2; }
@@ -572,7 +572,7 @@ pub fn main() nothrow -> Int {
 								else {
 									// and the remainder must be recoverable (readable => progress).
 									var rb2 = io.buffer(8);
-									match ss.read(&mut rb2, conc.Duration(millis = 1000)) {
+									match ss.read(rb2, conc.Duration(millis = 1000)) {
 										core.Result::Ok(n2) => { rc = (n2 == 8) ? 0 : 4; },
 										core.Result::Err(e) => { rc = 4; }
 									}
@@ -615,7 +615,7 @@ import std.concurrent as conc;
 fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 	var es: Array<io.PollEntry> = [];
 	es.push(io.PollEntry(fd = fd, token = 1, want_read = true, want_write = false));
-	match io.poll_many(&es, conc.Duration(millis = ms)) {
+	match io.poll_many(es, conc.Duration(millis = ms)) {
 		core.Result::Ok(rd) => { return rd.len() >= 1 and (rd[0].readable or rd[0].hangup); },
 		core.Result::Err(e) => { return false; }
 	}
@@ -623,7 +623,7 @@ fn readable1(fd: Int, ms: Int) nothrow -> Bool {
 
 fn closer(port: Int) nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+	match net.connect(net.socket_addr("127.0.0.1", port), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(cs) => {
 			val _w = conc.sleep(conc.Duration(millis = 120));
@@ -635,7 +635,7 @@ fn closer(port: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 1; },
 		core.Result::Ok(lis) => {
 			val port = lis.local_port();
@@ -644,7 +644,7 @@ pub fn main() nothrow -> Int {
 			val lfd = lis.raw_fd();
 			if not readable1(lfd, 2000) { val _j = cvt.join(); return 2; }
 			var rc = 0;
-			match net.accept(&lis, t) {
+			match net.accept(lis, t) {
 				core.Result::Err(e) => { rc = 3; },
 				core.Result::Ok(ss) => {
 					val fd = ss.raw_fd();
@@ -652,7 +652,7 @@ pub fn main() nothrow -> Int {
 					if not readable1(fd, 2000) { rc = 4; }
 					else {
 						var rb = io.buffer(16);
-						match ss.read(&mut rb, conc.Duration(millis = 1000)) {
+						match ss.read(rb, conc.Duration(millis = 1000)) {
 							core.Result::Ok(n) => { rc = (n == 0) ? 0 : 5; },   // EOF
 							core.Result::Err(e) => { rc = 5; }
 						}
@@ -696,7 +696,7 @@ struct Conn { cli: net.TcpStream, srv: net.TcpStream, token: Int }
 
 fn open_pair(lis: &net.TcpListener, port: Int, token: Int) nothrow -> core.Result<Conn, Int> {
 	val t = conc.Duration(millis = 4000);
-	match net.connect(&net.socket_addr("127.0.0.1", port), t) {
+	match net.connect(net.socket_addr("127.0.0.1", port), t) {
 		core.Result::Err(e) => { return core.Result::Err(1); },
 		core.Result::Ok(c) => {
 			match net.accept(lis, t) {
@@ -709,7 +709,7 @@ fn open_pair(lis: &net.TcpListener, port: Int, token: Int) nothrow -> core.Resul
 
 pub fn main() nothrow -> Int {
 	val t = conc.Duration(millis = 4000);
-	match net.listen(&net.socket_addr("127.0.0.1", 0), t) {
+	match net.listen(net.socket_addr("127.0.0.1", 0), t) {
 		core.Result::Err(e) => { return 100; },
 		core.Result::Ok(lis) => {
 			val port = lis.local_port();
@@ -718,7 +718,7 @@ pub fn main() nothrow -> Int {
 			var k = 0;
 			while k < 3 {
 				tokctr = tokctr + 1;
-				match open_pair(&lis, port, tokctr) {
+				match open_pair(lis, port, tokctr) {
 					core.Result::Err(c) => { return 50; },
 					core.Result::Ok(cn) => { conns.push(move cn); }
 				}
@@ -733,7 +733,7 @@ pub fn main() nothrow -> Int {
 					es.push(io.PollEntry(fd = conns[i].cli.raw_fd(), token = conns[i].token, want_read = true, want_write = false));
 					i = i + 1;
 				}
-				match io.poll_many(&es, conc.Duration(millis = 5)) {
+				match io.poll_many(es, conc.Duration(millis = 5)) {
 					core.Result::Ok(rd) => {
 						var j = 0;
 						while j < rd.len() {
@@ -746,7 +746,7 @@ pub fn main() nothrow -> Int {
 				val _c0 = conns[0].cli.close(t);
 				val _s0 = conns[0].srv.close(t);
 				tokctr = tokctr + 1;
-				match open_pair(&lis, port, tokctr) {
+				match open_pair(lis, port, tokctr) {
 					core.Result::Err(c) => { return 51; },
 					core.Result::Ok(cn) => { conns[0] = move cn; }
 				}
@@ -775,7 +775,7 @@ def test_poll_many_readiness_memcheck(tmp_path: Path) -> None:
 	body = """\
 					var es: Array<io.PollEntry> = [];
 					es.push(io.PollEntry(fd = fd, token = 0, want_read = true, want_write = false));
-					match io.poll_many(&es, conc.Duration(millis = 3000)) {
+					match io.poll_many(es, conc.Duration(millis = 3000)) {
 						core.Result::Ok(rd) => { r = rd.len() == 1 ? 0 : 7; },
 						core.Result::Err(e) => { r = 5; }
 					}"""

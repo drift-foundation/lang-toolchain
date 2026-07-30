@@ -3,12 +3,12 @@ import std.core as core;
 import std.json as json;
 fn run() -> Int {
   val a = "{";
-  match json.parse(&a) {
+  match json.parse(a) {
     core.Result::Ok(_) => { return 1; },
     core.Result::Err(e) => { if e.tag == "" { return 2; } }
   }
   val b = "[";
-  match json.parse(&b) {
+  match json.parse(b) {
     core.Result::Ok(_) => { return 3; },
     core.Result::Err(e2) => { if e2.tag == "" { return 4; } }
   }

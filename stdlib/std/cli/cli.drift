@@ -133,7 +133,7 @@ fn _slice_string(s: &String, start: Int, end: Int) nothrow -> String {
 		out.push(core.string_byte_at(s, i));
 		i = i + 1;
 	}
-	match text.utf8_from_bytes(&out) {
+	match text.utf8_from_bytes(out) {
 		core.Result::Ok(v) => { return v; },
 		core.Result::Err(_) => { return ""; }
 	}
@@ -158,7 +158,7 @@ fn _string_eq_ref(a: &String, b: &String) nothrow -> Bool {
 }
 
 fn _string_eq_value(a: &String, b: String) nothrow -> Bool {
-	return _string_eq_ref(a, &b);
+	return _string_eq_ref(a, b);
 }
 
 fn _contains_int(xs: &Array<Int>, value: Int) nothrow -> Bool {
@@ -183,7 +183,7 @@ fn _is_seen(flag_option_indices: &Array<Int>, option_value_indices: &Array<Int>,
 fn _find_option_by_long(option_longs: &Array<String>, long: &String) nothrow -> Int {
 	var i = 0;
 	while i < option_longs.len {
-		if _string_eq_ref(&option_longs[i], long) {
+		if _string_eq_ref(option_longs[i], long) {
 			return i;
 		}
 		i = i + 1;
@@ -194,7 +194,7 @@ fn _find_option_by_long(option_longs: &Array<String>, long: &String) nothrow -> 
 fn _find_option_by_short(option_shorts: &Array<String>, short: &String) nothrow -> Int {
 	var i = 0;
 	while i < option_shorts.len {
-		if _string_eq_ref(&option_shorts[i], short) {
+		if _string_eq_ref(option_shorts[i], short) {
 			return i;
 		}
 		i = i + 1;
@@ -205,18 +205,18 @@ fn _find_option_by_short(option_shorts: &Array<String>, short: &String) nothrow 
 fn _validate_schema(p: &ArgParser) nothrow -> Optional<CliError> {
 	var i = 0;
 	while i < p.option_longs.len {
-		if _string_eq_value(&p.option_longs[i], "help") or _string_eq_value(&p.option_longs[i], "version") {
+		if _string_eq_value(p.option_longs[i], "help") or _string_eq_value(p.option_longs[i], "version") {
 			return Optional::Some(CliError(tag = "cli-invalid-schema", arg = "", message = "reserved long option", index = i));
 		}
-		if _string_eq_value(&p.option_shorts[i], "h") or _string_eq_value(&p.option_shorts[i], "V") {
+		if _string_eq_value(p.option_shorts[i], "h") or _string_eq_value(p.option_shorts[i], "V") {
 			return Optional::Some(CliError(tag = "cli-invalid-schema", arg = "", message = "reserved short option", index = i));
 		}
 		var j = i + 1;
 		while j < p.option_longs.len {
-			if _string_eq_ref(&p.option_longs[i], &p.option_longs[j]) {
+			if _string_eq_ref(p.option_longs[i], p.option_longs[j]) {
 				return Optional::Some(CliError(tag = "cli-invalid-schema", arg = "", message = "duplicate long option", index = j));
 			}
-			if not _string_eq_value(&p.option_shorts[i], "") and _string_eq_ref(&p.option_shorts[i], &p.option_shorts[j]) {
+			if not _string_eq_value(p.option_shorts[i], "") and _string_eq_ref(p.option_shorts[i], p.option_shorts[j]) {
 				return Optional::Some(CliError(tag = "cli-invalid-schema", arg = "", message = "duplicate short option", index = j));
 			}
 			j = j + 1;
@@ -414,7 +414,7 @@ implement ArgParser {
 				} else {
 					long_name = _slice_string(tok, 2, tok.byte_length());
 				}
-				val idx = _find_option_by_long(&self.option_longs, &long_name);
+				val idx = _find_option_by_long(self.option_longs, long_name);
 				if idx < 0 {
 					return _err("cli-unknown-option", "", "unknown option", i);
 				}
@@ -422,7 +422,7 @@ implement ArgParser {
 					if has_inline {
 						return _err("cli-unexpected-option-value", "", "flag does not take a value", i);
 					}
-					if _is_seen(&flag_option_indices, &option_value_indices, idx) {
+					if _is_seen(flag_option_indices, option_value_indices, idx) {
 						return _err("cli-duplicate-option", "", "duplicate option", i);
 					}
 					flag_option_indices.push(idx);
@@ -436,10 +436,10 @@ implement ArgParser {
 					if i + 1 >= argv.len {
 						return _err("cli-missing-option-value", "", "missing option value", i);
 					}
-					value = _dup_string(&argv[i + 1]);
+					value = _dup_string(argv[i + 1]);
 					i = i + 1;
 				}
-				if _is_seen(&flag_option_indices, &option_value_indices, idx) {
+				if _is_seen(flag_option_indices, option_value_indices, idx) {
 					return _err("cli-duplicate-option", "", "duplicate option", i);
 				}
 				if self.option_kinds[idx] == OPTION_KIND_INT {
@@ -458,12 +458,12 @@ implement ArgParser {
 					return _err("cli-unsupported-short-cluster", "", "short option clusters are unsupported in MVP", i);
 				}
 				val short_name = _slice_string(tok, 1, 2);
-				val idx = _find_option_by_short(&self.option_shorts, &short_name);
+				val idx = _find_option_by_short(self.option_shorts, short_name);
 				if idx < 0 {
 					return _err("cli-unknown-option", "", "unknown option", i);
 				}
 				if self.option_kinds[idx] == OPTION_KIND_FLAG {
-					if _is_seen(&flag_option_indices, &option_value_indices, idx) {
+					if _is_seen(flag_option_indices, option_value_indices, idx) {
 						return _err("cli-duplicate-option", "", "duplicate option", i);
 					}
 					flag_option_indices.push(idx);
@@ -473,8 +473,8 @@ implement ArgParser {
 				if i + 1 >= argv.len {
 					return _err("cli-missing-option-value", "", "missing option value", i);
 				}
-				val value = _dup_string(&argv[i + 1]);
-				if _is_seen(&flag_option_indices, &option_value_indices, idx) {
+				val value = _dup_string(argv[i + 1]);
+				if _is_seen(flag_option_indices, option_value_indices, idx) {
 					return _err("cli-duplicate-option", "", "duplicate option", i);
 				}
 				if self.option_kinds[idx] == OPTION_KIND_INT {
@@ -494,7 +494,7 @@ implement ArgParser {
 		}
 		i = 0;
 		while i < self.option_longs.len {
-			if self.option_required[i] and not _is_seen(&flag_option_indices, &option_value_indices, i) {
+			if self.option_required[i] and not _is_seen(flag_option_indices, option_value_indices, i) {
 				return _err("cli-missing-required-option", "", "missing required option", argv.len);
 			}
 			i = i + 1;
@@ -528,31 +528,31 @@ implement ParsedArgs {
 	/// `parser` is the parser that produced these `ParsedArgs` —
 	/// needed to look up the flag by long name.
 	pub fn has_flag(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Bool {
-		val idx = _find_option_by_long(&parser.option_longs, &long);
+		val idx = _find_option_by_long(parser.option_longs, long);
 		if idx < 0 {
 			return false;
 		}
-		return _contains_int(&self.flag_option_indices, idx);
+		return _contains_int(self.flag_option_indices, idx);
 	}
 
 	/// Returns the value of a string-valued option, or `None` if
 	/// absent.
 	pub fn get_string(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Optional<&String> {
-		val idx = _find_option_by_long(&parser.option_longs, &long);
+		val idx = _find_option_by_long(parser.option_longs, long);
 		if idx < 0 {
 			return Optional<&String>::None();
 		}
-		return _get_option_value(&self.option_value_indices, &self.option_values, idx);
+		return _get_option_value(self.option_value_indices, self.option_values, idx);
 	}
 
 	/// Returns the value of an int-valued option, or `None` if
 	/// absent.  Already validated as `Int` during `parse`.
 	pub fn get_int(self: &ParsedArgs, long: String, parser: &ArgParser) nothrow -> Optional<Int> {
-		val idx = _find_option_by_long(&parser.option_longs, &long);
+		val idx = _find_option_by_long(parser.option_longs, long);
 		if idx < 0 {
 			return Optional<Int>::None();
 		}
-		match _get_option_value(&self.option_value_indices, &self.option_values, idx) {
+		match _get_option_value(self.option_value_indices, self.option_values, idx) {
 			Some(v) => {
 				match parse_std.parse_int(_dup_string(v)) {
 					core.Result::Ok(n) => { return Optional::Some(n); },

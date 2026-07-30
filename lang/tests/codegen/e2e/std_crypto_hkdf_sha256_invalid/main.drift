@@ -13,7 +13,7 @@ pub fn main() nothrow -> Int {
 	var info: Array<Byte> = [];
 
 	// 1. Negative output length -> Err
-	val r1 = crypto.hkdf_expand_sha256(&prk, &info, -1);
+	val r1 = crypto.hkdf_expand_sha256(prk, info, -1);
 	match r1 {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
@@ -22,7 +22,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// 2. Output length > 255*32 = 8160 -> Err
-	val r2 = crypto.hkdf_expand_sha256(&prk, &info, 8161);
+	val r2 = crypto.hkdf_expand_sha256(prk, info, 8161);
 	match r2 {
 		core.Result::Ok(_) => { return 3; },
 		core.Result::Err(e) => {
@@ -31,7 +31,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// 3. Exactly 8160 should succeed (boundary)
-	val r3 = crypto.hkdf_expand_sha256(&prk, &info, 8160);
+	val r3 = crypto.hkdf_expand_sha256(prk, info, 8160);
 	match r3 {
 		core.Result::Ok(okm) => {
 			if okm.len != 8160 { return 5; }
@@ -42,7 +42,7 @@ pub fn main() nothrow -> Int {
 	// 4. Full hkdf_sha256 with negative length -> Err
 	var salt: Array<Byte> = [];
 	var ikm: Array<Byte> = [];
-	val r4 = crypto.hkdf_sha256(&salt, &ikm, &info, -1);
+	val r4 = crypto.hkdf_sha256(salt, ikm, info, -1);
 	match r4 {
 		core.Result::Ok(_) => { return 7; },
 		core.Result::Err(e) => {

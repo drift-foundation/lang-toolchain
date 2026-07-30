@@ -7,7 +7,7 @@ import std.concurrent as conc;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
 	val t = conc.Duration(millis = 1000);
-	var lr = net.listen(&addr, t);
+	var lr = net.listen(addr, t);
 	match lr {
 		Ok(_l) => { return 0; },
 		Err(_) => { return 1; },

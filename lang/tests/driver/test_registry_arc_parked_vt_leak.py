@@ -62,7 +62,7 @@ pub struct PoolInner {
 }
 
 fn _keepalive(inner: arc.Arc<PoolInner>) nothrow -> Int {
-\twhile !atomic.atomic_load_bool(&inner.get().stop, 1) {
+\twhile !atomic.atomic_load_bool(inner.get().stop, 1) {
 \t\tmatch conc.sleep(conc.Duration(millis = 50)) {
 \t\t\tcore.Result::Err(_) => { return 0; },
 \t\t\tcore.Result::Ok(_) => {}
@@ -78,9 +78,9 @@ pub struct ConnectionPool {
 
 implement ConnectionPool {
 \tpub fn close(self: &mut ConnectionPool) nothrow -> Void {
-\t\tatomic.atomic_store_bool(&self.inner.get().stop, true, 2);
+\t\tatomic.atomic_store_bool(self.inner.get().stop, true, 2);
 \t\tval taken = mem.replace(
-\t\t\t&mut self.vt,
+\t\t\tself.vt,
 \t\t\tOptional<type conc.VirtualThread<Int> >::None()
 \t\t);
 \t\tmatch taken {

@@ -48,7 +48,9 @@ consume(x);        // error if x is a named non-Copy owner
                    //   (compiler emits: cannot copy 'x': type 'T'
                    //    is not Copy (use move x))
 consume(move x);   // transfers ownership; x is unusable afterward
-borrow(&x);        // keeps ownership with x; x stays usable
+borrow(x);         // keeps ownership with x; x stays usable — the
+                   //   parameter declaration (`b: &T`) spells the
+                   //   borrow; writing `borrow(&x)` is an error
 share x            // explicit second owner — only if T implements Share
 ```
 
@@ -87,8 +89,10 @@ consume(x);           // error if x is a named non-Copy owner
                       //   (compiler emits: cannot copy 'x': type 'T'
                       //    is not Copy (use move x))
 consume(move x);      // transfers ownership; x is unusable afterward
-borrow(&x);           // keeps ownership with x; x stays usable; no
-                      //   second owner is created
+borrow(x);            // keeps ownership with x; x stays usable; no
+                      //   second owner is created — the parameter
+                      //   declaration (`b: &T`) spells the borrow;
+                      //   `borrow(&x)` is a redundant-borrow error
 share x               // requires T: Share; creates a second owner of
                       //   the same resource; x stays usable; aliasing
                       //   and synchronization are now your problem
@@ -256,8 +260,16 @@ trait BorrowMut<T> { fn borrow_mut(self: &mut Self) nothrow -> &mut T; }
 
 Coercion rules (argument-only):
 
-- If a parameter expects `&T` and the argument has type `X` (or `&X`), and `X: Borrow<T>`, the compiler may insert `borrow(&arg)`.
-- If a parameter expects `&mut T` and the argument has type `X` (or `&mut X`), and `X: BorrowMut<T>`, the compiler may insert `borrow_mut(&mut arg)` (or `borrow_mut(arg)` if `arg` is already `&mut X`).
+- If a parameter expects `&T` and the argument has type `X` (an `&X`-typed
+  VALUE also qualifies), and `X: Borrow<T>`, the compiler may insert
+  `borrow` on the auto-borrowed argument. (A source-written `&arg` at such a
+  slot is subject to the redundant-borrow rule of §3.6.)
+- If a parameter expects `&mut T` and the argument has type `X` (or an
+  `&mut X`-typed value), and `X: BorrowMut<T>`, the compiler may insert
+  `borrow_mut` likewise.
+- Plain parameter-directed auto-borrow takes precedence over the borrow-trait
+  coercion when the formal's inner type is generic (`&X<T>`, `&T`): the bare
+  argument is borrowed directly and unification sees through the borrow.
 - When a generic function expects `&T`/`&mut T` and the argument is coerced via `Borrow`/`BorrowMut`, the compiler may use the trait argument (the `T` in `Borrow<T>`/`BorrowMut<T>`) to infer the function’s type arguments.
 - No coercion for by-value parameters (`T`).
 - No method-receiver auto-deref.
@@ -460,17 +472,52 @@ Rules:
 
 - `&v` produces a shared reference `&T` from an lvalue `v: T`.
 - `&mut v` produces an exclusive mutable reference `&mut T` from a mutable lvalue `v: T`.
-- Borrowing from temporaries (rvalues) is a compile-time error; bind to a local first.
+- `&(<rvalue>)` in a binding position materializes the temporary into a hidden
+  scope-lived local and borrows it (`val r = &make();`); `&mut (<rvalue>)`
+  likewise requires a binding position. Borrowing a value the expression itself
+  moves (`&(move x)` and result-forwarding shapes over it) is a compile-time
+  error; bind to a local first.
 - The legacy `ref` / `ref mut` spelling is invalid.
 
 ### 3.6. Call-site auto-borrowing (global rule)
 
 For parameters or receivers of type `&T` / `&mut T`, calling with an lvalue `v: T` auto-borrows:
 
-- `g(v)` ≡ `g(&v)` if the parameter is `&T`.
-- `h(v)` ≡ `h(&mut v)` if the parameter is `&mut T`.
+- `g(v)` is the ONLY spelling if the parameter is `&T` — the parameter
+  declaration spells the borrow.
+- `h(v)` is the ONLY spelling if the parameter is `&mut T`.
+- Rvalue arguments auto-borrow too at `&T` parameters (`g(make())`,
+  `g("literal")`) — the temporary is materialized and dropped at scope end,
+  exactly once. A mutable temporary has no argument spelling: bind it first
+  (`val p = &mut make(); h2(p);` for `h2(p: &mut T)`).
 
-Borrowing from rvalues (temporaries, moved values) is an error. The explicit forms `&v` / `&mut v` remain legal.
+**A source-written borrow in argument position is redundant and rejected**
+(`E_REDUNDANT_ARG_BORROW`): `g(&v)`, `h(&mut v)`, `g(&mut v)` (the bare form
+reborrows), and `g(&r)` where `r: &T` (pass `r` directly) are all errors.
+An `&` you see in an argument is always doing real semantic work — never
+decoration. The two argument contexts where `&` remains meaningful:
+
+- **Coercion borrows**: `use(&concrete)` at a declared `&Interface` parameter
+  performs borrow-plus-widen; deleting the `&` would not type-check, so it is
+  not redundant and stays legal.
+- **The sole non-redundancy rejection**: `h(&mut make())` at `&mut T` — its
+  deletion does not compile either, but the argument spelling is still
+  rejected (`E_MUT_RVALUE_ARG_BINDING_REQUIRED`, "bind it to a `var` first").
+
+Parameters declared as a bare type variable `T` are by-value even when
+instantiated at a reference type: `identity<type &String>(&name)` is legal —
+the borrow there is the argument value, not a redundant spelling. Thin
+function-pointer values (`Fn(&String) -> R`) are likewise exempt: through a
+function value the declared shape is not distinguishable from a generic
+instantiation, so both `fp(s)` and `fp(&s)` are accepted. Constructor fields
+are not parameters; `Ctor(f = &x)` is unaffected.
+
+Overload sets in which two concrete candidates differ only by the mode of a
+non-receiver parameter (`T` vs `&T` vs `&mut T` after erasure) are rejected at
+definition site (`E_OVERLOAD_PARAM_MODE_ONLY_DIFF`) — with call-site `&` gone,
+such sets are uncallable. Receiver-mode overloading is unaffected, and
+concrete-vs-generic sets need no restriction (the bare call selects the
+concrete overload).
 
 ### 3.7. Method receivers and overloading
 

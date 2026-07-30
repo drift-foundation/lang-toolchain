@@ -23,10 +23,10 @@ fn build_input(target_bytes: Int) nothrow -> String {
 	var total = 0;
 	val n = chunk.byte_length();
 	while total < target_bytes {
-		text.sb_append_string(&mut sb, &chunk);
+		text.sb_append_string(sb, chunk);
 		total = total + n;
 	}
-	return text.sb_build(&mut sb);
+	return text.sb_build(sb);
 }
 
 // SAFE tier: the shipped Result-returning StringByteView.byte_at,
@@ -72,7 +72,7 @@ fn sweep_bulk(v: &text.StringByteView, win: Int) nothrow -> Int {
 						}
 						acc
 					});
-				sum = sum + text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&sub, move body);
+				sum = sum + text.with_view_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(sub, move body);
 			},
 			Err(e) => { return 0 - 1; }
 		}
@@ -88,7 +88,7 @@ fn bench_one(v: &text.StringByteView, win: Int, iters: Int) nothrow -> Void {
 	while k < iters {
 		val t0 = time.now_monotonic();
 		val r = sweep_safe(v, win);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != ref { cons.println("MISMATCH"); return; }
 		k = k + 1;
 	}
@@ -97,7 +97,7 @@ fn bench_one(v: &text.StringByteView, win: Int, iters: Int) nothrow -> Void {
 	while k < iters {
 		val t0 = time.now_monotonic();
 		val r = sweep_bulk(v, win);
-		line = line + fmt.format_int(time.elapsed_micros(&t0)) + ",";
+		line = line + fmt.format_int(time.elapsed_micros(t0)) + ",";
 		if r != ref { cons.println("MISMATCH"); return; }
 		k = k + 1;
 	}
@@ -107,14 +107,14 @@ fn bench_one(v: &text.StringByteView, win: Int, iters: Int) nothrow -> Void {
 pub fn main() nothrow -> Int {
 	val input = build_input(2 * 1024 * 1024);
 	cons.println("input bytes: " + fmt.format_int(input.byte_length()));
-	val v = text.byte_view_all(&input);
+	val v = text.byte_view_all(input);
 	val iters = 5;
-	bench_one(&v, 8, iters);
-	bench_one(&v, 32, iters);
-	bench_one(&v, 128, iters);
-	bench_one(&v, 512, iters);
-	bench_one(&v, 4096, iters);
-	bench_one(&v, 65536, iters);
-	bench_one(&v, 2 * 1024 * 1024, iters);
+	bench_one(v, 8, iters);
+	bench_one(v, 32, iters);
+	bench_one(v, 128, iters);
+	bench_one(v, 512, iters);
+	bench_one(v, 4096, iters);
+	bench_one(v, 65536, iters);
+	bench_one(v, 2 * 1024 * 1024, iters);
 	return 0;
 }

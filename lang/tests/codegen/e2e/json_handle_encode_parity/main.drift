@@ -6,9 +6,9 @@ import std.core as core;
 pub fn main() nothrow -> Int {
 	// Use an array to avoid object key ordering non-determinism.
 	val text = "[1,true,\"hello\",null]";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
-			val node_enc = json.encode_compact(&node);
+			val node_enc = json.encode_compact(node);
 			val handle = json.share(move node);
 			val handle_enc = handle.encode_compact();
 			if node_enc != handle_enc { return 1; }

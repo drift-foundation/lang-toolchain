@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 2: source-written &mut of a var at a declared &mut String formal is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &mut String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'buffer' directly"
+    }
+  ]
+}

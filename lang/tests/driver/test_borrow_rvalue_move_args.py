@@ -1,24 +1,22 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""DriftQuery 2026-07-09 regression pins: `&call(move x)` and the
-location-less non-lvalue diagnostic.
+"""Move-containing borrow pins, POST reject-redundant-call-borrows.
 
-Root cause (assessment 2026-07-09T235900Z): a pass-contract gap —
-`borrow_materialize` skipped materializing any borrow whose subject
-"contains a move" ANYWHERE (recursing into call arguments), assuming the
-type checker rejects those; the checker's targeted rejection only covered
-`&mut`. The move predicate is now SPLIT: materialization is blocked only
-when the borrow would alias the moved value ITSELF (direct `&(move x)`,
-or a projection/ternary chain over it); moves inside call/ctor arguments
-feed construction of the borrowed RESULT and materialize like any other
-rvalue borrow.
+History: the DriftQuery 2026-07-09 pins covered `&call(move x)` at call-
+ARGUMENT position. The redundant-borrow rule (0.33.91) retired that
+spelling: a source-written borrow at a declared `&T` argument slot is
+rejected (E_REDUNDANT_ARG_BORROW), and its bare form `check_widget(
+mk_widget(move s))` auto-borrows through the SAME BorrowMaterializeRewriter
+predicate — the split move predicate (materialize unless the borrow would
+alias the moved value ITSELF) is now pinned via the bare spelling.
 
-Decision pinned here for `&mut` (option 1 of the review): `&mut
-mk(move s)` is SUPPORTED by the same temp-materialization as every
-`&mut <rvalue>` — stage1 lifts the call result into a mutable temp
-(`borrow_materialize`'s documented v1 design; `&mut mk("x")` already
-compiled this way, so the old broad contains-move gate made the move
-variant an inconsistent exception). Direct `&mut (move x)` keeps its
-targeted assign-to-var-first rejection.
+D1b(b) decision pinned here: `&mut <rvalue>` has NO argument spelling —
+the argument form is rejected with E_MUT_RVALUE_ARG_BINDING_REQUIRED and
+the bare form keeps its addressable-place rejection; the supported shape
+is a BINDING (`val p = &mut mk_widget(move s); touch(p)`), which is this
+file's migration exemplar (cited by the 0.33.91 MIGRATION notes). The
+move guardrails (`&(move x)`, `&mut (move x)`, match-result forwarding)
+keep their targeted messages, pinned in binding position where the
+spellings remain legal.
 
 Diagnostic pins: user `&` borrows carry a real source location
 (ast_to_hir attaches loc), and spanless diagnostics never masquerade as
@@ -47,11 +45,12 @@ fn mk_widget(s: String) nothrow -> Widget { return Widget(name = s + ""); }
 fn check_widget(w: &Widget) nothrow -> Bool { return (w.name + "") == "hello"; }
 """
 
-# (B) THE report shape: explicit & of a call whose arg moves a local.
+# (B) The report shape, bare form: the call whose arg moves a local
+# auto-borrows at the &Widget parameter (same materializer predicate).
 _MOVE_ARG_BORROW = _COMMON + """
 fn probe() nothrow -> Bool {
 	var s = "hello";
-	return check_widget(&mk_widget(move s));
+	return check_widget(mk_widget(move s));
 }
 
 pub fn main() nothrow -> Int {
@@ -63,7 +62,7 @@ pub fn main() nothrow -> Int {
 # (A) no-move sibling — must stay green.
 _NO_MOVE_BORROW = _COMMON + """
 fn probe() nothrow -> Bool {
-	return check_widget(&mk_widget("hello" + ""));
+	return check_widget(mk_widget("hello" + ""));
 }
 
 pub fn main() nothrow -> Int {
@@ -72,8 +71,8 @@ pub fn main() nothrow -> Int {
 }
 """
 
-# DriftQuery's real shape: & of a METHOD call with a move arg, nested as
-# an argument beside a second & arg.
+# DriftQuery's real shape, bare form: a METHOD call with a move arg,
+# nested as an argument beside a second borrowed-place arg.
 _METHOD_RECV_SHAPE = """\
 module main;
 
@@ -97,46 +96,51 @@ pub fn main() nothrow -> Int {
 	val src = Src(salt = "salt");
 	val env = Env(tag = 7);
 	var e = Entry(key = "k");
-	if src.validate(&src.catalog(move e), &env) { return 0; }
+	if src.validate(src.catalog(move e), env) { return 0; }
 	return 1;
 }
 """
 
-# Direct `&(move x)` — the case the guardrail is FOR: stays rejected,
-# now with the targeted message and a REAL location.
+# Direct `&(move x)` in BINDING position — the case the guardrail is
+# FOR: stays rejected with the targeted message and a REAL location.
 _DIRECT_MOVE_BORROW = _COMMON + """
 pub fn main() nothrow -> Int {
 	var s = "hello";
 	val w = Widget(name = s + "x");
-	val r = check_widget(&(move w));
+	val b = &(move w);
+	val r = check_widget(b);
 	if r { return 0; }
 	return 1;
 }
 """
 
-# `&mut` of a CALL rvalue materializes into a mutable temp — with or
-# without a move in the call's args (consistency pin: both variants in
-# one program, both dispatch correctly).
+# `&mut` of a CALL rvalue in BINDING position (the D1b(b) migration
+# exemplar): materializes into a mutable temp, with or without a move
+# in the call's args; the `&mut`-typed value is then passed bare.
 _MUT_CALL_MOVE = _COMMON + """
 fn touch(w: &mut Widget) nothrow -> Bool { return (w.name + "") == "hello"; }
 
 pub fn main() nothrow -> Int {
 	var s = "hello";
-	if touch(&mut mk_widget(move s)) {
-		if touch(&mut mk_widget("hello" + "")) { return 0; }
+	val p = &mut mk_widget(move s);
+	if touch(p) {
+		val q = &mut mk_widget("hello" + "");
+		if touch(q) { return 0; }
 		return 2;
 	}
 	return 1;
 }
 """
 
-# Direct `&mut (move x)`: keeps the targeted assign-to-var-first message.
+# Direct `&mut (move x)` in BINDING position: keeps the targeted
+# assign-to-var-first message.
 _MUT_DIRECT_MOVE = _COMMON + """
 fn touch(w: &mut Widget) nothrow -> Bool { return (w.name + "") == "hello"; }
 
 pub fn main() nothrow -> Int {
 	var w = Widget(name = "hello" + "");
-	if touch(&mut (move w)) { return 0; }
+	val p = &mut (move w);
+	if touch(p) { return 0; }
 	return 1;
 }
 """
@@ -243,10 +247,11 @@ pub fn main() nothrow -> Int {
 	var w1 = Widget(name = "hello" + "");
 	var w2 = Widget(name = "bye" + "");
 	val c = true;
-	val r = check_widget(&(match c {
+	val b = &(match c {
 		true => { move w1 },
 		false => { move w2 },
-	}));
+	});
+	val r = check_widget(b);
 	if r { return 0; }
 	return 1;
 }

@@ -18,7 +18,7 @@ fn run() -> Int {
 	var j = 0;
 	while j < rem.len {
 		val k2 = rem[j];
-		val _v = m.remove(&k2);
+		val _v = m.remove(k2);
 		if not m.__test_validate() {
 			return 2;
 		}

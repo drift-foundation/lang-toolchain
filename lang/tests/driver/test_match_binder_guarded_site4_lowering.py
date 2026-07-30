@@ -70,7 +70,7 @@ fn via_binder(h: Holder, take: Bool, over: Int) nothrow -> Int {
 			if take {
 				acc = acc + consume(move r);   // conditional move-out of the binder
 			} else {
-				acc = acc + borrow_tag(&r);     // binder stays live
+				acc = acc + borrow_tag(r);     // binder stays live
 			}
 			r = mk(over);                       // OVERWRITE the binder (guarded site-4)
 			acc = acc + r.tag;

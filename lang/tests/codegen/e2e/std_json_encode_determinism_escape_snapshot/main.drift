@@ -15,7 +15,7 @@ fn run() -> Int {
 	b.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = b.build();
 	val node = json.JsonNode::Object(move root);
-	console.println(json.encode_with_config(&node, &cfg));
+	console.println(json.encode_with_config(node, cfg));
 	return 0;
 }
 

@@ -241,10 +241,10 @@ fn read_file(path: String) throws -> String {{
 \tvar buf = io.buffer(65536);
 \tvar more = true;
 \twhile more {{
-\t\tio.buffer_set_len(&mut buf, 0);
-\t\tval n = f.read(&mut buf).or_throw();
+\t\tio.buffer_set_len(buf, 0);
+\t\tval n = f.read(buf).or_throw();
 \t\tif n <= 0 {{ more = false; }}
-\t\telse {{ out = out + core.string_from_utf8_bytes(io.buffer_ptr(&buf), n); }}
+\t\telse {{ out = out + core.string_from_utf8_bytes(io.buffer_ptr(buf), n); }}
 \t}}
 \tf.close().or_throw();
 \treturn out;

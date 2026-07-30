@@ -369,7 +369,7 @@ implement<T> core.Destructible for ResultState<T> {
 	pub fn destroy(var self: ResultState<T>) nothrow -> Void {
 		unsafe {
 			if self.initialized {
-				var v = mem.read<type T>(&mut self.buf, 0);
+				var v = mem.read<type T>(self.buf, 0);
 				// Drop the consumed `T` via `core.drop_value` so
 				// the generic monomorphisation works for move-only
 				// `T` (the `val _ = v` shape attempts to *copy* and
@@ -379,8 +379,8 @@ implement<T> core.Destructible for ResultState<T> {
 				// post-thunk-publish branches of R1.
 				core.drop_value<type T>(move v);
 			}
-			val ptr = mem.rawbuffer_ptr<type T>(&self.buf);
-			val cap = mem.rawbuffer_cap<type T>(&self.buf);
+			val ptr = mem.rawbuffer_ptr<type T>(self.buf);
+			val cap = mem.rawbuffer_cap<type T>(self.buf);
 			var b = mem.rawbuffer_from_parts<type T>(ptr, cap);
 			mem.dealloc<type T>(b);
 		}
@@ -530,10 +530,10 @@ pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
 /// **See also:** `Mutex.lock`, `MutexGuard`,
 /// `mutex_guard_get_mut`.
 pub fn lock<T>(m: &Mutex<T>) nothrow -> MutexGuard<T> {
-	while not atomic.atomic_compare_exchange_bool(&m.locked, false, true, 1, 0) {
+	while not atomic.atomic_compare_exchange_bool(m.locked, false, true, 1, 0) {
 	}
 	unsafe {
-		val vp = mem.ptr_from_ref<type T>(&m.value);
+		val vp = mem.ptr_from_ref<type T>(m.value);
 		return MutexGuard<type T>(mtx = m, value_ptr = vp, locked = true);
 	}
 }
@@ -555,10 +555,10 @@ pub fn mutex_guard_get_mut<T>(g: &mut MutexGuard<T>) nothrow -> &mut T {
 implement<T> Mutex<T> {
 	/// Method form of `lock`.  See that function for full semantics.
 	pub fn lock(self: &Mutex<T>) nothrow -> MutexGuard<T> {
-		while not atomic.atomic_compare_exchange_bool(&self.locked, false, true, 1, 0) {
+		while not atomic.atomic_compare_exchange_bool(self.locked, false, true, 1, 0) {
 		}
 		unsafe {
-			val vp = mem.ptr_from_ref<type T>(&self.value);
+			val vp = mem.ptr_from_ref<type T>(self.value);
 			return MutexGuard<type T>(mtx = self, value_ptr = vp, locked = true);
 		}
 	}
@@ -602,7 +602,7 @@ implement<T> MutexGuard<T> {
 	///     without a matching prior unlock.
 	pub fn unlock_for_condvar(self: &mut MutexGuard<T>) nothrow -> Void {
 		assert(self.locked, "unlock_for_condvar on already-unlocked guard");
-		atomic.atomic_store_bool(&self.mtx.locked, false, 2);
+		atomic.atomic_store_bool(self.mtx.locked, false, 2);
 		self.locked = false;
 	}
 
@@ -617,7 +617,7 @@ implement<T> MutexGuard<T> {
 	/// contract violation.
 	pub fn relock_for_condvar(self: &mut MutexGuard<T>) nothrow -> Void {
 		assert(not self.locked, "relock_for_condvar on already-locked guard");
-		while not atomic.atomic_compare_exchange_bool(&self.mtx.locked, false, true, 1, 0) {
+		while not atomic.atomic_compare_exchange_bool(self.mtx.locked, false, true, 1, 0) {
 		}
 		self.locked = true;
 	}
@@ -633,7 +633,7 @@ implement<T> core.BorrowMut<T> for MutexGuard<T> {
 implement<T> core.Destructible for MutexGuard<T> {
 	pub fn destroy(self: MutexGuard<T>) nothrow -> Void {
 		if self.locked {
-			atomic.atomic_store_bool(&self.mtx.locked, false, 2);
+			atomic.atomic_store_bool(self.mtx.locked, false, 2);
 		}
 		// else: the guard was left unlocked via `unlock_for_condvar`
 		// without a matching `relock_for_condvar` — a contract
@@ -737,7 +737,7 @@ implement Condvar {
 		// claim one or the list empties.  Skip-on-CAS-fail handles
 		// the dead-record case (waiter timed out / self-cancelled
 		// before we got here).
-		val claimed = _claim_one(&self.state.get().list_lock);
+		val claimed = _claim_one(self.state.get().list_lock);
 		match claimed {
 			Optional::Some(w) => { thread.vt_unpark(w.get().vt); },
 			default => { }
@@ -750,8 +750,8 @@ implement Condvar {
 	/// Same thread-safety as `signal_one` — does not require the
 	/// predicate's mutex.
 	pub fn signal_all(self: &Condvar) nothrow -> Void {
-		val claimed = _drain_active(&self.state.get().list_lock);
-		_unpark_all(&claimed);
+		val claimed = _drain_active(self.state.get().list_lock);
+		_unpark_all(claimed);
 	}
 
 	/// Wakes all currently-parked waiters with `CLOSED`; future
@@ -768,8 +768,8 @@ implement Condvar {
 	/// is a common source of pool / channel / shutdown bugs.
 	pub fn close(self: &Condvar) nothrow -> Void {
 		self.state.get().closed.store(true, atomic.MemoryOrder::Release());
-		val claimed = _drain_active(&self.state.get().list_lock);
-		_unpark_all(&claimed);
+		val claimed = _drain_active(self.state.get().list_lock);
+		_unpark_all(claimed);
 	}
 
 	/// Atomically (from the caller's view) releases `guard`, parks
@@ -887,7 +887,7 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, has_deadline: Bool, d
 	// with our push), so the cost is bounded.
 	if cv.state.get().closed.load(atomic.MemoryOrder::Acquire()) {
 		if waiter.get().active.compare_exchange(true, false, atomic.MemoryOrder::AcqRel(), atomic.MemoryOrder::Acquire()) {
-			_prune_inactive(&cv.state.get().list_lock);
+			_prune_inactive(cv.state.get().list_lock);
 			return core.Result::Err(ConcurrencyError(
 				kind = CONCURRENCY_KIND_CLOSED,
 				code = -3
@@ -926,7 +926,7 @@ fn _wait_inner<T>(cv: &Condvar, guard: &mut MutexGuard<T>, has_deadline: Bool, d
 	// us, which means signal_one already pulled our record out of
 	// the list before unparking us.
 	if self_won {
-		_prune_inactive(&cv.state.get().list_lock);
+		_prune_inactive(cv.state.get().list_lock);
 	}
 
 	// Classify return.  Order: closed > timeout > normal/spurious.
@@ -1123,7 +1123,7 @@ implement<T> ChannelHalves<T> {
 	/// ```
 	pub fn take_sender(self: &mut ChannelHalves<T>) nothrow -> Sender<T> {
 		var taken = mem.replace(
-			&mut self.sender,
+			self.sender,
 			Optional<type Sender<T>>::None()
 		);
 		match taken {
@@ -1142,7 +1142,7 @@ implement<T> ChannelHalves<T> {
 	/// **Asserts** that the receiver has not already been taken.
 	pub fn take_receiver(self: &mut ChannelHalves<T>) nothrow -> Receiver<T> {
 		var taken = mem.replace(
-			&mut self.receiver,
+			self.receiver,
 			Optional<type Receiver<T>>::None()
 		);
 		match taken {
@@ -1273,7 +1273,7 @@ implement<T> Receiver<T> {
 					));
 				}
 			}
-			val res = self.inner.get().not_empty.wait(&mut guard);
+			val res = self.inner.get().not_empty.wait(guard);
 			match res {
 				Err(e) => { return core.Result::Err(move e); },
 				Ok(_) => { }
@@ -1318,7 +1318,7 @@ implement<T> Receiver<T> {
 					code = -1
 				));
 			}
-			val res = self.inner.get().not_empty.wait_until(&mut guard, deadline);
+			val res = self.inner.get().not_empty.wait_until(guard, deadline);
 			match res {
 				Err(e) => {
 					if e.kind == CONCURRENCY_KIND_TIMEOUT {
@@ -1366,7 +1366,7 @@ implement<T> core.Destructible for Receiver<T> {
 			val s = guard.get_mut();
 			s.receiver_closed = true;
 			val empty_replacement: Array<T> = [];
-			detached = mem.replace(&mut s.queue, move empty_replacement);
+			detached = mem.replace(s.queue, move empty_replacement);
 		}
 		// Lock released here.  `detached` drops at fn-exit; each
 		// `T`'s `Destructible` runs without holding the channel
@@ -1689,7 +1689,7 @@ fn _publish_or_drop<T>(state: &core.Arc<Mutex<ResultState<T>>>, var v: T) nothro
 		return;
 	}
 	unsafe {
-		mem.write<type T>(&mut rs.buf, 0, move v);
+		mem.write<type T>(rs.buf, 0, move v);
 	}
 	rs.initialized = true;
 	return;
@@ -1733,7 +1733,7 @@ pub fn spawn<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	val state_for_cb = state.clone();
 	var thunk: core.Callback0<Void> = core.callback0(
 		| | captures(move cb, move state_for_cb) => {
-			_publish_or_drop(&state_for_cb, cb.call());
+			_publish_or_drop(state_for_cb, cb.call());
 			return;
 		}
 	);
@@ -1772,7 +1772,7 @@ pub fn spawn_cb<T>(var cb: core.Callback0<T>) nothrow -> VirtualThread<T> {
 	val state_for_cb = state.clone();
 	var thunk: core.Callback0<Void> = core.callback0(
 		| | captures(move cb, move state_for_cb) => {
-			_publish_or_drop(&state_for_cb, cb.call());
+			_publish_or_drop(state_for_cb, cb.call());
 			return;
 		}
 	);
@@ -1819,7 +1819,7 @@ pub fn spawn_on<T>(exec: Executor, var cb: core.Callback0<T>) nothrow -> core.Re
 	val state_for_cb = state.clone();
 	var thunk: core.Callback0<Void> = core.callback0(
 		| | captures(move cb, move state_for_cb) => {
-			_publish_or_drop(&state_for_cb, cb.call());
+			_publish_or_drop(state_for_cb, cb.call());
 			return;
 		}
 	);
@@ -1877,7 +1877,7 @@ pub fn spawn_on_labeled<T>(exec: Executor, label: String, var cb: core.Callback0
 	val state_for_cb = state.clone();
 	var thunk: core.Callback0<Void> = core.callback0(
 		| | captures(move cb, move state_for_cb) => {
-			_publish_or_drop(&state_for_cb, cb.call());
+			_publish_or_drop(state_for_cb, cb.call());
 			return;
 		}
 	);
@@ -1999,7 +1999,7 @@ implement<T> VirtualThread<T> {
 				val rs = guard.get_mut();
 				if rs.initialized {
 					unsafe {
-						var v = mem.read<type T>(&mut rs.buf, 0);
+						var v = mem.read<type T>(rs.buf, 0);
 						// `core.drop_value` instead of `val _ = v`
 						// so generic move-only `T` compiles.
 						core.drop_value<type T>(move v);
@@ -2016,7 +2016,7 @@ implement<T> VirtualThread<T> {
 		var guard = self.state.get().lock();
 		val rs = guard.get_mut();
 		unsafe {
-			var v = mem.read<type T>(&mut rs.buf, 0);
+			var v = mem.read<type T>(rs.buf, 0);
 			rs.initialized = false;
 			return core.Result::Ok(move v);
 		}
@@ -2067,7 +2067,7 @@ implement<T> VirtualThread<T> {
 				val rs = guard.get_mut();
 				if rs.initialized {
 					unsafe {
-						var v = mem.read<type T>(&mut rs.buf, 0);
+						var v = mem.read<type T>(rs.buf, 0);
 						// `core.drop_value` instead of `val _ = v`
 						// so generic move-only `T` compiles.
 						core.drop_value<type T>(move v);
@@ -2085,7 +2085,7 @@ implement<T> VirtualThread<T> {
 			var guard = self.state.get().lock();
 			val rs = guard.get_mut();
 			unsafe {
-				var v = mem.read<type T>(&mut rs.buf, 0);
+				var v = mem.read<type T>(rs.buf, 0);
 				rs.initialized = false;
 				return core.Result::Ok(move v);
 			}
@@ -2102,7 +2102,7 @@ implement<T> VirtualThread<T> {
 		var guard = self.state.get().lock();
 		val rs = guard.get_mut();
 		unsafe {
-			var v = mem.read<type T>(&mut rs.buf, 0);
+			var v = mem.read<type T>(rs.buf, 0);
 			rs.initialized = false;
 			return core.Result::Ok(move v);
 		}
@@ -2188,7 +2188,7 @@ implement<T> core.Destructible for VirtualThread<T> {
 			rs.abandoned = true;
 			if rs.initialized {
 				unsafe {
-					var v = mem.read<type T>(&mut rs.buf, 0);
+					var v = mem.read<type T>(rs.buf, 0);
 					// `core.drop_value` instead of `val _ = v` so
 					// generic move-only `T` compiles.
 					core.drop_value<type T>(move v);
@@ -2347,7 +2347,7 @@ implement<T> FutureGroup<T> require T is core.Copy {
 						has_value = rs.initialized;
 						if has_value {
 							unsafe {
-								val v_ref = mem.ptr_at_ref<type T>(&rs.buf, 0);
+								val v_ref = mem.ptr_at_ref<type T>(rs.buf, 0);
 								return core.Result::Ok(*v_ref);
 							}
 						}

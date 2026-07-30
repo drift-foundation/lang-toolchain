@@ -29,7 +29,7 @@ fn skip_remaining(st: &mut Statement) nothrow -> Void {
 
 implement core.Destructible for Statement {
 	pub fn destroy(var self: Statement) nothrow -> Void {
-		skip_remaining(&mut self);
+		skip_remaining(self);
 		return;
 	}
 }

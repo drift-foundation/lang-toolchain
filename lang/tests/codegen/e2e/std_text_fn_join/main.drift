@@ -21,24 +21,24 @@ pub fn main() nothrow -> Int {
 	parts.push("a");
 	parts.push("b");
 	parts.push("c");
-	val r = text.join(&parts, ", ");
+	val r = text.join(parts, ", ");
 	val e = "a, b, c";
-	if !str_eq(&r, &e) { return 1; }
+	if !str_eq(r, e) { return 1; }
 	// Single element
 	var one: Array<String> = [];
 	one.push("only");
-	val r2 = text.join(&one, ",");
+	val r2 = text.join(one, ",");
 	val e2 = "only";
-	if !str_eq(&r2, &e2) { return 2; }
+	if !str_eq(r2, e2) { return 2; }
 	// Empty array
 	var none: Array<String> = [];
-	val r3 = text.join(&none, ",");
+	val r3 = text.join(none, ",");
 	val e3 = "";
-	if !str_eq(&r3, &e3) { return 3; }
+	if !str_eq(r3, e3) { return 3; }
 	// Empty separator
-	val r4 = text.join(&parts, "");
+	val r4 = text.join(parts, "");
 	val e4 = "abc";
-	if !str_eq(&r4, &e4) { return 4; }
+	if !str_eq(r4, e4) { return 4; }
 
 	return 0;
 }

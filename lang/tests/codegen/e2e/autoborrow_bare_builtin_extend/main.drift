@@ -1,0 +1,9 @@
+module main;
+
+pub fn main() nothrow -> Int {
+	var dest: Array<Int> = [1, 2];
+	val src: Array<Int> = [3, 4];
+	dest.extend(src);
+	if src.len != 2 { return 9; }
+	return dest.len;
+}

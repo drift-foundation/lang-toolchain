@@ -18,50 +18,50 @@ fn run() -> Int {
 	}
 	// remove leaf
 	val k3 = 3;
-	val v3 = match m.remove(&k3) {
+	val v3 = match m.remove(k3) {
 		None => { -1 },
 		Some(v) => { v }
 	};
 	if v3 != 30 {
 		return 2;
 	}
-	if m.contains_key(&k3) {
+	if m.contains_key(k3) {
 		return 3;
 	}
 	// remove node with one child (left-only)
 	val k7 = 7;
-	val v7 = match m.remove(&k7) {
+	val v7 = match m.remove(k7) {
 		None => { -1 },
 		Some(v) => { v }
 	};
 	if v7 != 70 {
 		return 4;
 	}
-	if m.contains_key(&k7) {
+	if m.contains_key(k7) {
 		return 5;
 	}
 	// remove node with one child (right-only)
 	val k12 = 12;
-	val v12 = match m.remove(&k12) {
+	val v12 = match m.remove(k12) {
 		None => { -1 },
 		Some(v) => { v }
 	};
 	if v12 != 120 {
 		return 6;
 	}
-	if m.contains_key(&k12) {
+	if m.contains_key(k12) {
 		return 7;
 	}
 	// remove node with two children (root)
 	val k10 = 10;
-	val v10 = match m.remove(&k10) {
+	val v10 = match m.remove(k10) {
 		None => { -1 },
 		Some(v) => { v }
 	};
 	if v10 != 100 {
 		return 8;
 	}
-	if m.contains_key(&k10) {
+	if m.contains_key(k10) {
 		return 9;
 	}
 	// remove remaining nodes until empty
@@ -69,7 +69,7 @@ fn run() -> Int {
 	var i = 0;
 	while i < keys.len {
 		val k = keys[i];
-		val _v = m.remove(&k);
+		val _v = m.remove(k);
 		i = i + 1;
 	}
 	if m.len() != 0 {

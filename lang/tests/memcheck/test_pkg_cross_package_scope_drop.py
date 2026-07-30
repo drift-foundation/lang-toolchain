@@ -56,7 +56,7 @@ fn clone_handle(h: &Handle) nothrow -> Handle {
 pub fn start() -> core.Result<Running, String> {
 \tval a = conc.arc(sync.atomic_bool(false));
 \tvar handle = Handle(flag = move a, value = 42);
-\tvar caller_handle = clone_handle(&handle);
+\tvar caller_handle = clone_handle(handle);
 \tvar vt = conc.spawn_cb(core.callback0(|| captures(move handle) nothrow => {
 \t\treturn handle.value;
 \t}));
@@ -81,7 +81,7 @@ pub fn serve(handle: Handle, running: Running, max_iters: Int) nothrow -> core.R
 \t\tif flag.load(sync.MemoryOrder::Acquire()) {
 \t\t\treturn core.Result::Ok(i);
 \t\t}
-\t\tmatch use_running_nothrow(&running) {
+\t\tmatch use_running_nothrow(running) {
 \t\t\tcore.Result::Err(_) => {
 \t\t\t\treturn core.Result::Err("serve failed");
 \t\t\t},

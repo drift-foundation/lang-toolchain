@@ -5,7 +5,7 @@ import std.io as io;
 pub fn main() nothrow -> Int {
 	if true {
 		var buf = io.buffer(1);
-		io.buffer_write(&mut buf, 0, cast<Byte>(65));
+		io.buffer_write(buf, 0, cast<Byte>(65));
 	}
 	return 0;
 }

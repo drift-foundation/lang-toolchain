@@ -61,7 +61,7 @@ import std.net as net;
 
 fn _run() nothrow -> Int {
 	val addr = net.socket_addr("127.0.0.1", 0);
-	match net.listen(&addr, conc.Duration(millis = 1000)) {
+	match net.listen(addr, conc.Duration(millis = 1000)) {
 		Err(e) => { cons.eprintln("listen err"); return 1; },
 		Ok(listener) => {
 			// Step 1: accept with a SHORT deadline and NO connector.
@@ -77,7 +77,7 @@ fn _run() nothrow -> Int {
 			// skip `_block_on_io` entirely, the stale token would
 			// not be left, and the later sleep would pass for the
 			// wrong reason.  Accept only `WOULD_BLOCK` here.
-			match net.accept(&listener, conc.Duration(millis = 100)) {
+			match net.accept(listener, conc.Duration(millis = 100)) {
 				Ok(_stream) => { cons.eprintln("unexpected accept Ok"); return 2; },
 				Err(e) => {
 					if e.kind != net.NET_ERROR_KIND_WOULD_BLOCK {
@@ -95,7 +95,7 @@ fn _run() nothrow -> Int {
 				Ok(_) => { },
 				Err(e) => { cons.eprintln("sleep err"); return 3; }
 			}
-			val elapsed = time.elapsed_ms(&t0);
+			val elapsed = time.elapsed_ms(t0);
 			if elapsed < 80 {
 				cons.eprintln("FAIL: post-timeout sleep was " + fmt.format_int(elapsed) + "ms, expected >=80ms (stale park_token consumed it)");
 				return 10;

@@ -54,7 +54,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 
 pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
-	match query(&mut sess) {
+	match query(sess) {
 		core.Result::Ok(st) => {
 			if st.session.id != 1 {
 				return 1;
@@ -91,7 +91,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 
 pub fn main() nothrow -> Int {
 	var sess = Session(id = 1);
-	match query(&mut sess) {
+	match query(sess) {
 		core.Result::Ok(st) => {
 			if st.session.id != 1 {
 				return 1;
@@ -253,7 +253,7 @@ import std.containers as containers;
 fn run() -> Int {
 	var m = containers.tree_map<type Int, Int>();
 	val k0 = 5;
-	var e0 = m.entry_mut(&k0);
+	var e0 = m.entry_mut(k0);
 	if e0.is_occupied() {
 		return 1;
 	}
@@ -261,13 +261,13 @@ fn run() -> Int {
 	if not ins0 {
 		return 2;
 	}
-	var e1 = m.entry_mut(&k0);
+	var e1 = m.entry_mut(k0);
 	val old_opt = e1.insert(5, 20);
 	val _ = match old_opt {
 		Some(_v) => { 0 },
 		None => { 0 },
 	};
-	var e2 = m.entry_mut(&k0);
+	var e2 = m.entry_mut(k0);
 	val _ = e2.remove();
 	return 0;
 }

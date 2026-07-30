@@ -20,7 +20,7 @@ pub fn main() nothrow -> Int {
 		var g = m1.get().lock();
 		val v = g.get_mut();
 		while not *v {
-			match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 500)) {
+			match cv1.get().wait_timeout<type Bool>(g, conc.Duration(millis = 500)) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(e) => {
 					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 91; }

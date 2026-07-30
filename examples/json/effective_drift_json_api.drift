@@ -23,16 +23,16 @@ fn run() -> Int {
 	var cfgb = json.config_builder();
 	cfgb.key_order(json.JsonKeyOrder::OrderedLexUtf8());
 	val cfg = cfgb.build();
-	console.println(json.encode_with_config(&node, &cfg));
+	console.println(json.encode_with_config(node, cfg));
 
 	var users_path = ["users"];
-	val users_node = node.expect_path(&users_path);
+	val users_node = node.expect_path(users_path);
 	val arr = users_node.expect_array("users", "users");
 	if arr.len != 2 {
 		return 2;
 	}
-	val text = json.encode(&node);
-	match json.parse(&text) {
+	val text = json.encode(node);
+	match json.parse(text) {
 		core.Result::Ok(parsed) => {
 			match parsed.into_object() {
 				Some(obj) => {

@@ -41,7 +41,7 @@ fn make_token(sess: &mut Session) nothrow -> Token {
 pub fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));
+		val r: core.Result<Token, Int> = core.Result::Ok(make_token(sess));
 		// `match` is value-producing here, so its arms may not route
 		// control flow out of the function (post-#6 / E-MATCHEXPR-CONTROLFLOW).
 		// Record the in-arm liveness check into a non-escaping status flag and

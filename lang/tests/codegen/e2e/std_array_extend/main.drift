@@ -7,14 +7,14 @@ pub fn main() nothrow -> Int {
 	// Test 1: extend empty with empty
 	var a: Array<Int> = [];
 	val empty: Array<Int> = [];
-	a.extend(&empty);
+	a.extend(empty);
 	if a.len != 0 {
 		return 1;
 	}
 
 	// Test 2: extend empty with populated
 	val src1: Array<Int> = [10, 20, 30];
-	a.extend(&src1);
+	a.extend(src1);
 	if a.len != 3 {
 		return 2;
 	}
@@ -30,7 +30,7 @@ pub fn main() nothrow -> Int {
 
 	// Test 3: extend populated with populated, preserve order
 	val src2: Array<Int> = [40, 50];
-	a.extend(&src2);
+	a.extend(src2);
 	if a.len != 5 {
 		return 6;
 	}
@@ -47,7 +47,7 @@ pub fn main() nothrow -> Int {
 	// Test 4: capacity grows correctly (extend beyond current cap)
 	var b: Array<Int> = [1];
 	val big: Array<Int> = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-	b.extend(&big);
+	b.extend(big);
 	if b.len != 17 {
 		return 10;
 	}
@@ -61,7 +61,7 @@ pub fn main() nothrow -> Int {
 	// Test 5: extend with Byte array (Copy type)
 	var bytes: Array<Byte> = [cast<Byte>(65)];
 	val more_bytes: Array<Byte> = [cast<Byte>(66), cast<Byte>(67)];
-	bytes.extend(&more_bytes);
+	bytes.extend(more_bytes);
 	if bytes.len != 3 {
 		return 13;
 	}

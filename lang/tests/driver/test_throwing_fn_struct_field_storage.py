@@ -202,7 +202,7 @@ def test_borrow_of_throwing_fn_field_cross_function(tmp_path: Path) -> None:
 	src = _PRELUDE + _INVOKE_BY_REF + """
 pub fn main() nothrow -> Int {
 	val op = OpBinding(name = "dbl", run = double);
-	return (try invoke(&op.run) catch { -2 }) - 42;
+	return (try invoke(op.run) catch { -2 }) - 42;
 }
 """
 	run = _compile_and_run(tmp_path, src)
@@ -219,7 +219,7 @@ fn rebind(run_ref: &mut Fn(Int) -> Int) -> Void {
 
 pub fn main() nothrow -> Int {
 	var op = OpBinding(name = "dbl", run = double);
-	rebind(&mut op.run);
+	rebind(op.run);
 	val f = op.run;
 	val n = try f(14) catch { -1 };
 	return n - 42;
@@ -235,7 +235,7 @@ def test_borrow_of_local_holding_field_fn_cross_function(tmp_path: Path) -> None
 pub fn main() nothrow -> Int {
 	val op = OpBinding(name = "dbl", run = double);
 	val g = op.run;
-	return (try invoke(&g) catch { -2 }) - 42;
+	return (try invoke(g) catch { -2 }) - 42;
 }
 """
 	run = _compile_and_run(tmp_path, src)
@@ -263,7 +263,7 @@ def test_ref_to_local_named_fn_still_works(tmp_path: Path) -> None:
 	src = _PRELUDE + _INVOKE_BY_REF + """
 pub fn main() nothrow -> Int {
 	val h = double;
-	return (try invoke(&h) catch { -2 }) - 42;
+	return (try invoke(h) catch { -2 }) - 42;
 }
 """
 	run = _compile_and_run(tmp_path, src)

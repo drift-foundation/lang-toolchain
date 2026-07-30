@@ -10,13 +10,13 @@ use trait iter.SinglePassIterator;
 fn run() -> Int {
 	val text = "{\"users\":[{\"id\":1},{\"id\":2}]}";
 	var root = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => { root = move v; },
 		core.Result::Err(_) => { return 100; }
 	}
 
 	var users_path = ["users"];
-	val users_node = root.expect_path(&users_path);
+	val users_node = root.expect_path(users_path);
 	val users = users_node.expect_array("users", "users");
 
 	var it = users.iter();

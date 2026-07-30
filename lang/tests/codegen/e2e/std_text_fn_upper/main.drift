@@ -19,16 +19,16 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val r = text.upper("hello");
 	val e = "HELLO";
-	if !str_eq(&r, &e) { return 1; }
+	if !str_eq(r, e) { return 1; }
 	val r2 = text.upper("HeLLo");
 	val e2 = "HELLO";
-	if !str_eq(&r2, &e2) { return 2; }
+	if !str_eq(r2, e2) { return 2; }
 	val r3 = text.upper("a1b!");
 	val e3 = "A1B!";
-	if !str_eq(&r3, &e3) { return 3; }
+	if !str_eq(r3, e3) { return 3; }
 	val r4 = text.upper("");
 	val e4 = "";
-	if !str_eq(&r4, &e4) { return 4; }
+	if !str_eq(r4, e4) { return 4; }
 
 	return 0;
 }

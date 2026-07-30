@@ -74,7 +74,7 @@ fn mutate(ctx: &mut Ctx) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 \tvar ctx = Ctx(s = fmt.format_int(7));
-\tmutate(&mut ctx);
+\tmutate(ctx);
 \treturn 0;
 }
 """

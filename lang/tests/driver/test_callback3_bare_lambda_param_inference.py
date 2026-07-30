@@ -115,7 +115,7 @@ fn register2(slot: &mut Array<core.Callback2<Req, Req, Int>>,
 
 pub fn main() nothrow -> Int {
     var slot: Array<core.Callback2<Req, Req, Int>> = [];
-    register2(&mut slot, |a, b| => {
+    register2(slot, |a, b| => {
         return a.n + b.n;
     });
     return 0;
@@ -141,7 +141,7 @@ fn register3(slot: &mut Array<core.Callback3<Req, Req, Req, Int>>,
 
 pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Req, Req, Int>> = [];
-    register3(&mut slot, |a, b, c| => {
+    register3(slot, |a, b, c| => {
         return a.n + b.n + c.n;
     });
     return 0;
@@ -171,7 +171,7 @@ fn register_mw(slot: &mut Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx
 
 pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
-    register_mw(&mut slot, |a, b, next| => {
+    register_mw(slot, |a, b, next| => {
         val inner = next.call(a, b);
         return core.Result::Ok(Resp(status = a.n + b.k));
     });
@@ -201,7 +201,7 @@ fn register_mw_ref(slot: &mut Array<core.Callback3<&Req, &mut Ctx, core.Callback
 
 pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<&Req, &mut Ctx, core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
-    register_mw_ref(&mut slot, |req, ctx, next| => {
+    register_mw_ref(slot, |req, ctx, next| => {
         val inner = next.call(req, ctx);
         return core.Result::Ok(Resp(status = req.n + ctx.k));
     });
@@ -325,7 +325,7 @@ import mw;
 
 pub fn main() nothrow -> Int {
     var a = mw.new_app();
-    mw.add_middleware(&mut a, |req, ctx, next| => {
+    mw.add_middleware(a, |req, ctx, next| => {
         val inner = next.call(req, ctx);
         return mw.ok(req.n + ctx.k);
     });
@@ -402,7 +402,7 @@ pub fn main() nothrow -> Int {
     // the Callback3 expected type is nothrow → throws mismatch.
     // Pre-fix: cascade with Ref<Unknown> / Unknown receivers; post-
     // fix: a single, clean throws diagnostic.
-    register_mw(&mut slot, |req, ctx, next| => {
+    register_mw(slot, |req, ctx, next| => {
         val r = maybe_resp(req.n);
         return next.call(req, ctx);
     });
@@ -454,7 +454,7 @@ fn register_mw(slot: &mut Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx
 pub fn main() nothrow -> Int {
     var slot: Array<core.Callback3<Req, Ctx, core.Callback2<Req, Ctx, core.Result<Resp, AppErr>>, core.Result<Resp, AppErr>>> = [];
     val bias = 7;
-    register_mw(&mut slot, |req, ctx, next| captures(copy bias) => {
+    register_mw(slot, |req, ctx, next| captures(copy bias) => {
         val inner = next.call(req, ctx);
         return core.Result::Ok(Resp(status = req.n + ctx.k + bias));
     });

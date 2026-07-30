@@ -8,7 +8,7 @@ pub fn main() nothrow -> Int {
 	val input = io.stdin_builder().timeout(t).build();
 	val output = io.stdout_builder().timeout(t).build();
 	var inb = io.buffer(128);
-	val rr = input.read(&mut inb);
+	val rr = input.read(inb);
 	val n0 = match rr {
 		Ok(n) => { n },
 		Err(e) => {
@@ -20,18 +20,18 @@ pub fn main() nothrow -> Int {
 		return 0;
 	}
 	var n = n0;
-	val last = io.buffer_read(&mut inb, n - 1);
+	val last = io.buffer_read(inb, n - 1);
 	if last == cast<Byte>(10) {
 		n = n - 1;
 	}
 	var outb = io.buffer(n);
 	var i = 0;
 	while i < n {
-		val b = io.buffer_read(&mut inb, n - 1 - i);
-		io.buffer_write(&mut outb, i, b);
+		val b = io.buffer_read(inb, n - 1 - i);
+		io.buffer_write(outb, i, b);
 		i += 1;
 	}
-	val wr = output.write(&outb);
+	val wr = output.write(outb);
 	match wr {
 		Ok(_) => { return 0; },
 		Err(_) => { return 4; },

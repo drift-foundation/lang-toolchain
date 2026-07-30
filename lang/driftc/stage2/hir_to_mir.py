@@ -3217,11 +3217,22 @@ class HIRToMIR:
 			# Instead: walk the projection chain looking for the
 			# deepest rvalue base.  If that base is a call that
 			# returns `&T`, lower the call once to its `&T` value
-			# and walk the remaining HField chain emitting
-			# `AddrOfField` (and `LoadRef` for any intermediate REF
-			# field) directly against that pointer — the same place-
-			# chain shape `_lower_addr_of_place` produces, but
-			# rooted at a call result instead of a local's address.
+			# and walk the remaining projection chain — HField hops
+			# emit `AddrOfField`, HIndex hops emit `LoadRef` +
+			# `AddrOfArrayElem`, REF intermediates emit `LoadRef`,
+			# and an explicit deref directly on the base (`&*f()`)
+			# is an address-level no-op — directly against that
+			# pointer: the same place-chain shape
+			# `_lower_addr_of_place` produces, but rooted at a call
+			# result instead of a local's address.  An OWNED base is
+			# admitted only for index-bearing shared chains (the
+			# shape the fallback below cannot lower); it is
+			# materialized into a drop-registered temp first.
+			# Index and deref-at-base hops (and the owned-base mode)
+			# were added with reject-redundant-call-borrows: the
+			# rule's bare argument spellings and the widened
+			# receiver gate (`_ultimate_base_is_rvalue_call`) both
+			# synthesize these HBorrow shapes.
 			# (`_lower_addr_of_place` itself is not reused: it takes
 			# an `HPlaceExpr` and starts from `AddrOfLocal`, which
 			# this rvalue-rooted subject doesn't have.)
@@ -3266,12 +3277,15 @@ class HIRToMIR:
 	def _lift_rvalue_ref_base_for_borrow(
 		self, subject: H.HExpr, *, is_mut: bool
 	) -> "M.ValueId | None":
-		"""LANGUAGE_BUG-fix helper (2026-05-15).  Detect the
-		`HField(... HCall/HMethodCall_returning_ref, field1, ...)`
-		shape — a borrow subject that's a field-projection chain
-		rooted at a call returning `&T` — and lower it correctly so
-		`&self` interior-mutation methods on the leaf field mutate
-		the actual storage instead of a temp-local copy.
+		"""LANGUAGE_BUG-fix helper (2026-05-15; extended for
+		reject-redundant-call-borrows).  Detect a borrow subject
+		that's a field/index-projection chain (optionally with an
+		explicit deref directly on the base) rooted at a call rvalue
+		— `&T`/`&mut T`-returning, or OWNED for index-bearing shared
+		chains — and lower it correctly so `&self` interior-mutation
+		methods on the leaf mutate the actual storage instead of a
+		temp-local copy, and non-Copy element borrows never fall
+		into the whole-expression copy path.
 
 		## Atomicity contract (K-review, 2026-05-15)
 
@@ -3289,13 +3303,18 @@ class HIRToMIR:
 
 		Validated by `_validate_lifted_chain`:
 
-		1. The outermost subject is `HField`, repeatedly walked
-		   inward through nested `HField` projections.
+		1. The outermost subject is `HField` or `HIndex`, repeatedly
+		   walked inward through nested field/index projections; an
+		   explicit deref (`&*f()`) is accepted only directly on the
+		   base call, where it is an address-level no-op.
 		2. The innermost base is `HCall` / `HMethodCall` /
-		   `HInvoke` whose inferred type is `&T` (or `&mut T`).
-		3. Every intermediate field's type, after auto-dereffing
-		   any ref hops, resolves to a `TypeKind.STRUCT` so the
-		   next field name can be looked up.
+		   `HInvoke` whose inferred type is `&T` / `&mut T` — or an
+		   OWNED value, accepted only for shared borrows whose chain
+		   contains an index hop (materialized into a
+		   drop-registered temp by the emitter).
+		3. Every intermediate type, after auto-dereffing any ref
+		   hops, resolves to `TypeKind.STRUCT` for a field hop or
+		   `TypeKind.ARRAY` for an index hop.
 		4. Every field name is found by `struct_field` on its
 		   containing struct.
 		5. For `&mut` borrows: every REF hop must be `ref_mut`
@@ -3322,14 +3341,30 @@ class HIRToMIR:
 		plan = self._validate_lifted_chain(subject, is_mut=is_mut)
 		if plan is None:
 			return None
-		base_call_expr, projections = plan
+		base_call_expr, projections, base_owned = plan
 		# Validation passed.  Safe to emit.
-		ref_val = self.lower_expr(base_call_expr)
-		cur_ptr = ref_val
+		if base_owned:
+			# Owned-rvalue base admitted ONLY for index-bearing chains
+			# (validator rule): materialize the owned base into a
+			# drop-registered temp — the same lifetime shape stage1's
+			# `_split_lift_place_chain` produces (`val __tmp = mk();
+			# &__tmp[i]`) — and project from its address.  Pure-field
+			# owned chains keep the whole-expression-materialization
+			# fallback pinned by `autoborrow_owned_rvalue_field_method_
+			# unchanged`.
+			base_ty = self._infer_expr_type(base_call_expr)
+			cur_ptr = self._materialize_owned_temp_for_borrow(
+				ty=base_ty,
+				value=lambda: self.lower_expr(base_call_expr),
+				is_mut=False,
+			)
+		else:
+			ref_val = self.lower_expr(base_call_expr)
+			cur_ptr = ref_val
 		for step in projections:
-			# A step is either a "deref" (REF intermediate) or a
-			# "field" (struct field projection).  Deref emits
-			# LoadRef; field emits AddrOfField.
+			# A step is "deref" (REF intermediate → LoadRef), "field"
+			# (struct field → AddrOfField), or "index" (array element
+			# → LoadRef of the array value + AddrOfArrayElem).
 			step_kind, step_arg = step
 			if step_kind == "deref":
 				inner_ref_ty = step_arg  # the Ref<T> type at this point
@@ -3348,11 +3383,28 @@ class HIRToMIR:
 					is_mut=is_mut,
 				))
 				cur_ptr = next_ptr
+			elif step_kind == "index":
+				# Mirrors `_lower_addr_of_place`'s HPlaceIndex arm:
+				# load the array value from the storage pointer, then
+				# compute the (bounds-checked) element address.
+				array_ty, elem_ty, index_expr = step_arg
+				array_val = self.b.new_temp()
+				self.b.emit(M.LoadRef(dest=array_val, ptr=cur_ptr, inner_ty=array_ty))
+				index_val = self.lower_expr(index_expr)
+				next_ptr = self.b.new_temp()
+				self.b.emit(M.AddrOfArrayElem(
+					dest=next_ptr,
+					array=array_val,
+					index=index_val,
+					inner_ty=elem_ty,
+					is_mut=is_mut,
+				))
+				cur_ptr = next_ptr
 			else:
-				# Defensive: validator only emits the two step kinds
-				# above.  An unknown kind here means the validator
-				# and the emitter are out of sync — fail loud
-				# (we're past the no-emission boundary already).
+				# Defensive: validator only emits the three step
+				# kinds above.  An unknown kind here means the
+				# validator and the emitter are out of sync — fail
+				# loud (we're past the no-emission boundary already).
 				raise AssertionError(
 					f"_lift_rvalue_ref_base_for_borrow: unknown step kind "
 					f"{step_kind!r} from validator (compiler bug)"
@@ -3361,58 +3413,92 @@ class HIRToMIR:
 
 	def _validate_lifted_chain(
 		self, subject: H.HExpr, *, is_mut: bool
-	) -> "tuple[H.HExpr, list[tuple[str, object]]] | None":
+	) -> "tuple[H.HExpr, list[tuple[str, object]], bool] | None":
 		"""Validate the projection chain for
 		`_lift_rvalue_ref_base_for_borrow`.  Pure inspection — emits
 		zero MIR instructions.  On success returns
-		`(base_call_expr, projections)` where `projections` is the
-		ordered list of (`"deref"|"field"`, payload) steps the
-		emitter executes against the base's `&T` result.  On any
-		structural mismatch — non-field outer chain, non-call
-		innermost, non-ref call return, non-struct intermediate,
-		unknown field name, &mut through non-&mut REF hop —
-		returns None and leaves the MIR state untouched.
+		`(base_call_expr, projections, base_owned)` where
+		`projections` is the ordered list of
+		(`"deref"|"field"|"index"`, payload) steps the emitter
+		executes against the base pointer, and `base_owned` says the
+		base call returns its value BY VALUE (the emitter then
+		materializes a drop-registered temp instead of using the
+		call's `&T` result directly).  Owned bases are accepted ONLY
+		for shared borrows whose chain contains an index hop — the
+		one shape the whole-expr fallback cannot lower (non-Copy
+		element read); pure-field owned chains keep the fallback
+		pinned by `autoborrow_owned_rvalue_field_method_unchanged`.
+		On any structural mismatch — non-projection outer chain,
+		non-call innermost, non-struct/array intermediate, unknown
+		field name, &mut through non-&mut hop, &mut over an owned
+		base — returns None and leaves the MIR state untouched.
 
 		Walks types, never expressions.  `self._infer_expr_type` is
 		the only type-table consultation; it does not emit MIR.
 		`self._type_table.get` / `.struct_field` are pure lookups.
 		"""
-		field_names: list[str] = []
+		# Outer-to-inner peel.  Each hop is ("field", name) or
+		# ("index", index_expr); an explicit deref (`&*f()`) is legal
+		# only directly on the base call, where it is an address-level
+		# no-op (the call's `&T` result IS the borrow), recorded by
+		# consuming the HUnary without a hop.
+		hops: list[tuple[str, object]] = []
 		cur = subject
-		while isinstance(cur, H.HField):
-			field_names.append(cur.name)
-			cur = cur.subject
-		if not field_names:
+		while True:
+			if isinstance(cur, H.HField):
+				hops.append(("field", cur.name))
+				cur = cur.subject
+				continue
+			if isinstance(cur, H.HIndex):
+				# Index expressions lower inline at emit time — same
+				# contract as `_lower_addr_of_place`'s HPlaceIndex arm
+				# (can-throw calls are lifted by stage1 normalization).
+				hops.append(("index", cur.index))
+				cur = cur.subject
+				continue
+			if (
+				isinstance(cur, H.HUnary)
+				and cur.op is H.UnaryOp.DEREF
+				and isinstance(cur.expr, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ())))
+			):
+				cur = cur.expr
+				break
+			break
+		if not hops and not isinstance(subject, H.HUnary):
 			return None
 		# Innermost base must be a callable rvalue.  HVar /
 		# HPlaceExpr already-place cases are handled by the
 		# caller's HPlaceExpr branch.
 		if not isinstance(cur, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ()))):
 			return None
-		# Base must return a reference type.  Owned-rvalue bases
-		# fall through to whole-expr materialization — see
-		# `lang/tests/codegen/e2e/autoborrow_owned_rvalue_field_method_unchanged/`
-		# for the pinned over-fire guard.
 		base_ty = self._infer_expr_type(cur)
 		if base_ty is None:
 			return None
 		base_def = self._type_table.get(base_ty)
+		base_owned = False
 		if base_def.kind is not TypeKind.REF or not base_def.param_types:
-			return None
-		if is_mut and not getattr(base_def, "ref_mut", False):
+			# Owned-rvalue base.  Accepted only for SHARED borrows whose
+			# chain has an index hop — the shape the whole-expr fallback
+			# cannot lower (non-Copy element read).  Pure-field owned
+			# chains keep the fallback — see
+			# `lang/tests/codegen/e2e/autoborrow_owned_rvalue_field_method_unchanged/`
+			# for the pinned over-fire guard.
+			if is_mut or not any(k == "index" for k, _ in hops):
+				return None
+			base_owned = True
+		elif is_mut and not getattr(base_def, "ref_mut", False):
 			# `&mut place.field` over a base that returned `&T`
 			# (not `&mut T`) cannot produce a `&mut` field
 			# pointer.  Defer to caller's fallback / diagnostic.
 			return None
-		# Walk the field chain innermost-first against the
-		# pointed-to struct type.  Build the step list for the
-		# emitter as we go.
-		field_names.reverse()
+		# Walk the hop chain innermost-first against the pointed-to
+		# type.  Build the step list for the emitter as we go.
+		hops.reverse()
 		projections: list[tuple[str, object]] = []
-		cur_pointee_ty = base_def.param_types[0]
-		for field_name in field_names:
+		cur_pointee_ty = base_ty if base_owned else base_def.param_types[0]
+		for hop_kind, hop_arg in hops:
 			# Auto-deref ref intermediates: mirrors
-			# `_lower_addr_of_place`'s REF-then-field branch.
+			# `_lower_addr_of_place`'s REF-then-project branch.
 			pointee_def = self._type_table.get(cur_pointee_ty)
 			while pointee_def.kind is TypeKind.REF and pointee_def.param_types:
 				if is_mut and not getattr(pointee_def, "ref_mut", False):
@@ -3420,17 +3506,26 @@ class HIRToMIR:
 				projections.append(("deref", cur_pointee_ty))
 				cur_pointee_ty = pointee_def.param_types[0]
 				pointee_def = self._type_table.get(cur_pointee_ty)
-			if pointee_def.kind is not TypeKind.STRUCT:
-				return None
-			field_info = self._type_table.struct_field(cur_pointee_ty, field_name)
-			if field_info is None:
-				return None
-			field_idx, field_ty = field_info
-			projections.append(
-				("field", (cur_pointee_ty, field_idx, field_ty))
-			)
-			cur_pointee_ty = field_ty
-		return cur, projections
+			if hop_kind == "field":
+				if pointee_def.kind is not TypeKind.STRUCT:
+					return None
+				field_info = self._type_table.struct_field(cur_pointee_ty, hop_arg)
+				if field_info is None:
+					return None
+				field_idx, field_ty = field_info
+				projections.append(
+					("field", (cur_pointee_ty, field_idx, field_ty))
+				)
+				cur_pointee_ty = field_ty
+			else:  # "index"
+				if pointee_def.kind is not TypeKind.ARRAY or not pointee_def.param_types:
+					return None
+				elem_ty = pointee_def.param_types[0]
+				projections.append(
+					("index", (cur_pointee_ty, elem_ty, hop_arg))
+				)
+				cur_pointee_ty = elem_ty
+		return cur, projections, base_owned
 
 	def _visit_expr_HCopy(self, expr: H.HCopy) -> M.ValueId:
 		"""
@@ -11364,7 +11459,7 @@ class HIRToMIR:
 				elif isinstance(expr.receiver, H.HVar):
 					place_expr = H.HPlaceExpr(base=expr.receiver, projections=[], loc=Span())
 				if place_expr is None:
-					raise NotImplementedError("method auto-borrow requires an lvalue receiver in v1")
+					raise NotImplementedError(f"method auto-borrow requires an lvalue receiver in v1 (method={getattr(expr, 'method_name', None)} recv={type(expr.receiver).__name__} loc={getattr(expr, 'loc', None)})")
 				receiver_arg, _inner = self._lower_addr_of_place(place_expr, is_mut=(self_mode == "ref_mut"))
 
 		arg_vals: list[M.ValueId] = [receiver_arg]

@@ -43,7 +43,7 @@ fn sink(t: Token) nothrow -> Void { return; }
 
 pub fn main() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
-	val tok: Token = make_token(&mut sess);
+	val tok: Token = make_token(sess);
 	sink(move tok);   // first consume (explicit move) — legal.
 	sink(move tok);   // second consume — use-after-move (borrowcheck).
 	return 0;

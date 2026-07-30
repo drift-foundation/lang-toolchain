@@ -5,12 +5,12 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val text = "{\"x\":100}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
 			val handle = json.share(move node);
 			val handle2 = handle.clone();
 			val k = "x";
-			match handle.get(&k) {
+			match handle.get(k) {
 				Optional::Some(h) => {
 					match h.as_int() {
 						Optional::Some(v) => { if v != 100 { return 1; } },
@@ -19,7 +19,7 @@ pub fn main() nothrow -> Int {
 				},
 				Optional::None() => { return 3; }
 			}
-			match handle2.get(&k) {
+			match handle2.get(k) {
 				Optional::Some(h) => {
 					match h.as_int() {
 						Optional::Some(v) => { if v != 100 { return 4; } },

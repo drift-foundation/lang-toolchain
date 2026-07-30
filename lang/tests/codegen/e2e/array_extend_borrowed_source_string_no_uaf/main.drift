@@ -26,7 +26,7 @@ fn run_string_extend() nothrow -> Int {
 	src.push(heap_str("c"));
 
 	var dest: Array<String> = [];
-	dest.extend(&src);
+	dest.extend(src);
 
 	// Source array must still be valid post-extend: extend(&src) is a
 	// COPY-only operation, never a move.

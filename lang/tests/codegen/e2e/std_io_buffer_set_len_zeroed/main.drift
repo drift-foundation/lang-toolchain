@@ -4,45 +4,45 @@ import std.io as io;
 
 pub fn main() nothrow -> Int {
 	var buf = io.buffer(8);
-	io.buffer_write(&mut buf, 0, cast<Byte>(65));
-	io.buffer_set_len(&mut buf, 5);
-	if io.buffer_len(&buf) != 5 {
+	io.buffer_write(buf, 0, cast<Byte>(65));
+	io.buffer_set_len(buf, 5);
+	if io.buffer_len(buf) != 5 {
 		return 1;
 	}
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(65) {
+	if io.buffer_read(buf, 0) != cast<Byte>(65) {
 		return 2;
 	}
-	if io.buffer_read(&mut buf, 1) != cast<Byte>(0) {
+	if io.buffer_read(buf, 1) != cast<Byte>(0) {
 		return 3;
 	}
-	if io.buffer_read(&mut buf, 2) != cast<Byte>(0) {
+	if io.buffer_read(buf, 2) != cast<Byte>(0) {
 		return 4;
 	}
-	if io.buffer_read(&mut buf, 3) != cast<Byte>(0) {
+	if io.buffer_read(buf, 3) != cast<Byte>(0) {
 		return 5;
 	}
-	if io.buffer_read(&mut buf, 4) != cast<Byte>(0) {
+	if io.buffer_read(buf, 4) != cast<Byte>(0) {
 		return 6;
 	}
-	io.buffer_set_len(&mut buf, 3);
-	if io.buffer_len(&buf) != 3 {
+	io.buffer_set_len(buf, 3);
+	if io.buffer_len(buf) != 3 {
 		return 7;
 	}
-	io.buffer_set_len(&mut buf, -1);
-	if io.buffer_len(&buf) != 0 {
+	io.buffer_set_len(buf, -1);
+	if io.buffer_len(buf) != 0 {
 		return 8;
 	}
-	io.buffer_set_len(&mut buf, 100);
-	if io.buffer_len(&buf) != 8 {
+	io.buffer_set_len(buf, 100);
+	if io.buffer_len(buf) != 8 {
 		return 9;
 	}
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(0) {
+	if io.buffer_read(buf, 0) != cast<Byte>(0) {
 		return 10;
 	}
-	if io.buffer_read(&mut buf, 4) != cast<Byte>(0) {
+	if io.buffer_read(buf, 4) != cast<Byte>(0) {
 		return 11;
 	}
-	if io.buffer_read(&mut buf, 7) != cast<Byte>(0) {
+	if io.buffer_read(buf, 7) != cast<Byte>(0) {
 		return 12;
 	}
 	return 0;

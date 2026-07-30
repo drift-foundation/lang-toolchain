@@ -437,7 +437,7 @@ import std.console as cons;
 import std.format as fmt;
 pub fn main() nothrow -> Int {
 \tval c = boxlib.make_cfg(99);
-\tcons.println(fmt.format_int(boxlib.cfg_value(&c)));
+\tcons.println(fmt.format_int(boxlib.cfg_value(c)));
 \treturn 0;
 }
 """)
@@ -495,7 +495,7 @@ import sboxlib as sboxlib;
 import std.console as cons;
 pub fn main() nothrow -> Int {
 \tvar h = sboxlib.make("heap-owned string payload");
-\tcons.println(*sboxlib.value(&h));
+\tcons.println(*sboxlib.value(h));
 \t// h (and its Box<String>) drops at scope end -> the consumer must discover and
 \t// invoke the generic Box<String> destructor, freeing the String + cell.
 \treturn 0;

@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows W3: bare places at the declared &/&mut formals of std.mem intrinsics auto-borrow, including element-type inference from the bare place (replace, swap)",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

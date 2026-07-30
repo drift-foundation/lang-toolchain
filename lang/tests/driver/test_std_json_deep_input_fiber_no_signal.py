@@ -61,7 +61,7 @@ fn parse_deep_on_fiber(depth: Int) nothrow -> Int {
 	var t = conc.spawn(| | => {
 		val s = nested(depth);
 		val cfg = json.permissive();          // default max_depth = 128
-		match json.parse_with_config(&s, &cfg) {
+		match json.parse_with_config(s, cfg) {
 			core.Result::Ok(_n) => { return 0; },
 			core.Result::Err(e) => {
 				if e.tag == "limit-depth" { return 1; }

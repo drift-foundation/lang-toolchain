@@ -1,0 +1,14 @@
+{
+  "description": "D6 alias transparency: a type-alias-declared reference parameter (type Handle = &String) counts as declared; the explicit borrow is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'h:"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 's' directly"
+    }
+  ]
+}

@@ -230,7 +230,7 @@ from lang.driftc.type_resolver import resolve_program_signatures
 from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.type_checker import TypeChecker, ThunkKind
 from lang.driftc.method_registry import CallableRegistry, CallableSignature, CallableTemplateSignature, Visibility, SelfMode
-from lang.driftc.impl_index import GlobalImplIndex, ImplMeta, find_impl_method_conflicts
+from lang.driftc.impl_index import GlobalImplIndex, ImplMeta, find_impl_method_conflicts, find_param_mode_overload_conflicts
 from lang.driftc.trait_index import GlobalTraitImplIndex, GlobalTraitIndex, validate_trait_scopes
 from lang.driftc.fake_decl import FakeDecl
 from lang.driftc.packages.dmir_pkg_v0 import canonical_json_bytes, sha256_hex, write_dmir_pkg_v0
@@ -12499,6 +12499,13 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			signatures_by_id=signatures_by_id,
 			type_table=type_table,
 			visible_modules_by_name=visible_modules_by_name_set,
+		)
+	)
+	type_diags.extend(
+		find_param_mode_overload_conflicts(
+			callable_registry=callable_registry,
+			signatures_by_id=signatures_by_id,
+			type_table=type_table,
 		)
 	)
 	# Phase 3.5: validate trait impl terminal-throws compatibility in the

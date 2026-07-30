@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 13 (W3): source-written &mut at mem.replace's declared &mut T formal is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'x' directly"
+    }
+  ]
+}

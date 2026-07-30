@@ -3,5 +3,5 @@ fn id(p: &Int) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int{
-	return id(&(1 + 2));
+	return id((1 + 2));
 }

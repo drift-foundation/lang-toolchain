@@ -362,7 +362,7 @@ implement JsonParseConfigBuilder {
 	/// Validate and produce the config.  Returns `Err("invalid-config")` (with the
 	/// offending limit name in `key`) for a negative limit; `Ok(cfg)` otherwise.
 	pub fn build(self: &JsonParseConfigBuilder) nothrow -> core.Result<JsonParseConfig, JsonErrorData> {
-		match _validate_limits(&self.cfg.limits) {
+		match _validate_limits(self.cfg.limits) {
 			Optional::Some(e) => { return core.Result::Err(move e); },
 			Optional::None() => { return core.Result::Ok(self.cfg); }
 		}
@@ -373,12 +373,12 @@ implement JsonParseConfigBuilder {
 /// `None`.  Used by `build()` and the parse entry points so a struct-literal
 /// config is validated too.
 fn _validate_limits(lim: &JsonLimits) nothrow -> Optional<JsonErrorData> {
-	match _neg_limit(&lim.max_document_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-document-bytes")); }, None => { } }
-	match _neg_limit(&lim.max_depth) { Some(_) => { return Optional::Some(_err_invalid_config("max-depth")); }, None => { } }
-	match _neg_limit(&lim.max_string_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-string-bytes")); }, None => { } }
-	match _neg_limit(&lim.max_number_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-number-bytes")); }, None => { } }
-	match _neg_limit(&lim.max_array_items) { Some(_) => { return Optional::Some(_err_invalid_config("max-array-items")); }, None => { } }
-	match _neg_limit(&lim.max_object_fields) { Some(_) => { return Optional::Some(_err_invalid_config("max-object-fields")); }, None => { } }
+	match _neg_limit(lim.max_document_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-document-bytes")); }, None => { } }
+	match _neg_limit(lim.max_depth) { Some(_) => { return Optional::Some(_err_invalid_config("max-depth")); }, None => { } }
+	match _neg_limit(lim.max_string_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-string-bytes")); }, None => { } }
+	match _neg_limit(lim.max_number_bytes) { Some(_) => { return Optional::Some(_err_invalid_config("max-number-bytes")); }, None => { } }
+	match _neg_limit(lim.max_array_items) { Some(_) => { return Optional::Some(_err_invalid_config("max-array-items")); }, None => { } }
+	match _neg_limit(lim.max_object_fields) { Some(_) => { return Optional::Some(_err_invalid_config("max-object-fields")); }, None => { } }
 	return Optional<JsonErrorData>::None();
 }
 
@@ -402,7 +402,7 @@ fn _throw_json(tag: String, path: String, key: String) -> Void {
 }
 
 pub fn encode(node: &JsonNode) nothrow -> String {
-	return _encode_node(node, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+	return _encode_node(node, JsonConfig(key_order = JsonKeyOrder::Unordered()));
 }
 
 pub fn encode_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
@@ -410,7 +410,7 @@ pub fn encode_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
 }
 
 pub fn encode_compact(node: &JsonNode) nothrow -> String {
-	return _encode_node(node, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+	return _encode_node(node, JsonConfig(key_order = JsonKeyOrder::Unordered()));
 }
 
 pub fn encode_compact_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
@@ -427,25 +427,25 @@ pub fn encode_compact_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> 
 pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val ctx = _ParseCtx(cfg = permissive(), legacy = true, locate = false);
 	var sp: Optional<_SpanTree> = Optional::None();
-	return _parse_document(text, &ctx, &mut sp);
+	return _parse_document(text, ctx, sp);
 }
 
 /// Parses `text` under an explicit parser policy (§ std.json parser policy).
 /// Validates `cfg` first (negative limit ⇒ `Err("invalid-config")`).
 pub fn parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	match _validate_limits(&cfg.limits) {
+	match _validate_limits(cfg.limits) {
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
 	var sp: Optional<_SpanTree> = Optional::None();
-	return _parse_document(text, &ctx, &mut sp);
+	return _parse_document(text, ctx, sp);
 }
 
 /// `parse_with_config(text, strict())` — standard JSON, reject duplicate keys.
 pub fn parse_strict(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
 	val s = strict();
-	return parse_with_config(text, &s);
+	return parse_with_config(text, s);
 }
 
 /// Parses `text` under `cfg` AND retains a source-span sidecar, yielding a
@@ -453,13 +453,13 @@ pub fn parse_strict(text: &String) nothrow -> core.Result<JsonNode, JsonErrorDat
 /// (require / forbid_unknown / discriminant / typed getters).  Same policy
 /// outcome as `parse_with_config` (the sidecar never changes parsing).
 pub fn parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Result<JsonDoc, JsonErrorData> {
-	match _validate_limits(&cfg.limits) {
+	match _validate_limits(cfg.limits) {
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
 	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
 	var sp: Optional<_SpanTree> = Optional::None();
-	match _parse_document(text, &ctx, &mut sp) {
+	match _parse_document(text, ctx, sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(node) => {
 			match sp {
@@ -471,20 +471,20 @@ pub fn parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Resul
 }
 
 fn _parse_document(text: &String, ctx: &_ParseCtx, root_sp: &mut Optional<_SpanTree>) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	if _over_limit(&ctx.cfg.limits.max_document_bytes, text.byte_length()) {
+	if _over_limit(ctx.cfg.limits.max_document_bytes, text.byte_length()) {
 		return core.Result::Err(_err_parse(text, "limit-document-bytes", 0));
 	}
 	var idx = 0;
-	_skip_ws(text, &mut idx);
+	_skip_ws(text, idx);
 	val root_start = idx;
-	match _parse_value(text, &mut idx, ctx, 1, root_sp) {
+	match _parse_value(text, idx, ctx, 1, root_sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
 		core.Result::Ok(v) => {
-			_skip_ws(text, &mut idx);
+			_skip_ws(text, idx);
 			if idx != text.byte_length() {
 				return core.Result::Err(_err_parse(text, "invalid-syntax", idx));
 			}
-			match _check_top_level(&v, ctx, root_start, text) {
+			match _check_top_level(v, ctx, root_start, text) {
 				Optional::Some(e) => { return core.Result::Err(move e); },
 				Optional::None() => { }
 			}
@@ -530,7 +530,7 @@ fn _span_of(tree: &_SpanTree) nothrow -> JsonByteSpan {
 fn _located_err(text: &String, tag: String, span: JsonByteSpan, pointer: String, key: String) nothrow -> JsonErrorData {
 	var line = -1;
 	var col = -1;
-	_err_parse_line_col(text, span.start, &mut line, &mut col);
+	_err_parse_line_col(text, span.start, line, col);
 	return JsonErrorData(tag = tag, offset = span.start, line = line, col = col, path = pointer, key = key);
 }
 
@@ -688,7 +688,7 @@ implement JsonDoc {
 	/// Delegates verbatim to `txt.byte_view(&self.text, start, len)`
 	/// — same `TextError`, same bounds, `offset = start` on failure.
 	pub fn byte_range_view(self: &JsonDoc, start: Int, len: Int) nothrow -> core.Result<txt.StringByteView, txt.TextError> {
-		return txt.byte_view(&self.text, start, len);
+		return txt.byte_view(self.text, start, len);
 	}
 
 	/// Resolve an ABSOLUTE JSON Pointer (RFC 6901) from the document root.
@@ -708,10 +708,10 @@ implement JsonDoc {
 				raw_seg = raw_seg + _byte_to_string(core.string_byte_at(ptr, i));
 				i = i + 1;
 			}
-			match _jp_unescape(&raw_seg) {
+			match _jp_unescape(raw_seg) {
 				Optional::None() => { return core.Result::Err(_invalid_pointer(ptr)); },
 				Optional::Some(seg) => {
-					match _navigate_segment(&cur, &seg, &raw_seg) {
+					match _navigate_segment(cur, seg, raw_seg) {
 						core.Result::Err(e) => { return core.Result::Err(move e); },
 						core.Result::Ok(next) => { cur = move next; }
 					}
@@ -771,7 +771,7 @@ implement LocatedCursor {
 							Some(child_node) => {
 								match vspans.get(key) {
 									Some(child_span) => {
-										return core.Result::Ok(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(&self.pointer, key)));
+										return core.Result::Ok(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(self.pointer, key)));
 									},
 									None => {
 										return core.Result::Err(_err_data("internal-error", self.pointer.clone(), ""));
@@ -806,7 +806,7 @@ implement LocatedCursor {
 						if ix < 0 or ix >= values.len {
 							return core.Result::Err(_located_err(self.text, "index-out-of-range", _span_of(self.span), self.pointer.clone(), _int_to_string(ix)));
 						}
-						return core.Result::Ok(LocatedCursor(node = &values[ix], span = &items[ix], text = self.text, pointer = _jp_append_index(&self.pointer, ix)));
+						return core.Result::Ok(LocatedCursor(node = &values[ix], span = &items[ix], text = self.text, pointer = _jp_append_index(self.pointer, ix)));
 					},
 					default => {
 						return core.Result::Err(_located_err(self.text, "type-mismatch-array", _span_of(self.span), self.pointer.clone(), ""));
@@ -877,7 +877,7 @@ implement LocatedCursor {
 							Some(child_node) => {
 								match vspans.get(key) {
 									Some(child_span) => {
-										return core.Result::Ok(Optional::Some(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(&self.pointer, key))));
+										return core.Result::Ok(Optional::Some(LocatedCursor(node = child_node, span = child_span, text = self.text, pointer = _jp_append(self.pointer, key))));
 									},
 									None => {
 										return core.Result::Err(_err_data("internal-error", self.pointer.clone(), ""));
@@ -906,8 +906,8 @@ implement LocatedCursor {
 				var i = 0;
 				while i < occurrences.len {
 					val occ = &occurrences[i];
-					if not _str_in_array(&occ.key, allowed) {
-						return core.Result::Err(_located_err(self.text, "unknown-field", occ.key_span, _jp_append(&self.pointer, &occ.key), occ.key.clone()));
+					if not _str_in_array(occ.key, allowed) {
+						return core.Result::Err(_located_err(self.text, "unknown-field", occ.key_span, _jp_append(self.pointer, occ.key), occ.key.clone()));
 					}
 					i = i + 1;
 				}
@@ -1055,7 +1055,7 @@ implement JsonNode {
 	///   `None` when the parent is an array.
 	pub fn get_path(self: &JsonNode, path: &String) nothrow -> Optional<&JsonNode> {
 		val segments = _split_dotted_path(path);
-		return _get_path_at(self, &segments, 0);
+		return _get_path_at(self, segments, 0);
 	}
 
 	/// Dotted-path traversal narrowed to `String`.
@@ -1433,7 +1433,7 @@ implement StrictJsonCursor {
 					Optional::Some(child) => {
 						return StrictJsonCursor(
 							node = child,
-							path = _join_dotted(&self.path, key),
+							path = _join_dotted(self.path, key),
 							depth = self.depth + 1
 						);
 					},
@@ -1569,7 +1569,7 @@ implement JsonArray {
 
 	pub fn to_node(var self: JsonArray) nothrow -> JsonNode {
 		var empty: Array<JsonNode> = [];
-		val values = mem.replace<type Array<JsonNode> >(&mut self.values, move empty);
+		val values = mem.replace<type Array<JsonNode> >(self.values, move empty);
 		return JsonNode::Array(move values);
 	}
 }
@@ -1590,7 +1590,7 @@ implement JsonObject {
 
 	pub fn to_node(var self: JsonObject) nothrow -> JsonNode {
 		var empty = containers.hash_map<type String, std.json.JsonNode>();
-		val fields = mem.replace<type containers.HashMap<String, std.json.JsonNode> >(&mut self.fields, move empty);
+		val fields = mem.replace<type containers.HashMap<String, std.json.JsonNode> >(self.fields, move empty);
 		return JsonNode::Object(move fields);
 	}
 }
@@ -1669,10 +1669,10 @@ fn _slice_bytes(s: &String, start: Int, end: Int) nothrow -> String {
 	var buf = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		io.buffer_write(buf, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&buf), len);
+	return core.string_from_utf8_bytes(io.buffer_ptr(buf), len);
 }
 
 fn _err_parse_line_col(text: &String, offset: Int, line: &mut Int, col: &mut Int) nothrow -> Void {
@@ -1704,7 +1704,7 @@ fn _err_parse_line_col(text: &String, offset: Int, line: &mut Int, col: &mut Int
 fn _err_parse(text: &String, tag: String, offset: Int) nothrow -> JsonErrorData {
 	var line = -1;
 	var col = -1;
-	_err_parse_line_col(text, offset, &mut line, &mut col);
+	_err_parse_line_col(text, offset, line, col);
 	return JsonErrorData(tag = tag, offset = offset, line = line, col = col, path = "", key = "");
 }
 
@@ -1730,8 +1730,8 @@ fn _skip_ws(text: &String, idx: &mut Int) nothrow -> Void {
 fn _byte_to_string(b: Byte) nothrow -> String {
 	unsafe {
 		var raw = mem.alloc_uninit<type Byte>(1);
-		mem.write<type Byte>(&mut raw, 0, b);
-		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), 1);
+		mem.write<type Byte>(raw, 0, b);
+		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(raw), 1);
 		mem.dealloc<type Byte>(move raw);
 		return s;
 	}
@@ -1764,10 +1764,10 @@ fn _slice_string(text: &String, start: Int, end: Int) nothrow -> String {
 		var i = 0;
 		while i < n {
 			val b = core.string_byte_at(text, start + i);
-			mem.write<type Byte>(&mut raw, i, b);
+			mem.write<type Byte>(raw, i, b);
 			i = i + 1;
 		}
-		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(&raw), n);
+		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(raw), n);
 		mem.dealloc<type Byte>(move raw);
 		return s;
 	}
@@ -1783,7 +1783,7 @@ fn _parse_literal(text: &String, idx: &mut Int, lit: String, node: JsonNode) not
 	var i = 0;
 	while i < want {
 		val b = core.string_byte_at(text, start + i);
-		val w = core.string_byte_at(&lit, i);
+		val w = core.string_byte_at(lit, i);
 		if b != w {
 			return core.Result::Err(_err_parse(text, "invalid-syntax", start + i));
 		}
@@ -1851,7 +1851,7 @@ fn _set_leaf(ctx: &_ParseCtx, sp: &mut Optional<_SpanTree>, start: Int, end: Int
 fn _err_parse_key(text: &String, tag: String, offset: Int, key: String) nothrow -> JsonErrorData {
 	var line = -1;
 	var col = -1;
-	_err_parse_line_col(text, offset, &mut line, &mut col);
+	_err_parse_line_col(text, offset, line, col);
 	return JsonErrorData(tag = tag, offset = offset, line = line, col = col, path = "", key = key);
 }
 
@@ -1984,7 +1984,7 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 	var matched_quote = false;
 	var scanning = true;
 	while scan < n and scanning {
-		if _over_limit(&ctx.cfg.limits.max_string_bytes, scan - content_start) {
+		if _over_limit(ctx.cfg.limits.max_string_bytes, scan - content_start) {
 			*idx = scan;
 			return core.Result::Err(_err_parse(text, "limit-string-bytes", str_start));
 		}
@@ -2018,7 +2018,7 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 	while *idx < n {
 		// Incremental string-byte limit: reject as soon as the decoded length
 		// exceeds the cap (do not consume the remainder of the string).
-		if _over_limit(&ctx.cfg.limits.max_string_bytes, out.byte_length()) {
+		if _over_limit(ctx.cfg.limits.max_string_bytes, out.byte_length()) {
 			return core.Result::Err(_err_parse(text, "limit-string-bytes", str_start));
 		}
 		val b = core.string_byte_at(text, *idx);
@@ -2107,7 +2107,7 @@ fn _parse_number(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 	}
 	while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 		*idx = *idx + 1;
-		if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+		if _over_limit(ctx.cfg.limits.max_number_bytes, *idx - start) {
 			return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
 		}
 	}
@@ -2118,7 +2118,7 @@ fn _parse_number(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 		}
 		while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 			*idx = *idx + 1;
-			if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+			if _over_limit(ctx.cfg.limits.max_number_bytes, *idx - start) {
 				return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
 			}
 		}
@@ -2138,14 +2138,14 @@ fn _parse_number(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 			}
 			while *idx < n and _is_digit(core.string_byte_at(text, *idx)) {
 				*idx = *idx + 1;
-				if _over_limit(&ctx.cfg.limits.max_number_bytes, *idx - start) {
+				if _over_limit(ctx.cfg.limits.max_number_bytes, *idx - start) {
 					return core.Result::Err(_err_parse(text, "limit-number-bytes", start));
 				}
 			}
 		}
 	}
 	val raw = _slice_string(text, start, *idx);
-	match _check_number_policy(text, &raw, start, ctx) {
+	match _check_number_policy(text, raw, start, ctx) {
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
@@ -2294,7 +2294,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 		// are owned, definitely-initialised binders — no MAYBE_UNINIT
 		// consumer move.
 		var handed_off = false;
-		match mem.replace(&mut pending, Optional<_Completed>::None()) {
+		match mem.replace(pending, Optional<_Completed>::None()) {
 			Optional::Some(var completed) => {
 				match completed {
 					_Completed::Value(var node, var span) => {
@@ -2344,11 +2344,11 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 								match ctx.cfg.duplicate_keys {
 									DuplicateKeyPolicy::KeepFirst() => {
 										if ctx.locate { match move span { Some(c) => { vspans.insert_if_absent((*pkey).clone(), move c); }, None => { } } } else { val _ds = move span; }
-										fields.insert_if_absent(mem.replace(&mut *pkey, ""), move node);
+										fields.insert_if_absent(mem.replace(*pkey, ""), move node);
 									},
 									default => {
 										if ctx.locate { match move span { Some(c) => { vspans.insert((*pkey).clone(), move c); }, None => { } } } else { val _ds = move span; }
-										fields.insert(mem.replace(&mut *pkey, ""), move node);
+										fields.insert(mem.replace(*pkey, ""), move node);
 									}
 								}
 								*stage = 1;
@@ -2389,7 +2389,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 							if b == cast<Byte>(93) {
 								*idx = *idx + 1; do_close = true;
 							} else {
-								if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+								if _over_limit(ctx.cfg.limits.max_array_items, values.len + 1) {
 									perr = Optional::Some(_err_parse(text, "limit-array-items", *idx));
 								} else {
 									want_value = true;
@@ -2399,7 +2399,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 							if b == cast<Byte>(44) {
 								*idx = *idx + 1;
 								_skip_ws(text, idx);
-								if _over_limit(&ctx.cfg.limits.max_array_items, values.len + 1) {
+								if _over_limit(ctx.cfg.limits.max_array_items, values.len + 1) {
 									perr = Optional::Some(_err_parse(text, "limit-array-items", *idx));
 								} else {
 									want_value = true;
@@ -2456,7 +2456,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 								var dup_bad = false;
 								match ctx.cfg.duplicate_keys {
 									DuplicateKeyPolicy::Reject() => {
-										if fields.contains_key(&key) {
+										if fields.contains_key(key) {
 											dup_bad = true;
 										}
 									},
@@ -2466,7 +2466,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 									perr = Optional::Some(_err_parse_key(text, "duplicate-key", key_start, move key));
 								} else {
 									*mc = *mc + 1;
-									if _over_limit(&ctx.cfg.limits.max_object_fields, *mc) {
+									if _over_limit(ctx.cfg.limits.max_object_fields, *mc) {
 										perr = Optional::Some(_err_parse(text, "limit-object-fields", key_start));
 									} else {
 										_skip_ws(text, idx);
@@ -2534,7 +2534,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 			}
 			val vb = core.string_byte_at(text, *idx);
 			if vb == cast<Byte>(91) {
-				if _over_limit(&ctx.cfg.limits.max_depth, stack.len + 1) {
+				if _over_limit(ctx.cfg.limits.max_depth, stack.len + 1) {
 					return core.Result::Err(_err_parse(text, "limit-depth", *idx));
 				}
 				stack.push(_new_arr_frame(*idx));
@@ -2542,7 +2542,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 				continue;
 			}
 			if vb == cast<Byte>(123) {
-				if _over_limit(&ctx.cfg.limits.max_depth, stack.len + 1) {
+				if _over_limit(ctx.cfg.limits.max_depth, stack.len + 1) {
 					return core.Result::Err(_err_parse(text, "limit-depth", *idx));
 				}
 				stack.push(_new_obj_frame(*idx));
@@ -2550,7 +2550,7 @@ fn _parse_value_iter(text: &String, idx: &mut Int, ctx: &_ParseCtx, depth: Int, 
 				continue;
 			}
 			var leaf_sp: Optional<_SpanTree> = Optional::None();
-			match _parse_scalar_opt(text, idx, ctx, &mut leaf_sp) {
+			match _parse_scalar_opt(text, idx, ctx, leaf_sp) {
 				Some(res) => {
 					match res {
 						core.Result::Err(e) => { return core.Result::Err(move e); },
@@ -2574,7 +2574,7 @@ fn _encode_string(s: String) nothrow -> String {
 	val n = s.byte_length();
 	var i = 0;
 	while i < n {
-		val b = core.string_byte_at(&s, i);
+		val b = core.string_byte_at(s, i);
 		if b == cast<Byte>(34) {
 			out = out + "\\\"";
 		} else {
@@ -2647,7 +2647,7 @@ fn _encode_array(values: &Array<JsonNode>, cfg: &JsonConfig) nothrow -> String {
 		if i > 0 {
 			out = out + ",";
 		}
-		out = out + _encode_node(&values[i], cfg);
+		out = out + _encode_node(values[i], cfg);
 		i = i + 1;
 	}
 	return out + "]";
@@ -2693,7 +2693,7 @@ fn _sort_keys_lex(keys: &mut Array<String>) nothrow -> Void {
 	while i < keys.len {
 		var j = i;
 		while j > 0 {
-			if _string_lex_cmp(&keys[j - 1], &keys[j]) <= 0 {
+			if _string_lex_cmp(keys[j - 1], keys[j]) <= 0 {
 				break;
 			}
 			keys.swap(j - 1, j);
@@ -2739,10 +2739,10 @@ fn _encode_object_ordered_throwing(fields: &containers.HashMap<String, std.json.
 			match it.next() {
 				Some(item) => {
 					val k = item.key;
-					if has_prev and _string_lex_cmp(k, &prev) <= 0 {
+					if has_prev and _string_lex_cmp(k, prev) <= 0 {
 						continue;
 					}
-					if not found or _string_lex_cmp(k, &best) < 0 {
+					if not found or _string_lex_cmp(k, best) < 0 {
 						best = *k;
 						found = true;
 					}
@@ -2806,10 +2806,6 @@ fn _encode_node(node: &JsonNode, cfg: &JsonConfig) nothrow -> String {
 	}
 }
 
-fn _encode_node(node: JsonNode, cfg: &JsonConfig) nothrow -> String {
-	return _encode_node(&node, cfg);
-}
-
 // ── Slice-2 canonical encoding (result-propagating; signed-IR) ──────
 //
 // A SEPARATE encoder from `_encode_node` — it must NOT inherit the object
@@ -2860,7 +2856,7 @@ fn _enc_canon(node: &JsonNode, pointer: String) nothrow -> core.Result<String, J
 		Bool(v) => { return core.Result::Ok(_bool_to_json(*v)); },
 		String(v) => { return core.Result::Ok(_encode_string(*v)); },
 		Number(raw) => {
-			match _canon_number(raw, &pointer) {
+			match _canon_number(raw, pointer) {
 				Optional::Some(e) => { return core.Result::Err(move e); },
 				Optional::None() => { return core.Result::Ok(*raw); }
 			}
@@ -2881,7 +2877,7 @@ fn _enc_canon_array(values: &Array<JsonNode>, pointer: String) nothrow -> core.R
 			out = out + ",";
 		}
 		val child_ptr = pointer + "/" + _int_to_string(i);
-		match _enc_canon(&values[i], child_ptr) {
+		match _enc_canon(values[i], child_ptr) {
 			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(s) => { out = out + s; }
 		}
@@ -2904,10 +2900,10 @@ fn _enc_canon_object(fields: &containers.HashMap<String, std.json.JsonNode>, poi
 			match it.next() {
 				Some(item) => {
 					val k = item.key;
-					if has_prev and _string_lex_cmp(k, &prev) <= 0 {
+					if has_prev and _string_lex_cmp(k, prev) <= 0 {
 						continue;
 					}
-					if not found or _string_lex_cmp(k, &best) < 0 {
+					if not found or _string_lex_cmp(k, best) < 0 {
 						best = *k;
 						found = true;
 					}
@@ -2921,8 +2917,8 @@ fn _enc_canon_object(fields: &containers.HashMap<String, std.json.JsonNode>, poi
 		if emitted > 0 {
 			out = out + ",";
 		}
-		val child_ptr = pointer + "/" + _jp_escape(&best);
-		match fields.get(&best) {
+		val child_ptr = pointer + "/" + _jp_escape(best);
+		match fields.get(best) {
 			Some(v) => {
 				out = out + _encode_string(best) + ":";
 				match _enc_canon(v, child_ptr) {
@@ -2999,7 +2995,7 @@ implement JsonHandle {
 
 	pub fn encode_compact(self: &JsonHandle) nothrow -> String {
 		val n = self.data.get();
-		return _encode_node(n, &JsonConfig(key_order = JsonKeyOrder::Unordered()));
+		return _encode_node(n, JsonConfig(key_order = JsonKeyOrder::Unordered()));
 	}
 
 	pub fn clone_deep(self: &JsonHandle) nothrow -> JsonNode {
@@ -3018,7 +3014,7 @@ fn _clone_deep_impl(node: &JsonNode) nothrow -> JsonNode {
 			var out: Array<JsonNode> = [];
 			var i = 0;
 			while i < values.len {
-				var c = _clone_deep_impl(&values[i]);
+				var c = _clone_deep_impl(values[i]);
 				out.push(move c);
 				i = i + 1;
 			}

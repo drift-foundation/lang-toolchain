@@ -11,7 +11,7 @@ use trait iter.RandomAccessReadable;
 fn run() -> Int {
 	var arr = [1, 2, 2, 2, 3];
 	var r = arr.range();
-	val idx = algo.binary_search<type containers.ArrayRange<Int>, Int>(&r, &2);
+	val idx = algo.binary_search<type containers.ArrayRange<Int>, Int>(r, 2);
 	return match idx {
 		Some(i) => {
 			(i >= 1 and i <= 3) ? 0 : 10

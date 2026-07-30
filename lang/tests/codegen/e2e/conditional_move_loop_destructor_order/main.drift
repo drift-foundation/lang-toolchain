@@ -78,7 +78,7 @@ pub fn main() nothrow -> Int {
 	arr.push(Holder(raw = 1));
 	arr.push(Holder(raw = 0));
 	arr.push(Holder(raw = 2));
-	var kept = drain_conditional(&mut arr);
+	var kept = drain_conditional(arr);
 	val kept_count = kept.len;
 	thread.console_writeln("M" + fmt.format_int(kept_count));
 	// Drain `kept` via an unconditional-move loop.  No conditional

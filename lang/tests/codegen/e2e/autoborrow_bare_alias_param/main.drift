@@ -1,0 +1,12 @@
+module main;
+
+type Handle = &String;
+
+fn read_len(h: Handle) nothrow -> Int {
+	return h.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	val s: String = "hello";
+	return read_len(s);
+}

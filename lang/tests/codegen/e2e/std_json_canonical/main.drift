@@ -3,9 +3,9 @@ import std.json as json;
 import std.core as core;
 
 fn enc(src: String) nothrow -> String {
-	match json.parse(&src) {
+	match json.parse(src) {
 		core.Result::Ok(node) => {
-			match json.encode_canonical(&node) {
+			match json.encode_canonical(node) {
 				core.Result::Ok(s) => { return s; },
 				core.Result::Err(e) => { return "ERR:" + e.tag; }
 			}
@@ -15,9 +15,9 @@ fn enc(src: String) nothrow -> String {
 }
 
 fn enc_err(src: String) nothrow -> String {
-	match json.parse(&src) {
+	match json.parse(src) {
 		core.Result::Ok(node) => {
-			match json.encode_canonical(&node) {
+			match json.encode_canonical(node) {
 				core.Result::Ok(_) => { return "<ok>"; },
 				core.Result::Err(e) => { return e.tag + "@" + e.path; }
 			}

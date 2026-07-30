@@ -7,7 +7,7 @@ fn run() -> Int {
 	val text = "{\"meta\":{\"service\":\"auth\",\"build\":123,\"tags\":[\"a\",\"b\",\"c\"]},\"users\":[{\"id\":1,\"name\":\"alice\",\"roles\":[\"admin\",\"ops\"]},{\"id\":2,\"name\":\"bob\",\"roles\":[\"dev\"]}],\"events\":[{\"ev\":\"login\",\"ok\":true,\"attrs\":{\"ip\":\"127.0.0.1\",\"ua\":\"test\"}},{\"ev\":\"logout\",\"ok\":true,\"attrs\":{\"ip\":\"127.0.0.1\",\"ua\":\"test\"}}]}";
 	var i = 0;
 	while i < 800 {
-		match json.parse(&text) {
+		match json.parse(text) {
 			core.Result::Ok(node) => {
 				core.drop_value<type json.JsonNode>(move node);
 			},

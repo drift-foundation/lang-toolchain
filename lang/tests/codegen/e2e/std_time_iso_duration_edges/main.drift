@@ -17,7 +17,7 @@ fn expect_delta(a: String, b: String, want_us: Int) -> Int {
 		core.Result::Ok(ta) => {
 			match pb {
 				core.Result::Ok(tb) => {
-					val got = time.duration_micros_between(&ta, &tb);
+					val got = time.duration_micros_between(ta, tb);
 					if got != want_us {
 						return 2;
 					}

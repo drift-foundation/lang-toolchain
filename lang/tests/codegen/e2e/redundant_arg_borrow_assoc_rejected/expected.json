@@ -1,0 +1,14 @@
+{
+  "description": "W-assoc explicit-rejection half of the assoc-miscompile LANGUAGE_BUG pins: source-written & at an associated function's declared &String formal is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 's: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 's' directly"
+    }
+  ]
+}

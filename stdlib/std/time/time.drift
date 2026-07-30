@@ -213,13 +213,13 @@ pub fn format_iso8601_utc(ts: &UtcTimestamp) nothrow -> String {
 pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimeParseError> {
 	val n = s.byte_length();
 	if n >= 6 {
-		val sign6 = core.string_byte_at(&s, n - 6);
-		if (sign6 == cast<Byte>(43) or sign6 == cast<Byte>(45)) and core.string_byte_at(&s, n - 3) == cast<Byte>(58) {
+		val sign6 = core.string_byte_at(s, n - 6);
+		if (sign6 == cast<Byte>(43) or sign6 == cast<Byte>(45)) and core.string_byte_at(s, n - 3) == cast<Byte>(58) {
 			return _err("unsupported-offset", n - 6);
 		}
 	}
 	if n >= 5 {
-		val sign5 = core.string_byte_at(&s, n - 5);
+		val sign5 = core.string_byte_at(s, n - 5);
 		if sign5 == cast<Byte>(43) or sign5 == cast<Byte>(45) {
 			return _err("unsupported-offset", n - 5);
 		}
@@ -227,18 +227,18 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 	if n != 20 and n != 27 {
 		return _err("invalid-syntax", 0);
 	}
-	if core.string_byte_at(&s, 4) != cast<Byte>(45) { return _err("invalid-syntax", 4); }
-	if core.string_byte_at(&s, 7) != cast<Byte>(45) { return _err("invalid-syntax", 7); }
-	if core.string_byte_at(&s, 10) != cast<Byte>(84) { return _err("invalid-syntax", 10); }
-	if core.string_byte_at(&s, 13) != cast<Byte>(58) { return _err("invalid-syntax", 13); }
-	if core.string_byte_at(&s, 16) != cast<Byte>(58) { return _err("invalid-syntax", 16); }
+	if core.string_byte_at(s, 4) != cast<Byte>(45) { return _err("invalid-syntax", 4); }
+	if core.string_byte_at(s, 7) != cast<Byte>(45) { return _err("invalid-syntax", 7); }
+	if core.string_byte_at(s, 10) != cast<Byte>(84) { return _err("invalid-syntax", 10); }
+	if core.string_byte_at(s, 13) != cast<Byte>(58) { return _err("invalid-syntax", 13); }
+	if core.string_byte_at(s, 16) != cast<Byte>(58) { return _err("invalid-syntax", 16); }
 	var tz_idx = 19;
 	var micros = 0;
 	if n == 27 {
-		if core.string_byte_at(&s, 19) != cast<Byte>(46) {
+		if core.string_byte_at(s, 19) != cast<Byte>(46) {
 			return _err("invalid-syntax", 19);
 		}
-		val us_v = _parse_fixed_digits(&s, 20, 6);
+		val us_v = _parse_fixed_digits(s, 20, 6);
 		if us_v < 0 {
 			return _err("invalid-syntax", 20);
 		}
@@ -248,19 +248,19 @@ pub fn parse_iso8601_utc(s: String) nothrow -> core.Result<UtcTimestamp, TimePar
 	if tz_idx >= n {
 		return _err("invalid-utc-designator", -1);
 	}
-	val tz = core.string_byte_at(&s, tz_idx);
+	val tz = core.string_byte_at(s, tz_idx);
 	if tz == cast<Byte>(43) or tz == cast<Byte>(45) {
 		return _err("unsupported-offset", tz_idx);
 	}
 	if tz != cast<Byte>(90) {
 		return _err("invalid-utc-designator", tz_idx);
 	}
-	val year = _parse_fixed_digits(&s, 0, 4);
-	val month = _parse_fixed_digits(&s, 5, 2);
-	val day = _parse_fixed_digits(&s, 8, 2);
-	val hour = _parse_fixed_digits(&s, 11, 2);
-	val minute = _parse_fixed_digits(&s, 14, 2);
-	val second = _parse_fixed_digits(&s, 17, 2);
+	val year = _parse_fixed_digits(s, 0, 4);
+	val month = _parse_fixed_digits(s, 5, 2);
+	val day = _parse_fixed_digits(s, 8, 2);
+	val hour = _parse_fixed_digits(s, 11, 2);
+	val minute = _parse_fixed_digits(s, 14, 2);
+	val second = _parse_fixed_digits(s, 17, 2);
 	if year < 0 { return _err("invalid-syntax", 0); }
 	if month < 0 { return _err("invalid-syntax", 5); }
 	if day < 0 { return _err("invalid-syntax", 8); }
@@ -343,11 +343,11 @@ pub fn parse_iso8601_date(s: String) nothrow -> core.Result<Date, TimeParseError
 	if n != 10 {
 		return _err_date("invalid-syntax", 0);
 	}
-	if core.string_byte_at(&s, 4) != cast<Byte>(45) { return _err_date("invalid-syntax", 4); }
-	if core.string_byte_at(&s, 7) != cast<Byte>(45) { return _err_date("invalid-syntax", 7); }
-	val year = _parse_fixed_digits(&s, 0, 4);
-	val month = _parse_fixed_digits(&s, 5, 2);
-	val day = _parse_fixed_digits(&s, 8, 2);
+	if core.string_byte_at(s, 4) != cast<Byte>(45) { return _err_date("invalid-syntax", 4); }
+	if core.string_byte_at(s, 7) != cast<Byte>(45) { return _err_date("invalid-syntax", 7); }
+	val year = _parse_fixed_digits(s, 0, 4);
+	val month = _parse_fixed_digits(s, 5, 2);
+	val day = _parse_fixed_digits(s, 8, 2);
 	if year < 0 { return _err_date("invalid-syntax", 0); }
 	if month < 0 { return _err_date("invalid-syntax", 5); }
 	if day < 0 { return _err_date("invalid-syntax", 8); }

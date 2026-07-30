@@ -82,7 +82,7 @@ pub fn main() nothrow -> Int {{
 	var items0: Array<Int> = [];
 	var a = Acc(move items0);
 	var arr: Array<Int> = [10, 20, 30];
-	return fold(&mut a, &arr);
+	return fold(a, arr);
 }}
 """
 

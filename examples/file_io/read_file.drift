@@ -10,8 +10,8 @@ fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
 	val f = io.file_builder("example.txt").read(true).write(false).timeout(t).build().or_throw();
 	var buf = io.buffer(1024);
-	val n = f.read(&mut buf).or_throw();
-	val _s = core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+	val n = f.read(buf).or_throw();
+	val _s = core.string_from_utf8_bytes(io.buffer_ptr(buf), n);
 	f.close().or_throw();
 	return 0;
 }

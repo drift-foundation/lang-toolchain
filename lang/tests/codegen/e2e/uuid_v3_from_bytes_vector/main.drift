@@ -21,23 +21,23 @@ pub fn main() nothrow -> Int {
 	// (java.util.UUID.nameUUIDFromBytes compat — MD5 raw input bytes,
 	// no namespace prefix.)
 	val s: String = "bookkeeper-test-01";
-	val raw = _string_bytes(&s);
-	val u = uuid.v3_from_bytes(&raw);
+	val raw = _string_bytes(s);
+	val u = uuid.v3_from_bytes(raw);
 	val expected: String = "0655ee6e-92dd-3c59-af2d-b002138e7409";
-	val actual = uuid.to_string(&u);
+	val actual = uuid.to_string(u);
 	if actual != expected {
 		cons.eprintln("v3_from_bytes mismatch");
 		return 1;
 	}
 
 	// Version stamping: must be 3 (this is name-based MD5, RFC 4122 §4.3).
-	if uuid.version(&u) != 3 {
+	if uuid.version(u) != 3 {
 		cons.eprintln("v3_from_bytes wrong version");
 		return 2;
 	}
 
 	// Variant bits (byte 8 high two bits) must be 10b (RFC).
-	val bytes = uuid.to_bytes(&u);
+	val bytes = uuid.to_bytes(u);
 	var b8 = cast<Int>(bytes[8]);
 	if b8 < 0 { b8 = b8 + 256; }
 	if b8 / 64 != 2 {
@@ -47,8 +47,8 @@ pub fn main() nothrow -> Int {
 
 	// Distinct from v3 with a namespace — proves we're really skipping
 	// the namespace prefix in the hash input.
-	val with_ns = uuid.v3(&uuid.namespace_dns(), &s);
-	if uuid.to_string(&with_ns) == actual {
+	val with_ns = uuid.v3(uuid.namespace_dns(), s);
+	if uuid.to_string(with_ns) == actual {
 		cons.eprintln("v3 vs v3_from_bytes should differ");
 		return 4;
 	}

@@ -4,53 +4,53 @@ import std.core as core;
 
 fn run(doc: &json.JsonDoc) nothrow -> Int {
 	val c = doc.cursor();
-	match c.require_field(&"name") {
+	match c.require_field("name") {
 		core.Result::Ok(f) => { match f.as_string() { core.Result::Ok(s) => { if s != "x" { return 1; } }, core.Result::Err(_) => { return 2; } } },
 		core.Result::Err(_) => { return 3; }
 	}
-	match c.require_field(&"age") {
+	match c.require_field("age") {
 		core.Result::Ok(f) => { match f.as_int() { core.Result::Ok(v) => { if v != 30 { return 4; } }, core.Result::Err(_) => { return 5; } } },
 		core.Result::Err(_) => { return 6; }
 	}
-	match c.require_field(&"nope") {
+	match c.require_field("nope") {
 		core.Result::Ok(_) => { return 7; },
 		core.Result::Err(e) => { if e.tag != "missing-field" { return 8; } if e.key != "nope" { return 9; } }
 	}
 	var allowed_all: Array<String> = ["name", "age", "tags"];
-	match c.forbid_unknown(&allowed_all) { core.Result::Ok(_) => { }, core.Result::Err(_) => { return 10; } }
+	match c.forbid_unknown(allowed_all) { core.Result::Ok(_) => { }, core.Result::Err(_) => { return 10; } }
 	var allowed_one: Array<String> = ["name"];
-	match c.forbid_unknown(&allowed_one) {
+	match c.forbid_unknown(allowed_one) {
 		core.Result::Ok(_) => { return 11; },
 		core.Result::Err(e) => { if e.tag != "unknown-field" { return 12; } if e.key != "age" { return 13; } if e.path != "/age" { return 14; } }
 	}
-	match c.require_field(&"name") {
+	match c.require_field("name") {
 		core.Result::Ok(f) => { match f.as_int() { core.Result::Ok(_) => { return 15; }, core.Result::Err(e) => { if e.tag != "type-mismatch-int" { return 16; } } } },
 		core.Result::Err(_) => { return 17; }
 	}
-	match c.require_field(&"tags") {
+	match c.require_field("tags") {
 		core.Result::Ok(t) => {
 			match t.index(0) { core.Result::Ok(e0) => { match e0.as_string() { core.Result::Ok(s) => { if s != "a" { return 18; } }, default => { return 19; } } }, default => { return 20; } }
 			match t.index(5) { core.Result::Ok(_) => { return 21; }, core.Result::Err(e) => { if e.tag != "index-out-of-range" { return 22; } if e.key != "5" { return 23; } } }
 		},
 		core.Result::Err(_) => { return 24; }
 	}
-	match doc.at_pointer(&"/tags/1") {
+	match doc.at_pointer("/tags/1") {
 		core.Result::Ok(cur) => { match cur.as_string() { core.Result::Ok(s) => { if s != "b" { return 30; } }, default => { return 31; } } },
 		core.Result::Err(_) => { return 32; }
 	}
-	match doc.at_pointer(&"/tags/foo") {
+	match doc.at_pointer("/tags/foo") {
 		core.Result::Ok(_) => { return 33; },
 		core.Result::Err(e) => { if e.tag != "invalid-array-index" { return 34; } if e.key != "foo" { return 35; } }
 	}
-	match doc.at_pointer(&"/missing") {
+	match doc.at_pointer("/missing") {
 		core.Result::Ok(_) => { return 36; },
 		core.Result::Err(e) => { if e.tag != "missing-field" { return 37; } }
 	}
-	match doc.at_pointer(&"tags") {
+	match doc.at_pointer("tags") {
 		core.Result::Ok(_) => { return 38; },
 		core.Result::Err(e) => { if e.tag != "invalid-pointer" { return 39; } }
 	}
-	match c.require_field(&"age") {
+	match c.require_field("age") {
 		core.Result::Ok(f) => { val sp = f.span(); if sp.start <= 0 { return 40; } if sp.end <= sp.start { return 41; } },
 		core.Result::Err(_) => { return 42; }
 	}
@@ -60,8 +60,8 @@ fn run(doc: &json.JsonDoc) nothrow -> Int {
 pub fn main() nothrow -> Int {
 	val cfg = json.strict();
 	val src = "{\"name\":\"x\",\"age\":30,\"tags\":[\"a\",\"b\"]}";
-	match json.parse_located(&src, &cfg) {
-		core.Result::Ok(doc) => { return run(&doc); },
+	match json.parse_located(src, cfg) {
+		core.Result::Ok(doc) => { return run(doc); },
 		core.Result::Err(_) => { return 99; }
 	}
 }

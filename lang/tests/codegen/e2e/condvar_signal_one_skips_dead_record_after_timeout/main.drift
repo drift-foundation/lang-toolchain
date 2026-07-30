@@ -44,7 +44,7 @@ pub fn main() nothrow -> Int {
 		val mr = pred_lock.clone();
 		var w = conc.spawn_cb(core.callback0(| | captures(move cvr, move mr) nothrow => {
 			var g = mr.get().lock();
-			match cvr.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = 40)) {
+			match cvr.get().wait_timeout<type Bool>(g, conc.Duration(millis = 40)) {
 				core.Result::Ok(_) => { return 81; },
 				core.Result::Err(e) => {
 					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }
@@ -67,7 +67,7 @@ pub fn main() nothrow -> Int {
 	val wd_f = waker_done.clone();
 	var w_final = conc.spawn_cb(core.callback0(| | captures(move cv_f, move m_f, move wd_f) nothrow => {
 		var g = m_f.get().lock();
-		match cv_f.get().wait(&mut g) {
+		match cv_f.get().wait(g) {
 			core.Result::Ok(_) => {
 				var wg = wd_f.get().lock();
 				val wv = wg.get_mut();

@@ -7,9 +7,9 @@ pub fn main() nothrow -> Int {
 	val ts_str = "2024-01-01T00:00:00.000000Z";
 	match time.parse_iso8601_utc(ts_str) {
 		core.Result::Ok(ts) => {
-			val secs = time.utc_unix_seconds(&ts);
+			val secs = time.utc_unix_seconds(ts);
 			if secs != 1704067200 { return 10; }
-			val micros = time.utc_unix_micros(&ts);
+			val micros = time.utc_unix_micros(ts);
 			if micros != 1704067200000000 { return 11; }
 			if micros / 1000000 != secs { return 12; }
 		},
@@ -24,10 +24,10 @@ pub fn main() nothrow -> Int {
 	val ts_sub_str = "2024-01-01T00:00:00.999000Z";
 	match time.parse_iso8601_utc(ts_sub_str) {
 		core.Result::Ok(ts2) => {
-			val secs2 = time.utc_unix_seconds(&ts2);
+			val secs2 = time.utc_unix_seconds(ts2);
 			// 999ms truncates to same second
 			if secs2 != 1704067200 { return 30; }
-			val micros2 = time.utc_unix_micros(&ts2);
+			val micros2 = time.utc_unix_micros(ts2);
 			if micros2 != 1704067200999000 { return 31; }
 		},
 		core.Result::Err(_) => { return 2; }
@@ -38,9 +38,9 @@ pub fn main() nothrow -> Int {
 	val ts_pre_str = "1969-12-31T23:59:58.500000Z";
 	match time.parse_iso8601_utc(ts_pre_str) {
 		core.Result::Ok(ts3) => {
-			val micros3 = time.utc_unix_micros(&ts3);
+			val micros3 = time.utc_unix_micros(ts3);
 			if micros3 != -1500000 { return 40; }
-			val secs3 = time.utc_unix_seconds(&ts3);
+			val secs3 = time.utc_unix_seconds(ts3);
 			if secs3 != -1 { return 41; }
 		},
 		core.Result::Err(_) => { return 3; }
@@ -50,8 +50,8 @@ pub fn main() nothrow -> Int {
 	val ts_epoch_str = "1970-01-01T00:00:00.000000Z";
 	match time.parse_iso8601_utc(ts_epoch_str) {
 		core.Result::Ok(ts4) => {
-			if time.utc_unix_seconds(&ts4) != 0 { return 50; }
-			if time.utc_unix_micros(&ts4) != 0 { return 51; }
+			if time.utc_unix_seconds(ts4) != 0 { return 50; }
+			if time.utc_unix_micros(ts4) != 0 { return 51; }
 		},
 		core.Result::Err(_) => { return 4; }
 	}
@@ -61,9 +61,9 @@ pub fn main() nothrow -> Int {
 	val ts_far_str = "9999-12-31T23:59:59.999000Z";
 	match time.parse_iso8601_utc(ts_far_str) {
 		core.Result::Ok(ts5) => {
-			val micros5 = time.utc_unix_micros(&ts5);
+			val micros5 = time.utc_unix_micros(ts5);
 			if micros5 != 253402300799999000 { return 60; }
-			val secs5 = time.utc_unix_seconds(&ts5);
+			val secs5 = time.utc_unix_seconds(ts5);
 			if secs5 != 253402300799 { return 61; }
 			if micros5 / 1000000 != secs5 { return 62; }
 		},

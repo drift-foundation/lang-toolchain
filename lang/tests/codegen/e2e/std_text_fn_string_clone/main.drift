@@ -28,8 +28,8 @@ pub fn main() nothrow -> Int {
 	val original = "hello world";
 
 	// Clone from borrow produces equal string
-	val cloned = clone_from_borrow(&original);
-	if !str_eq(&cloned, &original) { return 1; }
+	val cloned = clone_from_borrow(original);
+	if !str_eq(cloned, original) { return 1; }
 
 	// Clone can be passed to a function that consumes ownership
 	val cloned2 = original.clone();
@@ -43,13 +43,13 @@ pub fn main() nothrow -> Int {
 	val empty = "";
 	val cloned_empty = empty.clone();
 	val e = "";
-	if !str_eq(&cloned_empty, &e) { return 4; }
+	if !str_eq(cloned_empty, e) { return 4; }
 
 	// Multiple clones from same source
 	val c1 = original.clone();
 	val c2 = original.clone();
-	if !str_eq(&c1, &original) { return 5; }
-	if !str_eq(&c2, &original) { return 6; }
+	if !str_eq(c1, original) { return 5; }
+	if !str_eq(c2, original) { return 6; }
 
 	return 0;
 }

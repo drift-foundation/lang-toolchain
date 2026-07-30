@@ -325,7 +325,7 @@ def test_normal_mode_boundary_provenance(tmp_path: Path) -> None:
 				"\tval s = \"hello\";",
 				"\tval len = s.byte_length();",
 				"\tvar st = S(a = atomic.atomic_uint(cast<Uint>(0)));",
-				"\tatomic.atomic_store_uint(&st.a, cast<Uint>(1), 0);",
+				"\tatomic.atomic_store_uint(st.a, cast<Uint>(1), 0);",
 				"\treturn len;",
 				"}",
 				"",

@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 5: borrowing an already-&String value at a &String formal is redundant (previously accepted via a hidden compiler-inserted deref)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'r' directly"
+    }
+  ]
+}

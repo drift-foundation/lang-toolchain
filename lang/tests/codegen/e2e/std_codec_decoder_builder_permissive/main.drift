@@ -11,7 +11,7 @@ pub fn main() nothrow -> Int {
 		core.Result::Err(err) => { return 1; },
 		core.Result::Ok(vals) => {
 			if vals.len != 2 { return 2; }
-			if codec.hex_encode(&vals) != "0a1b" { return 3; }
+			if codec.hex_encode(vals) != "0a1b" { return 3; }
 		}
 	}
 
@@ -27,7 +27,7 @@ pub fn main() nothrow -> Int {
 		core.Result::Err(err) => { return 6; },
 		core.Result::Ok(vals) => {
 			if vals.len != 1 { return 7; }
-			if codec.base64_encode(&vals) != "+w==" { return 8; }
+			if codec.base64_encode(vals) != "+w==" { return 8; }
 		}
 	}
 
@@ -42,7 +42,7 @@ pub fn main() nothrow -> Int {
 	match c.decode("mzxw6ytb oi======") {
 		core.Result::Err(err) => { return 10; },
 		core.Result::Ok(vals) => {
-			if codec.base64_encode(&vals) != "Zm9vYmFy" { return 11; }
+			if codec.base64_encode(vals) != "Zm9vYmFy" { return 11; }
 		}
 	}
 

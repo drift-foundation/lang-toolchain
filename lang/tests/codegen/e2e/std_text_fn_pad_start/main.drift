@@ -19,19 +19,19 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val r = text.pad_start("42", 5, cast<Byte>(48));
 	val e = "00042";
-	if !str_eq(&r, &e) { return 1; }
+	if !str_eq(r, e) { return 1; }
 	// Already wide enough
 	val r2 = text.pad_start("hello", 3, cast<Byte>(48));
 	val e2 = "hello";
-	if !str_eq(&r2, &e2) { return 2; }
+	if !str_eq(r2, e2) { return 2; }
 	// Exact width → unchanged
 	val r3 = text.pad_start("hi", 2, cast<Byte>(48));
 	val e3 = "hi";
-	if !str_eq(&r3, &e3) { return 3; }
+	if !str_eq(r3, e3) { return 3; }
 	// Empty string
 	val r4 = text.pad_start("", 3, cast<Byte>(46));
 	val e4 = "...";
-	if !str_eq(&r4, &e4) { return 4; }
+	if !str_eq(r4, e4) { return 4; }
 
 	return 0;
 }

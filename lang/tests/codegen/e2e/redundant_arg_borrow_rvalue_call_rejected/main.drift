@@ -1,0 +1,13 @@
+module main;
+
+fn read_len(arg: &String) nothrow -> Int {
+	return arg.byte_length();
+}
+
+fn mk() nothrow -> String {
+	return "hello";
+}
+
+pub fn main() nothrow -> Int {
+	return read_len(&mk());
+}

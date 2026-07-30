@@ -18,8 +18,8 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 fn check_replace_first(pattern: &String, input: &String, repl: &String, expected: &String, fail_base: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_first(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_base; }
+			val got = regex.replace_first(re, input, repl);
+			if !str_eq(got, expected) { return fail_base; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_base + 1; }
@@ -29,8 +29,8 @@ fn check_replace_first(pattern: &String, input: &String, repl: &String, expected
 fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_base: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_all(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_base; }
+			val got = regex.replace_all(re, input, repl);
+			if !str_eq(got, expected) { return fail_base; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_base + 1; }
@@ -55,43 +55,43 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// No match → input returned unchanged.
-	rc = check_replace_first(&"x", &"hello", &"Y", &"hello", 10);
+	rc = check_replace_first("x", "hello", "Y", "hello", 10);
 	if rc != 0 { return rc; }
 
 	// Single match in middle.
-	rc = check_replace_first(&"l", &"hello", &"L", &"heLlo", 12);
+	rc = check_replace_first("l", "hello", "L", "heLlo", 12);
 	if rc != 0 { return rc; }
 
 	// Match at prefix.
-	rc = check_replace_first(&"he", &"hello", &"HE", &"HEllo", 14);
+	rc = check_replace_first("he", "hello", "HE", "HEllo", 14);
 	if rc != 0 { return rc; }
 
 	// Match at suffix.
-	rc = check_replace_first(&"lo$", &"hello", &"LO", &"helLO", 16);
+	rc = check_replace_first("lo$", "hello", "LO", "helLO", 16);
 	if rc != 0 { return rc; }
 
 	// Full string match.
-	rc = check_replace_first(&"^hello$", &"hello", &"BYE", &"BYE", 18);
+	rc = check_replace_first("^hello$", "hello", "BYE", "BYE", 18);
 	if rc != 0 { return rc; }
 
 	// Empty replacement → deletion.
-	rc = check_replace_first(&"l", &"hello", &"", &"helo", 20);
+	rc = check_replace_first("l", "hello", "", "helo", 20);
 	if rc != 0 { return rc; }
 
 	// Empty input, no match.
-	rc = check_replace_first(&"a", &"", &"X", &"", 22);
+	rc = check_replace_first("a", "", "X", "", 22);
 	if rc != 0 { return rc; }
 
 	// Empty pattern on non-empty input → zero-length match at start.
-	rc = check_replace_first(&"", &"abc", &"X", &"Xabc", 24);
+	rc = check_replace_first("", "abc", "X", "Xabc", 24);
 	if rc != 0 { return rc; }
 
 	// Empty pattern on empty input → zero-length match, replaces with repl.
-	rc = check_replace_first(&"", &"", &"X", &"X", 26);
+	rc = check_replace_first("", "", "X", "X", 26);
 	if rc != 0 { return rc; }
 
 	// Quantifier match: replace first run of digits.
-	rc = check_replace_first(&"[0-9]+", &"abc123def456", &"NUM", &"abcNUMdef456", 28);
+	rc = check_replace_first("[0-9]+", "abc123def456", "NUM", "abcNUMdef456", 28);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -99,43 +99,43 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// No match → input returned unchanged.
-	rc = check_replace_all(&"x", &"hello", &"Y", &"hello", 40);
+	rc = check_replace_all("x", "hello", "Y", "hello", 40);
 	if rc != 0 { return rc; }
 
 	// Single occurrence.
-	rc = check_replace_all(&"world", &"hello world", &"earth", &"hello earth", 42);
+	rc = check_replace_all("world", "hello world", "earth", "hello earth", 42);
 	if rc != 0 { return rc; }
 
 	// Multiple non-overlapping occurrences.
-	rc = check_replace_all(&"a", &"banana", &"X", &"bXnXnX", 44);
+	rc = check_replace_all("a", "banana", "X", "bXnXnX", 44);
 	if rc != 0 { return rc; }
 
 	// All chars match (dot).
-	rc = check_replace_all(&".", &"abc", &"X", &"XXX", 46);
+	rc = check_replace_all(".", "abc", "X", "XXX", 46);
 	if rc != 0 { return rc; }
 
 	// Prefix match.
-	rc = check_replace_all(&"^a", &"abc", &"X", &"Xbc", 48);
+	rc = check_replace_all("^a", "abc", "X", "Xbc", 48);
 	if rc != 0 { return rc; }
 
 	// Suffix match.
-	rc = check_replace_all(&"c$", &"abc", &"X", &"abX", 50);
+	rc = check_replace_all("c$", "abc", "X", "abX", 50);
 	if rc != 0 { return rc; }
 
 	// Full string match.
-	rc = check_replace_all(&"^abc$", &"abc", &"XYZ", &"XYZ", 52);
+	rc = check_replace_all("^abc$", "abc", "XYZ", "XYZ", 52);
 	if rc != 0 { return rc; }
 
 	// Empty replacement → delete all matches.
-	rc = check_replace_all(&"[0-9]", &"a1b2c3", &"", &"abc", 54);
+	rc = check_replace_all("[0-9]", "a1b2c3", "", "abc", 54);
 	if rc != 0 { return rc; }
 
 	// Replacement longer than match.
-	rc = check_replace_all(&"a", &"aaa", &"XY", &"XYXYXY", 56);
+	rc = check_replace_all("a", "aaa", "XY", "XYXYXY", 56);
 	if rc != 0 { return rc; }
 
 	// Replacement shorter than match.
-	rc = check_replace_all(&"aa", &"aaaa", &"b", &"bb", 58);
+	rc = check_replace_all("aa", "aaaa", "b", "bb", 58);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -143,11 +143,11 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// Empty input, non-empty pattern that can't match.
-	rc = check_replace_all(&"a", &"", &"X", &"", 60);
+	rc = check_replace_all("a", "", "X", "", 60);
 	if rc != 0 { return rc; }
 
 	// Empty input, empty pattern → one zero-length match, result = repl.
-	rc = check_replace_all(&"", &"", &"X", &"X", 62);
+	rc = check_replace_all("", "", "X", "X", 62);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -156,24 +156,24 @@ pub fn main() nothrow -> Int {
 
 	// Empty pattern on "ab" → inserts repl before every byte and after last.
 	// Matches at positions 0, 1, 2 → "X" + "a" + "X" + "b" + "X" = "XaXbX"
-	rc = check_replace_all(&"", &"ab", &"X", &"XaXbX", 70);
+	rc = check_replace_all("", "ab", "X", "XaXbX", 70);
 	if rc != 0 { return rc; }
 
 	// Empty pattern on "abc" → "XaXbXcX"
-	rc = check_replace_all(&"", &"abc", &"-", &"-a-b-c-", 72);
+	rc = check_replace_all("", "abc", "-", "-a-b-c-", 72);
 	if rc != 0 { return rc; }
 
 	// a* on "bbb" → matches zero-length at 0,1,2,3 → inserts between each.
-	rc = check_replace_all(&"a*", &"bbb", &"X", &"XbXbXbX", 74);
+	rc = check_replace_all("a*", "bbb", "X", "XbXbXbX", 74);
 	if rc != 0 { return rc; }
 
 	// a* on "aab" → "aa" at 0 (greedy), then zero-length at 2, zero-length at 3.
 	// Expected: "X" + "X" + "b" + "X" = "XXbX"
-	rc = check_replace_all(&"a*", &"aab", &"X", &"XXbX", 76);
+	rc = check_replace_all("a*", "aab", "X", "XXbX", 76);
 	if rc != 0 { return rc; }
 
 	// a? on "bbb" → zero-length at 0,1,2,3 → same as empty pattern.
-	rc = check_replace_all(&"a?", &"bbb", &"X", &"XbXbXbX", 78);
+	rc = check_replace_all("a?", "bbb", "X", "XbXbXbX", 78);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -181,15 +181,15 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// Alternation: replace 'a' or 'b'.
-	rc = check_replace_all(&"a|b", &"aXbYa", &"_", &"_X_Y_", 90);
+	rc = check_replace_all("a|b", "aXbYa", "_", "_X_Y_", 90);
 	if rc != 0 { return rc; }
 
 	// Character class: replace digits.
-	rc = check_replace_all(&"[0-9]+", &"abc123def456", &"#", &"abc#def#", 92);
+	rc = check_replace_all("[0-9]+", "abc123def456", "#", "abc#def#", 92);
 	if rc != 0 { return rc; }
 
 	// Negated class: replace non-digits.
-	rc = check_replace_all(&"[^0-9]+", &"abc123def456", &"_", &"_123_456", 94);
+	rc = check_replace_all("[^0-9]+", "abc123def456", "_", "_123_456", 94);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -197,24 +197,24 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// 200-byte input: replace_all with single-char pattern.
-	val long_a = repeat_string(&"a", 200);
-	val long_X = repeat_string(&"X", 200);
-	rc = check_replace_all(&"a", &long_a, &"X", &long_X, 100);
+	val long_a = repeat_string("a", 200);
+	val long_X = repeat_string("X", 200);
+	rc = check_replace_all("a", long_a, "X", long_X, 100);
 	if rc != 0 { return rc; }
 
 	// 200-byte input: replace_all with .+ (greedy, single match).
-	rc = check_replace_all(&".+", &long_a, &"Z", &"Z", 102);
+	rc = check_replace_all(".+", long_a, "Z", "Z", 102);
 	if rc != 0 { return rc; }
 
 	// 100 repetitions of "ab": replace "ab" with "X" → 100 "X"s.
-	val long_ab = repeat_string(&"ab", 100);
-	val hundred_X = repeat_string(&"X", 100);
-	rc = check_replace_all(&"ab", &long_ab, &"X", &hundred_X, 104);
+	val long_ab = repeat_string("ab", 100);
+	val hundred_X = repeat_string("X", 100);
+	rc = check_replace_all("ab", long_ab, "X", hundred_X, 104);
 	if rc != 0 { return rc; }
 
 	// Empty-pattern replace_all on 50-byte input → 51 insertions.
 	// "aaa...a" (50) → "-a-a-a-...-a-" (50 a's interleaved with 51 dashes).
-	val fifty_a = repeat_string(&"a", 50);
+	val fifty_a = repeat_string("a", 50);
 	var expected_dashes = "";
 	{
 		var j = 0;
@@ -224,11 +224,11 @@ pub fn main() nothrow -> Int {
 		}
 		expected_dashes = expected_dashes + "-";
 	}
-	rc = check_replace_all(&"", &fifty_a, &"-", &expected_dashes, 106);
+	rc = check_replace_all("", fifty_a, "-", expected_dashes, 106);
 	if rc != 0 { return rc; }
 
 	// a* on 100-byte "b" string → zero-length matches at 101 positions.
-	val hundred_b = repeat_string(&"b", 100);
+	val hundred_b = repeat_string("b", 100);
 	var expected_Xb = "";
 	{
 		var j = 0;
@@ -238,11 +238,11 @@ pub fn main() nothrow -> Int {
 		}
 		expected_Xb = expected_Xb + "X";
 	}
-	rc = check_replace_all(&"a*", &hundred_b, &"X", &expected_Xb, 108);
+	rc = check_replace_all("a*", hundred_b, "X", expected_Xb, 108);
 	if rc != 0 { return rc; }
 
 	// replace_first on long input — only first match replaced.
-	rc = check_replace_first(&"a", &long_a, &"B", &("B" + repeat_string(&"a", 199)), 110);
+	rc = check_replace_first("a", long_a, "B", ("B" + repeat_string("a", 199)), 110);
 	if rc != 0 { return rc; }
 
 	return 0;

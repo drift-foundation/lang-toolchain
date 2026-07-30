@@ -94,7 +94,7 @@ import std.concurrent as conc;
 fn open_conn() throws -> net.TcpStream {
 	val addr = net.socket_addr("127.0.0.1", 0);
 	val timeout = conc.Duration(millis = 100);
-	return net.connect(&addr, timeout);
+	return net.connect(addr, timeout);
 }
 
 pub fn main() nothrow -> Int {
@@ -154,7 +154,7 @@ fn decode(bytes: &Array<Byte>) throws -> String {
 pub fn main() nothrow -> Int {
 	var bytes: Array<Byte> = [];
 	try {
-		val _s = decode(&bytes);
+		val _s = decode(bytes);
 		return 0;
 	} catch {
 		return 1;
@@ -183,7 +183,7 @@ fn decode_hex(s: &String) throws -> Array<Byte> {
 pub fn main() nothrow -> Int {
 	val s = "abcd";
 	try {
-		val _b = decode_hex(&s);
+		val _b = decode_hex(s);
 		return 0;
 	} catch {
 		return 1;
@@ -240,7 +240,7 @@ fn parse_json(s: &String) throws -> json.JsonNode {
 pub fn main() nothrow -> Int {
 	val s = "{}";
 	try {
-		val _n = parse_json(&s);
+		val _n = parse_json(s);
 		return 0;
 	} catch {
 		return 1;

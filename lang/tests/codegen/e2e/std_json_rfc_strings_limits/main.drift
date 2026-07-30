@@ -3,13 +3,13 @@ import std.json as json;
 import std.core as core;
 
 fn pstr(src: String, cfg: &json.JsonParseConfig) nothrow -> String {
-	match json.parse_with_config(&src, cfg) {
+	match json.parse_with_config(src, cfg) {
 		core.Result::Ok(n) => { match n.as_string() { Some(s) => { return s; }, None => { return "<notstr>"; } } },
 		core.Result::Err(e) => { return "ERR:" + e.tag; }
 	}
 }
 fn ptag(src: String, cfg: &json.JsonParseConfig) nothrow -> String {
-	match json.parse_with_config(&src, cfg) {
+	match json.parse_with_config(src, cfg) {
 		core.Result::Ok(_) => { return "<ok>"; },
 		core.Result::Err(e) => { return e.tag; }
 	}
@@ -19,14 +19,14 @@ pub fn main() nothrow -> Int {
 	val st = json.strict();
 
 	// (1) RFC \u: strict decodes é -> "é"; surrogate pair -> "😀"
-	if pstr("\"\\u00e9\"", &st) != "é" { return 1; }
-	if pstr("\"\\uD83D\\uDE00\"", &st) != "😀" { return 2; }
+	if pstr("\"\\u00e9\"", st) != "é" { return 1; }
+	if pstr("\"\\uD83D\\uDE00\"", st) != "😀" { return 2; }
 	// lone low surrogate -> invalid-escape
-	if ptag("\"\\uDE00\"", &st) != "invalid-escape" { return 3; }
+	if ptag("\"\\uDE00\"", st) != "invalid-escape" { return 3; }
 	// bad hex -> invalid-escape
-	if ptag("\"\\uZZZZ\"", &st) != "invalid-escape" { return 4; }
+	if ptag("\"\\uZZZZ\"", st) != "invalid-escape" { return 4; }
 	// legacy parse() rejects \u (compat)
-	match json.parse(&"\"\\u00e9\"") {
+	match json.parse("\"\\u00e9\"") {
 		core.Result::Ok(_) => { return 5; },
 		core.Result::Err(e) => { if e.tag != "invalid-escape" { return 6; } }
 	}
@@ -41,8 +41,8 @@ pub fn main() nothrow -> Int {
 	match b.build() {
 		core.Result::Ok(c) => {
 			// 3 occurrences of "a" (unique=1) must still trip the 2-field limit
-			if ptag("{\"a\":1,\"a\":2,\"a\":3}", &c) != "limit-object-fields" { return 10; }
-			if ptag("{\"a\":1,\"b\":2}", &c) != "<ok>" { return 11; }
+			if ptag("{\"a\":1,\"a\":2,\"a\":3}", c) != "limit-object-fields" { return 10; }
+			if ptag("{\"a\":1,\"b\":2}", c) != "<ok>" { return 11; }
 		},
 		core.Result::Err(_) => { return 12; }
 	}
@@ -55,7 +55,7 @@ pub fn main() nothrow -> Int {
 		max_array_items = Optional::Some(2), max_object_fields = Optional<Int>::None()));
 	match ab.build() {
 		core.Result::Ok(c) => {
-			match json.parse_with_config(&"[1,2,3]", &c) {
+			match json.parse_with_config("[1,2,3]", c) {
 				core.Result::Ok(_) => { return 20; },
 				core.Result::Err(e) => { if e.tag != "limit-array-items" { return 21; } if e.offset != 5 { return 22; } }
 			}
@@ -64,13 +64,13 @@ pub fn main() nothrow -> Int {
 	}
 
 	// (4) malformed JSON Pointer escape -> invalid-pointer
-	match json.parse_located(&"{\"a\":1}", &st) {
+	match json.parse_located("{\"a\":1}", st) {
 		core.Result::Ok(doc) => {
-			match doc.at_pointer(&"/a~2b") { core.Result::Ok(_) => { return 30; }, core.Result::Err(e) => { if e.tag != "invalid-pointer" { return 31; } } }
-			match doc.at_pointer(&"/a~") { core.Result::Ok(_) => { return 32; }, core.Result::Err(e) => { if e.tag != "invalid-pointer" { return 33; } } }
+			match doc.at_pointer("/a~2b") { core.Result::Ok(_) => { return 30; }, core.Result::Err(e) => { if e.tag != "invalid-pointer" { return 31; } } }
+			match doc.at_pointer("/a~") { core.Result::Ok(_) => { return 32; }, core.Result::Err(e) => { if e.tag != "invalid-pointer" { return 33; } } }
 			// valid escape: key "a/b" -> /a~1b
-			match json.parse_located(&"{\"a/b\":9}", &st) {
-				core.Result::Ok(d2) => { match d2.at_pointer(&"/a~1b") { core.Result::Ok(c) => { match c.as_int() { core.Result::Ok(v) => { if v != 9 { return 34; } }, default => { return 35; } } }, core.Result::Err(_) => { return 36; } } },
+			match json.parse_located("{\"a/b\":9}", st) {
+				core.Result::Ok(d2) => { match d2.at_pointer("/a~1b") { core.Result::Ok(c) => { match c.as_int() { core.Result::Ok(v) => { if v != 9 { return 34; } }, default => { return 35; } } }, core.Result::Err(_) => { return 36; } } },
 				core.Result::Err(_) => { return 37; }
 			}
 		},
@@ -79,9 +79,9 @@ pub fn main() nothrow -> Int {
 
 	// (6) index(Int::MIN) formats correctly in the error key
 	// index Int::MIN on an actual array
-	match json.parse_located(&"[1]", &st) {
+	match json.parse_located("[1]", st) {
 		core.Result::Ok(doc) => {
-			match doc.at_pointer(&"") {
+			match doc.at_pointer("") {
 				core.Result::Ok(root) => {
 					match root.index(-9223372036854775808) {
 						core.Result::Ok(_) => { return 43; },
@@ -102,8 +102,8 @@ pub fn main() nothrow -> Int {
 		max_array_items = Optional<Int>::None(), max_object_fields = Optional<Int>::None()));
 	match db.build() {
 		core.Result::Ok(c) => {
-			if ptag("12345", &c) != "limit-document-bytes" { return 50; }
-			if ptag("12", &c) != "<ok>" { return 51; }
+			if ptag("12345", c) != "limit-document-bytes" { return 50; }
+			if ptag("12", c) != "<ok>" { return 51; }
 		},
 		core.Result::Err(_) => { return 52; }
 	}
@@ -114,8 +114,8 @@ pub fn main() nothrow -> Int {
 		max_array_items = Optional<Int>::None(), max_object_fields = Optional<Int>::None()));
 	match sb.build() {
 		core.Result::Ok(c) => {
-			if ptag("\"abcd\"", &c) != "limit-string-bytes" { return 53; }
-			if ptag("\"ab\"", &c) != "<ok>" { return 54; }
+			if ptag("\"abcd\"", c) != "limit-string-bytes" { return 53; }
+			if ptag("\"ab\"", c) != "<ok>" { return 54; }
 		},
 		core.Result::Err(_) => { return 55; }
 	}
@@ -126,15 +126,15 @@ pub fn main() nothrow -> Int {
 		max_array_items = Optional<Int>::None(), max_object_fields = Optional<Int>::None()));
 	match nb.build() {
 		core.Result::Ok(c) => {
-			if ptag("12345", &c) != "limit-number-bytes" { return 56; }
-			if ptag("12", &c) != "<ok>" { return 57; }
+			if ptag("12345", c) != "limit-number-bytes" { return 56; }
+			if ptag("12", c) != "<ok>" { return 57; }
 		},
 		core.Result::Err(_) => { return 58; }
 	}
 	// unescaped control byte (literal TAB in the string) — rejected by RFC configs
-	if ptag("\"a\tb\"", &st) != "unescaped-control" { return 59; }
+	if ptag("\"a\tb\"", st) != "unescaped-control" { return 59; }
 	// legacy parse() tolerates it (compat)
-	match json.parse(&"\"a\tb\"") {
+	match json.parse("\"a\tb\"") {
 		core.Result::Ok(_) => { },
 		core.Result::Err(_) => { return 60; }
 	}

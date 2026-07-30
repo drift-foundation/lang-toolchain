@@ -32,11 +32,11 @@ pub fn main() nothrow -> Int {
 		exec,
 		core.callback0(
 			| | captures(move blocker_sigs) nothrow => {
-				atomic.atomic_store_bool(&blocker_sigs.get().blocker_started, true, 2);
+				atomic.atomic_store_bool(blocker_sigs.get().blocker_started, true, 2);
 				val deadline = thread.now_ms() + 20000;
-				while !atomic.atomic_load_bool(&blocker_sigs.get().release_blocker, 1) {
+				while !atomic.atomic_load_bool(blocker_sigs.get().release_blocker, 1) {
 					if thread.now_ms() > deadline {
-						atomic.atomic_store_bool(&blocker_sigs.get().blocker_timed_out, true, 2);
+						atomic.atomic_store_bool(blocker_sigs.get().blocker_timed_out, true, 2);
 						break;
 					}
 				}
@@ -47,11 +47,11 @@ pub fn main() nothrow -> Int {
 		Ok(v) => {
 			var blocker = move v;
 			var spins: Int = 0;
-			while !atomic.atomic_load_bool(&sigs.get().blocker_started, 1) {
+			while !atomic.atomic_load_bool(sigs.get().blocker_started, 1) {
 				val _ = conc.sleep(conc.Duration(millis = 2));
 				spins = spins + 1;
 				if spins > 1000 {
-					atomic.atomic_store_bool(&sigs.get().release_blocker, true, 2);
+					atomic.atomic_store_bool(sigs.get().release_blocker, true, 2);
 					var _j = blocker.join();
 					return 80;
 				}
@@ -62,7 +62,7 @@ pub fn main() nothrow -> Int {
 				exec,
 				core.callback0(
 					| | captures(move dropped_sigs) nothrow => {
-						atomic.atomic_store_bool(&dropped_sigs.get().dropped_task_ran, true, 2);
+						atomic.atomic_store_bool(dropped_sigs.get().dropped_task_ran, true, 2);
 						return 0;
 					}
 				)
@@ -71,24 +71,24 @@ pub fn main() nothrow -> Int {
 					{ var dropped = move v2; }
 				},
 				Err(_) => {
-					atomic.atomic_store_bool(&sigs.get().release_blocker, true, 2);
+					atomic.atomic_store_bool(sigs.get().release_blocker, true, 2);
 					var _j2 = blocker.join();
 					return 81;
 				},
 				default => {
-					atomic.atomic_store_bool(&sigs.get().release_blocker, true, 2);
+					atomic.atomic_store_bool(sigs.get().release_blocker, true, 2);
 					var _j3 = blocker.join();
 					return 82;
 				}
 			}
 
-			atomic.atomic_store_bool(&sigs.get().release_blocker, true, 2);
+			atomic.atomic_store_bool(sigs.get().release_blocker, true, 2);
 			var _ = blocker.join();
-			if atomic.atomic_load_bool(&sigs.get().blocker_timed_out, 1) {
+			if atomic.atomic_load_bool(sigs.get().blocker_timed_out, 1) {
 				return 83;
 			}
 			var wait_spins: Int = 0;
-			while !atomic.atomic_load_bool(&sigs.get().dropped_task_ran, 1) {
+			while !atomic.atomic_load_bool(sigs.get().dropped_task_ran, 1) {
 				val _sleep = conc.sleep(conc.Duration(millis = 2));
 				wait_spins = wait_spins + 1;
 				if wait_spins > 1000 {

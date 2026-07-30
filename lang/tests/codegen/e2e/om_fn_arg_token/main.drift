@@ -7,7 +7,7 @@
 // Type    = token
 //
 // Exercises both Token value shapes (hvar_move via explicit
-// `move tok`, and hcall_rvalue via `make_token(&mut sess)`
+// `move tok`, and hcall_rvalue via `make_token(sess)`
 // directly); projection is deferred for non-Copy types.  Every
 // scenario observes `sess.drops` via an `&mut Session` side
 // channel to assert the Token is destroyed exactly once.
@@ -43,7 +43,7 @@ fn sink(t: Token) nothrow -> Void {
 }
 fn scenario_hvar_move() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
-	val tok: Token = make_token(&mut sess);
+	val tok: Token = make_token(sess);
 	sink(move tok);
 	// After sink returns, destructor must have run exactly once.
 	// destination container scope-dropped above; destructor
@@ -53,7 +53,7 @@ fn scenario_hvar_move() nothrow -> Int {
 }
 fn scenario_hcall_rvalue() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
-	sink(make_token(&mut sess));
+	sink(make_token(sess));
 	// After sink returns, destructor must have run exactly once.
 	// destination container scope-dropped above; destructor
 	// must have run exactly once.

@@ -30,7 +30,7 @@ fn replace_items(h: &mut Holder) nothrow -> Void {
 implement core.Destructible for Holder {
 	pub fn destroy(var self: Holder) nothrow -> Void {
 		// Calls through &mut self, replacing the owned Array<String> field.
-		replace_items(&mut self);
+		replace_items(self);
 		return;
 	}
 }

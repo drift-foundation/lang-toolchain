@@ -56,7 +56,7 @@ fn run() throws -> Int {
 	var map = containers.hash_map<type BadKey, Int>();
 	map.insert(BadKey(id = 1), 7);
 	val probe = BadKey(id = 1);
-	val got = map.get(&probe);
+	val got = map.get(probe);
 	return match got {
 		None => { 1 },
 		Some(v) => { *v }

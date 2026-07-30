@@ -148,7 +148,7 @@ fn inner(code: Int) -> Int {
 \t\targs.items.push("a");
 \t\targs.items.push("b");
 \t\tval sp: String = "sp_singular_complete";
-\t\tval row = _do_call(conn, &sp, move args, code);
+\t\tval row = _do_call(conn, sp, move args, code);
 \t\tif code == 1 {
 \t\t\treturn 1 + row;
 \t\t} else if code == 2 {

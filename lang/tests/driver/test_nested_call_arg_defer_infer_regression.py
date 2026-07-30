@@ -69,19 +69,19 @@ fn make_int(b: &Byte) nothrow -> Int {
 // Non-generic: nested call in method-call argument position.
 pub fn direct(cb: core.Callback1<mem.Ptr<Byte>, Int>) nothrow -> Int {
 	val b = core.string_byte_at("z", 0);
-	return cb.call(make_ptr(&b));
+	return cb.call(make_ptr(b));
 }
 
 // Same shape through a generic require-bound.
 pub fn via_bound<T, F>(body: F) nothrow -> T require F is core.Fn1<mem.Ptr<Byte>, T> {
 	val b = core.string_byte_at("z", 0);
-	return body.call(make_ptr(&b));
+	return body.call(make_ptr(b));
 }
 
 // Int-returning nested call in argument position (non-pointer control).
 pub fn int_arg(cb: core.Callback1<Int, Int>) nothrow -> Int {
 	val b = core.string_byte_at("z", 0);
-	return cb.call(make_int(&b));
+	return cb.call(make_int(b));
 }
 
 pub fn main() nothrow -> Int {
@@ -147,7 +147,7 @@ pub fn main() nothrow -> Int {
 	// the transactional attempt must succeed and COMMIT.  Confirmed
 	// failing pre-fix ("Callback1.call argument 1 type mismatch").
 	val cb: core.Callback1<mem.Ptr<Byte>, Int> = core.callback1(|p: mem.Ptr<Byte>| => { 7 });
-	val a = cb.call(ident(make_ptr(&b)));
+	val a = cb.call(ident(make_ptr(b)));
 	val cbi: core.Callback1<Int, Int> = core.callback1(|n: Int| => { n });
 	val i = cbi.call(ident(4));
 

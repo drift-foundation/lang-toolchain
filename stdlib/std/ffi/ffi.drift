@@ -58,7 +58,7 @@ pub variant CStringError {
 
 fn null_byte_ptr() nothrow -> mem.Ptr<Byte> {
 	var drained = mem.rawbuffer_empty<type Byte>();
-	return mem.rawbuffer_ptr<type Byte>(&drained);
+	return mem.rawbuffer_ptr<type Byte>(drained);
 }
 
 /* ── Borrowed bulk byte access ────────────────────────────────────── */
@@ -229,7 +229,7 @@ implement OwnedCStr {
 	}
 	/// Transfers the allocation out; drop becomes a no-op.
 	pub fn release(var self: OwnedCStr) nothrow -> mem.Ptr<Byte> {
-		val out = mem.replace<type mem.Ptr<Byte> >(&mut self.ptr, null_byte_ptr());
+		val out = mem.replace<type mem.Ptr<Byte> >(self.ptr, null_byte_ptr());
 		return out;
 	}
 }
@@ -299,7 +299,7 @@ implement OwnedCBytes {
 	}
 	/// Transfers the allocation out; drop becomes a no-op.
 	pub fn release(var self: OwnedCBytes) nothrow -> ReleasedCBytes {
-		val out = mem.replace<type mem.Ptr<Byte> >(&mut self.ptr, null_byte_ptr());
+		val out = mem.replace<type mem.Ptr<Byte> >(self.ptr, null_byte_ptr());
 		return ReleasedCBytes(ptr = out, len = self.len);
 	}
 }
@@ -401,18 +401,18 @@ implement CStringScope {
 		var buf = mem.alloc_uninit<type mem.Ptr<Byte> >(n + 1);
 		var i = 0;
 		while i < n {
-			val nul = ffi_interior_nul_index(&xs[i]);
+			val nul = ffi_interior_nul_index(xs[i]);
 			if nul >= 0 {
 				mem.dealloc<type mem.Ptr<Byte> >(move buf);
 				return core.Result::Err(CStringError::InteriorNul(arg = i + 1, index = nul));
 			}
-			val p = ffi_string_to_owned_cstr(&xs[i]);
+			val p = ffi_string_to_owned_cstr(xs[i]);
 			self.pins.push(p);
-			mem.write<type mem.Ptr<Byte> >(&mut buf, i, p);
+			mem.write<type mem.Ptr<Byte> >(buf, i, p);
 			i = i + 1;
 		}
-		mem.write<type mem.Ptr<Byte> >(&mut buf, n, null_byte_ptr());
-		val first = mem.ptr_at_ref<type mem.Ptr<Byte> >(&buf, 0);
+		mem.write<type mem.Ptr<Byte> >(buf, n, null_byte_ptr());
+		val first = mem.ptr_at_ref<type mem.Ptr<Byte> >(buf, 0);
 		val vec = mem.ptr_from_ref<type mem.Ptr<Byte> >(first);
 		self.vecs.push(move buf);
 		return core.Result::Ok(CArgv(argv = vec, argc = n));

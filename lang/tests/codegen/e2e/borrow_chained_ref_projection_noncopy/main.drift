@@ -17,12 +17,30 @@ module main;
 //   val __tmp_borrow = recv.method();   // tmp holds the &Outer result
 //   &__tmp_borrow.field                 // borrow the field via the temp
 //
-// This file pins all three arms of `_split_lift_place_chain`:
-//   - HField  via `&w.get().handle` and `&_build().handle`
-//   - HIndex  via `&w.handles_ref()[i]`
-//   - HUnary(DEREF) via `&*w.inner_ref()`
-// Pre-fix every case failed at type-check with the "cannot copy"
-// diagnostic; post-fix they compile and the borrow round-trips.
+// Since reject-redundant-call-borrows, the same projection chains have
+// TWO distinct lowering routes, and this file pins BOTH:
+//
+// SECTION A — source-written borrows in NON-ARGUMENT bindings (still
+// legal under the rule; argument positions at declared-ref formals are
+// the only rejection surface).  These exercise the ORIGINAL stage1
+// `_split_lift_place_chain` arms:
+//   - HField        via `val r = &w.get().handle` / `&_build().handle`
+//   - HIndex        via `val r = &w.handles_ref()[i]`
+//   - HUnary(DEREF) via `val r = &*w.inner_ref()`
+// Pre-2026-05-14-fix every case failed at type-check with the
+// "cannot copy" diagnostic; post-fix they compile and round-trip.
+//
+// SECTION B — the SAME chains passed BARE in argument position at a
+// declared `&T` formal.  The typed checker synthesizes the HBorrow
+// AFTER stage1 has run, so borrow_materialize never sees it; lowering
+// goes through the MIR-side twin instead
+// (`_lift_rvalue_ref_base_for_borrow` / `_validate_lifted_chain` in
+// stage2/hir_to_mir.py, extended with index and deref-at-base hops for
+// this rule).  Pre-extension the HIndex/DEREF shapes died in MIR
+// lowering ("array index read requires Copy element type") after the
+// shallow checker's HBorrow-over-HIndex copy-suppression gap was
+// closed; post-fix they compile and run.  These are the bare spellings
+// the corpus audit flagged as flips when this fixture was first swept.
 
 import std.core as core;
 import std.console as cons;
@@ -58,38 +76,78 @@ fn _peek_inner(i: &Inner) nothrow -> Int { return i.handle.raw; }
 // from the temp.
 fn _build() nothrow -> Inner { return Inner(handle = Handle(raw = 99)); }
 
+// Owned-returning ARRAY builder for SECTION C: `_peek(mk()[i])` bare —
+// an owned rvalue base with an index hop.  The whole-expr fallback
+// cannot lower this (non-Copy element read), so the MIR lifted chain
+// admits owned bases for index-bearing shared chains and materializes
+// the base into a drop-registered temp (same lifetime shape as
+// stage1's `val __tmp = mk(); &__tmp[i]`).
+fn mk() nothrow -> Array<Handle> {
+	var a: Array<Handle> = [];
+	a.push(Handle(raw = 7));
+	a.push(Handle(raw = 9));
+	return move a;
+}
+
+// Nested-matrix builder for SECTION D: `_peek(mk_matrix()[i][j])` —
+// REPEATED index hops through an owned rvalue base.  The shallow
+// checker must suppress the element-copy check for EVERY HIndex on
+// the borrow-subject spine (round-5 finding: only the outer index was
+// suppressed, so the inner hop mis-reported "cannot copy value of
+// type 'Array'"); MIR's lifted chain then emits both index hops.
+fn mk_matrix() nothrow -> Array<Array<Handle>> {
+	var m: Array<Array<Handle>> = [];
+	m.push(mk());
+	return move m;
+}
+
 pub fn main() nothrow -> Int {
 	var handles: Array<Handle> = [];
 	handles.push(Handle(raw = 10));
 	handles.push(Handle(raw = 20));
 	val w = Wrapper(inner = Inner(handle = Handle(raw = 42)), handles = move handles);
 
-	// === HField branch through rvalue base ===
-	// Ref-returning method case: get() returns &Inner.
-	val n1 = _peek(&w.get().handle);
+	// ===== SECTION A: explicit borrows in bindings (stage1 split-lift) =====
+	// HField through ref-returning method rvalue base.
+	val a1: &Handle = &w.get().handle;
+	if _peek(a1) != 42 { return 11; }
+	// HField through owned-returning function rvalue base.
+	val a2: &Handle = &_build().handle;
+	if _peek(a2) != 99 { return 12; }
+	// HIndex through ref-returning method rvalue base.
+	val a3: &Handle = &w.handles_ref()[0];
+	if _peek(a3) != 10 { return 13; }
+	val a4: &Handle = &w.handles_ref()[1];
+	if _peek(a4) != 20 { return 14; }
+	// HUnary(DEREF): deref the returned &Inner and immediately re-borrow.
+	val a5: &Inner = &*w.inner_ref();
+	if _peek_inner(a5) != 42 { return 15; }
+
+	// ===== SECTION B: the same chains BARE in argument position =====
+	// (checker-synthesized HBorrow -> MIR lifted-chain lowering)
+	// HField branch through rvalue base.
+	val n1 = _peek(w.get().handle);
 	if n1 != 42 { return 1; }
-	// Owned-returning function case: _build() returns Inner.
-	val n2 = _peek(&_build().handle);
+	val n2 = _peek(_build().handle);
 	if n2 != 99 { return 2; }
-
-	// === HIndex branch through rvalue base ===
-	// handles_ref() returns &Array<Handle>; indexing it gives Handle.
-	// Pre-fix this hit the same whole-expression-lift path and was
-	// rejected for trying to copy Handle into __tmp_borrow.  Post-fix
-	// the array reference is lifted into the temp; indexing happens
-	// through the place expression.
-	val n3 = _peek(&w.handles_ref()[0]);
+	// HIndex branch through rvalue base.
+	val n3 = _peek(w.handles_ref()[0]);
 	if n3 != 10 { return 3; }
-	val n4 = _peek(&w.handles_ref()[1]);
+	val n4 = _peek(w.handles_ref()[1]);
 	if n4 != 20 { return 4; }
-
-	// === HUnary(DEREF) branch through rvalue base ===
-	// `&*inner_ref()` derefs the returned &Inner and immediately
-	// re-borrows it.  Exercises the HUnary(DEREF) arm of
-	// _split_lift_place_chain: the method call is lifted into the
-	// temp, the deref is kept as part of the place expression.
-	val n5 = _peek_inner(&*w.inner_ref());
+	// Deref-at-base branch through rvalue base.
+	val n5 = _peek_inner(*w.inner_ref());
 	if n5 != 42 { return 5; }
+
+	// ===== SECTION C: OWNED rvalue base + index, bare argument =====
+	val c1 = _peek(mk()[1]);
+	if c1 != 9 { return 21; }
+
+	// ===== SECTION D: NESTED index hops, bare argument =====
+	val d1 = _peek(mk_matrix()[0][0]);
+	if d1 != 7 { return 22; }
+	val d2 = _peek(mk_matrix()[0][1]);
+	if d2 != 9 { return 23; }
 
 	cons.println("ok");
 	return 0;

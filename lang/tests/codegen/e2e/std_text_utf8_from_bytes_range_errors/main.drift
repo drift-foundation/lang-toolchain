@@ -6,7 +6,7 @@ import std.core as core;
 pub fn main() nothrow -> Int {
 	var bytes: Array<Byte> = [cast<Byte>(226), cast<Byte>(130), cast<Byte>(172), cast<Byte>(255)];
 
-	match text.utf8_from_bytes_range(&bytes, -1, 1) {
+	match text.utf8_from_bytes_range(bytes, -1, 1) {
 		core.Result::Ok(_) => { return 1; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-range" { return 2; }
@@ -14,7 +14,7 @@ pub fn main() nothrow -> Int {
 		}
 	}
 
-	match text.utf8_from_bytes_range(&bytes, 3, 2) {
+	match text.utf8_from_bytes_range(bytes, 3, 2) {
 		core.Result::Ok(_) => { return 4; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-range" { return 5; }
@@ -22,7 +22,7 @@ pub fn main() nothrow -> Int {
 		}
 	}
 
-	match text.utf8_from_bytes_range(&bytes, 3, 4) {
+	match text.utf8_from_bytes_range(bytes, 3, 4) {
 		core.Result::Ok(_) => { return 7; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-leading-byte" { return 8; }

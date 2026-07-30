@@ -5,7 +5,7 @@ import std.mem as mem;
 pub fn main() nothrow -> Int {
 	var a = 1;
 	var b = 2;
-	mem.swap(&mut a, &mut b);
-	var c = mem.replace(&mut a, b);
+	mem.swap(a, b);
+	var c = mem.replace(a, b);
 	return a + b + c;
 }

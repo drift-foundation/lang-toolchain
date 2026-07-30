@@ -342,10 +342,10 @@ pub fn epoch_enter(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 	if p.active {
 		return;
 	}
-	val cur = atomic.atomic_load_uint(&d.current, _ord_acquire());
+	val cur = atomic.atomic_load_uint(d.current, _ord_acquire());
 	p.active = true;
 	p.epoch = cur;
-	val _ = atomic.atomic_fetch_add_uint(&d.active, cast<Uint>(1), _ord_acqrel());
+	val _ = atomic.atomic_fetch_add_uint(d.active, cast<Uint>(1), _ord_acqrel());
 	return;
 }
 
@@ -360,7 +360,7 @@ pub fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 		return;
 	}
 	p.active = false;
-	val _ = atomic.atomic_fetch_sub_uint(&d.active, cast<Uint>(1), _ord_acqrel());
+	val _ = atomic.atomic_fetch_sub_uint(d.active, cast<Uint>(1), _ord_acqrel());
 	return;
 }
 
@@ -372,10 +372,10 @@ pub fn epoch_leave(d: &EpochDomain, p: &mut EpochParticipant) nothrow -> Void {
 ///
 /// **See also:** `epoch_try_advance`, `epoch_pending`.
 pub fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) nothrow -> Void {
-	if p.active and p.epoch > atomic.atomic_load_uint(&d.current, _ord_acquire()) {
+	if p.active and p.epoch > atomic.atomic_load_uint(d.current, _ord_acquire()) {
 		return;
 	}
-	val _ = atomic.atomic_fetch_add_uint(&d.pending, cast<Uint>(1), _ord_acqrel());
+	val _ = atomic.atomic_fetch_add_uint(d.pending, cast<Uint>(1), _ord_acqrel());
 	return;
 }
 
@@ -392,32 +392,32 @@ pub fn epoch_retire(d: &EpochDomain, p: &EpochParticipant) nothrow -> Void {
 ///
 /// **See also:** `epoch_retire`, `epoch_current`, `epoch_reclaimed`.
 pub fn epoch_try_advance(d: &EpochDomain) nothrow -> Int {
-	if atomic.atomic_load_uint(&d.active, _ord_acquire()) != cast<Uint>(0) {
+	if atomic.atomic_load_uint(d.active, _ord_acquire()) != cast<Uint>(0) {
 		return 0;
 	}
-	val _ = atomic.atomic_fetch_add_uint(&d.current, cast<Uint>(1), _ord_acqrel());
-	val reclaim = atomic.atomic_exchange_uint(&d.pending, cast<Uint>(0), _ord_acqrel());
+	val _ = atomic.atomic_fetch_add_uint(d.current, cast<Uint>(1), _ord_acqrel());
+	val reclaim = atomic.atomic_exchange_uint(d.pending, cast<Uint>(0), _ord_acqrel());
 	if reclaim != cast<Uint>(0) {
-		val _ = atomic.atomic_fetch_add_uint(&d.reclaimed, reclaim, _ord_acqrel());
+		val _ = atomic.atomic_fetch_add_uint(d.reclaimed, reclaim, _ord_acqrel());
 	}
 	return cast<Int>(reclaim);
 }
 
 /// Returns the domain's current epoch number.
 pub fn epoch_current(d: &EpochDomain) nothrow -> Uint {
-	return atomic.atomic_load_uint(&d.current, _ord_acquire());
+	return atomic.atomic_load_uint(d.current, _ord_acquire());
 }
 
 /// Returns the count of objects pending reclamation (carried
 /// forward into the next `epoch_try_advance` call).
 pub fn epoch_pending(d: &EpochDomain) nothrow -> Uint {
-	return atomic.atomic_load_uint(&d.pending, _ord_acquire());
+	return atomic.atomic_load_uint(d.pending, _ord_acquire());
 }
 
 /// Returns the cumulative count of objects reclaimed across every
 /// successful epoch advancement on this domain.
 pub fn epoch_reclaimed(d: &EpochDomain) nothrow -> Uint {
-	return atomic.atomic_load_uint(&d.reclaimed, _ord_acquire());
+	return atomic.atomic_load_uint(d.reclaimed, _ord_acquire());
 }
 
 implement<T> core.Copy for Handle<T> {
@@ -674,15 +674,15 @@ implement<T> MpscQueue<T> {
 	///
 	/// **See also:** `MpscQueue.pop`.
 	pub fn push(self: &MpscQueue<T>, v: Handle<T>) nothrow -> Bool {
-		var pos = atomic.atomic_load_uint(&self.tail, _ord_relaxed());
+		var pos = atomic.atomic_load_uint(self.tail, _ord_relaxed());
 		while true {
 			val idx = cast<Int>(pos % self.cap);
-			val seq = atomic.atomic_load_uint(&self.states[idx], _ord_acquire());
+			val seq = atomic.atomic_load_uint(self.states[idx], _ord_acquire());
 			if seq == pos {
-				val observed = atomic.atomic_compare_exchange_observed_uint(&self.tail, pos, pos + cast<Uint>(1), _ord_acqrel(), _ord_acquire());
+				val observed = atomic.atomic_compare_exchange_observed_uint(self.tail, pos, pos + cast<Uint>(1), _ord_acqrel(), _ord_acquire());
 				if observed == pos {
-					atomic.atomic_store_uint(&self.slots[idx].inner, v.raw, _ord_relaxed());
-					atomic.atomic_store_uint(&self.states[idx], pos + cast<Uint>(1), _ord_release());
+					atomic.atomic_store_uint(self.slots[idx].inner, v.raw, _ord_relaxed());
+					atomic.atomic_store_uint(self.states[idx], pos + cast<Uint>(1), _ord_release());
 					return true;
 				}
 				pos = observed;
@@ -691,7 +691,7 @@ implement<T> MpscQueue<T> {
 			if seq < pos {
 				return false;
 			}
-			pos = atomic.atomic_load_uint(&self.tail, _ord_acquire());
+			pos = atomic.atomic_load_uint(self.tail, _ord_acquire());
 		}
 		return false;
 	}
@@ -703,16 +703,16 @@ implement<T> MpscQueue<T> {
 	///
 	/// **See also:** `MpscQueue.push`.
 	pub fn pop(self: &MpscQueue<T>) nothrow -> Optional<Handle<T>> {
-		var pos = atomic.atomic_load_uint(&self.head, _ord_relaxed());
+		var pos = atomic.atomic_load_uint(self.head, _ord_relaxed());
 		while true {
 			val idx = cast<Int>(pos % self.cap);
-			val seq = atomic.atomic_load_uint(&self.states[idx], _ord_acquire());
+			val seq = atomic.atomic_load_uint(self.states[idx], _ord_acquire());
 			val ready = pos + cast<Uint>(1);
 			if seq == ready {
-				val observed = atomic.atomic_compare_exchange_observed_uint(&self.head, pos, ready, _ord_acqrel(), _ord_acquire());
+				val observed = atomic.atomic_compare_exchange_observed_uint(self.head, pos, ready, _ord_acqrel(), _ord_acquire());
 				if observed == pos {
-					val old_raw = atomic.atomic_exchange_uint(&self.slots[idx].inner, cast<Uint>(0), _ord_relaxed());
-					atomic.atomic_store_uint(&self.states[idx], pos + self.cap, _ord_release());
+					val old_raw = atomic.atomic_exchange_uint(self.slots[idx].inner, cast<Uint>(0), _ord_relaxed());
+					atomic.atomic_store_uint(self.states[idx], pos + self.cap, _ord_release());
 					return Optional::Some(handle<type T>(old_raw));
 				}
 				pos = observed;
@@ -721,7 +721,7 @@ implement<T> MpscQueue<T> {
 			if seq < ready {
 				return Optional::None();
 			}
-			pos = atomic.atomic_load_uint(&self.head, _ord_acquire());
+			pos = atomic.atomic_load_uint(self.head, _ord_acquire());
 		}
 		return Optional::None();
 	}

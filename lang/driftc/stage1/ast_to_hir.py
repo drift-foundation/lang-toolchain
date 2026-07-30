@@ -504,6 +504,7 @@ class AstToHIR:
 				subject=self.lower_expr(expr.operand),
 				is_mut=expr.op == "&mut",
 				loc=self._as_span(getattr(expr, "loc", None)),
+				source_written=True,
 			)
 		op_map = {
 			"-": H.UnaryOp.NEG,

@@ -11,10 +11,10 @@ pub fn main() nothrow -> Int {
 	match w {
 		Ok(fw) => {
 			var buf = io.buffer(3);
-			io.buffer_write(&mut buf, 0, cast<Byte>(65));
-			io.buffer_write(&mut buf, 1, cast<Byte>(66));
-			io.buffer_write(&mut buf, 2, cast<Byte>(67));
-			val wres = fw.write(&buf);
+			io.buffer_write(buf, 0, cast<Byte>(65));
+			io.buffer_write(buf, 1, cast<Byte>(66));
+			io.buffer_write(buf, 2, cast<Byte>(67));
+			val wres = fw.write(buf);
 			val wcode = match wres {
 				Ok(n) => { (n == 3) ? 0 : 1 },
 				default => { 2 }
@@ -34,16 +34,16 @@ pub fn main() nothrow -> Int {
 	match r {
 		Ok(fr) => {
 			var buf2 = io.buffer(3);
-			val rr = fr.read(&mut buf2);
+			val rr = fr.read(buf2);
 			val n = match rr {
 				Ok(v) => { v },
 				default => { 6 }
 			};
 			if n == 6 { return 6; }
 			if n != 3 { return 7; }
-			if io.buffer_read(&mut buf2, 0) != cast<Byte>(65) { return 8; }
-			if io.buffer_read(&mut buf2, 1) != cast<Byte>(66) { return 9; }
-			if io.buffer_read(&mut buf2, 2) != cast<Byte>(67) { return 10; }
+			if io.buffer_read(buf2, 0) != cast<Byte>(65) { return 8; }
+			if io.buffer_read(buf2, 1) != cast<Byte>(66) { return 9; }
+			if io.buffer_read(buf2, 2) != cast<Byte>(67) { return 10; }
 			val c2 = fr.close();
 			val c2code = match c2 {
 				Ok(_) => { 0 },

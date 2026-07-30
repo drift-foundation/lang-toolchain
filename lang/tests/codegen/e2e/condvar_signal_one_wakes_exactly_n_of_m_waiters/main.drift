@@ -37,7 +37,7 @@ fn make_waiter(cv_arc: core.Arc<conc.Condvar>, pred_lock: core.Arc<conc.Mutex<Bo
 		var g = m1.get().lock();
 		val v = g.get_mut();
 		while not *v {
-			match cv1.get().wait(&mut g) {
+			match cv1.get().wait(g) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(e) => {
 					if e.kind == conc.CONCURRENCY_KIND_CLOSED {

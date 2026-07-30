@@ -6,7 +6,7 @@ import std.codec as codec;
 pub fn main() nothrow -> Int {
 	val h = "4142";
 	var a: Array<Byte> = [];
-	match codec.hex_decode(&h) {
+	match codec.hex_decode(h) {
 		core.Result::Ok(v) => {
 			a = move v;
 		},

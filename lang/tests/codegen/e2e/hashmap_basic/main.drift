@@ -10,10 +10,10 @@ fn run() -> Int {
 	m.insert(1, 10);
 	m.insert(2, 20);
 	val k1 = 1;
-	if not m.contains_key(&k1) {
+	if not m.contains_key(k1) {
 		return 2;
 	}
-	val v1 = match m.get_mut(&k1) {
+	val v1 = match m.get_mut(k1) {
 		None => {
 			-1
 		},
@@ -45,7 +45,7 @@ fn run() -> Int {
 	if m.len() != 2 {
 		return 7;
 	}
-	val rem_v = match m.remove(&k1) {
+	val rem_v = match m.remove(k1) {
 		None => {
 			-1
 		},
@@ -59,10 +59,10 @@ fn run() -> Int {
 	if rem_v != 99 {
 		return 9;
 	}
-	if m.contains_key(&k1) {
+	if m.contains_key(k1) {
 		return 10;
 	}
-	val missing = m.remove(&k1);
+	val missing = m.remove(k1);
 	val miss_ok = match missing {
 		None => {
 			true

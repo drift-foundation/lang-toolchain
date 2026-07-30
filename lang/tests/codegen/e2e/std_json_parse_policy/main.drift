@@ -6,7 +6,7 @@ import std.core as core;
 fn field_a_raw(node: &json.JsonNode) nothrow -> String {
 	match node {
 		json.JsonNode::Object(fields) => {
-			match fields.get(&"a") {
+			match fields.get("a") {
 				Some(v) => {
 					match v {
 						json.JsonNode::Number(raw) => { return *raw; },
@@ -21,15 +21,15 @@ fn field_a_raw(node: &json.JsonNode) nothrow -> String {
 }
 
 fn err_tag(text: String, cfg: &json.JsonParseConfig) nothrow -> String {
-	match json.parse_with_config(&text, cfg) {
+	match json.parse_with_config(text, cfg) {
 		core.Result::Ok(_) => { return "<ok>"; },
 		core.Result::Err(e) => { return e.tag; }
 	}
 }
 
 fn ok_a(text: String, cfg: &json.JsonParseConfig) nothrow -> String {
-	match json.parse_with_config(&text, cfg) {
-		core.Result::Ok(v) => { return field_a_raw(&v); },
+	match json.parse_with_config(text, cfg) {
+		core.Result::Ok(v) => { return field_a_raw(v); },
 		core.Result::Err(e) => { return "ERR:" + e.tag; }
 	}
 }
@@ -40,46 +40,46 @@ pub fn main() nothrow -> Int {
 	val si = json.signed_ir();
 
 	// 1. parse() preserved: leading zeros accepted, dup keep-last
-	match json.parse(&"{\"a\":0123}") {
-		core.Result::Ok(v) => { if field_a_raw(&v) != "0123" { return 1; } },
+	match json.parse("{\"a\":0123}") {
+		core.Result::Ok(v) => { if field_a_raw(v) != "0123" { return 1; } },
 		core.Result::Err(_) => { return 2; }
 	}
-	match json.parse(&"{\"a\":1,\"a\":2}") {
-		core.Result::Ok(v) => { if field_a_raw(&v) != "2" { return 3; } },
+	match json.parse("{\"a\":1,\"a\":2}") {
+		core.Result::Ok(v) => { if field_a_raw(v) != "2" { return 3; } },
 		core.Result::Err(_) => { return 4; }
 	}
 
 	// 2. dup-key policies
 	// permissive (KeepLast)
-	if ok_a("{\"a\":1,\"a\":2}", &perm) != "2" { return 10; }
+	if ok_a("{\"a\":1,\"a\":2}", perm) != "2" { return 10; }
 	// strict (Reject)
-	if err_tag("{\"a\":1,\"a\":2}", &st) != "duplicate-key" { return 11; }
+	if err_tag("{\"a\":1,\"a\":2}", st) != "duplicate-key" { return 11; }
 	// KeepFirst via builder
 	var kf = json.parse_config_builder();
 	kf.duplicate_keys(json.DuplicateKeyPolicy::KeepFirst());
 	match kf.build() {
-		core.Result::Ok(c) => { if ok_a("{\"a\":1,\"a\":2}", &c) != "1" { return 12; } },
+		core.Result::Ok(c) => { if ok_a("{\"a\":1,\"a\":2}", c) != "1" { return 12; } },
 		core.Result::Err(_) => { return 13; }
 	}
 
 	// 3. leading zeros: rejected by strict/signed_ir, accepted by parse() only
-	if err_tag("{\"a\":0123}", &st) != "number-leading-zero" { return 20; }
-	if err_tag("0123", &perm) != "number-leading-zero" { return 21; }  // permissive rejects too
+	if err_tag("{\"a\":0123}", st) != "number-leading-zero" { return 20; }
+	if err_tag("0123", perm) != "number-leading-zero" { return 21; }  // permissive rejects too
 
 	// 4. numeric subset (signed_ir)
-	if err_tag("1.5", &si) != "number-fraction" { return 30; }
-	if err_tag("1e3", &si) != "number-exponent" { return 31; }
-	if err_tag("-0", &si) != "number-negative-zero" { return 32; }
-	if err_tag("42", &si) != "<ok>" { return 33; }
-	if err_tag("-0", &st) != "<ok>" { return 34; }   // strict allows -0
+	if err_tag("1.5", si) != "number-fraction" { return 30; }
+	if err_tag("1e3", si) != "number-exponent" { return 31; }
+	if err_tag("-0", si) != "number-negative-zero" { return 32; }
+	if err_tag("42", si) != "<ok>" { return 33; }
+	if err_tag("-0", st) != "<ok>" { return 34; }   // strict allows -0
 
 	// 5. top-level
 	var oo = json.parse_config_builder();
 	oo.top_level(json.TopLevelPolicy::ObjectOnly());
 	match oo.build() {
 		core.Result::Ok(c) => {
-			if err_tag("[1,2]", &c) != "top-level-not-object" { return 40; }
-			if err_tag("{\"a\":1}", &c) != "<ok>" { return 41; }
+			if err_tag("[1,2]", c) != "top-level-not-object" { return 40; }
+			if err_tag("{\"a\":1}", c) != "<ok>" { return 41; }
 		},
 		core.Result::Err(_) => { return 42; }
 	}
@@ -92,8 +92,8 @@ pub fn main() nothrow -> Int {
 		max_array_items = Optional<Int>::None(), max_object_fields = Optional<Int>::None()));
 	match dl.build() {
 		core.Result::Ok(c) => {
-			if err_tag("[1,2]", &c) != "<ok>" { return 50; }        // depth1 ok
-			if err_tag("[[1]]", &c) != "limit-depth" { return 51; }  // depth2 rejected
+			if err_tag("[1,2]", c) != "<ok>" { return 50; }        // depth1 ok
+			if err_tag("[[1]]", c) != "limit-depth" { return 51; }  // depth2 rejected
 		},
 		core.Result::Err(_) => { return 52; }
 	}
@@ -107,7 +107,7 @@ pub fn main() nothrow -> Int {
 			max_document_bytes = Optional<Int>::None(), max_depth = Optional::Some(-5),
 			max_string_bytes = Optional<Int>::None(), max_number_bytes = Optional<Int>::None(),
 			max_array_items = Optional<Int>::None(), max_object_fields = Optional<Int>::None()));
-	if err_tag("1", &badcfg) != "invalid-config" { return 60; }
+	if err_tag("1", badcfg) != "invalid-config" { return 60; }
 
 	return 0;
 }

@@ -56,7 +56,7 @@ fn use_it(h: &Handle, extra: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\tval r = use_it(&h, 1);
+\tval r = use_it(h, 1);
 \tif r == 42 { return 0; }
 \treturn 1;
 }
@@ -85,12 +85,12 @@ fn use_it(h: &Handle) nothrow -> Int {
 \t\treturn hh.tag;
 \t}));
 \tval hh = Handle(tag = 7);
-\treturn s.cb.call(&hh);
+\treturn s.cb.call(hh);
 }
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\treturn use_it(&h);
+\treturn use_it(h);
 }
 """
 
@@ -121,12 +121,12 @@ fn use_it(h: &Handle) nothrow -> Int {
 \t\treturn hh.tag;
 \t}));
 \tval hh = Handle(tag = 7);
-\treturn s.cb.call(&hh);
+\treturn s.cb.call(hh);
 }
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\treturn use_it(&h);
+\treturn use_it(h);
 }
 """
 
@@ -156,7 +156,7 @@ fn use_it(h: &Handle, extra: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\tif use_it(&h, 1) == 42 { return 0; }
+\tif use_it(h, 1) == 42 { return 0; }
 \treturn 1;
 }
 """
@@ -183,7 +183,7 @@ fn use_it(h: &Handle, extra: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\tif use_it(&h, 1) == 42 { return 0; }
+\tif use_it(h, 1) == 42 { return 0; }
 \treturn 1;
 }
 """
@@ -266,7 +266,7 @@ fn use_it(h: &Handle, extra: Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval h = Handle(tag = 41);
-\tif use_it(&h, 1) == 42 { return 0; }
+\tif use_it(h, 1) == 42 { return 0; }
 \treturn 1;
 }
 """

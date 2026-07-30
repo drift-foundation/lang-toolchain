@@ -38,13 +38,13 @@ fn _heap_string(bytes: &Array<Byte>) nothrow -> String {
 \tval n = bytes.len;
 \tvar buf = io.buffer(n);
 \tvar i = 0;
-\twhile i < n { io.buffer_write(&mut buf, i, bytes[i]); i = i + 1; }
-\treturn core.string_from_utf8_bytes(io.buffer_ptr(&buf), n);
+\twhile i < n { io.buffer_write(buf, i, bytes[i]); i = i + 1; }
+\treturn core.string_from_utf8_bytes(io.buffer_ptr(buf), n);
 }
 
 fn throw_heap(label: String) -> Int {
 \tvar b: Array<Byte> = [cast<Byte>(104), cast<Byte>(101), cast<Byte>(108), cast<Byte>(108), cast<Byte>(111)];
-\tval s = _heap_string(&b);
+\tval s = _heap_string(b);
 \tthrow Info(s, label);
 }
 

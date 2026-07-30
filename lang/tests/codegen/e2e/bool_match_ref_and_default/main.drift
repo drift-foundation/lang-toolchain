@@ -15,5 +15,5 @@ pub fn main() nothrow -> Int {
 	val t = true;
 	val f = false;
 	// classify(&t)=1, classify(&f)=0 → 1*10 + 0 + 5 == 15
-	return classify(&t) * 10 + classify(&f) + 5;
+	return classify(t) * 10 + classify(f) + 5;
 }

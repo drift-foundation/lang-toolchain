@@ -82,7 +82,7 @@ def test_all_six_helpers_callable(tmp_path, capsys):
 	rc, errs = _compile(tmp_path, capsys, _PRE + """
 pub fn main() nothrow -> Int {
 \tval s1: String = "x";
-\tval _a: String = core.diagnostic_json_string(&s1);
+\tval _a: String = core.diagnostic_json_string(s1);
 \tval _b: String = core.diagnostic_json_null();
 \tval _c: String = core.diagnostic_json_bool(true);
 \tval _d: String = core.diagnostic_json_int(42);
@@ -114,15 +114,15 @@ pub fn main() nothrow -> Int {
 \tval ff: String = "\\f";
 \tval utf8: String = "héllo";
 
-\tval _a: String = core.diagnostic_json_string(&empty);
-\tval _b: String = core.diagnostic_json_string(&quote);
-\tval _c: String = core.diagnostic_json_string(&bs);
-\tval _d: String = core.diagnostic_json_string(&nl);
-\tval _e: String = core.diagnostic_json_string(&cr);
-\tval _f: String = core.diagnostic_json_string(&tab);
-\tval _g: String = core.diagnostic_json_string(&bksp);
-\tval _h: String = core.diagnostic_json_string(&ff);
-\tval _i: String = core.diagnostic_json_string(&utf8);
+\tval _a: String = core.diagnostic_json_string(empty);
+\tval _b: String = core.diagnostic_json_string(quote);
+\tval _c: String = core.diagnostic_json_string(bs);
+\tval _d: String = core.diagnostic_json_string(nl);
+\tval _e: String = core.diagnostic_json_string(cr);
+\tval _f: String = core.diagnostic_json_string(tab);
+\tval _g: String = core.diagnostic_json_string(bksp);
+\tval _h: String = core.diagnostic_json_string(ff);
+\tval _i: String = core.diagnostic_json_string(utf8);
 \treturn 0;
 }
 """)

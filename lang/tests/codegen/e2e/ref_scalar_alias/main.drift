@@ -14,17 +14,17 @@ pub fn main() nothrow -> Int{
 	var c = 0;
 
 	// Unconditional bumps should both be visible through the same slot.
-	bump(&mut c);
-	bump(&mut c);
+	bump(c);
+	bump(c);
 
 	// Only the true branch mutates.
-	bump_if(true, &mut c);
-	bump_if(false, &mut c);
+	bump_if(true, c);
+	bump_if(false, c);
 
 	// Loop-based mutation through the same reference.
 	var i = 0;
 	while i < 3 {
-		bump(&mut c);
+		bump(c);
 		i = i + 1;
 	}
 

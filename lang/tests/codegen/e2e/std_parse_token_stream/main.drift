@@ -85,9 +85,9 @@ implement parse.TokenKind for WKind {
 // fresh allocation, not a static literal).
 fn heap_word(base: String) nothrow -> String {
 	var sb = text.string_builder(8);
-	text.sb_append_string(&mut sb, &base);
-	text.sb_append_string(&mut sb, &"-tok");
-	return text.sb_build(&mut sb);
+	text.sb_append_string(sb, base);
+	text.sb_append_string(sb, "-tok");
+	return text.sb_build(sb);
 }
 
 fn wtok(var k: WKind, off: Int) nothrow -> parse.Token<WKind> {
@@ -123,14 +123,14 @@ pub fn main() nothrow -> Int {
 
 	// expect Ident (Ok path, consumes)
 	val want_ident = Kind::Ident();
-	match ts.expect(&want_ident, "identifier") {
+	match ts.expect(want_ident, "identifier") {
 		core.Result::Ok(t) => { if t.span.start.byte_offset != 0 { return 41; } },
 		core.Result::Err(_) => { return 42; }
 	}
 
 	// next is Eq; expect Comma -> Err unexpected-token, no consume
 	val want_comma = Kind::Comma();
-	match ts.expect(&want_comma, "','") {
+	match ts.expect(want_comma, "','") {
 		core.Result::Ok(_) => { return 43; },
 		core.Result::Err(d) => {
 			if d.code != "unexpected-token" { return 44; }
@@ -145,7 +145,7 @@ pub fn main() nothrow -> Int {
 
 	// the failed expect did NOT consume: next is still Eq
 	val want_eq = Kind::Eq();
-	match ts.expect(&want_eq, "'='") {
+	match ts.expect(want_eq, "'='") {
 		core.Result::Ok(t) => { if t.span.start.byte_offset != 2 { return 51; } },
 		core.Result::Err(_) => { return 52; }
 	}
@@ -183,7 +183,7 @@ pub fn main() nothrow -> Int {
 	// expect() at EOF -> unexpected-eof, span == eof_span (offset 7),
 	// found == None (the structured EOF encoding).
 	val want_any = Kind::Ident();
-	match ts.expect(&want_any, "identifier") {
+	match ts.expect(want_any, "identifier") {
 		core.Result::Ok(_) => { return 63; },
 		core.Result::Err(d) => {
 			if d.code != "unexpected-eof" { return 64; }

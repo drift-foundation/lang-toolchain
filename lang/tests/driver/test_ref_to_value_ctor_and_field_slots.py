@@ -98,7 +98,7 @@ pub fn main() nothrow -> Int {
 	var sum: Int = 0;
 	var i: Int = 0;
 	while i < 10 {
-		val n = wrap(&src);
+		val n = wrap(src);
 		match n {
 			Node::Tagged(t) => { sum = sum + t.byte_length(); },
 			Node::Empty => { sum = sum + 999; }
@@ -184,7 +184,7 @@ fn set_status(e: &mut Entry, s: &String) nothrow -> Void {
 pub fn main() nothrow -> Int {
 	var e = Entry(status = "init");
 	val s: String = "FINISHED";
-	set_status(&mut e, &s);
+	set_status(e, s);
 	return e.status.byte_length();
 }
 """.lstrip(),
@@ -213,7 +213,7 @@ fn set_value(c: &mut Cell, n: &Int) nothrow -> Void {
 pub fn main() nothrow -> Int {
 	var c = Cell(value = 0);
 	val v: Int = 42;
-	set_value(&mut c, &v);
+	set_value(c, v);
 	return c.value;
 }
 """.lstrip(),
@@ -291,7 +291,7 @@ fn wrap(s: &String) nothrow -> Box {
 
 pub fn main() nothrow -> Int {
 	val src: String = "ok";
-	val b = wrap(&src);
+	val b = wrap(src);
 	return b.tag.byte_length();
 }
 """.lstrip(),
@@ -316,7 +316,7 @@ fn wrap(s: &String) nothrow -> Box {
 
 pub fn main() nothrow -> Int {
 	val src: String = "ok";
-	val b = wrap(&src);
+	val b = wrap(src);
 	return b.tag.byte_length();
 }
 """.lstrip(),
@@ -342,7 +342,7 @@ fn update(s: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val src: String = "after";
-	return update(&src);
+	return update(src);
 }
 """.lstrip(),
 	)
@@ -367,7 +367,7 @@ fn update_at(arr: &mut Array<String>, s: &String) nothrow -> Void {
 pub fn main() nothrow -> Int {
 	var arr: Array<String> = ["a", "b", "c"];
 	val src: String = "REPLACED";
-	update_at(&mut arr, &src);
+	update_at(arr, src);
 	return arr[0].byte_length();
 }
 """.lstrip(),

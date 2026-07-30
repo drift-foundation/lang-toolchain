@@ -25,10 +25,10 @@ fn early_exit(n: &json.JsonNode) nothrow -> Int {
 }
 
 pub fn main() nothrow -> Int {
-	match json.parse(&"{\"a\":1,\"b\":2,\"c\":3}") {
+	match json.parse("{\"a\":1,\"b\":2,\"c\":3}") {
 		core.Result::Ok(n) => {
-			if count_for_in(&n) != 3 { return 1; }       // for-in, non-empty
-			if early_exit(&n) != 1 { return 2; }          // early exit (broke after first)
+			if count_for_in(n) != 3 { return 1; }       // for-in, non-empty
+			if early_exit(n) != 1 { return 2; }          // early exit (broke after first)
 			// manual next() with the trait import
 			var it = n.entries();
 			var m = 0;
@@ -43,14 +43,14 @@ pub fn main() nothrow -> Int {
 		core.Result::Err(_) => { return 4; }
 	}
 	// empty object -> zero iterations
-	match json.parse(&"{}") {
-		core.Result::Ok(eo) => { if count_for_in(&eo) != 0 { return 5; } },
+	match json.parse("{}") {
+		core.Result::Ok(eo) => { if count_for_in(eo) != 0 { return 5; } },
 		core.Result::Err(_) => { return 6; }
 	}
 	// non-object nodes -> zero iterations
 	val num = json.JsonNode::Number("7");
-	if count_for_in(&num) != 0 { return 7; }
+	if count_for_in(num) != 0 { return 7; }
 	val nul = json.JsonNode::Null();
-	if count_for_in(&nul) != 0 { return 8; }
+	if count_for_in(nul) != 0 { return 8; }
 	return 0;
 }

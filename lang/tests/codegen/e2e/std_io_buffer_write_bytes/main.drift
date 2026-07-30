@@ -6,43 +6,43 @@ pub fn main() nothrow -> Int {
 	// Test 1: append into empty buffer
 	var buf = io.buffer(32);
 	val src: Array<Byte> = [cast<Byte>(65), cast<Byte>(66), cast<Byte>(67)];
-	io.buffer_write_bytes(&mut buf, &src);
-	if io.buffer_len(&buf) != 3 {
+	io.buffer_write_bytes(buf, src);
+	if io.buffer_len(buf) != 3 {
 		return 1;
 	}
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(65) {
+	if io.buffer_read(buf, 0) != cast<Byte>(65) {
 		return 2;
 	}
-	if io.buffer_read(&mut buf, 1) != cast<Byte>(66) {
+	if io.buffer_read(buf, 1) != cast<Byte>(66) {
 		return 3;
 	}
-	if io.buffer_read(&mut buf, 2) != cast<Byte>(67) {
+	if io.buffer_read(buf, 2) != cast<Byte>(67) {
 		return 4;
 	}
 
 	// Test 2: append into non-empty buffer
 	val src2: Array<Byte> = [cast<Byte>(68), cast<Byte>(69)];
-	io.buffer_write_bytes(&mut buf, &src2);
-	if io.buffer_len(&buf) != 5 {
+	io.buffer_write_bytes(buf, src2);
+	if io.buffer_len(buf) != 5 {
 		return 5;
 	}
-	if io.buffer_read(&mut buf, 3) != cast<Byte>(68) {
+	if io.buffer_read(buf, 3) != cast<Byte>(68) {
 		return 6;
 	}
-	if io.buffer_read(&mut buf, 4) != cast<Byte>(69) {
+	if io.buffer_read(buf, 4) != cast<Byte>(69) {
 		return 7;
 	}
 
 	// Test 3: multiple appends preserve order
-	if io.buffer_read(&mut buf, 0) != cast<Byte>(65) {
+	if io.buffer_read(buf, 0) != cast<Byte>(65) {
 		return 8;
 	}
 
 	// Test 4: empty source is no-op
 	val empty: Array<Byte> = [];
-	val len_before = io.buffer_len(&buf);
-	io.buffer_write_bytes(&mut buf, &empty);
-	if io.buffer_len(&buf) != len_before {
+	val len_before = io.buffer_len(buf);
+	io.buffer_write_bytes(buf, empty);
+	if io.buffer_len(buf) != len_before {
 		return 9;
 	}
 

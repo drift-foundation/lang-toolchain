@@ -109,7 +109,7 @@ implement SinglePassIterator<Byte> for StringBytesIter {
 		if self.idx >= self.len {
 			return Optional::None();
 		}
-		val b = core.string_byte_at(&self.s, self.idx);
+		val b = core.string_byte_at(self.s, self.idx);
 		self.idx = self.idx + 1;
 		return Optional::Some(b);
 	}

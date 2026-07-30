@@ -142,7 +142,7 @@ fn mutate(ctx: &mut Ctx) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 \tvar ctx = Ctx(s = fmt.format_int(7));
-\tmutate(&mut ctx);
+\tmutate(ctx);
 \tif ctx.s.byte_length() == 0 { return 1; }
 \treturn 0;
 }
@@ -166,8 +166,8 @@ fn filter_b(ctx: &mut Ctx) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 \tvar ctx = Ctx(s = "");
-\tfilter_a(&mut ctx);
-\tfilter_b(&mut ctx);
+\tfilter_a(ctx);
+\tfilter_b(ctx);
 \tif ctx.s.byte_length() != 2 { return 1; }
 \treturn 0;
 }
@@ -187,7 +187,7 @@ fn mutate(ctx: &mut Ctx) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 \tvar ctx = Ctx(s = "seed");
-\tmutate(&mut ctx);
+\tmutate(ctx);
 \tif ctx.s.byte_length() != 5 { return 1; }
 \treturn 0;
 }

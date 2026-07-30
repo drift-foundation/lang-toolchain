@@ -401,7 +401,17 @@ class BorrowMaterializeRewriter:
 			if split is None:
 				return pfx, replace(expr, subject=subj)
 			lift_pfx, place = split
-			return pfx + lift_pfx, replace(expr, subject=place)
+			new_borrow = replace(expr, subject=place)
+			# A minted __tmp_borrow* HLet means the subject was an rvalue —
+			# the W0 policy needs this to route source-written `&mut <rvalue>`
+			# arguments to E_MUT_RVALUE_ARG_BINDING_REQUIRED instead of the
+			# redundancy diagnostic.
+			if any(
+				isinstance(s, H.HLet) and str(getattr(s, "name", "")).startswith("__tmp_borrow")
+				for s in lift_pfx
+			):
+				new_borrow = replace(new_borrow, materialized_rvalue=True)
+			return pfx + lift_pfx, new_borrow
 		if isinstance(expr, getattr(H, "HMove", ())):
 			pfx, subj = self._rewrite_expr(expr.subject)
 			return pfx, H.HMove(

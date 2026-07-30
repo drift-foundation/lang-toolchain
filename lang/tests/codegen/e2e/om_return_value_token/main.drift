@@ -7,7 +7,7 @@
 // Type    = token
 //
 // Exercises both Token value shapes (hvar_move via explicit
-// `move tok`, and hcall_rvalue via `make_token(&mut sess)`
+// `move tok`, and hcall_rvalue via `make_token(sess)`
 // directly); projection is deferred for non-Copy types.  Every
 // scenario observes `sess.drops` via an `&mut Session` side
 // channel to assert the Token is destroyed exactly once.
@@ -48,7 +48,7 @@ fn produce_hcall_rvalue(sess: &mut Session) nothrow -> Token {
 fn scenario_hvar_move() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val v: Token = produce_hvar_move(&mut sess);
+		val v: Token = produce_hvar_move(sess);
 		if sess.drops != 0 { return 1; }
 	}
 	// destination container scope-dropped above; destructor
@@ -59,7 +59,7 @@ fn scenario_hvar_move() nothrow -> Int {
 fn scenario_hcall_rvalue() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val v: Token = produce_hcall_rvalue(&mut sess);
+		val v: Token = produce_hcall_rvalue(sess);
 		if sess.drops != 0 { return 1; }
 	}
 	// destination container scope-dropped above; destructor

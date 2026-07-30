@@ -8,7 +8,7 @@ import std.format as fmt;
 // nested match.  The val should be dropped when the outer arm exits.
 
 fn make_json() nothrow -> core.Result<json.JsonNode, String> {
-	match json.parse(&"{\"a\": 1}") {
+	match json.parse("{\"a\": 1}") {
 		core.Result::Ok(node) => {
 			return core.Result::Ok(move node);
 		},
@@ -33,7 +33,7 @@ fn test_nested_match_drop() nothrow -> Int {
 				},
 				None => {
 					// deep IS moved here.
-					val s = json.encode(&deep);
+					val s = json.encode(deep);
 					return s.byte_length();
 				}
 			}

@@ -4,5 +4,5 @@ fn id(p: &Int) nothrow -> &Int {
 
 pub fn main() nothrow -> Int{
 	var x = 7;
-	return *id(&x);
+	return *id(x);
 }

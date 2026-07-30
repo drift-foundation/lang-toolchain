@@ -48,8 +48,8 @@ fn pick(o: &Optional<String>) nothrow -> Int {
 pub fn main() nothrow -> Int {
 	val a: Optional<String> = Some("x");
 	val b: Optional<String> = Optional::None();
-	if pick(&a) == 1 {
-		if pick(&b) == 3 { return 0; }
+	if pick(a) == 1 {
+		if pick(b) == 3 { return 0; }
 		return 2;
 	}
 	return 1;
@@ -110,7 +110,7 @@ import std.mem as mem;
 
 pub fn main() nothrow -> Int {
 	var s = "first" + "";
-	val taken = mem.replace(&mut s, "second" + "");
+	val taken = mem.replace(s, "second" + "");
 	if taken == "first" {
 		if s == "second" { return 0; }
 		return 2;

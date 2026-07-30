@@ -6,11 +6,11 @@ import std.net as net;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
 	val io_t = conc.Duration(millis = 1000);
-	val lr = net.listen(&addr, io_t);
+	val lr = net.listen(addr, io_t);
 	match lr {
 		Ok(l) => {
 			val t = conc.Duration(millis = 1);
-			val ar = net.accept(&l, t);
+			val ar = net.accept(l, t);
 			match ar {
 				Ok(s) => {
 					val _ = s.close(io_t);

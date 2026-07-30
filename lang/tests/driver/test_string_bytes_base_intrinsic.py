@@ -41,7 +41,7 @@ pub fn main() nothrow -> Int {
 			val b0 = mem.ptr_read<type Byte>(p);
 			cast<Int>(b0) + len
 		});
-	val n = ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&s, cb);
+	val n = ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(s, cb);
 	return n - 103;  // 'a'(97) + 6
 }
 """
@@ -84,7 +84,7 @@ import std.mem as mem;
 
 pub fn main() nothrow -> Int {
 	val s = "x";
-	val p = string_bytes_base(&s);
+	val p = string_bytes_base(s);
 	val is_null = mem.ptr_is_null<type Byte>(p);
 	if is_null { return 1; }
 	return 0;
@@ -127,13 +127,13 @@ def test_bytes_base_misuse_rejected_in_std_ffi(tmp_path: Path) -> None:
 	# wrong arity + non-String argument misuses, referenced from a pub fn
 	text = text.replace(marker, """fn bb_misuse_arity() nothrow -> Int {
 	val s = "x";
-	val p = string_bytes_base(&s, 1);
+	val p = string_bytes_base(s, 1);
 	return 0;
 }
 
 fn bb_misuse_type() nothrow -> Int {
 	val n = 3;
-	val p = string_bytes_base(&n);
+	val p = string_bytes_base(n);
 	return 0;
 }
 

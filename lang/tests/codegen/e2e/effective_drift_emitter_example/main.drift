@@ -91,11 +91,11 @@ fn register_handlers(bus: &mut EventBus) nothrow -> conc.Arc<conc.Mutex<StateMac
 
 pub fn main() nothrow -> Int {
 	var bus = event_bus();
-	var sm = register_handlers(&mut bus);
+	var sm = register_handlers(bus);
 	var ex = Event(v = 5);
 	var ey = Event(v = 2);
 	var ez = Event(v = 7);
-	bus.emit(&ex, &ey, &ez);
+	bus.emit(ex, ey, ez);
 	var guard = conc.lock(sm);
 	return guard.get_mut().state;
 }

@@ -60,7 +60,7 @@ pub fn main() nothrow -> Int {
 		name = "storage-lmdb",
 		exec = make_adapter("storage-lmdb")
 	);
-	if run_op(&adapter.exec, "lmdb.write_txn") == 42 {
+	if run_op(adapter.exec, "lmdb.write_txn") == 42 {
 		console.println("type-nameable-ok");
 		return 0;
 	}
@@ -82,7 +82,7 @@ pub fn main() nothrow -> Int {
 	b.min_threads(1);
 	b.max_threads(1);
 	val ex = conc.build_blocking_executor(b.build(), "inference-demo");
-	match conc.run_blocking_on(&ex, "demo.op", core.callback0(|| => { return 7; })) {
+	match conc.run_blocking_on(ex, "demo.op", core.callback0(|| => { return 7; })) {
 		core.Result::Ok(v) => {
 			match v == 7 { true => { console.println("inference-ok"); return 0; }, false => { return 2; } }
 		},

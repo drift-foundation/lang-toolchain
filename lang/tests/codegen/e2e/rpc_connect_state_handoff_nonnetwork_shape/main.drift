@@ -25,7 +25,7 @@ fn _apply_connect_mutations(conn: &mut FakeConnection) nothrow -> Void {
 
 fn _connect_like() nothrow -> core.Result<FakeConnection, Int> {
 	var conn = FakeConnection(session = FakeSession(state = SessionState(reusable = false, autocommit_enabled = true, in_transaction = false)), strict_reuse = true);
-	_apply_connect_mutations(&mut conn);
+	_apply_connect_mutations(conn);
 	if not conn.session.state.reusable { return core.Result::Err(101); }
 	if conn.session.state.autocommit_enabled { return core.Result::Err(102); }
 	if conn.session.state.in_transaction { return core.Result::Err(103); }

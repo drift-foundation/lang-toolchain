@@ -6,7 +6,7 @@ fn run() -> Int {
 	var m = containers.hash_map<type Int, Int>();
 	m.insert(1, 10);
 	val k = 1;
-	val ok = match m.get_mut(&k) {
+	val ok = match m.get_mut(k) {
 		None => { false },
 		Some(v) => {
 			*v = 42;
@@ -16,7 +16,7 @@ fn run() -> Int {
 	if not ok {
 		return 1;
 	}
-	val v = match m.get_mut(&k) {
+	val v = match m.get_mut(k) {
 		None => { -1 },
 		Some(p) => { *p }
 	};

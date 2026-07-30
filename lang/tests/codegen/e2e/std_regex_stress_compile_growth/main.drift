@@ -6,8 +6,8 @@ import std.regex as regex;
 
 fn byte_to_string(ch: Byte) nothrow -> String {
 	var b = io.buffer(1);
-	io.buffer_write(&mut b, 0, ch);
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 1);
+	io.buffer_write(b, 0, ch);
+	return core.string_from_utf8_bytes(io.buffer_ptr(b), 1);
 }
 
 fn str_eq(a: &String, b: &String) nothrow -> Bool {
@@ -25,7 +25,7 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 fn check_compiles_and_matches(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			if regex.is_match(&re, input) != expected { return fail_code; }
+			if regex.is_match(re, input) != expected { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -35,7 +35,7 @@ fn check_compiles_and_matches(pattern: &String, input: &String, expected: Bool, 
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -77,15 +77,15 @@ pub fn main() nothrow -> Int {
 	// alt50 now has 50 branches.
 
 	// Should compile successfully.
-	rc = check_compiles_and_matches(&alt50, &"az", true, 10);
+	rc = check_compiles_and_matches(alt50, "az", true, 10);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&alt50, &"bx", true, 12);
+	rc = check_compiles_and_matches(alt50, "bx", true, 12);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&alt50, &"cx", false, 14);
+	rc = check_compiles_and_matches(alt50, "cx", false, 14);
 	if rc != 0 { return rc; }
 
 	// Find first: "xbhx" → matches "bh" at 1..3.
-	rc = check_match(&alt50, &"xbhx", 1, 3, 16);
+	rc = check_match(alt50, "xbhx", 1, 3, 16);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -124,11 +124,11 @@ pub fn main() nothrow -> Int {
 	}
 
 	// Should compile and match.
-	rc = check_compiles_and_matches(&alt100, &"Z", true, 20);
+	rc = check_compiles_and_matches(alt100, "Z", true, 20);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&alt100, &"5", true, 22);
+	rc = check_compiles_and_matches(alt100, "5", true, 22);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&alt100, &"!", false, 24);
+	rc = check_compiles_and_matches(alt100, "!", false, 24);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -147,7 +147,7 @@ pub fn main() nothrow -> Int {
 		i = i + 1;
 	}
 
-	rc = check_compiles_and_matches(&long_pat, &long_inp, true, 30);
+	rc = check_compiles_and_matches(long_pat, long_inp, true, 30);
 	if rc != 0 { return rc; }
 
 	// Off-by-one: input one byte short → no match.
@@ -158,7 +158,7 @@ pub fn main() nothrow -> Int {
 		short_inp = short_inp + ch;
 		i = i + 1;
 	}
-	rc = check_compiles_and_matches(&long_pat, &short_inp, false, 32);
+	rc = check_compiles_and_matches(long_pat, short_inp, false, 32);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -167,11 +167,11 @@ pub fn main() nothrow -> Int {
 	// "a.b.c.d.e.f.g.h.i.j" (19 nodes: 10 literals + 9 dots).
 	// =================================================================
 
-	rc = check_compiles_and_matches(&"a.b.c.d.e.f.g.h.i.j", &"aXbXcXdXeXfXgXhXiXj", true, 40);
+	rc = check_compiles_and_matches("a.b.c.d.e.f.g.h.i.j", "aXbXcXdXeXfXgXhXiXj", true, 40);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&"a.b.c.d.e.f.g.h.i.j", &"aXbXcXdXeXfXgXhXiYj", true, 42);
+	rc = check_compiles_and_matches("a.b.c.d.e.f.g.h.i.j", "aXbXcXdXeXfXgXhXiYj", true, 42);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&"a.b.c.d.e.f.g.h.i.j", &"aXbXcXdXeXfXgXhXi", false, 44);
+	rc = check_compiles_and_matches("a.b.c.d.e.f.g.h.i.j", "aXbXcXdXeXfXgXhXi", false, 44);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -181,18 +181,18 @@ pub fn main() nothrow -> Int {
 	// Deep nesting tests parser recursion depth.
 	// =================================================================
 
-	rc = check_compiles_and_matches(&"((((a))))", &"a", true, 50);
+	rc = check_compiles_and_matches("((((a))))", "a", true, 50);
 	if rc != 0 { return rc; }
-	rc = check_compiles_and_matches(&"((((a))))", &"b", false, 52);
+	rc = check_compiles_and_matches("((((a))))", "b", false, 52);
 	if rc != 0 { return rc; }
 
 	// 10 levels deep: ((((((((((a))))))))))
-	rc = check_compiles_and_matches(&"((((((((((a))))))))))", &"a", true, 54);
+	rc = check_compiles_and_matches("((((((((((a))))))))))", "a", true, 54);
 	if rc != 0 { return rc; }
 
 	// Nested group with alternation + quantifier.
 	// ((a|b)+) on "ababba" → should match.
-	rc = check_match(&"((a|b)+)", &"ababba", 0, 6, 56);
+	rc = check_match("((a|b)+)", "ababba", 0, 6, 56);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -200,13 +200,13 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// Run the same match 3 times and verify identical output.
-	match regex.compile(&"[a-z]+") {
+	match regex.compile("[a-z]+") {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, &"123abc456") {
+			match regex.find_first(re, "123abc456") {
 				Optional::Some(m1) => {
-					match regex.find_first(&re, &"123abc456") {
+					match regex.find_first(re, "123abc456") {
 						Optional::Some(m2) => {
-							match regex.find_first(&re, &"123abc456") {
+							match regex.find_first(re, "123abc456") {
 								Optional::Some(m3) => {
 									if m1.start != m2.start or m2.start != m3.start { return 60; }
 									if m1.end != m2.end or m2.end != m3.end { return 61; }

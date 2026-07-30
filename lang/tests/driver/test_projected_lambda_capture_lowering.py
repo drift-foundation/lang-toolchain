@@ -129,7 +129,7 @@ fn describe(p: &Prepared) -> String {
 
 fn use_it(p: Prepared) -> Int {
 \treturn (| | => {
-\t\tval _s = describe(&p);
+\t\tval _s = describe(p);
 \t\treturn p.count;
 \t})();
 }

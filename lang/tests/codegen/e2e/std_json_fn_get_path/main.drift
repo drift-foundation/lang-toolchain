@@ -7,7 +7,7 @@ pub fn main() nothrow -> Int {
 	// Object-only path through nested objects.
 	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"code\":42},\"flag\":true},\"items\":[1,2,3]}";
 
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Err(_) => { return 100; },
 		core.Result::Ok(root) => {
 
@@ -18,8 +18,8 @@ pub fn main() nothrow -> Int {
 						Optional::Some(s) => {
 							val want = "ok";
 							if s.byte_length() != 2 { return 1; }
-							if core.string_byte_at(&s, 0) != cast<Byte>(111) { return 2; }  // 'o'
-							if core.string_byte_at(&s, 1) != cast<Byte>(107) { return 3; }  // 'k'
+							if core.string_byte_at(s, 0) != cast<Byte>(111) { return 2; }  // 'o'
+							if core.string_byte_at(s, 1) != cast<Byte>(107) { return 3; }  // 'k'
 						},
 						Optional::None() => { return 4; }
 					}

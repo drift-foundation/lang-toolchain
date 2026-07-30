@@ -9,6 +9,6 @@ fn inc_x(p: &mut Point) nothrow -> Void {
 
 pub fn main() nothrow -> Int{
 	var p = Point(41, 0);
-	inc_x(&mut p);
+	inc_x(p);
 	return p.x;
 }

@@ -10,7 +10,7 @@ pub fn main() nothrow -> Int {
 	if m.len() != 1 { return 2; }
 	if m.insert_if_absent("a", 2) { return 3; }        // present -> false (no change)
 	if m.len() != 1 { return 4; }
-	match m.get(&"a") { Some(v) => { if *v != 1 { return 5; } }, None => { return 6; } }  // kept first
+	match m.get("a") { Some(v) => { if *v != 1 { return 5; } }, None => { return 6; } }  // kept first
 	if not m.insert_if_absent("b", 9) { return 7; }    // absent -> true
 	if m.len() != 2 { return 8; }
 	// A present-key insert must not perturb the map: returns false, no new entry.

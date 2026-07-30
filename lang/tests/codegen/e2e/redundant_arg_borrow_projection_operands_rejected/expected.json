@@ -1,0 +1,22 @@
+{
+  "description": "matrix row 8: operand-text rendering for field, index, parenthesized, and whitespace shapes (four pinned diagnostics, subset-matched)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'p.name' directly"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'arr[0]' directly"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass '(name)' directly"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'name' directly"
+    }
+  ]
+}

@@ -24,10 +24,10 @@ pub fn main() nothrow -> Int {
 				var i = 0;
 				val base = chunk * CHUNK_BYTES;
 				while i < CHUNK_BYTES {
-					io.buffer_write(&mut buf, i, _byte_at(base + i));
+					io.buffer_write(buf, i, _byte_at(base + i));
 					i += 1;
 				}
-				val wr = wfile.write(&buf);
+				val wr = wfile.write(buf);
 				val wn = match wr {
 					Ok(n) => { n },
 					Err(e) => { io.is_would_block_error(e) ? -3 : -4 },
@@ -56,7 +56,7 @@ pub fn main() nothrow -> Int {
 			var total = 0;
 			var buf = io.buffer(CHUNK_BYTES);
 			while true {
-				val rr = rfile.read(&mut buf);
+				val rr = rfile.read(buf);
 				val n = match rr {
 					Ok(v) => { v },
 					Err(e) => { io.is_eof_error(e) ? -1 : (io.is_would_block_error(e) ? -10 : -11) },
@@ -69,7 +69,7 @@ pub fn main() nothrow -> Int {
 				if n == 0 { break; }
 				var i = 0;
 				while i < n {
-					val got = io.buffer_read(&mut buf, i);
+					val got = io.buffer_read(buf, i);
 					val expected = _byte_at(total + i);
 					if got != expected { return 9; }
 					i += 1;

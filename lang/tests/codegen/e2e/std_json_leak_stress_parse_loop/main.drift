@@ -8,9 +8,9 @@ fn run() -> Int {
 	val users_path = ["users"];
 	var i = 0;
 	while i < 800 {
-		match json.parse(&text) {
+		match json.parse(text) {
 			core.Result::Ok(node) => {
-				val users_node = node.expect_path(&users_path);
+				val users_node = node.expect_path(users_path);
 				val users = users_node.expect_array("users", "users");
 				if users.len != 2 { return 2; }
 				core.drop_value<type json.JsonNode>(move node);

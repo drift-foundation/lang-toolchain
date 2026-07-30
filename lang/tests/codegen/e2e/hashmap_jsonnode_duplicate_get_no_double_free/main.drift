@@ -8,7 +8,7 @@ fn run() -> Int {
 	m.insert("a", json.JsonNode::Number("1"));
 	m.insert("a", json.JsonNode::Number("2"));
 	val k = "a";
-	match m.get(&k) {
+	match m.get(k) {
 		Some(_v) => {
 		},
 		None => {

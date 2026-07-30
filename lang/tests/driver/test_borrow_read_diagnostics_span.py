@@ -92,7 +92,7 @@ fn read(r: &Int) nothrow -> Int {
 pub fn main() nothrow -> Int {
 	var x = 0;
 	val m = &mut x;
-	return read(&x);
+	return read(x);
 }
 """,
 	)

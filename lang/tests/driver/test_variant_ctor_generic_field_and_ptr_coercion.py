@@ -116,7 +116,7 @@ fn wrap(r: &S) nothrow -> Optional<&S> {
 }
 pub fn main() nothrow -> Int {
 	val v = S(x = 7);
-	val o = wrap(&v);
+	val o = wrap(v);
 	var r = 1;
 	match o { Optional::Some(s) => { r = s.x; }, Optional::None() => { r = 0; } }
 	return r;

@@ -31,7 +31,7 @@ pub fn main() nothrow -> Int {
 		// pattern).
 		val deadline = thread.now_ms() + 2000;
 		while not *v {
-			match cv1.get().wait_until<type Bool>(&mut g, deadline) {
+			match cv1.get().wait_until<type Bool>(g, deadline) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(e) => {
 					if e.kind == conc.CONCURRENCY_KIND_TIMEOUT {

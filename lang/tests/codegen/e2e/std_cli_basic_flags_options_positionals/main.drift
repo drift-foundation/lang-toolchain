@@ -9,12 +9,12 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 	val _ = p.option_int("port", "p", "PORT", "tcp port", true);
 	val _ = p.positional("target", "target name", true, false);
 	val _ = p.positional("extra", "extra args", false, true);
-	match p.parse(&argv) {
+	match p.parse(argv) {
 		core.Result::Ok(parsed) => {
-			if not parsed.has_flag("verbose", &p) {
+			if not parsed.has_flag("verbose", p) {
 				return 1;
 			}
-			match parsed.get_int("port", &p) {
+			match parsed.get_int("port", p) {
 				Some(v) => {
 					if v != 3306 {
 						return 2;

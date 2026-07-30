@@ -5,7 +5,7 @@ import std.containers as containers;
 fn run() -> Int {
 	var m = containers.tree_map<type Int, Int>();
 	val k0 = 5;
-	var e0 = m.entry_mut(&k0);
+	var e0 = m.entry_mut(k0);
 	if e0.is_occupied() {
 		return 1;
 	}
@@ -13,7 +13,7 @@ fn run() -> Int {
 	if not ins0 {
 		return 2;
 	}
-	var e1 = m.entry_mut(&k0);
+	var e1 = m.entry_mut(k0);
 	if not e1.is_occupied() {
 		return 3;
 	}
@@ -30,7 +30,7 @@ fn run() -> Int {
 	if old_val != 10 {
 		return 5;
 	}
-	var e2 = m.entry_mut(&k0);
+	var e2 = m.entry_mut(k0);
 	val rem1 = e2.remove();
 	var rem1_ok = false;
 	var rem1_val = -1;
@@ -44,7 +44,7 @@ fn run() -> Int {
 	if rem1_val != 20 {
 		return 7;
 	}
-	var e3 = m.entry_mut(&k0);
+	var e3 = m.entry_mut(k0);
 	val rem2 = e3.remove();
 	var rem2_some = false;
 	val _ = match rem2 {

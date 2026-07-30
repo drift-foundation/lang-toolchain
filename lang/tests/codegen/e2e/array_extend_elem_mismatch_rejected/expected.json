@@ -1,0 +1,10 @@
+{
+  "description": "LANGUAGE_BUG regression (found during reject-redundant-call-borrows D2 review, 2026-07-29): Array<T>.extend() accepted a source array with a DIFFERENT element type and mislowered it (String payloads appended into an Int array; ran to exit 3). The source element type must match the receiver's element type and be rejected at typecheck.",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "extend() source element type"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import std.core as core;
 
 fn assert_num(node: &json.JsonNode, key: String, want: String, code: Int) -> Int {
 	val path = [key];
-	val num = node.expect_path(&path);
+	val num = node.expect_path(path);
 	match num.as_number_raw() {
 		Some(raw) => {
 			if raw != want {
@@ -22,7 +22,7 @@ fn assert_num(node: &json.JsonNode, key: String, want: String, code: Int) -> Int
 fn run() -> Int {
 	val text = "{\"a\":21.05,\"b\":-1.2,\"c\":0.5,\"d\":10.0,\"e\":2.99792458e8,\"f\":10e5,\"g\":1.5e-3,\"h\":1.0E+2,\"i\":-42.1,\"j\":-0.0001,\"k\":-5e-1}";
 	var root = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => {
 			root = move v;
 		},
@@ -30,27 +30,27 @@ fn run() -> Int {
 			return 1;
 		}
 	}
-	val r1 = assert_num(&root, "a", "21.05", 2);
+	val r1 = assert_num(root, "a", "21.05", 2);
 	if r1 != 0 { return r1; }
-	val r2 = assert_num(&root, "b", "-1.2", 3);
+	val r2 = assert_num(root, "b", "-1.2", 3);
 	if r2 != 0 { return r2; }
-	val r3 = assert_num(&root, "c", "0.5", 4);
+	val r3 = assert_num(root, "c", "0.5", 4);
 	if r3 != 0 { return r3; }
-	val r4 = assert_num(&root, "d", "10.0", 5);
+	val r4 = assert_num(root, "d", "10.0", 5);
 	if r4 != 0 { return r4; }
-	val r5 = assert_num(&root, "e", "2.99792458e8", 6);
+	val r5 = assert_num(root, "e", "2.99792458e8", 6);
 	if r5 != 0 { return r5; }
-	val r6 = assert_num(&root, "f", "10e5", 7);
+	val r6 = assert_num(root, "f", "10e5", 7);
 	if r6 != 0 { return r6; }
-	val r7 = assert_num(&root, "g", "1.5e-3", 8);
+	val r7 = assert_num(root, "g", "1.5e-3", 8);
 	if r7 != 0 { return r7; }
-	val r8 = assert_num(&root, "h", "1.0E+2", 9);
+	val r8 = assert_num(root, "h", "1.0E+2", 9);
 	if r8 != 0 { return r8; }
-	val r9 = assert_num(&root, "i", "-42.1", 10);
+	val r9 = assert_num(root, "i", "-42.1", 10);
 	if r9 != 0 { return r9; }
-	val r10 = assert_num(&root, "j", "-0.0001", 11);
+	val r10 = assert_num(root, "j", "-0.0001", 11);
 	if r10 != 0 { return r10; }
-	val r11 = assert_num(&root, "k", "-5e-1", 12);
+	val r11 = assert_num(root, "k", "-5e-1", 12);
 	if r11 != 0 { return r11; }
 	return 0;
 }

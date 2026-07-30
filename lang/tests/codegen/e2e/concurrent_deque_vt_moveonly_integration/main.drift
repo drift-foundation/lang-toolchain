@@ -22,7 +22,7 @@ pub struct OwnedResult
 
 implement core.Destructible for OwnedResult {
 	pub fn destroy(var self: OwnedResult) nothrow -> Void {
-		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+		val _ = atomic.atomic_fetch_add_int(self.destruct_count.get(), 1, 2);
 	}
 }
 
@@ -82,7 +82,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	if consumed != 3 { return 20; }
-	val n = atomic.atomic_load_int(&ctr.get(), 1);
+	val n = atomic.atomic_load_int(ctr.get(), 1);
 	/* Each consumed OwnedResult was destructed exactly once. */
 	if n != 3 { return 100 + n; }
 	return 0;

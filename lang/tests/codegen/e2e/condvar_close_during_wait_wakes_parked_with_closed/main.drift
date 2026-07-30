@@ -33,7 +33,7 @@ pub fn main() nothrow -> Int {
 		var g = m1.get().lock();
 		// Single wait() — no predicate loop, because the only legal
 		// outcome here is CLOSED (close() arrives while we're parked).
-		match cv1.get().wait<type Bool>(&mut g) {
+		match cv1.get().wait<type Bool>(g) {
 			core.Result::Ok(_) => { return 91; },  // spurious wake not expected here
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }

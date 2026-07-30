@@ -4,7 +4,7 @@ import std.json as json;
 import std.core as core;
 
 fn expect_parse_err(text: String, tag: String) -> Int {
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(_) => {
 			return 1;
 		},

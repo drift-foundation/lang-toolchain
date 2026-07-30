@@ -390,7 +390,7 @@ import iface_pkg as iface_pkg;
 pub fn main() nothrow -> Int {
 	var t = impl_pkg.open(10);
 	val req = iface_pkg.Req(path = "abcd");
-	val st = t.handle(&req);
+	val st = t.handle(req);
 	if st.code == 14 { return 0; }
 	return 1;
 }

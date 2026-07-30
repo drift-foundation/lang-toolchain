@@ -92,7 +92,7 @@ pub fn main() nothrow -> Int {
 \tval p = app.ping();
 \tif p != 2 { return 90; }
 
-\tval g = call_greet(&app, &req);
+\tval g = call_greet(app, req);
 \tif g != 1 { return 91; }
 
 \treturn 0;

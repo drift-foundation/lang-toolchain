@@ -272,11 +272,11 @@ def site_array_extend(shape_name: str, ty_info: dict, flavor: str | None) -> str
     assert_snippet = ty_info["assert_eq_heap"](f"dest[0]")
     return f"""
 	// Setup phase varies by shape; transfer site is always
-	// `dest.extend(&src_arr)` with src_arr a borrowed local array.
+	// `dest.extend(src_arr)` with src_arr a borrowed local array.
 	var src_arr: Array<{decl_ty}> = [];
 {decls}	src_arr.push({access});
 	var dest: Array<{decl_ty}> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 {{ return 1; }}
 	{assert_snippet}
 	if src_arr.len != 1 {{ return 2; }}
@@ -379,8 +379,8 @@ def site_extend_source(shape_name: str, ty_info: dict, flavor: str | None) -> st
     # populate-via-push step.  Complements `array_extend` (which
     # documented the populate-shape axis as approximate).
     #
-    # - hvar_local: `dest.extend(&src_arr)` — borrow of a local var.
-    # - hcall_rvalue: `dest.extend(&make_one_element_array())` — borrow
+    # - hvar_local: `dest.extend(src_arr)` — auto-borrow of a local var.
+    # - hcall_rvalue: bind the call result to a local, then extend
     #   of an rvalue.  May be rejected by Drift's borrow rules; if so,
     #   the failure is the contract — document and move on.
     # - projection: `dest.extend(&holder.items)` — borrow of a struct
@@ -390,7 +390,7 @@ def site_extend_source(shape_name: str, ty_info: dict, flavor: str | None) -> st
     assert_snippet = ty_info["assert_eq_heap"](f"dest[0]")
     if shape_name == "hvar_local":
         setup = f"\tvar src_arr: Array<{decl_ty}> = [];\n\tsrc_arr.push({seed});\n"
-        extend_call = "dest.extend(&src_arr);"
+        extend_call = "dest.extend(src_arr);"
         post_check = "\tif src_arr.len != 1 { return 4; }\n"
     elif shape_name == "hcall_rvalue":
         # Build a single-element array from a function call return.
@@ -398,7 +398,7 @@ def site_extend_source(shape_name: str, ty_info: dict, flavor: str | None) -> st
         # the borrow checker; bind to a local first to keep the
         # transfer site at extend rather than failing surface syntax.
         setup = f"\tval src_arr: Array<{decl_ty}> = make_one_element_array();\n"
-        extend_call = "dest.extend(&src_arr);"
+        extend_call = "dest.extend(src_arr);"
         post_check = "\tif src_arr.len != 1 { return 4; }\n"
     elif shape_name == "projection":
         # `move <expr>` requires an addressable place; bind the call
@@ -407,7 +407,7 @@ def site_extend_source(shape_name: str, ty_info: dict, flavor: str | None) -> st
             f"\tvar bag_items: Array<{decl_ty}> = arr_lit_factory();\n"
             f"\tval bag: ArrBag<{decl_ty}> = ArrBag(items = move bag_items);\n"
         )
-        extend_call = "dest.extend(&bag.items);"
+        extend_call = "dest.extend(bag.items);"
         post_check = "\tif bag.items.len != 1 { return 4; }\n"
     else:
         raise ValueError(f"unknown shape: {shape_name!r}")
@@ -868,7 +868,7 @@ def _token_match_bind_named_bind() -> str:
     return """fn scenario_named_bind() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		match m {
 			TokenMsg::Payload(v) => {
 				// Inside arm: Token is live as `v`.
@@ -894,7 +894,7 @@ def _token_match_bind_wildcard_ignore() -> str:
     return """fn scenario_wildcard_ignore() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		match m {
 			TokenMsg::Payload(_) => {
 				// Wildcard: no binder.  Payload destructor fires
@@ -918,7 +918,7 @@ def _token_match_bind_arm_bind_vs_ignore() -> str:
 	var sess_left: Session = Session(drops = 0);
 	var sess_right: Session = Session(drops = 0);
 	{
-		val left: TokenPair = TokenPair::Left(t = make_token(&mut sess_left));
+		val left: TokenPair = TokenPair::Left(t = make_token(sess_left));
 		match left {
 			TokenPair::Left(v) => {
 				if sess_left.drops != 0 { return 1; }
@@ -929,7 +929,7 @@ def _token_match_bind_arm_bind_vs_ignore() -> str:
 	}
 	if sess_left.drops != 1 { return 5; }
 	{
-		val right: TokenPair = TokenPair::Right(t = make_token(&mut sess_right));
+		val right: TokenPair = TokenPair::Right(t = make_token(sess_right));
 		match right {
 			TokenPair::Left(_) => { return 6; },
 			TokenPair::Right(_) => {
@@ -953,10 +953,10 @@ def _token_match_bind_reassignment_before_match() -> str:
 	var sess_old: Session = Session(drops = 0);
 	var sess_new: Session = Session(drops = 0);
 	{
-		var r: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess_old));
+		var r: TokenMsg = TokenMsg::Payload(t = make_token(sess_old));
 		// Pre-reassignment: old token alive.
 		if sess_old.drops != 0 { return 1; }
-		r = TokenMsg::Payload(t = make_token(&mut sess_new));
+		r = TokenMsg::Payload(t = make_token(sess_new));
 		// Post-reassignment: old token dropped (sess_old.drops == 1),
 		// new token alive (sess_new.drops == 0).  Exercises the
 		// MoveOut-zero-then-StoreLocal hardening in string_arc.py —
@@ -992,7 +992,7 @@ def _token_match_bind_nested_match() -> str:
     return """fn scenario_nested_match() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val inner: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val inner: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		val outer: TokenNest = TokenNest::Wrap(inner = move inner);
 		match outer {
 			TokenNest::Wrap(i) => {
@@ -1018,7 +1018,7 @@ def _token_match_bind_nested_match() -> str:
 
 def _token_match_bind_value_producing_match() -> str:
     # `val returned: Token = match m { Payload(v) => move v, default
-    # => make_token(&mut sess_fb) }`.  The Payload arm MOVES `v` out
+    # => make_token(sess_fb) }`.  The Payload arm MOVES `v` out
     # of the scrutinee and returns it as the match result → `returned`
     # owns the Token.
     #
@@ -1033,11 +1033,11 @@ def _token_match_bind_value_producing_match() -> str:
 	var sess: Session = Session(drops = 0);
 	var sess_fb: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		{
 			val returned: Token = match m {
 				TokenMsg::Payload(v) => { move v },
-				default => { make_token(&mut sess_fb) },
+				default => { make_token(sess_fb) },
 			};
 			// Crucial assertion: the returned Token is live; destroy
 			// has NOT fired.  If the compiler incorrectly dropped `v`
@@ -1143,8 +1143,8 @@ def _render_fixture_token_match_bind() -> str:
 #
 # SHAPES — two for Token (projection of a non-Copy struct field is
 # complex and deferred):
-#   - hvar_move:    `val tok = make_token(&mut sess); <site>(move tok);`
-#   - hcall_rvalue: `<site>(make_token(&mut sess));`
+#   - hvar_move:    `val tok = make_token(sess); <site>(move tok);`
+#   - hcall_rvalue: `<site>(make_token(sess));`
 #
 # SITES supported for Token (see TOKEN_SITES dict below):
 #   - struct_ctor, variant_ctor
@@ -1190,7 +1190,7 @@ fn make_token(sess: &mut Session) nothrow -> Token {
 TOKEN_SHAPES = ("hvar_move", "hcall_rvalue")
 
 
-def token_access(shape_name: str, sess_expr: str = "&mut sess") -> tuple[str, str]:
+def token_access(shape_name: str, sess_expr: str = "sess") -> tuple[str, str]:
     """Return (setup-decls, access-expression) for a Token-transfer
     scenario.  `sess_expr` is the expression that yields `&mut Session`
     — at the scenario level where `sess` is a `Session` local this is
@@ -1264,7 +1264,7 @@ def token_site_return_value(shape: str) -> str:
     # shape; caller receives it and lets it drop at the end of the
     # wrapping block.
     return f"""	{{
-		val v: Token = produce_{shape}(&mut sess);
+		val v: Token = produce_{shape}(sess);
 		if sess.drops != 0 {{ return 1; }}
 	}}
 """
@@ -1278,7 +1278,7 @@ def token_site_local_assign(shape: str) -> str:
     decls, access = token_access(shape)
     return f"""	{{
 		var dst_sess: Session = Session(drops = 0);
-		var dst: Token = make_token(&mut dst_sess);
+		var dst: Token = make_token(dst_sess);
 {decls}		dst = {access};
 		if sess.drops != 0 {{ return 1; }}
 	}}
@@ -1421,7 +1421,7 @@ _SHAPE_LINE_COPY = (
 
 _SHAPE_LINE_TOKEN = (
     "// Exercises both Token value shapes (hvar_move via explicit\n"
-    "// `move tok`, and hcall_rvalue via `make_token(&mut sess)`\n"
+    "// `move tok`, and hcall_rvalue via `make_token(sess)`\n"
     "// directly); projection is deferred for non-Copy types.  Every\n"
     "// scenario observes `sess.drops` via an `&mut Session` side\n"
     "// channel to assert the Token is destroyed exactly once.\n"
@@ -1583,7 +1583,7 @@ def render_expected(site: str, ty_name: str, flavor: str | None) -> str:
             f"sess.drops == 0 while the token is in flight through the "
             f"transfer site, then sess.drops == 1 after the destination "
             f"container goes out of scope.  Shapes: hvar_move (`move tok`) "
-            f"and hcall_rvalue (`make_token(&mut sess)` directly).  Must "
+            f"and hcall_rvalue (`make_token(sess)` directly).  Must "
             f"pass plain + ASAN + memcheck."
         )
         return json.dumps({"description": desc, "exit_code": 0}, indent=2) + "\n"
@@ -1594,7 +1594,7 @@ def render_expected(site: str, ty_name: str, flavor: str | None) -> str:
         shape_note = (
             "Value shapes vary the upstream setup (single push into "
             "src_arr) only — extend's transfer site is always "
-            "`dest.extend(&src_arr)` with src_arr a borrowed local."
+            "`dest.extend(src_arr)` with src_arr a borrowed local."
         )
     elif site == "extend_source":
         # Honest accounting: extend_source varies the source-array

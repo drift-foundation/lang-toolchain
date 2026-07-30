@@ -48,22 +48,22 @@ pub fn main() nothrow -> Int {
 	val _cfg: core.Result<json.JsonParseConfig, json.JsonErrorData> = b.build();
 
 	val src = "{\\"a\\":1}";
-	val _r1: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_with_config(&src, &_p);
-	val _r2: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_strict(&src);
+	val _r1: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_with_config(src, _p);
+	val _r2: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_strict(src);
 
 	// located surface
-	match json.parse_located(&src, &_s) {
+	match json.parse_located(src, _s) {
 		core.Result::Ok(doc) => {
 			val c: json.LocatedCursor = doc.cursor();
 			val _sp: json.JsonByteSpan = c.span();
 			val _ptr: String = c.pointer();
-			val _f = c.require_field(&"a");
-			val _o = c.optional(&"a");
+			val _f = c.require_field("a");
+			val _o = c.optional("a");
 			var allowed: Array<String> = ["a"];
-			val _u = c.forbid_unknown(&allowed);
-			val _d = c.discriminant(&"a");
+			val _u = c.forbid_unknown(allowed);
+			val _d = c.discriminant("a");
 			val _ai = c.as_int();
-			val _ap = doc.at_pointer(&"/a");
+			val _ap = doc.at_pointer("/a");
 		},
 		core.Result::Err(_) => { }
 	}
@@ -83,9 +83,9 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val src = "{\\"a\\":1}";
-	match json.parse(&src) {
+	match json.parse(src) {
 		core.Result::Ok(node) => {
-			val _r: core.Result<String, json.JsonErrorData> = json.encode_canonical(&node);
+			val _r: core.Result<String, json.JsonErrorData> = json.encode_canonical(node);
 		},
 		core.Result::Err(_) => { }
 	}

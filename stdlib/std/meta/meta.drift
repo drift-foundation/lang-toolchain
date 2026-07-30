@@ -39,12 +39,12 @@ implement Caller {
 
 	/// Returns the byte length of `module_id`.
 	pub fn module_id_len(self: &Caller) nothrow -> Int {
-		return byte_length(&self.module_id_v);
+		return byte_length(self.module_id_v);
 	}
 
 	/// Returns the byte length of `file`.
 	pub fn file_len(self: &Caller) nothrow -> Int {
-		return byte_length(&self.file_v);
+		return byte_length(self.file_v);
 	}
 }
 
@@ -99,23 +99,23 @@ pub fn compiler_info_pairs() nothrow -> Array<CompilerTag> {
 	while i < n {
 		var at_delim = false;
 		if i + 2 < n {
-			if core.string_byte_at(&info, i) == cast<Byte>(32) {
-				if core.string_byte_at(&info, i + 1) == cast<Byte>(124) {
-					if core.string_byte_at(&info, i + 2) == cast<Byte>(32) {
+			if core.string_byte_at(info, i) == cast<Byte>(32) {
+				if core.string_byte_at(info, i + 1) == cast<Byte>(124) {
+					if core.string_byte_at(info, i + 2) == cast<Byte>(32) {
 						at_delim = true;
 					}
 				}
 			}
 		}
 		if at_delim {
-			_parse_tag(&info, seg_start, i, &mut result);
+			_parse_tag(info, seg_start, i, result);
 			seg_start = i + 3;
 			i = i + 3;
 		} else {
 			i = i + 1;
 		}
 	}
-	_parse_tag(&info, seg_start, n, &mut result);
+	_parse_tag(info, seg_start, n, result);
 	return move result;
 }
 

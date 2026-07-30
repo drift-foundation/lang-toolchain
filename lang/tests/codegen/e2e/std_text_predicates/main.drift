@@ -12,43 +12,43 @@ pub fn main() nothrow -> Int {
 	val mixed = "Hello";
 
 	// ── is_empty ────────────────────────────────────────────────
-	if !text.is_empty(&empty) { return 1; }
+	if !text.is_empty(empty) { return 1; }
 	if text.is_empty("x") { return 2; }
 
 	// ── is_blank ────────────────────────────────────────────────
-	if !text.is_blank(&empty) { return 10; }
-	if !text.is_blank(&spaces) { return 11; }
-	if text.is_blank(&alpha) { return 12; }
+	if !text.is_blank(empty) { return 10; }
+	if !text.is_blank(spaces) { return 11; }
+	if text.is_blank(alpha) { return 12; }
 
 	// ── is_numeric ──────────────────────────────────────────────
-	if !text.is_numeric(&digits) { return 20; }
-	if text.is_numeric(&alpha) { return 21; }
-	if text.is_numeric(&alnum) { return 22; }
-	if text.is_numeric(&empty) { return 23; }
+	if !text.is_numeric(digits) { return 20; }
+	if text.is_numeric(alpha) { return 21; }
+	if text.is_numeric(alnum) { return 22; }
+	if text.is_numeric(empty) { return 23; }
 
 	// ── is_alphanumeric ─────────────────────────────────────────
-	if !text.is_alphanumeric(&alnum) { return 30; }
-	if !text.is_alphanumeric(&alpha) { return 31; }
-	if !text.is_alphanumeric(&digits) { return 32; }
-	if text.is_alphanumeric(&empty) { return 33; }
+	if !text.is_alphanumeric(alnum) { return 30; }
+	if !text.is_alphanumeric(alpha) { return 31; }
+	if !text.is_alphanumeric(digits) { return 32; }
+	if text.is_alphanumeric(empty) { return 33; }
 	val punct = "hello!";
-	if text.is_alphanumeric(&punct) { return 34; }
+	if text.is_alphanumeric(punct) { return 34; }
 
 	// ── is_lowercase ────────────────────────────────────────────
-	if !text.is_lowercase(&alpha) { return 40; }
-	if text.is_lowercase(&upper_str) { return 41; }
-	if text.is_lowercase(&mixed) { return 42; }
-	if text.is_lowercase(&empty) { return 43; }
+	if !text.is_lowercase(alpha) { return 40; }
+	if text.is_lowercase(upper_str) { return 41; }
+	if text.is_lowercase(mixed) { return 42; }
+	if text.is_lowercase(empty) { return 43; }
 	// digits-only: no uppercase letters → true
-	if !text.is_lowercase(&digits) { return 44; }
+	if !text.is_lowercase(digits) { return 44; }
 
 	// ── is_uppercase ────────────────────────────────────────────
-	if !text.is_uppercase(&upper_str) { return 50; }
-	if text.is_uppercase(&alpha) { return 51; }
-	if text.is_uppercase(&mixed) { return 52; }
-	if text.is_uppercase(&empty) { return 53; }
+	if !text.is_uppercase(upper_str) { return 50; }
+	if text.is_uppercase(alpha) { return 51; }
+	if text.is_uppercase(mixed) { return 52; }
+	if text.is_uppercase(empty) { return 53; }
 	// digits-only: no lowercase letters → true
-	if !text.is_uppercase(&digits) { return 54; }
+	if !text.is_uppercase(digits) { return 54; }
 
 	return 0;
 }

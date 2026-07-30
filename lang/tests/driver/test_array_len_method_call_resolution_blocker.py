@@ -117,9 +117,9 @@ pub fn main() nothrow -> Int {
 	var a: Array<Int> = [];
 	a.push(1);
 	a.push(2);
-	val r = _ref(&a);
+	val r = _ref(a);
 	if r != 2 { return r; }
-	val rm = _refmut(&mut a);
+	val rm = _refmut(a);
 	if rm != 2 { return rm; }
 	val cg = _cap_gen();
 	if cg != 0 { return cg; }

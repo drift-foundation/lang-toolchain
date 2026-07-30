@@ -36,7 +36,7 @@ pub fn main() nothrow -> Int {
 		var g = m1.get().lock();
 		val v = g.get_mut();
 		while not *v {
-			match cv1.get().wait(&mut g) {
+			match cv1.get().wait(g) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(_) => { return 81; }
 			}
@@ -50,7 +50,7 @@ pub fn main() nothrow -> Int {
 		var g = m2.get().lock();
 		val v = g.get_mut();
 		while not *v {
-			match cv2.get().wait(&mut g) {
+			match cv2.get().wait(g) {
 				core.Result::Ok(_) => { },
 				core.Result::Err(_) => { return 82; }
 			}
@@ -89,7 +89,7 @@ pub fn main() nothrow -> Int {
 	val m3 = pred_lock.clone();
 	var w3 = conc.spawn_cb(core.callback0(| | captures(move cv3, move m3) nothrow => {
 		var g = m3.get().lock();
-		match cv3.get().wait(&mut g) {
+		match cv3.get().wait(g) {
 			core.Result::Ok(_) => { return 91; },
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_CLOSED { return 0; }

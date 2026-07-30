@@ -46,11 +46,11 @@ pub fn random_secure_bytes(n: Int) nothrow -> core.Result<Array<Byte>, RandomErr
 		return core.Result::Ok(move empty);
 	}
 	var buf = unsafe { thread.array_byte_alloc_uninit(n) };
-	val ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };
+	val ptr = unsafe { thread.array_byte_as_mut_ptr(buf) };
 	val rc = unsafe { thread.random_fill(ptr, n) };
 	if rc != 0 {
 		return core.Result::Err(RandomError(tag = "os-random-failed", errno = 0 - rc));
 	}
-	unsafe { thread.array_byte_commit_init_len(&mut buf, n); }
+	unsafe { thread.array_byte_commit_init_len(buf, n); }
 	return core.Result::Ok(move buf);
 }

@@ -6,12 +6,12 @@ import std.json as json;
 fn run() -> Int {
 	val text = "{\"users\":[{\"id\":1},{\"id\":2}]}";
 	var node = json.JsonNode::Null();
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(v) => { node = move v; },
 		core.Result::Err(_) => { return 10; }
 	}
 	var users_path = ["users"];
-	val users_node = node.expect_path(&users_path);
+	val users_node = node.expect_path(users_path);
 	val users = users_node.expect_array("users", "users");
 	var count = 0;
 	for val item : users {

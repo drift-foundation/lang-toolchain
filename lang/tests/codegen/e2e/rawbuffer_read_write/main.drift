@@ -4,15 +4,15 @@ import std.mem as mem;
 
 pub fn main() nothrow -> Int {
 	var buf = unsafe { mem.alloc_uninit<type Int>(2) };
-	unsafe { mem.write<type Int>(&mut buf, 1, 123); }
-	val x = unsafe { mem.read<type Int>(&mut buf, 1) };
+	unsafe { mem.write<type Int>(buf, 1, 123); }
+	val x = unsafe { mem.read<type Int>(buf, 1) };
 	unsafe { mem.dealloc<type Int>(buf); }
 
 	var bbuf = unsafe { mem.alloc_uninit<type Bool>(2) };
-	unsafe { mem.write<type Bool>(&mut bbuf, 1, true); }
-	val b1 = unsafe { mem.read<type Bool>(&mut bbuf, 1) };
-	unsafe { mem.write<type Bool>(&mut bbuf, 0, false); }
-	val b0 = unsafe { mem.read<type Bool>(&mut bbuf, 0) };
+	unsafe { mem.write<type Bool>(bbuf, 1, true); }
+	val b1 = unsafe { mem.read<type Bool>(bbuf, 1) };
+	unsafe { mem.write<type Bool>(bbuf, 0, false); }
+	val b0 = unsafe { mem.read<type Bool>(bbuf, 0) };
 	unsafe { mem.dealloc<type Bool>(bbuf); }
 
 	var sum = x;

@@ -10,13 +10,13 @@ fn run_main() throws -> Int {
 	val t = conc.Duration(millis = 5000);
 	val f = io.file_builder("example.txt").read(false).write(true).create(true).truncate(true).timeout(t).build().or_throw();
 	var buf = io.buffer(6);
-	io.buffer_write(&mut buf, 0, cast<Byte>(72));
-	io.buffer_write(&mut buf, 1, cast<Byte>(101));
-	io.buffer_write(&mut buf, 2, cast<Byte>(108));
-	io.buffer_write(&mut buf, 3, cast<Byte>(108));
-	io.buffer_write(&mut buf, 4, cast<Byte>(111));
-	io.buffer_write(&mut buf, 5, cast<Byte>(10));
-	val n = f.write(&buf).or_throw();
+	io.buffer_write(buf, 0, cast<Byte>(72));
+	io.buffer_write(buf, 1, cast<Byte>(101));
+	io.buffer_write(buf, 2, cast<Byte>(108));
+	io.buffer_write(buf, 3, cast<Byte>(108));
+	io.buffer_write(buf, 4, cast<Byte>(111));
+	io.buffer_write(buf, 5, cast<Byte>(10));
+	val n = f.write(buf).or_throw();
 	if n != 6 { return 2; }
 	f.close().or_throw();
 	return 0;

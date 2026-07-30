@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows D2: compiler-internal reference formals count as declared \u2014 bare source at Array.extend(src: &Array<T>) auto-borrows",
+  "exit_code": 4,
+  "stderr": "",
+  "stdout": ""
+}

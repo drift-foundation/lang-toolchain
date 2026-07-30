@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 2: source-written & of a local at a declared &String formal is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'name' directly"
+    }
+  ]
+}

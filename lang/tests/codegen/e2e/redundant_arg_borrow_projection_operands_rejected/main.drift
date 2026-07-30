@@ -1,0 +1,18 @@
+module main;
+
+struct P { name: String }
+
+fn read_len(arg: &String) nothrow -> Int {
+	return arg.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	val name: String = "hello";
+	val p = P(name = "x");
+	val arr: Array<String> = ["y"];
+	val a = read_len(&p.name);
+	val b = read_len(&arr[0]);
+	val c = read_len(&(name));
+	val d = read_len(& name);
+	return a + b + c + d;
+}

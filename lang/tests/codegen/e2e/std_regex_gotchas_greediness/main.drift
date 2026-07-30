@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -22,7 +22,7 @@ fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, f
 fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			if regex.is_match(&re, input) != expected { return fail_code; }
+			if regex.is_match(re, input) != expected { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -44,8 +44,8 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_all(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_code; }
+			val got = regex.replace_all(re, input, repl);
+			if !str_eq(got, expected) { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -78,16 +78,16 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// a.*b on "aXbYb": greedy .* consumes maximally → match is 0..5 (whole string).
-	rc = check_match(&"a.*b", &"aXbYb", 0, 5, 10);
+	rc = check_match("a.*b", "aXbYb", 0, 5, 10);
 	if rc != 0 { return rc; }
 
 	// a.*b on "aXbYbZ": greedy .* extends to last b → match is 0..5.
-	rc = check_match(&"a.*b", &"aXbYbZ", 0, 5, 14);
+	rc = check_match("a.*b", "aXbYbZ", 0, 5, 14);
 	if rc != 0 { return rc; }
 
 	// a.*?b would be non-greedy (not supported in v1) — but a.b is fixed-length.
 	// a.b on "aXbYb": first match at 0..3 (not 2..5).
-	rc = check_match(&"a.b", &"aXbYb", 0, 3, 18);
+	rc = check_match("a.b", "aXbYb", 0, 3, 18);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -95,11 +95,11 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// [a-z]* on "abcDEF": greedy → consumes "abc" (3 bytes), stops at D.
-	rc = check_match(&"[a-z]+", &"abcDEF", 0, 3, 22);
+	rc = check_match("[a-z]+", "abcDEF", 0, 3, 22);
 	if rc != 0 { return rc; }
 
 	// [a-z]* on "ABCdef": starts at 3 (first lowercase), greedy → 3..6.
-	rc = check_match(&"[a-z]+", &"ABCdef", 3, 6, 26);
+	rc = check_match("[a-z]+", "ABCdef", 3, 6, 26);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -107,15 +107,15 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// a+ on "baaab": leftmost a at 1, greedy → consumes all a's → 1..4.
-	rc = check_match(&"a+", &"baaab", 1, 4, 30);
+	rc = check_match("a+", "baaab", 1, 4, 30);
 	if rc != 0 { return rc; }
 
 	// .+ on "abc": greedy → entire string → 0..3.
-	rc = check_match(&".+", &"abc", 0, 3, 34);
+	rc = check_match(".+", "abc", 0, 3, 34);
 	if rc != 0 { return rc; }
 
 	// a.*a on "aXaYa": greedy .* → match is 0..5 (first a to last a).
-	rc = check_match(&"a.*a", &"aXaYa", 0, 5, 38);
+	rc = check_match("a.*a", "aXaYa", 0, 5, 38);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -124,21 +124,21 @@ pub fn main() nothrow -> Int {
 
 	// ab|abc on "xabc": at start 1, both "ab" and "abc" match.
 	// Thompson NFA explores both simultaneously; longest wins → 1..4.
-	rc = check_match(&"ab|abc", &"xabc", 1, 4, 42);
+	rc = check_match("ab|abc", "xabc", 1, 4, 42);
 	if rc != 0 { return rc; }
 
 	// a|ab on "xab": at start 1, branch "a" matches 1..2, branch "ab" matches 1..3.
 	// Leftmost-longest → 1..3.
-	rc = check_match(&"a|ab", &"xab", 1, 3, 46);
+	rc = check_match("a|ab", "xab", 1, 3, 46);
 	if rc != 0 { return rc; }
 
 	// cat|catfish on "xcatfishy": "cat" matches 1..4, "catfish" matches 1..8.
 	// Leftmost-longest → 1..8.
-	rc = check_match(&"cat|catfish", &"xcatfishy", 1, 8, 50);
+	rc = check_match("cat|catfish", "xcatfishy", 1, 8, 50);
 	if rc != 0 { return rc; }
 
 	// Reverse order: catfish|cat — same result due to Thompson NFA.
-	rc = check_match(&"catfish|cat", &"xcatfishy", 1, 8, 54);
+	rc = check_match("catfish|cat", "xcatfishy", 1, 8, 54);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -147,11 +147,11 @@ pub fn main() nothrow -> Int {
 
 	// a|bbb on "abbb": "a" matches at 0..1, "bbb" would match at 1..4.
 	// Leftmost start wins → 0..1.
-	rc = check_match(&"a|bbb", &"abbb", 0, 1, 58);
+	rc = check_match("a|bbb", "abbb", 0, 1, 58);
 	if rc != 0 { return rc; }
 
 	// bbb|a on "abbb": still leftmost start wins → "a" at 0..1.
-	rc = check_match(&"bbb|a", &"abbb", 0, 1, 62);
+	rc = check_match("bbb|a", "abbb", 0, 1, 62);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -159,16 +159,16 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// a* on "bbb": at position 0, a* matches zero-length → 0..0.
-	rc = check_match(&"a*", &"bbb", 0, 0, 66);
+	rc = check_match("a*", "bbb", 0, 0, 66);
 	if rc != 0 { return rc; }
 
 	// a+ on "bbb": no match at any position.
-	rc = check_is_match(&"a+", &"bbb", false, 70);
+	rc = check_is_match("a+", "bbb", false, 70);
 	if rc != 0 { return rc; }
 
 	// a* on "baab": at position 0, zero-length match → 0..0 (leftmost).
 	// NOT 1..3 (which would be longer but at a later start).
-	rc = check_match(&"a*", &"baab", 0, 0, 72);
+	rc = check_match("a*", "baab", 0, 0, 72);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -176,15 +176,15 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// (ab)+ on "ababab": greedy → consumes all three "ab" → 0..6.
-	rc = check_match(&"(ab)+", &"ababab", 0, 6, 76);
+	rc = check_match("(ab)+", "ababab", 0, 6, 76);
 	if rc != 0 { return rc; }
 
 	// (ab)+ on "xababx": leftmost at 1, greedy → 1..5.
-	rc = check_match(&"(ab)+", &"xababx", 1, 5, 80);
+	rc = check_match("(ab)+", "xababx", 1, 5, 80);
 	if rc != 0 { return rc; }
 
 	// (a|b)+ on "aabb": greedy → consumes everything → 0..4.
-	rc = check_match(&"(a|b)+", &"aabb", 0, 4, 84);
+	rc = check_match("(a|b)+", "aabb", 0, 4, 84);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -192,16 +192,16 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// a+ replace on "aabaa": first match 0..2 ("aa"), then 3..5 ("aa").
-	rc = check_replace_all(&"a+", &"aabaa", &"X", &"XbX", 88);
+	rc = check_replace_all("a+", "aabaa", "X", "XbX", 88);
 	if rc != 0 { return rc; }
 
 	// .* replace on "abc": greedy matches entire string, then zero-length at end.
 	// Result: "X" (whole string replaced) + "X" (zero-length at pos 3) = "XX".
-	rc = check_replace_all(&".*", &"abc", &"X", &"XX", 90);
+	rc = check_replace_all(".*", "abc", "X", "XX", 90);
 	if rc != 0 { return rc; }
 
 	// .+ replace on "abc": greedy matches "abc", no further match.
-	rc = check_replace_all(&".+", &"abc", &"X", &"X", 92);
+	rc = check_replace_all(".+", "abc", "X", "X", 92);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -209,15 +209,15 @@ pub fn main() nothrow -> Int {
 	// -------------------------------------------------------------------
 
 	// a? on "aa": greedy → matches "a" at 0..1 (not zero-length).
-	rc = check_match(&"a?", &"aa", 0, 1, 94);
+	rc = check_match("a?", "aa", 0, 1, 94);
 	if rc != 0 { return rc; }
 
 	// ab? on "a": b is optional, greedy tries b first but fails → match "a" at 0..1.
-	rc = check_match(&"ab?", &"a", 0, 1, 98);
+	rc = check_match("ab?", "a", 0, 1, 98);
 	if rc != 0 { return rc; }
 
 	// ab? on "ab": greedy → matches "ab" at 0..2.
-	rc = check_match(&"ab?", &"ab", 0, 2, 102);
+	rc = check_match("ab?", "ab", 0, 2, 102);
 	if rc != 0 { return rc; }
 
 	return 0;

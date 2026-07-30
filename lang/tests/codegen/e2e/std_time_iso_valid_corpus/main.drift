@@ -6,13 +6,13 @@ import std.time as time;
 fn expect_ok(s: String, canon: String) -> Int {
 	match time.parse_iso8601_utc(s) {
 		core.Result::Ok(ts) => {
-			val out = time.format_iso8601_utc(&ts);
+			val out = time.format_iso8601_utc(ts);
 			if out != canon {
 				return 1;
 			}
 			match time.parse_iso8601_utc(out) {
 				core.Result::Ok(ts2) => {
-					if time.format_iso8601_utc(&ts2) != canon {
+					if time.format_iso8601_utc(ts2) != canon {
 						return 2;
 					}
 				},

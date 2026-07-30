@@ -8,20 +8,20 @@ import std.net as net;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
 	val io_t = conc.Duration(millis = 1000);
-	var lr = net.listen(&addr, io_t);
+	var lr = net.listen(addr, io_t);
 	match lr {
 		Ok(l) => {
 			val port = l.test_local_port();
 			var t = conc.spawn(| | captures(copy port, copy io_t) => {
 				var caddr = net.socket_addr("127.0.0.1", port);
-				var cr = net.connect(&caddr, io_t);
+				var cr = net.connect(caddr, io_t);
 				match cr {
 					Ok(s) => {
 						var buf = io.buffer(1024);
 						val sbyte = "a";
-						val b = core.string_byte_at(&sbyte, 0);
-						io.buffer_write(&mut buf, 0, b);
-						var wr = s.write(&buf, io_t);
+						val b = core.string_byte_at(sbyte, 0);
+						io.buffer_write(buf, 0, b);
+						var wr = s.write(buf, io_t);
 						match wr {
 							Ok(_) => { },
 							Err(_) => { return 3; },
@@ -34,11 +34,11 @@ pub fn main() nothrow -> Int {
 					default => { return 6; }
 				}
 			});
-			var ar = net.accept(&l, io_t);
+			var ar = net.accept(l, io_t);
 			match ar {
 				Ok(s2) => {
 					var buf = io.buffer(1024);
-					var rr = s2.read(&mut buf, io_t);
+					var rr = s2.read(buf, io_t);
 					match rr {
 						Ok(_) => { },
 						Err(_) => { return 8; },

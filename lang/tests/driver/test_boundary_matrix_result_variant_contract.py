@@ -100,7 +100,7 @@ fn query(s: &mut Session) nothrow -> core.Result<Statement, Int> {
 }
 pub fn main() nothrow -> Int {
 	var sess = Session(id = 41);
-	match query(&mut sess) {
+	match query(sess) {
 		core.Result::Ok(st) => {
 			if st.session.id != 41 { return 1; }
 			return 0;

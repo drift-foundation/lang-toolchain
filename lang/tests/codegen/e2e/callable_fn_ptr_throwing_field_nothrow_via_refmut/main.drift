@@ -13,7 +13,7 @@ fn swap(target: &mut Fn(Int, Int) nothrow -> Int) nothrow -> Void {
 
 fn run() -> Int {
 	var f: Fn(Int, Int) nothrow -> Int = add;
-	swap(&mut f);
+	swap(f);
 	val op = MathOp(apply = f);
 	val g = op.apply;
 	val result = g(10, 3);

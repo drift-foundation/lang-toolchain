@@ -15,27 +15,27 @@ fn _push_ascii(out: &mut Array<Byte>, s: &String) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 	var empty: Array<Byte> = [];
-	val h0 = crypto.sha256(&empty);
-	if codec.hex_encode(&h0) != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
+	val h0 = crypto.sha256(empty);
+	if codec.hex_encode(h0) != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
 		return 1;
 	}
 
 	var abc: Array<Byte> = [];
-	_push_ascii(&mut abc, "abc");
-	val h1 = crypto.sha256(&abc);
-	if codec.hex_encode(&h1) != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+	_push_ascii(abc, "abc");
+	val h1 = crypto.sha256(abc);
+	if codec.hex_encode(h1) != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
 		return 2;
 	}
 
 	var multi: Array<Byte> = [];
-	_push_ascii(&mut multi, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
-	val h2 = crypto.sha256(&multi);
-	if codec.hex_encode(&h2) != "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" {
+	_push_ascii(multi, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq");
+	val h2 = crypto.sha256(multi);
+	if codec.hex_encode(h2) != "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" {
 		return 3;
 	}
 
-	val h3 = crypto.sha256(&empty);
-	if codec.hex_encode(&h3) != codec.hex_encode(&h0) {
+	val h3 = crypto.sha256(empty);
+	if codec.hex_encode(h3) != codec.hex_encode(h0) {
 		return 4;
 	}
 

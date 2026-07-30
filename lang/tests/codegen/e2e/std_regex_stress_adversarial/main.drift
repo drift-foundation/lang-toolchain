@@ -18,8 +18,8 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 
 fn byte_to_string(ch: Byte) nothrow -> String {
 	var b = io.buffer(1);
-	io.buffer_write(&mut b, 0, ch);
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), 1);
+	io.buffer_write(b, 0, ch);
+	return core.string_from_utf8_bytes(io.buffer_ptr(b), 1);
 }
 
 fn repeat_char(ch: Byte, n: Int) nothrow -> String {
@@ -35,7 +35,7 @@ fn repeat_char(ch: Byte, n: Int) nothrow -> String {
 fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			if regex.is_match(&re, input) != expected { return fail_code; }
+			if regex.is_match(re, input) != expected { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -45,8 +45,8 @@ fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: I
 fn check_replace_all(pattern: &String, input: &String, repl: &String, expected: &String, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.replace_all(&re, input, repl);
-			if !str_eq(&got, expected) { return fail_code; }
+			val got = regex.replace_all(re, input, repl);
+			if !str_eq(got, expected) { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -90,7 +90,7 @@ pub fn main() nothrow -> Int {
 	}
 	val inp1 = repeat_char(cast<Byte>(97), n1);
 
-	rc = check_is_match(&pat1, &inp1, true, 10);
+	rc = check_is_match(pat1, inp1, true, 10);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -103,12 +103,12 @@ pub fn main() nothrow -> Int {
 
 	val n2 = 25;
 	val inp2 = repeat_char(cast<Byte>(97), n2);
-	rc = check_is_match(&"(a+)+b", &inp2, false, 20);
+	rc = check_is_match("(a+)+b", inp2, false, 20);
 	if rc != 0 { return rc; }
 
 	// Same but with a trailing b → should match.
 	val inp2b = repeat_char(cast<Byte>(97), n2) + "b";
-	rc = check_is_match(&"(a+)+b", &inp2b, true, 22);
+	rc = check_is_match("(a+)+b", inp2b, true, 22);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -120,7 +120,7 @@ pub fn main() nothrow -> Int {
 
 	val n3 = 50;
 	val inp3 = repeat_char(cast<Byte>(97), n3);
-	rc = check_is_match(&"(a|a)*", &inp3, true, 30);
+	rc = check_is_match("(a|a)*", inp3, true, 30);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -132,12 +132,12 @@ pub fn main() nothrow -> Int {
 
 	val n4 = 60;
 	val inp4 = repeat_char(cast<Byte>(97), n4);
-	rc = check_is_match(&".*.*.*b", &inp4, false, 40);
+	rc = check_is_match(".*.*.*b", inp4, false, 40);
 	if rc != 0 { return rc; }
 
 	// With trailing b → should match.
 	val inp4b = repeat_char(cast<Byte>(97), n4) + "b";
-	rc = check_is_match(&".*.*.*b", &inp4b, true, 42);
+	rc = check_is_match(".*.*.*b", inp4b, true, 42);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -149,11 +149,11 @@ pub fn main() nothrow -> Int {
 
 	val n5 = 40;
 	val inp5 = repeat_char(cast<Byte>(97), n5);
-	rc = check_is_match(&"(a*)*b", &inp5, false, 50);
+	rc = check_is_match("(a*)*b", inp5, false, 50);
 	if rc != 0 { return rc; }
 
 	val inp5b = repeat_char(cast<Byte>(97), n5) + "b";
-	rc = check_is_match(&"(a*)*b", &inp5b, true, 52);
+	rc = check_is_match("(a*)*b", inp5b, true, 52);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -165,17 +165,17 @@ pub fn main() nothrow -> Int {
 
 	val n6 = 80;
 	val inp6 = repeat_char(cast<Byte>(97), n6);
-	match regex.compile(&"") {
+	match regex.compile("") {
 		core.Result::Ok(re) => {
-			val got = regex.replace_all(&re, &inp6, &"-");
+			val got = regex.replace_all(re, inp6, "-");
 			// Expected length: n6 + (n6+1) = 80 + 81 = 161 bytes.
 			if got.byte_length() != 161 { return 60; }
 			// First byte should be '-'.
-			if core.string_byte_at(&got, 0) != cast<Byte>(45) { return 61; }
+			if core.string_byte_at(got, 0) != cast<Byte>(45) { return 61; }
 			// Second byte should be 'a'.
-			if core.string_byte_at(&got, 1) != cast<Byte>(97) { return 62; }
+			if core.string_byte_at(got, 1) != cast<Byte>(97) { return 62; }
 			// Last byte should be '-'.
-			if core.string_byte_at(&got, 160) != cast<Byte>(45) { return 63; }
+			if core.string_byte_at(got, 160) != cast<Byte>(45) { return 63; }
 		},
 		core.Result::Err(_) => { return 64; }
 	}
@@ -188,13 +188,13 @@ pub fn main() nothrow -> Int {
 	// when a longer branch also matches.
 	// -------------------------------------------------------------------
 
-	rc = check_is_match(&"aaaa|aab|a", &"aab", true, 70);
+	rc = check_is_match("aaaa|aab|a", "aab", true, 70);
 	if rc != 0 { return rc; }
 
 	// find_first should select "aab" (0..3), not "a" (0..1).
-	match regex.compile(&"aaaa|aab|a") {
+	match regex.compile("aaaa|aab|a") {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, &"aab") {
+			match regex.find_first(re, "aab") {
 				Optional::Some(m) => {
 					if m.start != 0 { return 72; }
 					if m.end != 3 { return 73; }
@@ -212,11 +212,11 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	val mixed = "abc123def456ghi";
-	rc = check_replace_all(&"[a-z]+", &mixed, &"_", &"_123_456_", 80);
+	rc = check_replace_all("[a-z]+", mixed, "_", "_123_456_", 80);
 	if rc != 0 { return rc; }
 
 	// [0-9]+ replaces digit runs.
-	rc = check_replace_all(&"[0-9]+", &mixed, &"#", &"abc#def#ghi", 82);
+	rc = check_replace_all("[0-9]+", mixed, "#", "abc#def#ghi", 82);
 	if rc != 0 { return rc; }
 
 	// -------------------------------------------------------------------
@@ -228,9 +228,9 @@ pub fn main() nothrow -> Int {
 	val n9 = 50;
 	val inp9 = "a" + repeat_char(cast<Byte>(120), n9) + "z";
 
-	match regex.compile(&"a.*z") {
+	match regex.compile("a.*z") {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, &inp9) {
+			match regex.find_first(re, inp9) {
 				Optional::Some(m) => {
 					if m.start != 0 { return 90; }
 					if m.end != n9 + 2 { return 91; }

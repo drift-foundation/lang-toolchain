@@ -80,8 +80,8 @@ pub fn main() nothrow -> Int {
 \tval s1: sinklib.Sink<Int> = move b1;
 \tvar b2 = boxlib.mk(40);
 \tval s2: sinklib.Sink<String> = move b2;
-\tval r1 = sinklib.use_int(&s1);
-\tval r2 = sinklib.use_str(&s2);
+\tval r1 = sinklib.use_int(s1);
+\tval r2 = sinklib.use_str(s2);
 \tval b3 = boxlib.mk(40);
 \tval b4 = boxlib.mk(40);
 \tval r3 = sinklib.use_int(&b3);

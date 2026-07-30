@@ -19,7 +19,7 @@ pub fn main() nothrow -> Int {
 	bytes.push(cast<Byte>(40));    // '('   offset 3 (invalid continuation)
 	bytes.push(cast<Byte>(98));    // 'b'   offset 4
 
-	match source.source_cursor(&bytes, "bad") {
+	match source.source_cursor(bytes, "bad") {
 		core.Result::Ok(_) => { return 1; },   // must NOT succeed
 		core.Result::Err(e) => {
 			if e.code != "invalid-utf8" { return 2; }
@@ -42,7 +42,7 @@ pub fn main() nothrow -> Int {
 	ok.push(cast<Byte>(130));
 	ok.push(cast<Byte>(172));
 	ok.push(cast<Byte>(98));
-	match source.source_cursor(&ok, "ok") {
+	match source.source_cursor(ok, "ok") {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 8; }
 	}

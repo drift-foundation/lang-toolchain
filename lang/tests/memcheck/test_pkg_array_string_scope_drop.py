@@ -81,10 +81,10 @@ fn _substring(s: &String, start: Int, end_pos: Int) nothrow -> String {
 \tvar b = io.buffer(n);
 \tvar i = 0;
 \twhile i < n {
-\t\tio.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+\t\tio.buffer_write(b, i, core.string_byte_at(s, start + i));
 \t\ti = i + 1;
 \t}
-\treturn core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+\treturn core.string_from_utf8_bytes(io.buffer_ptr(b), n);
 }
 
 fn _dup_string(s: &String) nothrow -> String {
@@ -92,10 +92,10 @@ fn _dup_string(s: &String) nothrow -> String {
 \tvar b = io.buffer(n);
 \tvar i = 0;
 \twhile i < n {
-\t\tio.buffer_write(&mut b, i, core.string_byte_at(s, i));
+\t\tio.buffer_write(b, i, core.string_byte_at(s, i));
 \t\ti = i + 1;
 \t}
-\treturn core.string_from_utf8_bytes(io.buffer_ptr(&b), n);
+\treturn core.string_from_utf8_bytes(io.buffer_ptr(b), n);
 }
 
 // Split path on '/' — returns Array<String> of owned substrings.
@@ -133,7 +133,7 @@ pub fn parse_pattern(path: &String) nothrow -> RoutePattern {
 \tvar param_names: Array<String> = [];
 \tvar i = 0;
 \twhile i < segs.len {
-\t\tsegments.push(_dup_string(&segs[i]));
+\t\tsegments.push(_dup_string(segs[i]));
 \t\tvar empty = "";
 \t\tparam_names.push(move empty);
 \t\ti = i + 1;
@@ -162,7 +162,7 @@ pub fn new_registry() nothrow -> Registry {
 // split_path creates Array<String>, only borrowed for validation,
 // never moved — must be dropped on scope exit INSIDE THIS FUNCTION.
 pub fn add_group(reg: &mut Registry, prefix: String) nothrow -> Group {
-\tval segs = split_path(&prefix);
+\tval segs = split_path(prefix);
 \t// Borrow segments for validation — never move segs.
 \tvar i = 0;
 \twhile i < segs.len {
@@ -183,7 +183,7 @@ pub fn add_group(reg: &mut Registry, prefix: String) nothrow -> Group {
 // parse_pattern internally creates a temporary segs Array<String> that
 // must also be dropped.
 pub fn add_route(reg: &mut Registry, path: String) nothrow -> Int {
-\tval pattern = parse_pattern(&path);
+\tval pattern = parse_pattern(path);
 \tval count = pattern.seg_count;
 \treg.patterns.push(move pattern);
 \treturn count;

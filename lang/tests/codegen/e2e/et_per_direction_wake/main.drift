@@ -16,19 +16,19 @@ import std.net as net;
 pub fn main() nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", 0);
 	val io_t = conc.Duration(millis = 3000);
-	var lr = net.listen(&addr, io_t);
+	var lr = net.listen(addr, io_t);
 	match lr {
 		Ok(l) => {
 			val port = l.test_local_port();
 			// Client: connect, write a payload, then read the echo.
 			var client = conc.spawn(| | captures(copy port, copy io_t) => {
 				var caddr = net.socket_addr("127.0.0.1", port);
-				var cr = net.connect(&caddr, io_t);
+				var cr = net.connect(caddr, io_t);
 				match cr {
 					Ok(s) => {
 						var wbuf = io.buffer(16);
-						io.buffer_write(&mut wbuf, 0, cast<Byte>(42));
-						val wr = s.write(&wbuf, io_t);
+						io.buffer_write(wbuf, 0, cast<Byte>(42));
+						val wr = s.write(wbuf, io_t);
 						match wr {
 							Ok(_) => { },
 							Err(_) => { return 10; },
@@ -36,7 +36,7 @@ pub fn main() nothrow -> Int {
 						}
 						// Read echo back.
 						var rbuf = io.buffer(16);
-						val rr = s.read(&mut rbuf, io_t);
+						val rr = s.read(rbuf, io_t);
 						match rr {
 							Ok(n) => {
 								if n <= 0 { return 12; }
@@ -52,11 +52,11 @@ pub fn main() nothrow -> Int {
 				}
 			});
 			// Server: accept, read, then write the same data back (echo).
-			var ar = net.accept(&l, io_t);
+			var ar = net.accept(l, io_t);
 			match ar {
 				Ok(s2) => {
 					var rbuf = io.buffer(16);
-					val rr = s2.read(&mut rbuf, io_t);
+					val rr = s2.read(rbuf, io_t);
 					match rr {
 						Ok(n) => {
 							if n <= 0 { return 20; }
@@ -65,7 +65,7 @@ pub fn main() nothrow -> Int {
 						default => { return 22; }
 					}
 					// Echo back what we read.
-					val wr = s2.write(&rbuf, io_t);
+					val wr = s2.write(rbuf, io_t);
 					match wr {
 						Ok(_) => { },
 						Err(_) => { return 23; },

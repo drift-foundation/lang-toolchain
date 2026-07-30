@@ -1,0 +1,14 @@
+module main;
+
+struct Util { tag: Int }
+
+implement Util {
+	pub fn measure(s: &String) nothrow -> Int {
+		return s.byte_length();
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val s: String = "hello";
+	return Util::measure(s);
+}

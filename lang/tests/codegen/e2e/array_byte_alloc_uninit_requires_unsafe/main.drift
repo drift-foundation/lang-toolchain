@@ -5,7 +5,7 @@ import lang.thread as thread;
 pub fn main() nothrow -> Int {
 	// All three calls must be rejected without an unsafe block.
 	var buf = thread.array_byte_alloc_uninit(4);
-	val ptr = thread.array_byte_as_mut_ptr(&mut buf);
-	thread.array_byte_commit_init_len(&mut buf, 4);
+	val ptr = thread.array_byte_as_mut_ptr(buf);
+	thread.array_byte_commit_init_len(buf, 4);
 	return 0;
 }

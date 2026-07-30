@@ -26,7 +26,7 @@ fn expect_err_tag(pattern: &String, expected_tag: &String, fail_base: Int) nothr
 	match regex.compile(pattern) {
 		core.Result::Ok(_) => { return fail_base; },
 		core.Result::Err(e) => {
-			if !str_eq(&e.tag, expected_tag) { return fail_base + 1; }
+			if !str_eq(e.tag, expected_tag) { return fail_base + 1; }
 			return 0;
 		}
 	}
@@ -107,7 +107,7 @@ fn is_alternation_with_len(node: &regex.RegexNode, expected_len: Int) nothrow ->
 fn repeat_child_is_literal(node: &regex.RegexNode, expected: Int) nothrow -> Bool {
 	match node {
 		regex.RegexNode::Repeat(child, quant) => {
-			return is_literal_byte(&child[0], expected);
+			return is_literal_byte(child[0], expected);
 		},
 		default => { return false; }
 	}
@@ -116,7 +116,7 @@ fn repeat_child_is_literal(node: &regex.RegexNode, expected: Int) nothrow -> Boo
 fn repeat_child_is_group_with_len(node: &regex.RegexNode, expected_len: Int) nothrow -> Bool {
 	match node {
 		regex.RegexNode::Repeat(child, quant) => {
-			return is_group_with_len(&child[0], expected_len);
+			return is_group_with_len(child[0], expected_len);
 		},
 		default => { return false; }
 	}
@@ -125,7 +125,7 @@ fn repeat_child_is_group_with_len(node: &regex.RegexNode, expected_len: Int) not
 fn repeat_child_is_alternation_with_len(node: &regex.RegexNode, expected_len: Int) nothrow -> Bool {
 	match node {
 		regex.RegexNode::Repeat(child, quant) => {
-			return is_alternation_with_len(&child[0], expected_len);
+			return is_alternation_with_len(child[0], expected_len);
 		},
 		default => { return false; }
 	}
@@ -138,7 +138,7 @@ pub fn main() nothrow -> Int {
 	// Empty pattern → produces empty Group (zero children)
 	// ===================================================================
 	val p_empty = "";
-	match regex.compile(&p_empty) {
+	match regex.compile(p_empty) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Group(children) => {
@@ -155,24 +155,24 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// "((a|b)+c)*" — nested group, alternation inside, quantifier on group
-	rc = expect_ok(&"((a|b)+c)*", 10);
+	rc = expect_ok("((a|b)+c)*", 10);
 	if rc != 0 { return rc; }
 	// Verify top-level is Repeat/Star
 	val p_nest = "((a|b)+c)*";
-	match regex.compile(&p_nest) {
+	match regex.compile(p_nest) {
 		core.Result::Ok(re) => {
-			if !is_repeat_star(&re.root) { return 11; }
+			if !is_repeat_star(re.root) { return 11; }
 		},
 		core.Result::Err(_) => { return 13; }
 	}
 
 	// "(a(b(c)))" — deeply nested
-	rc = expect_ok(&"(a(b(c)))", 14);
+	rc = expect_ok("(a(b(c)))", 14);
 	if rc != 0 { return rc; }
 
 	// "a|b|c|d|e" — flat alternation with 5 branches
 	val p_alt5 = "a|b|c|d|e";
-	match regex.compile(&p_alt5) {
+	match regex.compile(p_alt5) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Alternation(branches) => {
@@ -186,14 +186,14 @@ pub fn main() nothrow -> Int {
 
 	// "ab+c" — quantifier binds to 'b' only, not 'ab'
 	val p_prec = "ab+c";
-	match regex.compile(&p_prec) {
+	match regex.compile(p_prec) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Group(children) => {
 					// children: [Literal(a), Repeat([Literal(b)], Plus), Literal(c)]
 					if children.len != 3 { return 18; }
-					if !is_repeat_plus(&children[1]) { return 19; }
-					if !repeat_child_is_literal(&children[1], 98) { return 20; }
+					if !is_repeat_plus(children[1]) { return 19; }
+					if !repeat_child_is_literal(children[1], 98) { return 20; }
 				},
 				default => { return 23; }
 			}
@@ -207,7 +207,7 @@ pub fn main() nothrow -> Int {
 
 	// Literal ']' as first char in class: "[]]" → class containing ']'
 	val p_rbracket = "[]]";
-	match regex.compile(&p_rbracket) {
+	match regex.compile(p_rbracket) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {
@@ -222,7 +222,7 @@ pub fn main() nothrow -> Int {
 
 	// Literal '-' at end of class: "[a-]" → class with 'a' and '-'
 	val p_dash_end = "[a-]";
-	match regex.compile(&p_dash_end) {
+	match regex.compile(p_dash_end) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {
@@ -242,7 +242,7 @@ pub fn main() nothrow -> Int {
 
 	// Negated class with '^' not at start: "[a^b]" → class with a, ^, b
 	val p_caret_mid = "[a^b]";
-	match regex.compile(&p_caret_mid) {
+	match regex.compile(p_caret_mid) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {
@@ -257,7 +257,7 @@ pub fn main() nothrow -> Int {
 
 	// Escaped '-' in range position: "[\\-a]" → class with '-' and 'a'
 	val p_esc_dash = "[\\-a]";
-	match regex.compile(&p_esc_dash) {
+	match regex.compile(p_esc_dash) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {
@@ -273,7 +273,7 @@ pub fn main() nothrow -> Int {
 
 	// Multiple ranges: "[a-zA-Z0-9_]" → 4 ranges
 	val p_multi = "[a-zA-Z0-9_]";
-	match regex.compile(&p_multi) {
+	match regex.compile(p_multi) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {
@@ -290,19 +290,19 @@ pub fn main() nothrow -> Int {
 	// ===================================================================
 
 	// "(^a)" — anchor inside group
-	rc = expect_ok(&"(^a)", 60);
+	rc = expect_ok("(^a)", 60);
 	if rc != 0 { return rc; }
 
 	// Verify anchor node type preserved in group
 	val p_anch_grp = "(^a)";
-	match regex.compile(&p_anch_grp) {
+	match regex.compile(p_anch_grp) {
 		core.Result::Ok(re) => {
 			// compile unwraps the group since it's a single sub-expression
 			// inner is Group([Anchor(Start), Literal(a)])
 			match re.root {
 				regex.RegexNode::Group(children) => {
 					if children.len != 2 { return 61; }
-					if !is_anchor_start(&children[0]) { return 62; }
+					if !is_anchor_start(children[0]) { return 62; }
 				},
 				default => { return 64; }
 			}
@@ -311,7 +311,7 @@ pub fn main() nothrow -> Int {
 	}
 
 	// "(a$|^b)" — anchors in alternation branches
-	rc = expect_ok(&"(a$|^b)", 66);
+	rc = expect_ok("(a$|^b)", 66);
 	if rc != 0 { return rc; }
 
 	// ===================================================================
@@ -320,21 +320,21 @@ pub fn main() nothrow -> Int {
 
 	// "(ab)+" — quantifier on grouped concat
 	val p_grp_q = "(ab)+";
-	match regex.compile(&p_grp_q) {
+	match regex.compile(p_grp_q) {
 		core.Result::Ok(re) => {
-			if !is_repeat_plus(&re.root) { return 70; }
+			if !is_repeat_plus(re.root) { return 70; }
 			// child[0] should be Group with 2 children
-			if !repeat_child_is_group_with_len(&re.root, 2) { return 71; }
+			if !repeat_child_is_group_with_len(re.root, 2) { return 71; }
 		},
 		core.Result::Err(_) => { return 74; }
 	}
 
 	// "(a|b)?" — quantifier on alternation group
 	val p_alt_q = "(a|b)?";
-	match regex.compile(&p_alt_q) {
+	match regex.compile(p_alt_q) {
 		core.Result::Ok(re) => {
-			if !is_repeat_question(&re.root) { return 75; }
-			if !repeat_child_is_alternation_with_len(&re.root, 2) { return 76; }
+			if !is_repeat_question(re.root) { return 75; }
+			if !repeat_child_is_alternation_with_len(re.root, 2) { return 76; }
 		},
 		core.Result::Err(_) => { return 79; }
 	}
@@ -346,12 +346,12 @@ pub fn main() nothrow -> Int {
 
 	// "a|" → Alternation with 2 branches, second is empty Group
 	val p_trail_alt = "a|";
-	match regex.compile(&p_trail_alt) {
+	match regex.compile(p_trail_alt) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Alternation(branches) => {
 					if branches.len != 2 { return 80; }
-					if !is_group_with_len(&branches[1], 0) { return 81; }
+					if !is_group_with_len(branches[1], 0) { return 81; }
 				},
 				default => { return 83; }
 			}
@@ -361,12 +361,12 @@ pub fn main() nothrow -> Int {
 
 	// "|b" → Alternation with 2 branches, first is empty Group
 	val p_lead_alt = "|b";
-	match regex.compile(&p_lead_alt) {
+	match regex.compile(p_lead_alt) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Alternation(branches) => {
 					if branches.len != 2 { return 85; }
-					if !is_group_with_len(&branches[0], 0) { return 86; }
+					if !is_group_with_len(branches[0], 0) { return 86; }
 				},
 				default => { return 88; }
 			}
@@ -376,7 +376,7 @@ pub fn main() nothrow -> Int {
 
 	// "||" → Alternation with 3 empty branches
 	val p_empty_alt = "||";
-	match regex.compile(&p_empty_alt) {
+	match regex.compile(p_empty_alt) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Alternation(branches) => {
@@ -394,12 +394,12 @@ pub fn main() nothrow -> Int {
 
 	// "\\*\\+\\?" — escaped quantifier chars are literals
 	val p_esc_quant = "\\*\\+\\?";
-	match regex.compile(&p_esc_quant) {
+	match regex.compile(p_esc_quant) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Group(children) => {
 					if children.len != 3 { return 100; }
-					if !is_literal_byte(&children[0], 42) { return 101; }
+					if !is_literal_byte(children[0], 42) { return 101; }
 				},
 				default => { return 103; }
 			}
@@ -411,7 +411,7 @@ pub fn main() nothrow -> Int {
 	// Shorthand \d inside [] does not double-count with explicit ranges
 	// ===================================================================
 	val p_d_in_class = "[\\d_]";
-	match regex.compile(&p_d_in_class) {
+	match regex.compile(p_d_in_class) {
 		core.Result::Ok(re) => {
 			match re.root {
 				regex.RegexNode::Class(cls) => {

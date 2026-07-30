@@ -21,11 +21,11 @@ const N: Int = 500;
 // retried elsewhere" (typed → distinct code).
 fn handle_client(var s: net.TcpStream, timeout: conc.Duration) nothrow -> Int {
 	var buf = io.buffer(1024);
-	match s.read(&mut buf, timeout) {
+	match s.read(buf, timeout) {
 		Ok(_) => {},
 		Err(_) => { return -1; },
 	}
-	match s.write(&buf, timeout) {
+	match s.write(buf, timeout) {
 		Ok(_) => {},
 		Err(_) => { return -2; },
 	}
@@ -39,7 +39,7 @@ fn handle_client(var s: net.TcpStream, timeout: conc.Duration) nothrow -> Int {
 fn server_loop(listener: net.TcpListener, timeout: conc.Duration) nothrow -> Int {
 	var i = 0;
 	while i < N {
-		match net.accept(&listener, timeout) {
+		match net.accept(listener, timeout) {
 			Ok(s) => {
 				val r = handle_client(move s, timeout);
 				if r < 0 { return r; }
@@ -56,18 +56,18 @@ fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) no
 	var wbuf = io.buffer(size);
 	var i = 0;
 	while i < size {
-		io.buffer_write(&mut wbuf, i, byte);
+		io.buffer_write(wbuf, i, byte);
 		i = i + 1;
 	}
 	var wn: Int = 0;
-	match s.write(&wbuf, timeout) {
+	match s.write(wbuf, timeout) {
 		Ok(v) => { wn = v; },
 		Err(_) => { return -30; },
 	}
 	if wn != size { return -33; }
 	var rbuf = io.buffer(size);
 	var rn: Int = 0;
-	match s.read(&mut rbuf, timeout) {
+	match s.read(rbuf, timeout) {
 		Ok(v) => { rn = v; },
 		Err(_) => { return -35; },
 	}
@@ -81,7 +81,7 @@ fn _client_after_connect(s: net.TcpStream, size: Int, timeout: conc.Duration) no
 
 fn client_once(port: Int, size: Int, timeout: conc.Duration) nothrow -> Int {
 	var addr = net.socket_addr("127.0.0.1", port);
-	match net.connect(&addr, timeout) {
+	match net.connect(addr, timeout) {
 		Ok(s) => { return _client_after_connect(move s, size, timeout); },
 		Err(_) => { return -20; },
 	}
@@ -101,7 +101,7 @@ pub fn main() nothrow -> Int {
 fn run_main() throws -> Int {
 	val io_t = conc.Duration(millis = 5000);
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t);
+	val listener = net.listen(addr, io_t);
 	return _run_with_listener(move listener, io_t);
 }
 

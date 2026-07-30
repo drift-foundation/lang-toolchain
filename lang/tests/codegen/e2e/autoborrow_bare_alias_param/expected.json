@@ -1,0 +1,6 @@
+{
+  "description": "reject-redundant-call-borrows D6: a type-alias-declared reference parameter (type Handle = &String) counts as declared; the bare place auto-borrows (alias transparency)",
+  "exit_code": 5,
+  "stderr": "",
+  "stdout": ""
+}

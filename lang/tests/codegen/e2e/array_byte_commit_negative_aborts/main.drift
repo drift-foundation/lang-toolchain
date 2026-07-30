@@ -4,6 +4,6 @@ import lang.thread as thread;
 
 pub fn main() nothrow -> Int {
 	var buf = unsafe { thread.array_byte_alloc_uninit(4) };
-	unsafe { thread.array_byte_commit_init_len(&mut buf, -1); }
+	unsafe { thread.array_byte_commit_init_len(buf, -1); }
 	return 0;
 }

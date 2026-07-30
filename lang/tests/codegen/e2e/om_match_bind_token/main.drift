@@ -52,7 +52,7 @@ pub variant TokenNest {
 fn scenario_named_bind() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		match m {
 			TokenMsg::Payload(v) => {
 				// Inside arm: Token is live as `v`.
@@ -71,7 +71,7 @@ fn scenario_named_bind() nothrow -> Int {
 fn scenario_wildcard_ignore() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		match m {
 			TokenMsg::Payload(_) => {
 				// Wildcard: no binder.  Payload destructor fires
@@ -89,7 +89,7 @@ fn scenario_arm_bind_vs_ignore() nothrow -> Int {
 	var sess_left: Session = Session(drops = 0);
 	var sess_right: Session = Session(drops = 0);
 	{
-		val left: TokenPair = TokenPair::Left(t = make_token(&mut sess_left));
+		val left: TokenPair = TokenPair::Left(t = make_token(sess_left));
 		match left {
 			TokenPair::Left(v) => {
 				if sess_left.drops != 0 { return 1; }
@@ -100,7 +100,7 @@ fn scenario_arm_bind_vs_ignore() nothrow -> Int {
 	}
 	if sess_left.drops != 1 { return 5; }
 	{
-		val right: TokenPair = TokenPair::Right(t = make_token(&mut sess_right));
+		val right: TokenPair = TokenPair::Right(t = make_token(sess_right));
 		match right {
 			TokenPair::Left(_) => { return 6; },
 			TokenPair::Right(_) => {
@@ -118,10 +118,10 @@ fn scenario_reassignment_before_match() nothrow -> Int {
 	var sess_old: Session = Session(drops = 0);
 	var sess_new: Session = Session(drops = 0);
 	{
-		var r: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess_old));
+		var r: TokenMsg = TokenMsg::Payload(t = make_token(sess_old));
 		// Pre-reassignment: old token alive.
 		if sess_old.drops != 0 { return 1; }
-		r = TokenMsg::Payload(t = make_token(&mut sess_new));
+		r = TokenMsg::Payload(t = make_token(sess_new));
 		// Post-reassignment: old token dropped (sess_old.drops == 1),
 		// new token alive (sess_new.drops == 0).  Exercises the
 		// MoveOut-zero-then-StoreLocal hardening in string_arc.py —
@@ -147,7 +147,7 @@ fn scenario_reassignment_before_match() nothrow -> Int {
 fn scenario_nested_match() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val inner: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val inner: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		val outer: TokenNest = TokenNest::Wrap(inner = move inner);
 		match outer {
 			TokenNest::Wrap(i) => {
@@ -173,11 +173,11 @@ fn scenario_value_producing_match() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	var sess_fb: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		{
 			val returned: Token = match m {
 				TokenMsg::Payload(v) => { move v },
-				default => { make_token(&mut sess_fb) },
+				default => { make_token(sess_fb) },
 			};
 			// Crucial assertion: the returned Token is live; destroy
 			// has NOT fired.  If the compiler incorrectly dropped `v`

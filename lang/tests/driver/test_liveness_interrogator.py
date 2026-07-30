@@ -64,7 +64,7 @@ pub fn main() nothrow -> Int {
 \t\tvar g = m1.get().lock();
 \t\tval v = g.get_mut();
 \t\twhile not *v {
-\t\t\tmatch cv1.get().wait(&mut g) {
+\t\t\tmatch cv1.get().wait(g) {
 \t\t\t\tcore.Result::Ok(_) => { },
 \t\t\t\tcore.Result::Err(_) => { return 1; }
 \t\t\t}

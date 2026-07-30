@@ -32,14 +32,14 @@ fn parse(text: &String) nothrow -> core.Result<Int, E> {
 
 fn run() -> Int {
   val s = "{\n\"a\":}\n";
-  match parse(&s) {
+  match parse(s) {
     core.Result::Ok(_) => { return 1; },
     core.Result::Err(e) => {
       if e.tag != "invalid-syntax" { return 2; }
       if e.line != 2 { return 3; }
     }
   }
-  match parse(&s) {
+  match parse(s) {
     core.Result::Ok(_) => { return 4; },
     core.Result::Err(e) => {
       if e.tag != "invalid-syntax" { return 5; }

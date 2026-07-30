@@ -40,7 +40,7 @@ fn make_token(sess: &mut Session) nothrow -> Token {
 fn case_result_ok_named_local() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val r: core.Result<Token, Int> = core.Result::Ok(make_token(&mut sess));
+		val r: core.Result<Token, Int> = core.Result::Ok(make_token(sess));
 		match r {
 			core.Result::Err(_) => { return 10; },
 			core.Result::Ok(v) => {
@@ -64,7 +64,7 @@ pub variant TokenMsg {
 fn case_variant_named_local() nothrow -> Int {
 	var sess: Session = Session(drops = 0);
 	{
-		val m: TokenMsg = TokenMsg::Payload(t = make_token(&mut sess));
+		val m: TokenMsg = TokenMsg::Payload(t = make_token(sess));
 		match m {
 			TokenMsg::Payload(inner) => {
 				if sess.drops != 0 { return 21; }

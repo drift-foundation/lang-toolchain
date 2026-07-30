@@ -77,7 +77,7 @@ def test_ir_declares_random_fill_runtime_helper(tmp_path: Path) -> None:
 		"import lang.thread as thread;\n\n"
 		"pub fn main() nothrow -> Int {\n"
 		"\tvar buf = unsafe { thread.array_byte_alloc_uninit(1) };\n"
-		"\tval ptr = unsafe { thread.array_byte_as_mut_ptr(&mut buf) };\n"
+		"\tval ptr = unsafe { thread.array_byte_as_mut_ptr(buf) };\n"
 		"\tval rc = unsafe { thread.random_fill(ptr, 1) };\n"
 		"\treturn rc;\n"
 		"}\n"

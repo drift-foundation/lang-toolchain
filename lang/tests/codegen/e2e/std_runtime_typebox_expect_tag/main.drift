@@ -4,9 +4,9 @@ import std.runtime as rt;
 
 fn run() -> Int {
 	val b = rt.type_box(7);
-	val _ = rt.expect_downcast<type Int>(&b, "x");
+	val _ = rt.expect_downcast<type Int>(b, "x");
 	try {
-		val _ = rt.expect_downcast<type String>(&b, "invalid-datatype");
+		val _ = rt.expect_downcast<type String>(b, "invalid-datatype");
 		return 1;
 	} catch rt:TypeBoxError(_e) {
 		return 0;

@@ -124,7 +124,7 @@ pub fn main() nothrow -> Int {
 \t\treturn 90;
 \t} catch std.err:IndexError(e) {
 \t\tval envelope: String = e.encode_compact();
-\t\tmatch json.parse(&envelope) {
+\t\tmatch json.parse(envelope) {
 \t\t\tOk(_) => { return 0; },
 \t\t\tErr(_) => { return 1; }
 \t\t}

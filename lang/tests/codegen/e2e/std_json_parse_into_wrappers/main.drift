@@ -35,7 +35,7 @@ fn run_main() throws -> Int {
 		return 3;
 	}
 	val key_ok = "ok";
-	match obj.get(&key_ok) {
+	match obj.get(key_ok) {
 		Some(v) => {
 			if not v.expect_bool("", "") {
 				return 5;

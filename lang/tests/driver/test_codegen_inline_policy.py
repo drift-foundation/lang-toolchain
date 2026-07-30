@@ -113,7 +113,7 @@ pub fn main() nothrow -> Int {
 	while i < 100 {
 		var slot = i * 3 + 1;
 		unsafe {
-			val p = mem.ptr_from_ref<type Int>(&slot);
+			val p = mem.ptr_from_ref<type Int>(slot);
 			total = total + read_through_ptr(p);
 		}
 		i = i + 1;

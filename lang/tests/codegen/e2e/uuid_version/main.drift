@@ -7,21 +7,21 @@ import std.console as cons;
 pub fn main() nothrow -> Int {
 	// Nil UUID — version nibble is 0.
 	val n = uuid.nil();
-	if uuid.version(&n) != 0 {
+	if uuid.version(n) != 0 {
 		cons.eprintln("nil version not 0");
 		return 1;
 	}
 
 	// v3 generated UUID — version nibble is 3.
-	val u3 = uuid.v3(&uuid.namespace_dns(), &("www.python.org"));
-	if uuid.version(&u3) != 3 {
+	val u3 = uuid.v3(uuid.namespace_dns(), ("www.python.org"));
+	if uuid.version(u3) != 3 {
 		cons.eprintln("v3 version not 3");
 		return 2;
 	}
 
 	// v5 generated UUID — version nibble is 5.
-	val u5 = uuid.v5(&uuid.namespace_dns(), &("python.org"));
-	if uuid.version(&u5) != 5 {
+	val u5 = uuid.v5(uuid.namespace_dns(), ("python.org"));
+	if uuid.version(u5) != 5 {
 		cons.eprintln("v5 version not 5");
 		return 3;
 	}
@@ -32,11 +32,11 @@ pub fn main() nothrow -> Int {
 	val n_bytes = s.byte_length();
 	var i = 0;
 	while i < n_bytes {
-		raw.push(core.string_byte_at(&s, i));
+		raw.push(core.string_byte_at(s, i));
 		i = i + 1;
 	}
-	val uj = uuid.v3_from_bytes(&raw);
-	if uuid.version(&uj) != 3 {
+	val uj = uuid.v3_from_bytes(raw);
+	if uuid.version(uj) != 3 {
 		cons.eprintln("v3_from_bytes version not 3");
 		return 4;
 	}
@@ -44,7 +44,7 @@ pub fn main() nothrow -> Int {
 	// v4 random — version nibble is 4.
 	match uuid.v4() {
 		Ok(u4) => {
-			if uuid.version(&u4) != 4 {
+			if uuid.version(u4) != 4 {
 				cons.eprintln("v4 version not 4");
 				return 5;
 			}
@@ -57,9 +57,9 @@ pub fn main() nothrow -> Int {
 
 	// version() should also report correctly for a parsed UUID.
 	val parsed_s: String = "886313e1-3b8a-5372-9b90-0c9aee199e5d";
-	match uuid.parse(&parsed_s) {
+	match uuid.parse(parsed_s) {
 		Ok(p) => {
-			if uuid.version(&p) != 5 {
+			if uuid.version(p) != 5 {
 				cons.eprintln("parsed v5 version not 5");
 				return 7;
 			}

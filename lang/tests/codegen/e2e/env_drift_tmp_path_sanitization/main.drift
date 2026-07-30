@@ -23,7 +23,7 @@ import std.env as env;
 import std.text as text;
 
 fn _assert_contains(haystack: String, needle: String, tag: String) nothrow -> Int {
-	if not text.contains(&haystack, &needle) {
+	if not text.contains(haystack, needle) {
 		cons.eprintln("FAIL " + tag + ": " + haystack + " missing " + needle);
 		return 1;
 	}
@@ -32,7 +32,7 @@ fn _assert_contains(haystack: String, needle: String, tag: String) nothrow -> In
 
 fn _assert_no_dotdot(s: String, tag: String) nothrow -> Int {
 	val dotdot = "..";
-	if text.contains(&s, &dotdot) {
+	if text.contains(s, dotdot) {
 		cons.eprintln("FAIL " + tag + ": result still contains '..' — sanitizer broken: " + s);
 		return 1;
 	}

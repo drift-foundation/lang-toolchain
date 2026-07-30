@@ -18,10 +18,10 @@ fn check_bounds<R>(r: &R, i: Int, j: Int, expect: Int) nothrow -> Int require R 
 pub fn main() nothrow -> Int {
 	var arr = [1, 2];
 	var r = arr.range();
-	val neg = check_bounds(&r, -1, 0, -1);
+	val neg = check_bounds(r, -1, 0, -1);
 	if neg != 0 {
 		return neg;
 	}
-	val hi = check_bounds(&r, 2, 0, 2);
+	val hi = check_bounds(r, 2, 0, 2);
 	return hi;
 }

@@ -1,0 +1,6 @@
+{
+  "description": "LANGUAGE_BUG regression (found during reject-redundant-call-borrows round-2 pins, 2026-07-29): a qualified call on a parameterized trait instantiated at a REFERENCE type argument (Taker<&String>::take) failed impl lookup with 'no implementation for trait ... on receiver Sink' while the identical shape at Taker<Int> resolved. The reference type-arg must match the registered impl.",
+  "exit_code": 0,
+  "stderr": "",
+  "stdout": ""
+}

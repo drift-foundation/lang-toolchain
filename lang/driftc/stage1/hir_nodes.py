@@ -713,6 +713,28 @@ class HBorrow(HExpr):
 	# an implicit const_share() on that fresh read.  (Never an HCopy / deref.)
 	# an explicit `&v` must stay borrow-mode and never fall back to `Iterable<V>`.
 	for_iter_implicit_borrow: bool = False
+	# Provenance: True iff this borrow was written in source (`&x` / `&mut x`
+	# tokens exist).  Set ONLY by ast_to_hir's Unary lowering; every
+	# compiler-synthesis site leaves it False.  The redundant-argument-borrow
+	# policy (W0) keys on it; the `.dmp` package encoder strips it (D9:
+	# packages are never subject to source-spelling rules).  Do NOT infer
+	# provenance from `loc` — the for-in desugar re-wraps source borrows
+	# without their span.
+	source_written: bool = False
+	# Set by stage1 borrow_materialize when the subject was an rvalue lifted
+	# into a hidden temp (`&(expr)` → `val __tmp_borrowN = expr; &__tmp_borrowN`).
+	# Distinguishes a source-written `&mut <rvalue>` argument (rejected with
+	# E_MUT_RVALUE_ARG_BINDING_REQUIRED, the sole non-redundancy rejection)
+	# from a source-written `&mut <place>` argument (redundant).
+	materialized_rvalue: bool = False
+	# W0 policy classification, stamped by the declared-reference argument
+	# policy when this borrow appears in call-argument position.  Values:
+	# "redundant" (rejected), "coercion" (D7(a) legal), "exempt" (D8(b)
+	# fn-pointer / generic-formal legal), "mut_rvalue_binding" (rejected with
+	# the binding-required diagnostic).  None = never examined; the typed
+	# validator asserts totality for source-written borrows in argument
+	# position.  Never serialized into packages.
+	policy_class: str | None = None
 
 
 @dataclass

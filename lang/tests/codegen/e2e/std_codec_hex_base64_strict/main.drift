@@ -4,17 +4,17 @@ import std.codec as codec;
 import std.core as core;
 
 fn _require_ok_hex(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int, b3: Int) nothrow -> Int {
-	match codec.hex_decode(&s) {
+	match codec.hex_decode(s) {
 		core.Result::Err(err) => { return 100; },
 		core.Result::Ok(vals) => {
 			if vals.len != expected_len { return 101; }
-			val encoded = codec.hex_encode(&vals);
+			val encoded = codec.hex_encode(vals);
 			var expected: Array<Byte> = [];
 			expected.push(cast<Byte>(b0));
 			expected.push(cast<Byte>(b1));
 			expected.push(cast<Byte>(b2));
 			expected.push(cast<Byte>(b3));
-			val expected_hex = codec.hex_encode(&expected);
+			val expected_hex = codec.hex_encode(expected);
 			if encoded != expected_hex { return 102; }
 		}
 	}
@@ -22,7 +22,7 @@ fn _require_ok_hex(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int, b3: 
 }
 
 fn _require_err_hex(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
-	match codec.hex_decode(&s) {
+	match codec.hex_decode(s) {
 		core.Result::Ok(v) => { return code; },
 		core.Result::Err(e) => {
 			if e.tag != tag { return code + 1; }
@@ -33,16 +33,16 @@ fn _require_err_hex(s: String, tag: String, off: Int, code: Int) nothrow -> Int 
 }
 
 fn _require_ok_b64(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int) nothrow -> Int {
-	match codec.base64_decode(&s) {
+	match codec.base64_decode(s) {
 		core.Result::Err(err) => { return 200; },
 		core.Result::Ok(vals) => {
 			if vals.len != expected_len { return 201; }
-			val encoded = codec.base64_encode(&vals);
+			val encoded = codec.base64_encode(vals);
 			var expected: Array<Byte> = [];
 			expected.push(cast<Byte>(b0));
 			if expected_len > 1 { expected.push(cast<Byte>(b1)); }
 			if expected_len > 2 { expected.push(cast<Byte>(b2)); }
-			val expected_b64 = codec.base64_encode(&expected);
+			val expected_b64 = codec.base64_encode(expected);
 			if encoded != expected_b64 { return 202; }
 		}
 	}
@@ -50,7 +50,7 @@ fn _require_ok_b64(s: String, expected_len: Int, b0: Int, b1: Int, b2: Int) noth
 }
 
 fn _require_err_b64(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
-	match codec.base64_decode(&s) {
+	match codec.base64_decode(s) {
 		core.Result::Ok(v) => { return code; },
 		core.Result::Err(e) => {
 			if e.tag != tag { return code + 1; }
@@ -61,10 +61,10 @@ fn _require_err_b64(s: String, tag: String, off: Int, code: Int) nothrow -> Int 
 }
 
 fn _require_ok_b32(s: String, expected_b64: String, code: Int) nothrow -> Int {
-	match codec.base32_decode(&s) {
+	match codec.base32_decode(s) {
 		core.Result::Err(err) => { return code; },
 		core.Result::Ok(vals) => {
-			val encoded = codec.base64_encode(&vals);
+			val encoded = codec.base64_encode(vals);
 			if encoded != expected_b64 { return code + 1; }
 		}
 	}
@@ -72,7 +72,7 @@ fn _require_ok_b32(s: String, expected_b64: String, code: Int) nothrow -> Int {
 }
 
 fn _require_err_b32(s: String, tag: String, off: Int, code: Int) nothrow -> Int {
-	match codec.base32_decode(&s) {
+	match codec.base32_decode(s) {
 		core.Result::Ok(v) => { return code; },
 		core.Result::Err(e) => {
 			if e.tag != tag { return code + 1; }
@@ -88,7 +88,7 @@ pub fn main() nothrow -> Int {
 	src.push(cast<Byte>(10));
 	src.push(cast<Byte>(27));
 	src.push(cast<Byte>(255));
-	val h = codec.hex_encode(&src);
+	val h = codec.hex_encode(src);
 	if h != "000a1bff" { return 1; }
 	val r0 = _require_ok_hex(h, 4, 0, 10, 27, 255);
 	if r0 != 0 { return r0; }
@@ -103,7 +103,7 @@ pub fn main() nothrow -> Int {
 	man.push(cast<Byte>(77));
 	man.push(cast<Byte>(97));
 	man.push(cast<Byte>(110));
-	val b = codec.base64_encode(&man);
+	val b = codec.base64_encode(man);
 	if b != "TWFu" { return 40; }
 	val r4 = _require_ok_b64("TWFu", 3, 77, 97, 110);
 	if r4 != 0 { return r4; }
@@ -122,7 +122,7 @@ pub fn main() nothrow -> Int {
 	b32_src.push(cast<Byte>(77));
 	b32_src.push(cast<Byte>(97));
 	b32_src.push(cast<Byte>(110));
-	val b32 = codec.base32_encode(&b32_src);
+	val b32 = codec.base32_encode(b32_src);
 	if b32 != "JVQW4===" { return 100; }
 	val r10 = _require_ok_b32("MY======", "Zg==", 110);
 	if r10 != 0 { return r10; }

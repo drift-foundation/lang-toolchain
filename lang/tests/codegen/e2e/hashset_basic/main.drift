@@ -12,7 +12,7 @@ fn run() -> Int {
 	if s.insert(1) {
 		return 2;
 	}
-	if not s.contains(&k1) {
+	if not s.contains(k1) {
 		return 3;
 	}
 	if not s.insert(2) {
@@ -21,20 +21,20 @@ fn run() -> Int {
 	if s.len() != 2 {
 		return 5;
 	}
-	if not s.remove(&k1) {
+	if not s.remove(k1) {
 		return 6;
 	}
-	if s.contains(&k1) {
+	if s.contains(k1) {
 		return 7;
 	}
-	if s.remove(&k1) {
+	if s.remove(k1) {
 		return 8;
 	}
 	s.clear();
 	if s.len() != 0 {
 		return 9;
 	}
-	if s.contains(&k2) {
+	if s.contains(k2) {
 		return 10;
 	}
 	return 0;

@@ -10,7 +10,7 @@ fn run() -> Int {
 	m.insert(2, 20);
 	var it = m.iter();
 	val k1 = 1;
-	val _g = m.get_mut(&k1);
+	val _g = m.get_mut(k1);
 	var count = 0;
 	var done = false;
 	while not done {

@@ -43,7 +43,7 @@ pub fn caller(s_ref: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 \tval s: String = fmt.format_int(700);
-\tval total = caller(&s);
+\tval total = caller(s);
 \treturn total - 6;
 \t// Two `take_s(s_ref)` calls each dup the String via `*s_ref`.
 \t// String is Copy + ConstShare; the retain happens in

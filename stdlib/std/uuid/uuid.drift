@@ -166,16 +166,16 @@ pub fn to_string(u: &Uuid) nothrow -> String {
 	var i = 0;
 	while i < 16 {
 		val byte_val = _byte_u8(bytes[i]);
-		io.buffer_write(&mut out, pos, _hex_char(byte_val / 16));
-		io.buffer_write(&mut out, pos + 1, _hex_char(byte_val % 16));
+		io.buffer_write(out, pos, _hex_char(byte_val / 16));
+		io.buffer_write(out, pos + 1, _hex_char(byte_val % 16));
 		pos = pos + 2;
 		if i == 3 or i == 5 or i == 7 or i == 9 {
-			io.buffer_write(&mut out, pos, cast<Byte>(45));  // '-'
+			io.buffer_write(out, pos, cast<Byte>(45));  // '-'
 			pos = pos + 1;
 		}
 		i = i + 1;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&out), 36);
+	return core.string_from_utf8_bytes(io.buffer_ptr(out), 36);
 }
 
 /// Parse a canonical hyphenated UUID string (case-insensitive hex).
@@ -219,7 +219,7 @@ pub fn parse(s: &String) nothrow -> core.Result<Uuid, UuidError> {
 			i = i + 2;
 		}
 	}
-	return core.Result::Ok(_uuid_from_16_bytes(&bytes));
+	return core.Result::Ok(_uuid_from_16_bytes(bytes));
 }
 
 // ─── Well-known UUIDs ──────────────────────────────────────────────
@@ -289,10 +289,10 @@ fn _append_name_bytes(out: &mut Array<Byte>, name: &String) nothrow -> Void {
 pub fn v3(namespace: &Uuid, name: &String) nothrow -> Uuid {
 	val ns_bytes = to_bytes(namespace);
 	var combined = ns_bytes.clone_with_capacity(ns_bytes.len + name.byte_length());
-	_append_name_bytes(&mut combined, name);
-	var hash = crypto.md5(&combined);
-	_stamp_version_and_variant(&mut hash, 3);
-	return _uuid_from_16_bytes(&hash);
+	_append_name_bytes(combined, name);
+	var hash = crypto.md5(combined);
+	_stamp_version_and_variant(hash, 3);
+	return _uuid_from_16_bytes(hash);
 }
 
 /// `java.util.UUID.nameUUIDFromBytes(byte[])` compatibility: MD5 the
@@ -301,8 +301,8 @@ pub fn v3(namespace: &Uuid, name: &String) nothrow -> Uuid {
 /// without rebuilding the inputs.
 pub fn v3_from_bytes(bytes: &Array<Byte>) nothrow -> Uuid {
 	var hash = crypto.md5(bytes);
-	_stamp_version_and_variant(&mut hash, 3);
-	return _uuid_from_16_bytes(&hash);
+	_stamp_version_and_variant(hash, 3);
+	return _uuid_from_16_bytes(hash);
 }
 
 /// Convenience pairing of `core.string_to_utf8_bytes` and
@@ -313,7 +313,7 @@ pub fn v3_from_bytes(bytes: &Array<Byte>) nothrow -> Uuid {
 /// in the hash input).
 pub fn v3_from_string(s: &String) nothrow -> Uuid {
 	val bytes = core.string_to_utf8_bytes(s);
-	return v3_from_bytes(&bytes);
+	return v3_from_bytes(bytes);
 }
 
 // ─── v5 (name-based, SHA-1) ────────────────────────────────────────
@@ -325,16 +325,16 @@ pub fn v3_from_string(s: &String) nothrow -> Uuid {
 pub fn v5(namespace: &Uuid, name: &String) nothrow -> Uuid {
 	val ns_bytes = to_bytes(namespace);
 	var combined = ns_bytes.clone_with_capacity(ns_bytes.len + name.byte_length());
-	_append_name_bytes(&mut combined, name);
-	val full_hash = crypto.sha1(&combined);
+	_append_name_bytes(combined, name);
+	val full_hash = crypto.sha1(combined);
 	var hash: Array<Byte> = [];
 	var k = 0;
 	while k < 16 {
 		hash.push(full_hash[k]);
 		k = k + 1;
 	}
-	_stamp_version_and_variant(&mut hash, 5);
-	return _uuid_from_16_bytes(&hash);
+	_stamp_version_and_variant(hash, 5);
+	return _uuid_from_16_bytes(hash);
 }
 
 // ─── v4 (random) ───────────────────────────────────────────────────
@@ -348,8 +348,8 @@ pub fn v4() nothrow -> core.Result<Uuid, UuidError> {
 	match random.random_secure_bytes(16) {
 		Ok(bytes) => {
 			var b = move bytes;
-			_stamp_version_and_variant(&mut b, 4);
-			return core.Result::Ok(_uuid_from_16_bytes(&b));
+			_stamp_version_and_variant(b, 4);
+			return core.Result::Ok(_uuid_from_16_bytes(b));
 		},
 		Err(e) => {
 			return core.Result::Err(UuidError(

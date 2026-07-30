@@ -12,23 +12,23 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 		val msg = argv[1];
 		val len = msg.byte_length();
 		var addr = net.socket_addr("127.0.0.1", 5555);
-		val s = net.connect(&addr, io_t).or_throw();
+		val s = net.connect(addr, io_t).or_throw();
 		if len < 1 { return 2; }
 		var wbuf = io.buffer(len);
 		var i = 0;
 		while i < len {
 			val b = core.string_byte_at(msg, i);
-			io.buffer_write(&mut wbuf, i, b);
+			io.buffer_write(wbuf, i, b);
 			i = i + 1;
 		}
-		val n = s.write(&wbuf, io_t).or_throw();
+		val n = s.write(wbuf, io_t).or_throw();
 		if n != len { return 2; }
 		var rbuf = io.buffer(len);
-		val r = s.read(&mut rbuf, io_t).or_throw();
+		val r = s.read(rbuf, io_t).or_throw();
 		if r != len { return 3; }
 		var j = 0;
 		while j < len {
-			val got = io.buffer_read(&mut rbuf, j);
+			val got = io.buffer_read(rbuf, j);
 			val exp = core.string_byte_at(msg, j);
 			if got != exp { return 4; }
 			j = j + 1;

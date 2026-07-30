@@ -296,10 +296,10 @@ pub fn utf8_from_bytes_range(bytes: &Array<Byte>, start: Int, end: Int) nothrow 
 	var b = io.buffer(n);
 	var i = 0;
 	while i < n {
-		io.buffer_write(&mut b, i, bytes[start + i]);
+		io.buffer_write(b, i, bytes[start + i]);
 		i = i + 1;
 	}
-	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), io.buffer_len(&b)));
+	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(b), io.buffer_len(b)));
 }
 
 // ── Substring ───────────────────────────────────────────────────────
@@ -327,10 +327,10 @@ pub fn substring(s: &String, start: Int, len: Int) nothrow -> core.Result<String
 	var b = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		io.buffer_write(b, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(&b), len));
+	return core.Result::Ok(core.string_from_utf8_bytes(io.buffer_ptr(b), len));
 }
 
 // ── Byte classifiers ────────────────────────────────────────────────
@@ -370,8 +370,8 @@ pub struct StringBuilder {
 implement core.Destructible for StringBuilder {
 	pub fn destroy(var self: StringBuilder) nothrow -> Void {
 		if self.cap > 0 {
-			val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
-			val cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+			val ptr = mem.rawbuffer_ptr<type Byte>(self.buf);
+			val cap = mem.rawbuffer_cap<type Byte>(self.buf);
 			var tmp = mem.rawbuffer_from_parts<type Byte>(ptr, cap);
 			mem.dealloc<type Byte>(tmp);
 		}
@@ -401,13 +401,13 @@ fn _sb_grow(self: &mut StringBuilder, needed: Int) nothrow -> Void {
 		var new_buf = mem.alloc_uninit<type Byte>(new_cap);
 		var i = 0;
 		while i < cur_len {
-			val b = mem.read<type Byte>(&mut self.buf, i);
-			mem.write<type Byte>(&mut new_buf, i, b);
+			val b = mem.read<type Byte>(self.buf, i);
+			mem.write<type Byte>(new_buf, i, b);
 			i = i + 1;
 		}
 		if cur_cap > 0 {
-			val old_ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
-			val old_cap = mem.rawbuffer_cap<type Byte>(&self.buf);
+			val old_ptr = mem.rawbuffer_ptr<type Byte>(self.buf);
+			val old_cap = mem.rawbuffer_cap<type Byte>(self.buf);
 			var old_tmp = mem.rawbuffer_from_parts<type Byte>(old_ptr, old_cap);
 			mem.dealloc<type Byte>(old_tmp);
 		}
@@ -429,7 +429,7 @@ pub fn sb_append_string(self: &mut StringBuilder, s: &String) nothrow -> Void {
 	val base = self.len;
 	var i = 0;
 	while i < n {
-		mem.write<type Byte>(&mut self.buf, base + i, core.string_byte_at(s, i));
+		mem.write<type Byte>(self.buf, base + i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
 	self.len = base + n;
@@ -440,7 +440,7 @@ fn _sb_append_byte(self: &mut StringBuilder, b: Byte) nothrow -> Void {
 	if needed > self.cap {
 		_sb_grow(self, needed);
 	}
-	mem.write<type Byte>(&mut self.buf, self.len, b);
+	mem.write<type Byte>(self.buf, self.len, b);
 	self.len = self.len + 1;
 }
 
@@ -455,7 +455,7 @@ fn _sb_append_substring(self: &mut StringBuilder, s: &String, start: Int, len: I
 	val base = self.len;
 	var i = 0;
 	while i < len {
-		mem.write<type Byte>(&mut self.buf, base + i, core.string_byte_at(s, start + i));
+		mem.write<type Byte>(self.buf, base + i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
 	self.len = base + len;
@@ -474,7 +474,7 @@ pub fn sb_build(self: &mut StringBuilder) nothrow -> String {
 	if self.len == 0 {
 		return "";
 	}
-	val ptr = mem.rawbuffer_ptr<type Byte>(&self.buf);
+	val ptr = mem.rawbuffer_ptr<type Byte>(self.buf);
 	return core.string_from_utf8_bytes(ptr, self.len);
 }
 
@@ -659,13 +659,13 @@ pub fn lower(s: &String) nothrow -> String {
 	while i < n {
 		val b = core.string_byte_at(s, i);
 		if b >= cast<Byte>(65) and b <= cast<Byte>(90) {
-			io.buffer_write(&mut buf, i, cast<Byte>(cast<Int>(b) + 32));
+			io.buffer_write(buf, i, cast<Byte>(cast<Int>(b) + 32));
 		} else {
-			io.buffer_write(&mut buf, i, b);
+			io.buffer_write(buf, i, b);
 		}
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, n);
+	return _string_from_buffer(buf, n);
 }
 
 /// Returns a copy of `s` with all ASCII lowercase letters converted to uppercase.
@@ -681,13 +681,13 @@ pub fn upper(s: &String) nothrow -> String {
 	while i < n {
 		val b = core.string_byte_at(s, i);
 		if b >= cast<Byte>(97) and b <= cast<Byte>(122) {
-			io.buffer_write(&mut buf, i, cast<Byte>(cast<Int>(b) - 32));
+			io.buffer_write(buf, i, cast<Byte>(cast<Int>(b) - 32));
 		} else {
-			io.buffer_write(&mut buf, i, b);
+			io.buffer_write(buf, i, b);
 		}
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, n);
+	return _string_from_buffer(buf, n);
 }
 
 // ── Trimming ────────────────────────────────────────────────────────
@@ -713,10 +713,10 @@ pub fn trim(s: &String) nothrow -> String {
 	var buf = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		io.buffer_write(buf, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, len);
+	return _string_from_buffer(buf, len);
 }
 
 /// Returns `s` with leading ASCII whitespace removed.
@@ -736,10 +736,10 @@ pub fn trim_start(s: &String) nothrow -> String {
 	var buf = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		io.buffer_write(buf, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, len);
+	return _string_from_buffer(buf, len);
 }
 
 /// Returns `s` with trailing ASCII whitespace removed.
@@ -758,10 +758,10 @@ pub fn trim_end(s: &String) nothrow -> String {
 	var buf = io.buffer(end);
 	var i = 0;
 	while i < end {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, i));
+		io.buffer_write(buf, i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, end);
+	return _string_from_buffer(buf, end);
 }
 
 /// Returns `s` with leading and trailing bytes found in `chars` removed.
@@ -791,10 +791,10 @@ pub fn strip(s: &String, chars: &String) nothrow -> String {
 	var buf = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		io.buffer_write(buf, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, len);
+	return _string_from_buffer(buf, len);
 }
 
 fn _byte_in_set(b: Byte, chars: &String, cn: Int) nothrow -> Bool {
@@ -819,8 +819,8 @@ pub fn char_at(s: &String, index: Int) nothrow -> core.Result<String, TextError>
 		return core.Result::Err(TextError(tag = "out-of-bounds", offset = index));
 	}
 	var buf = io.buffer(1);
-	io.buffer_write(&mut buf, 0, core.string_byte_at(s, index));
-	return core.Result::Ok(_string_from_buffer(&mut buf, 1));
+	io.buffer_write(buf, 0, core.string_byte_at(s, index));
+	return core.Result::Ok(_string_from_buffer(buf, 1));
 }
 
 /// Splits `s` on every non-overlapping occurrence of `delimiter`.
@@ -836,8 +836,8 @@ pub fn split(s: &String, delimiter: &String) nothrow -> Array<String> {
 		var i = 0;
 		while i < sn {
 			var buf = io.buffer(1);
-			io.buffer_write(&mut buf, 0, core.string_byte_at(s, i));
-			arr.push(_string_from_buffer(&mut buf, 1));
+			io.buffer_write(buf, 0, core.string_byte_at(s, i));
+			arr.push(_string_from_buffer(buf, 1));
 			i = i + 1;
 		}
 		return move arr;
@@ -848,10 +848,10 @@ pub fn split(s: &String, delimiter: &String) nothrow -> Array<String> {
 	while start <= sn {
 		val pos = _index_of_from(s, sn, delimiter, dn, start);
 		if pos < 0 {
-			_push_slice(&mut arr, s, start, sn - start);
+			_push_slice(arr, s, start, sn - start);
 			return move arr;
 		}
-		_push_slice(&mut arr, s, start, pos - start);
+		_push_slice(arr, s, start, pos - start);
 		start = pos + dn;
 	}
 	return move arr;
@@ -877,15 +877,15 @@ pub fn split_limit(s: &String, delimiter: &String, max: Int) nothrow -> Array<St
 	while start <= sn and splits < max {
 		val pos = _index_of_from(s, sn, delimiter, dn, start);
 		if pos < 0 {
-			_push_slice(&mut arr, s, start, sn - start);
+			_push_slice(arr, s, start, sn - start);
 			return move arr;
 		}
-		_push_slice(&mut arr, s, start, pos - start);
+		_push_slice(arr, s, start, pos - start);
 		start = pos + dn;
 		splits = splits + 1;
 	}
 	// Remainder
-	_push_slice(&mut arr, s, start, sn - start);
+	_push_slice(arr, s, start, sn - start);
 	return move arr;
 }
 
@@ -925,10 +925,10 @@ fn _push_slice(arr: &mut Array<String>, s: &String, start: Int, len: Int) nothro
 	var buf = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, start + i));
+		io.buffer_write(buf, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	arr.push(_string_from_buffer(&mut buf, len));
+	arr.push(_string_from_buffer(buf, len));
 }
 
 // ── Replacement / transformation ────────────────────────────────────
@@ -947,14 +947,14 @@ pub fn replace(s: &String, old: &String, repl: &String) nothrow -> String {
 	while start <= sn {
 		val pos = _index_of_from(s, sn, old, on, start);
 		if pos < 0 {
-			_sb_append_substring(&mut sb, s, start, sn - start);
-			return sb_build(&mut sb);
+			_sb_append_substring(sb, s, start, sn - start);
+			return sb_build(sb);
 		}
-		_sb_append_substring(&mut sb, s, start, pos - start);
-		sb_append_string(&mut sb, repl);
+		_sb_append_substring(sb, s, start, pos - start);
+		sb_append_string(sb, repl);
 		start = pos + on;
 	}
-	return sb_build(&mut sb);
+	return sb_build(sb);
 }
 
 /// Returns a copy of `s` with the first occurrence of `old` replaced by `repl`.
@@ -971,10 +971,10 @@ pub fn replace_first(s: &String, old: &String, repl: &String) nothrow -> String 
 		return *s;
 	}
 	var sb = string_builder(sn);
-	_sb_append_substring(&mut sb, s, 0, pos);
-	sb_append_string(&mut sb, repl);
-	_sb_append_substring(&mut sb, s, pos + on, sn - pos - on);
-	return sb_build(&mut sb);
+	_sb_append_substring(sb, s, 0, pos);
+	sb_append_string(sb, repl);
+	_sb_append_substring(sb, s, pos + on, sn - pos - on);
+	return sb_build(sb);
 }
 
 /// Returns a copy of `s` with all occurrences of `target` removed.
@@ -982,7 +982,7 @@ pub fn replace_first(s: &String, old: &String, repl: &String) nothrow -> String 
 /// Equivalent to `replace(s, target, "")`.
 pub fn remove(s: &String, target: &String) nothrow -> String {
 	val empty = "";
-	return replace(s, target, &empty);
+	return replace(s, target, empty);
 }
 
 /// Returns `s` repeated `n` times. Returns `""` if `n <= 0`.
@@ -1001,13 +1001,13 @@ pub fn repeat(s: &String, n: Int) nothrow -> String {
 	while rep < n {
 		var i = 0;
 		while i < sn {
-			io.buffer_write(&mut buf, k, core.string_byte_at(s, i));
+			io.buffer_write(buf, k, core.string_byte_at(s, i));
 			k = k + 1;
 			i = i + 1;
 		}
 		rep = rep + 1;
 	}
-	return _string_from_buffer(&mut buf, total);
+	return _string_from_buffer(buf, total);
 }
 
 /// Returns a byte-level reversal of `s`.
@@ -1022,10 +1022,10 @@ pub fn reverse(s: &String) nothrow -> String {
 	var buf = io.buffer(n);
 	var i = 0;
 	while i < n {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, n - 1 - i));
+		io.buffer_write(buf, i, core.string_byte_at(s, n - 1 - i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, n);
+	return _string_from_buffer(buf, n);
 }
 
 // ── Padding ─────────────────────────────────────────────────────────
@@ -1042,15 +1042,15 @@ pub fn pad_start(s: &String, width: Int, fill: Byte) nothrow -> String {
 	var buf = io.buffer(width);
 	var i = 0;
 	while i < pad {
-		io.buffer_write(&mut buf, i, fill);
+		io.buffer_write(buf, i, fill);
 		i = i + 1;
 	}
 	i = 0;
 	while i < sn {
-		io.buffer_write(&mut buf, pad + i, core.string_byte_at(s, i));
+		io.buffer_write(buf, pad + i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, width);
+	return _string_from_buffer(buf, width);
 }
 
 /// Returns `s` padded on the right with `fill` bytes to at least `width` bytes.
@@ -1064,14 +1064,14 @@ pub fn pad_end(s: &String, width: Int, fill: Byte) nothrow -> String {
 	var buf = io.buffer(width);
 	var i = 0;
 	while i < sn {
-		io.buffer_write(&mut buf, i, core.string_byte_at(s, i));
+		io.buffer_write(buf, i, core.string_byte_at(s, i));
 		i = i + 1;
 	}
 	while i < width {
-		io.buffer_write(&mut buf, i, fill);
+		io.buffer_write(buf, i, fill);
 		i = i + 1;
 	}
-	return _string_from_buffer(&mut buf, width);
+	return _string_from_buffer(buf, width);
 }
 
 // ── Joining ─────────────────────────────────────────────────────────
@@ -1088,14 +1088,14 @@ pub fn join(parts: &Array<String>, separator: &String) nothrow -> String {
 		return parts[0];
 	}
 	var sb = string_builder(64);
-	sb_append_string(&mut sb, &parts[0]);
+	sb_append_string(sb, parts[0]);
 	var i = 1;
 	while i < n {
-		sb_append_string(&mut sb, separator);
-		sb_append_string(&mut sb, &parts[i]);
+		sb_append_string(sb, separator);
+		sb_append_string(sb, parts[i]);
 		i = i + 1;
 	}
-	return sb_build(&mut sb);
+	return sb_build(sb);
 }
 
 // ── String-level predicates ─────────────────────────────────────────
@@ -1330,7 +1330,7 @@ implement StringByteView {
 		if i < 0 or i >= self.len {
 			return core.Result::Err(err.IndexError(container_id = STRING_BYTE_VIEW_CONTAINER_ID, index = i));
 		}
-		return core.Result::Ok(core.string_byte_at(&self.backing, self.start + i));
+		return core.Result::Ok(core.string_byte_at(self.backing, self.start + i));
 	}
 
 	/// Returns an O(1) view of bytes `[start, start + len)` OF THIS
@@ -1362,8 +1362,8 @@ implement StringByteView {
 		}
 		var i = 0;
 		while i < self.len {
-			if core.string_byte_at(&self.backing, self.start + i)
-					!= core.string_byte_at(&other.backing, other.start + i) {
+			if core.string_byte_at(self.backing, self.start + i)
+					!= core.string_byte_at(other.backing, other.start + i) {
 				return false;
 			}
 			i = i + 1;
@@ -1378,7 +1378,7 @@ implement StringByteView {
 		}
 		var i = 0;
 		while i < self.len {
-			if core.string_byte_at(&self.backing, self.start + i) != core.string_byte_at(s, i) {
+			if core.string_byte_at(self.backing, self.start + i) != core.string_byte_at(s, i) {
 				return false;
 			}
 			i = i + 1;
@@ -1394,8 +1394,8 @@ implement StringByteView {
 		}
 		var i = 0;
 		while i < prefix.len {
-			if core.string_byte_at(&self.backing, self.start + i)
-					!= core.string_byte_at(&prefix.backing, prefix.start + i) {
+			if core.string_byte_at(self.backing, self.start + i)
+					!= core.string_byte_at(prefix.backing, prefix.start + i) {
 				return false;
 			}
 			i = i + 1;
@@ -1411,7 +1411,7 @@ implement StringByteView {
 		}
 		var i = 0;
 		while i < pn {
-			if core.string_byte_at(&self.backing, self.start + i) != core.string_byte_at(prefix, i) {
+			if core.string_byte_at(self.backing, self.start + i) != core.string_byte_at(prefix, i) {
 				return false;
 			}
 			i = i + 1;
@@ -1428,8 +1428,8 @@ implement StringByteView {
 		val base = self.start + self.len - suffix.len;
 		var i = 0;
 		while i < suffix.len {
-			if core.string_byte_at(&self.backing, base + i)
-					!= core.string_byte_at(&suffix.backing, suffix.start + i) {
+			if core.string_byte_at(self.backing, base + i)
+					!= core.string_byte_at(suffix.backing, suffix.start + i) {
 				return false;
 			}
 			i = i + 1;
@@ -1446,7 +1446,7 @@ implement StringByteView {
 		val base = self.start + self.len - sn;
 		var i = 0;
 		while i < sn {
-			if core.string_byte_at(&self.backing, base + i) != core.string_byte_at(suffix, i) {
+			if core.string_byte_at(self.backing, base + i) != core.string_byte_at(suffix, i) {
 				return false;
 			}
 			i = i + 1;
@@ -1467,8 +1467,8 @@ implement StringByteView {
 			var matched = true;
 			var j = 0;
 			while j < needle.len {
-				if core.string_byte_at(&self.backing, self.start + i + j)
-						!= core.string_byte_at(&needle.backing, needle.start + j) {
+				if core.string_byte_at(self.backing, self.start + i + j)
+						!= core.string_byte_at(needle.backing, needle.start + j) {
 					matched = false;
 					j = needle.len;
 				} else {
@@ -1496,7 +1496,7 @@ implement StringByteView {
 			var matched = true;
 			var j = 0;
 			while j < nn {
-				if core.string_byte_at(&self.backing, self.start + i + j)
+				if core.string_byte_at(self.backing, self.start + i + j)
 						!= core.string_byte_at(needle, j) {
 					matched = false;
 					j = nn;
@@ -1524,10 +1524,10 @@ implement StringByteView {
 		var b = io.buffer(self.len);
 		var i = 0;
 		while i < self.len {
-			io.buffer_write(&mut b, i, core.string_byte_at(&self.backing, self.start + i));
+			io.buffer_write(b, i, core.string_byte_at(self.backing, self.start + i));
 			i = i + 1;
 		}
-		return core.string_from_utf8_bytes(io.buffer_ptr(&b), self.len);
+		return core.string_from_utf8_bytes(io.buffer_ptr(b), self.len);
 	}
 
 	/// Consumes the view into a byte iterator.  Consumption (rather
@@ -1552,7 +1552,7 @@ implement ViewBytesIter {
 		if self.idx >= self.v.len {
 			return Optional<Byte>::None();
 		}
-		val b = core.string_byte_at(&self.v.backing, self.v.start + self.idx);
+		val b = core.string_byte_at(self.v.backing, self.v.start + self.idx);
 		self.idx = self.idx + 1;
 		return Optional::Some(b);
 	}
@@ -1633,7 +1633,7 @@ pub fn with_view_bytes<T, F>(v: &StringByteView, var body: F) nothrow -> T requi
 		core.callback2(|p: mem.Ptr<Byte>, n: Int| captures(move body, copy start, copy vlen) => {
 			body.call(mem.ptr_offset<type Byte>(p, start), vlen)
 		});
-	return ffi.with_bytes<type T, core.Callback2<mem.Ptr<Byte>, Int, T> >(&v.backing, inner);
+	return ffi.with_bytes<type T, core.Callback2<mem.Ptr<Byte>, Int, T> >(v.backing, inner);
 }
 
 /// Throwing-callback form of `with_view_bytes` (same window
@@ -1645,7 +1645,7 @@ pub fn with_view_bytes_throw<T, F>(v: &StringByteView, var body: F) -> T require
 		core.callback_throw2(|p: mem.Ptr<Byte>, n: Int| captures(move body, copy start, copy vlen) => {
 			body.call(mem.ptr_offset<type Byte>(p, start), vlen)
 		});
-	return ffi.with_bytes_throw<type T, core.CallbackThrow2<mem.Ptr<Byte>, Int, T> >(&v.backing, inner);
+	return ffi.with_bytes_throw<type T, core.CallbackThrow2<mem.Ptr<Byte>, Int, T> >(v.backing, inner);
 }
 
 /// Splits `s` on `delimiter` into VIEWS — field structure EXACTLY as

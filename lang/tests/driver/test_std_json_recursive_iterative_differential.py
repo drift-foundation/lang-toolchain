@@ -34,7 +34,11 @@ from lang.tests.driver._json_oracle_stdlib import build_oracle_stdlib
 
 ROOT = Path(__file__).resolve().parents[3]
 _FRAG = ROOT / "lang" / "tests" / "fixtures" / "json_recursive_oracle.drift.frag"
-_FRAG_SHA256 = "adef5119f2c36d5f6577e0d965f1f4df92a9b6fe1f8fff465aef2206dd470949"
+# Re-pinned 2026-07-30 (review-approved): the reject-redundant-call-borrows
+# sweep bared 18 explicit borrows in the oracle fragment (one-token
+# deletions; IR-equivalent — parity and perf-band gates below prove the
+# baseline is unchanged in behavior).
+_FRAG_SHA256 = "c3714429c75d3140b451b9f7dcf0d2fc2d4a273ce34fb788c8cac1f7782a80a6"
 
 
 def _dq(s: str) -> str:
@@ -140,7 +144,7 @@ def _build_src() -> str:
 		{pushes}
 		var q = 0;
 		while q < ps.len {{
-			if not agree_pointer_span(&d, &kl, &ps[q]) {{
+			if not agree_pointer_span(d, kl, ps[q]) {{
 				cons.println("MISMATCH span-tree " + ps[q]);
 				mism = mism + 1;
 			}}
@@ -180,7 +184,7 @@ fn agree_nonlocated(input: &String, cfg: &json.JsonParseConfig) nothrow -> Bool 
 	match json.parse_with_config(input, cfg) {
 		core.Result::Ok(inode) => {
 			match json._oracle_parse_with_config(input, cfg) {
-				core.Result::Ok(rnode) => { return value_eq(&inode, &rnode); },
+				core.Result::Ok(rnode) => { return value_eq(inode, rnode); },
 				core.Result::Err(_re) => { return false; }
 			}
 		},
@@ -257,12 +261,12 @@ pub fn main() nothrow -> Int {
 		var p = 0;
 		while p < 3 {
 			val cfg = cfg_for(p);
-			if not agree_nonlocated(inp, &cfg) {
+			if not agree_nonlocated(inp, cfg) {
 				cons.println("MISMATCH nonlocated p=" + fmt.format_int(p) + " #" + fmt.format_int(i) + ": " + *inp);
 				mism = mism + 1;
 			}
 			total = total + 1;
-			if not agree_located(inp, &cfg) {
+			if not agree_located(inp, cfg) {
 				cons.println("MISMATCH located p=" + fmt.format_int(p) + " #" + fmt.format_int(i) + ": " + *inp);
 				mism = mism + 1;
 			}

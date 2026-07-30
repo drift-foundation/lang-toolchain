@@ -14,13 +14,13 @@ fn run() -> Int {
 		return 3;
 	}
 	val k1 = 1;
-	if not s.contains(&k1) {
+	if not s.contains(k1) {
 		return 4;
 	}
-	if not s.remove(&k1) {
+	if not s.remove(k1) {
 		return 5;
 	}
-	if s.contains(&k1) {
+	if s.contains(k1) {
 		return 6;
 	}
 	return 0;

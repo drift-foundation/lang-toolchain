@@ -68,7 +68,7 @@ pub fn main() nothrow -> Int {
 	var acc = 0;
 	var round = 0;
 	while round < 3 {
-		acc = acc + render(&names, 9);
+		acc = acc + render(names, 9);
 		round = round + 1;
 	}
 	if acc > 0 { return 0; }

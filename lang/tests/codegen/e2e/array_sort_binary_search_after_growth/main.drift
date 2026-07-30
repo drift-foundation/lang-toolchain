@@ -15,14 +15,14 @@ pub fn main() nothrow -> Int {
 	arr.push(5);
 	var r = arr.range_mut();
 	try {
-		algo.sort_in_place<type containers.ArrayRangeMut<Int>, Int>(&mut r);
+		algo.sort_in_place<type containers.ArrayRangeMut<Int>, Int>(r);
 	} catch _ {
 		return 10;
 	}
 	var r2 = arr.range();
 	var found_idx = -1;
 	try {
-		val f = algo.binary_search<type containers.ArrayRange<Int>, Int>(&r2, &2);
+		val f = algo.binary_search<type containers.ArrayRange<Int>, Int>(r2, 2);
 		match f {
 			Some(i) => { found_idx = i; },
 			None => {}

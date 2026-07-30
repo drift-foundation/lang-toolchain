@@ -9,9 +9,9 @@ fn worker(dref: conc.Arc<sync.EpochDomain>, loops: Int) nothrow -> Int {
 	var p = sync.epoch_participant();
 	var i = 0;
 	while i < loops {
-		sync.epoch_enter(dref.get(), &mut p);
-		sync.epoch_retire(dref.get(), &p);
-		sync.epoch_leave(dref.get(), &mut p);
+		sync.epoch_enter(dref.get(), p);
+		sync.epoch_retire(dref.get(), p);
+		sync.epoch_leave(dref.get(), p);
 		i = i + 1;
 	}
 	return 0;

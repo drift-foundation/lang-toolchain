@@ -15,7 +15,7 @@ fn run() -> Int {
 		return 1;
 	}
 	val k = 1;
-	val cur = match m.get_mut(&k) {
+	val cur = match m.get_mut(k) {
 		None => { "" },
 		Some(p) => { *p }
 	};

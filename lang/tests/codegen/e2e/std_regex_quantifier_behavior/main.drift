@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.is_match(&re, input);
+			val got = regex.is_match(re, input);
 			if got != expected { return fail_code; }
 			return 0;
 		},
@@ -17,7 +17,7 @@ fn check(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothr
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -34,109 +34,109 @@ pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- §3: a* matches empty and non-empty ---
-	rc = check(&"^a*$", &"", true, 1);
+	rc = check("^a*$", "", true, 1);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a*$", &"a", true, 3);
+	rc = check("^a*$", "a", true, 3);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a*$", &"aaa", true, 5);
+	rc = check("^a*$", "aaa", true, 5);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a*$", &"b", false, 7);
+	rc = check("^a*$", "b", false, 7);
 	if rc != 0 { return rc; }
 
 	// --- §3: a+ requires at least one ---
-	rc = check(&"^a+$", &"", false, 10);
+	rc = check("^a+$", "", false, 10);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a+$", &"a", true, 12);
+	rc = check("^a+$", "a", true, 12);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a+$", &"aaa", true, 14);
+	rc = check("^a+$", "aaa", true, 14);
 	if rc != 0 { return rc; }
 
 	// --- §3: a? optional ---
-	rc = check(&"^a?$", &"", true, 20);
+	rc = check("^a?$", "", true, 20);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a?$", &"a", true, 22);
+	rc = check("^a?$", "a", true, 22);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a?$", &"aa", false, 24);
+	rc = check("^a?$", "aa", false, 24);
 	if rc != 0 { return rc; }
 
 	// --- §3: ab*c / ab+c / ab?c binding checks ---
-	rc = check(&"^ab*c$", &"ac", true, 30);
+	rc = check("^ab*c$", "ac", true, 30);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab*c$", &"abc", true, 32);
+	rc = check("^ab*c$", "abc", true, 32);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab*c$", &"abbc", true, 34);
+	rc = check("^ab*c$", "abbc", true, 34);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab+c$", &"ac", false, 36);
+	rc = check("^ab+c$", "ac", false, 36);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab+c$", &"abc", true, 38);
+	rc = check("^ab+c$", "abc", true, 38);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab+c$", &"abbc", true, 40);
+	rc = check("^ab+c$", "abbc", true, 40);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab?c$", &"ac", true, 42);
+	rc = check("^ab?c$", "ac", true, 42);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab?c$", &"abc", true, 44);
+	rc = check("^ab?c$", "abc", true, 44);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab?c$", &"abbc", false, 46);
+	rc = check("^ab?c$", "abbc", false, 46);
 	if rc != 0 { return rc; }
 
 	// --- §4: alternation + concat precedence ---
 	// "ab|cd" means (ab)|(cd), not a(b|c)d
-	rc = check(&"^ab|cd$", &"ab", true, 50);
+	rc = check("^ab|cd$", "ab", true, 50);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab|cd$", &"cd", true, 52);
+	rc = check("^ab|cd$", "cd", true, 52);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^ab|cd$", &"ad", false, 54);
+	rc = check("^ab|cd$", "ad", false, 54);
 	if rc != 0 { return rc; }
 
 	// "a|bc" precedence: (a)|(bc)
-	rc = check(&"^a|bc$", &"a", true, 56);
+	rc = check("^a|bc$", "a", true, 56);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^a|bc$", &"bc", true, 58);
+	rc = check("^a|bc$", "bc", true, 58);
 	if rc != 0 { return rc; }
 
 	// "(ab|c)d" grouping
-	rc = check(&"^(ab|c)d$", &"abd", true, 60);
+	rc = check("^(ab|c)d$", "abd", true, 60);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^(ab|c)d$", &"cd", true, 62);
+	rc = check("^(ab|c)d$", "cd", true, 62);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^(ab|c)d$", &"ad", false, 64);
+	rc = check("^(ab|c)d$", "ad", false, 64);
 	if rc != 0 { return rc; }
 
 	// multi-branch "a|b|c|d"
-	rc = check(&"^(a|b|c|d)$", &"a", true, 70);
+	rc = check("^(a|b|c|d)$", "a", true, 70);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^(a|b|c|d)$", &"d", true, 72);
+	rc = check("^(a|b|c|d)$", "d", true, 72);
 	if rc != 0 { return rc; }
 
-	rc = check(&"^(a|b|c|d)$", &"e", false, 74);
+	rc = check("^(a|b|c|d)$", "e", false, 74);
 	if rc != 0 { return rc; }
 
 	// --- greedy: quantifier takes longest ---
-	rc = check_match(&"a+", &"xaaay", 1, 4, 80);
+	rc = check_match("a+", "xaaay", 1, 4, 80);
 	if rc != 0 { return rc; }
 
-	rc = check_match(&"a*b", &"aaab", 0, 4, 84);
+	rc = check_match("a*b", "aaab", 0, 4, 84);
 	if rc != 0 { return rc; }
 
 	return 0;

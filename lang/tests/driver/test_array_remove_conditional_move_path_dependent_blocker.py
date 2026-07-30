@@ -85,7 +85,7 @@ pub fn main() nothrow -> Int {
 	a.push(Holder(raw = 1));
 	a.push(Holder(raw = 0));
 	a.push(Holder(raw = 2));
-	val out = drain(&mut a);
+	val out = drain(a);
 	return out.len;
 }
 """

@@ -1,4 +1,4 @@
 {
-  "description": "e2e: borrow rvalue string param",
+  "description": "A3 (reject-redundant-call-borrows D5): TRUE rvalue at a declared &String formal \u2014 a bare literal argument auto-borrows via a scope-end materialized temp (the rule's motivating case). Historically this fixture was a byte-identical duplicate of borrow_string_param; it now matches its name.",
   "exit_code": 3
 }

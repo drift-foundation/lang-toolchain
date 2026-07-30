@@ -19,49 +19,49 @@ pub fn main() nothrow -> Int {
 	// ── lower ───────────────────────────────────────────────────
 	val l1 = text.lower("HELLO");
 	val e1 = "hello";
-	if !str_eq(&l1, &e1) { return 1; }
+	if !str_eq(l1, e1) { return 1; }
 
 	val l2 = text.lower("Hello World");
 	val e2 = "hello world";
-	if !str_eq(&l2, &e2) { return 2; }
+	if !str_eq(l2, e2) { return 2; }
 
 	// digits/punctuation unchanged
 	val l3 = text.lower("ABC123!@#");
 	val e3 = "abc123!@#";
-	if !str_eq(&l3, &e3) { return 3; }
+	if !str_eq(l3, e3) { return 3; }
 
 	// already lowercase
 	val l4 = text.lower("already");
 	val e4 = "already";
-	if !str_eq(&l4, &e4) { return 4; }
+	if !str_eq(l4, e4) { return 4; }
 
 	// empty
 	val l5 = text.lower("");
 	val e5 = "";
-	if !str_eq(&l5, &e5) { return 5; }
+	if !str_eq(l5, e5) { return 5; }
 
 	// ── upper ───────────────────────────────────────────────────
 	val u1 = text.upper("hello");
 	val eu1 = "HELLO";
-	if !str_eq(&u1, &eu1) { return 10; }
+	if !str_eq(u1, eu1) { return 10; }
 
 	val u2 = text.upper("Hello World");
 	val eu2 = "HELLO WORLD";
-	if !str_eq(&u2, &eu2) { return 11; }
+	if !str_eq(u2, eu2) { return 11; }
 
 	val u3 = text.upper("abc123!@#");
 	val eu3 = "ABC123!@#";
-	if !str_eq(&u3, &eu3) { return 12; }
+	if !str_eq(u3, eu3) { return 12; }
 
 	// already uppercase
 	val u4 = text.upper("ALREADY");
 	val eu4 = "ALREADY";
-	if !str_eq(&u4, &eu4) { return 13; }
+	if !str_eq(u4, eu4) { return 13; }
 
 	// empty
 	val u5 = text.upper("");
 	val eu5 = "";
-	if !str_eq(&u5, &eu5) { return 14; }
+	if !str_eq(u5, eu5) { return 14; }
 
 	return 0;
 }

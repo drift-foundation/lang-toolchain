@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -22,7 +22,7 @@ fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, f
 fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			if regex.is_match(&re, input) != expected { return fail_code; }
+			if regex.is_match(re, input) != expected { return fail_code; }
 			return 0;
 		},
 		core.Result::Err(_) => { return fail_code + 1; }
@@ -33,7 +33,7 @@ fn check_compile_err(pattern: &String, exp_tag: &String, fail_code: Int) nothrow
 	match regex.compile(pattern) {
 		core.Result::Ok(_) => { return fail_code; },
 		core.Result::Err(e) => {
-			if !str_eq(&e.tag, exp_tag) { return fail_code + 1; }
+			if !str_eq(e.tag, exp_tag) { return fail_code + 1; }
 			return 0;
 		}
 	}
@@ -65,35 +65,35 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// Hyphen at start: [-abc] matches '-', 'a', 'b', 'c'.
-	rc = check_is_match(&"[-abc]", &"-", true, 10);
+	rc = check_is_match("[-abc]", "-", true, 10);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[-abc]", &"a", true, 12);
+	rc = check_is_match("[-abc]", "a", true, 12);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[-abc]", &"x", false, 14);
+	rc = check_is_match("[-abc]", "x", false, 14);
 	if rc != 0 { return rc; }
 
 	// Hyphen at end: [abc-] matches '-', 'a', 'b', 'c'.
-	rc = check_is_match(&"[abc-]", &"-", true, 16);
+	rc = check_is_match("[abc-]", "-", true, 16);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[abc-]", &"c", true, 18);
+	rc = check_is_match("[abc-]", "c", true, 18);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[abc-]", &"x", false, 20);
+	rc = check_is_match("[abc-]", "x", false, 20);
 	if rc != 0 { return rc; }
 
 	// Hyphen in middle: [a-z] is a range.
-	rc = check_is_match(&"[a-z]", &"m", true, 22);
+	rc = check_is_match("[a-z]", "m", true, 22);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a-z]", &"A", false, 24);
+	rc = check_is_match("[a-z]", "A", false, 24);
 	if rc != 0 { return rc; }
 
 	// Escaped hyphen: [a\-z] matches 'a', '-', 'z' (NOT range).
-	rc = check_is_match(&"[a\\-z]", &"-", true, 26);
+	rc = check_is_match("[a\\-z]", "-", true, 26);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\-z]", &"a", true, 28);
+	rc = check_is_match("[a\\-z]", "a", true, 28);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\-z]", &"z", true, 30);
+	rc = check_is_match("[a\\-z]", "z", true, 30);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\-z]", &"m", false, 32);
+	rc = check_is_match("[a\\-z]", "m", false, 32);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -106,27 +106,27 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// ] as first char: []abc] matches ']', 'a', 'b', 'c'.
-	rc = check_is_match(&"[]abc]", &"]", true, 40);
+	rc = check_is_match("[]abc]", "]", true, 40);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[]abc]", &"a", true, 42);
+	rc = check_is_match("[]abc]", "a", true, 42);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[]abc]", &"x", false, 44);
+	rc = check_is_match("[]abc]", "x", false, 44);
 	if rc != 0 { return rc; }
 
 	// ] as first char after negation: [^]abc] matches anything except ']','a','b','c'.
-	rc = check_is_match(&"[^]abc]", &"x", true, 46);
+	rc = check_is_match("[^]abc]", "x", true, 46);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[^]abc]", &"]", false, 48);
+	rc = check_is_match("[^]abc]", "]", false, 48);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[^]abc]", &"a", false, 50);
+	rc = check_is_match("[^]abc]", "a", false, 50);
 	if rc != 0 { return rc; }
 
 	// Escaped ] inside class: [a\]b] matches 'a', ']', 'b'.
-	rc = check_is_match(&"[a\\]b]", &"]", true, 52);
+	rc = check_is_match("[a\\]b]", "]", true, 52);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\]b]", &"a", true, 54);
+	rc = check_is_match("[a\\]b]", "a", true, 54);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\]b]", &"x", false, 56);
+	rc = check_is_match("[a\\]b]", "x", false, 56);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -139,23 +139,23 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// ^ as negation: [^a] matches anything except 'a'.
-	rc = check_is_match(&"[^a]", &"b", true, 60);
+	rc = check_is_match("[^a]", "b", true, 60);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[^a]", &"a", false, 62);
+	rc = check_is_match("[^a]", "a", false, 62);
 	if rc != 0 { return rc; }
 
 	// ^ not first: [a^b] matches 'a', '^', 'b'.
-	rc = check_is_match(&"[a^b]", &"^", true, 64);
+	rc = check_is_match("[a^b]", "^", true, 64);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a^b]", &"a", true, 66);
+	rc = check_is_match("[a^b]", "a", true, 66);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a^b]", &"x", false, 68);
+	rc = check_is_match("[a^b]", "x", false, 68);
 	if rc != 0 { return rc; }
 
 	// Escaped ^ inside class: [a\^b] matches 'a', '^', 'b'.
-	rc = check_is_match(&"[a\\^b]", &"^", true, 70);
+	rc = check_is_match("[a\\^b]", "^", true, 70);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\^b]", &"x", false, 72);
+	rc = check_is_match("[a\\^b]", "x", false, 72);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -163,35 +163,35 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// \\  inside class: [a\\b] matches 'a', '\', 'b'.
-	rc = check_is_match(&"[a\\\\b]", &"\\", true, 80);
+	rc = check_is_match("[a\\\\b]", "\\", true, 80);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\\\b]", &"a", true, 82);
+	rc = check_is_match("[a\\\\b]", "a", true, 82);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[a\\\\b]", &"x", false, 84);
+	rc = check_is_match("[a\\\\b]", "x", false, 84);
 	if rc != 0 { return rc; }
 
 	// \d inside class: [\da-f] matches digits and a-f (hex chars).
-	rc = check_is_match(&"[\\da-f]", &"5", true, 86);
+	rc = check_is_match("[\\da-f]", "5", true, 86);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\da-f]", &"c", true, 88);
+	rc = check_is_match("[\\da-f]", "c", true, 88);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\da-f]", &"g", false, 90);
+	rc = check_is_match("[\\da-f]", "g", false, 90);
 	if rc != 0 { return rc; }
 
 	// \w inside class: [\w.] matches word chars plus dot.
-	rc = check_is_match(&"[\\w.]", &"a", true, 92);
+	rc = check_is_match("[\\w.]", "a", true, 92);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\w.]", &".", true, 94);
+	rc = check_is_match("[\\w.]", ".", true, 94);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\w.]", &"!", false, 96);
+	rc = check_is_match("[\\w.]", "!", false, 96);
 	if rc != 0 { return rc; }
 
 	// \s inside class: [\sa] matches whitespace plus 'a'.
-	rc = check_is_match(&"[\\sa]", &" ", true, 98);
+	rc = check_is_match("[\\sa]", " ", true, 98);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\sa]", &"a", true, 100);
+	rc = check_is_match("[\\sa]", "a", true, 100);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[\\sa]", &"b", false, 102);
+	rc = check_is_match("[\\sa]", "b", false, 102);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -199,18 +199,18 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// Class with ], -, ^ all together: []^-] matches ']', '^', '-'.
-	rc = check_is_match(&"[]^-]", &"]", true, 110);
+	rc = check_is_match("[]^-]", "]", true, 110);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[]^-]", &"^", true, 112);
+	rc = check_is_match("[]^-]", "^", true, 112);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[]^-]", &"-", true, 114);
+	rc = check_is_match("[]^-]", "-", true, 114);
 	if rc != 0 { return rc; }
-	rc = check_is_match(&"[]^-]", &"a", false, 116);
+	rc = check_is_match("[]^-]", "a", false, 116);
 	if rc != 0 { return rc; }
 
 	// find_first offset check on class match.
 	// [abc]+ on "xxabcxx" → match at 2..5.
-	rc = check_match(&"[abc]+", &"xxabcxx", 2, 5, 120);
+	rc = check_match("[abc]+", "xxabcxx", 2, 5, 120);
 	if rc != 0 { return rc; }
 
 	// =================================================================
@@ -218,19 +218,19 @@ pub fn main() nothrow -> Int {
 	// =================================================================
 
 	// Reversed range: [z-a] → error.
-	rc = check_compile_err(&"[z-a]", &"reversed-range", 130);
+	rc = check_compile_err("[z-a]", "reversed-range", 130);
 	if rc != 0 { return rc; }
 
 	// Unclosed class: [abc → error.
-	rc = check_compile_err(&"[abc", &"unclosed-class", 132);
+	rc = check_compile_err("[abc", "unclosed-class", 132);
 	if rc != 0 { return rc; }
 
 	// Trailing backslash in class: [a\ → error.
-	rc = check_compile_err(&"[a\\", &"trailing-backslash-in-class", 134);
+	rc = check_compile_err("[a\\", "trailing-backslash-in-class", 134);
 	if rc != 0 { return rc; }
 
 	// Invalid escape in class: [a\q] → error.
-	rc = check_compile_err(&"[a\\q]", &"invalid-escape-in-class", 136);
+	rc = check_compile_err("[a\\q]", "invalid-escape-in-class", 136);
 	if rc != 0 { return rc; }
 
 	return 0;

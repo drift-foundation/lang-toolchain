@@ -69,7 +69,7 @@ fn run(counter: &conc.Arc<atomic.AtomicInt>) nothrow -> Void {
 
 pub fn main() nothrow -> Int {
 \tval counter = conc.arc(atomic.atomic_int(0));
-\trun(&counter);
+\trun(counter);
 \treturn atomic.atomic_load_int(counter.get(), 0);
 }
 """

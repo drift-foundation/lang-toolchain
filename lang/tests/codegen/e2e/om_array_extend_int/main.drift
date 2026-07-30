@@ -21,12 +21,12 @@ pub struct Holder<T> {
 
 fn scenario_hvar_local() nothrow -> Int {
 	// Setup phase varies by shape; transfer site is always
-	// `dest.extend(&src_arr)` with src_arr a borrowed local array.
+	// `dest.extend(src_arr)` with src_arr a borrowed local array.
 	var src_arr: Array<Int> = [];
 	val src: Int = 42;
 	src_arr.push(src);
 	var dest: Array<Int> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 { return 1; }
 	if (dest[0]) != 42 { return 1; }
 	if src_arr.len != 1 { return 2; }
@@ -34,11 +34,11 @@ fn scenario_hvar_local() nothrow -> Int {
 }
 fn scenario_hcall_rvalue() nothrow -> Int {
 	// Setup phase varies by shape; transfer site is always
-	// `dest.extend(&src_arr)` with src_arr a borrowed local array.
+	// `dest.extend(src_arr)` with src_arr a borrowed local array.
 	var src_arr: Array<Int> = [];
 	src_arr.push(42);
 	var dest: Array<Int> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 { return 1; }
 	if (dest[0]) != 42 { return 1; }
 	if src_arr.len != 1 { return 2; }
@@ -46,12 +46,12 @@ fn scenario_hcall_rvalue() nothrow -> Int {
 }
 fn scenario_projection() nothrow -> Int {
 	// Setup phase varies by shape; transfer site is always
-	// `dest.extend(&src_arr)` with src_arr a borrowed local array.
+	// `dest.extend(src_arr)` with src_arr a borrowed local array.
 	var src_arr: Array<Int> = [];
 	val holder: Holder<Int> = Holder(field = 42);
 	src_arr.push(holder.field);
 	var dest: Array<Int> = [];
-	dest.extend(&src_arr);
+	dest.extend(src_arr);
 	if dest.len != 1 { return 1; }
 	if (dest[0]) != 42 { return 1; }
 	if src_arr.len != 1 { return 2; }

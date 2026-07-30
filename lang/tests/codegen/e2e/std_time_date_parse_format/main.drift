@@ -9,7 +9,7 @@ fn expect_date(s: String, y: Int, mo: Int, d: Int, canon: String) -> Int {
 			if dt.year != y { return 1; }
 			if dt.month != mo { return 2; }
 			if dt.day != d { return 3; }
-			if time.format_iso8601_date(&dt) != canon { return 4; }
+			if time.format_iso8601_date(dt) != canon { return 4; }
 			return 0;
 		},
 		core.Result::Err(_) => { return 5; }

@@ -12,7 +12,7 @@ fn _inner(main: &log.Logger, st: &mut rt.ScopedStack<log.LogContext>) nothrow ->
 	val g2 = st.push(move inner);
 	match st.peek() {
 		Some(top) => {
-			main.info("inner", top, {"req": core.diagnostic_json_string(&"r-override"), "code": core.diagnostic_json_int(500)});
+			main.info("inner", top, {"req": core.diagnostic_json_string("r-override"), "code": core.diagnostic_json_int(500)});
 		},
 		None => {
 			return 32;
@@ -56,7 +56,7 @@ fn run() -> Int {
 	if st.depth() != 0 {
 		return 1;
 	}
-	val rc = _outer(&main, &mut st);
+	val rc = _outer(main, st);
 	if rc != 0 {
 		return rc;
 	}

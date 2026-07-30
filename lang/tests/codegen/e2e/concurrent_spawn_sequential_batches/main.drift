@@ -21,14 +21,14 @@ fn code_from_error(diag_json: String) nothrow -> Int {
 }
 
 fn server_task(listener: net.TcpListener, timeout: conc.Duration) -> Int {
-	val s = net.accept(&listener, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); });
+	val s = net.accept(listener, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-2)); });
 	val _ = s.close(timeout);
 	return 0;
 }
 
 fn client_task(port: Int, timeout: conc.Duration) -> Int {
 	var caddr = net.socket_addr("127.0.0.1", port);
-	val cs = net.connect(&caddr, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-3)); });
+	val cs = net.connect(caddr, timeout).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-3)); });
 	val _ = cs.close(timeout);
 	return 0;
 }
@@ -37,7 +37,7 @@ fn run() -> Int {
 	val io_t = conc.Duration(millis = 5000);
 	// Batch 1: TCP listen + connect on VTs (forces reactor init + I/O).
 	var addr = net.socket_addr("127.0.0.1", 0);
-	val listener = net.listen(&addr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); });
+	val listener = net.listen(addr, io_t).on_error(|_e| => { throw std.err:ResultError(diag_json = core.diagnostic_json_int(-1)); });
 	val port = listener.local_port();
 	var server = conc.spawn(| | captures(move listener, copy io_t) => {
 		return try server_task(move listener, io_t) catch std.err:ResultError(e) {

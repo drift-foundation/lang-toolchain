@@ -240,7 +240,7 @@ pub fn main() nothrow -> Int {
 \t\twhile k < 3 {
 \t\t\tmatch receiver.recv() {
 \t\t\t\tOk(_) => {
-\t\t\t\t\tval c = _reload("__DIR__", &live_w, &drops_w);
+\t\t\t\t\tval c = _reload("__DIR__", live_w, drops_w);
 \t\t\t\t\t// Per-reload ack on stderr (unbuffered): the test reads this to
 \t\t\t\t\t// confirm reload k observed exactly `c` entries BEFORE mutating the
 \t\t\t\t\t// directory for reload k+1 — no timing sleeps.

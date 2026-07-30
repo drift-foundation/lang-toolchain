@@ -12,11 +12,11 @@ pub fn main() nothrow -> Int {
 
 	// Write known bytes [0x41, 0x5B, 0xCC, 0xDD]
 	var wbuf = io.buffer(4);
-	io.buffer_write(&mut wbuf, 0, cast<Byte>(65));   // 0x41
-	io.buffer_write(&mut wbuf, 1, cast<Byte>(91));   // 0x5B (the MariaDB handshake byte)
-	io.buffer_write(&mut wbuf, 2, cast<Byte>(204));  // 0xCC
-	io.buffer_write(&mut wbuf, 3, cast<Byte>(221));  // 0xDD
-	val wptr = io.buffer_ptr(&wbuf);
+	io.buffer_write(wbuf, 0, cast<Byte>(65));   // 0x41
+	io.buffer_write(wbuf, 1, cast<Byte>(91));   // 0x5B (the MariaDB handshake byte)
+	io.buffer_write(wbuf, 2, cast<Byte>(204));  // 0xCC
+	io.buffer_write(wbuf, 3, cast<Byte>(221));  // 0xDD
+	val wptr = io.buffer_ptr(wbuf);
 	val wn = thread.io_write(wfd, wptr, 4);
 	val _ = thread.io_close(wfd);
 	if wn != 4 { return 2; }
@@ -29,17 +29,17 @@ pub fn main() nothrow -> Int {
 	//   1. io_read into raw ptr
 	//   2. buffer_set_len (THIS IS THE BUG PATH)
 	var rbuf = io.buffer(16);
-	val rptr = io.buffer_ptr_mut(&mut rbuf);
+	val rptr = io.buffer_ptr_mut(rbuf);
 	val n = thread.io_read(rfd, rptr, 16);
 	val _ = thread.io_close(rfd);
 	if n != 4 { return 4; }
-	io.buffer_commit_read(&mut rbuf, n);  // fixed: no zero-fill over io_read data
+	io.buffer_commit_read(rbuf, n);  // fixed: no zero-fill over io_read data
 
 	// Assert byte fidelity at each index
-	if io.buffer_read(&mut rbuf, 0) != cast<Byte>(65) { return 10; }   // 0x41
-	if io.buffer_read(&mut rbuf, 1) != cast<Byte>(91) { return 11; }   // 0x5B
-	if io.buffer_read(&mut rbuf, 2) != cast<Byte>(204) { return 12; }  // 0xCC
-	if io.buffer_read(&mut rbuf, 3) != cast<Byte>(221) { return 13; }  // 0xDD
+	if io.buffer_read(rbuf, 0) != cast<Byte>(65) { return 10; }   // 0x41
+	if io.buffer_read(rbuf, 1) != cast<Byte>(91) { return 11; }   // 0x5B
+	if io.buffer_read(rbuf, 2) != cast<Byte>(204) { return 12; }  // 0xCC
+	if io.buffer_read(rbuf, 3) != cast<Byte>(221) { return 13; }  // 0xDD
 
 	return 0;
 }

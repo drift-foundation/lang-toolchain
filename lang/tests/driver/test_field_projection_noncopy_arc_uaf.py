@@ -101,9 +101,9 @@ fn dispatch_direct(h: &Holder) nothrow -> Int {
 pub fn main() nothrow -> Int {
 	val original = conc.arc(S(n = 7)).as_interface<type I>();
 	val h = Holder(arc = move original);
-	val cloned = clone_direct(&h);
+	val cloned = clone_direct(h);
 	val r1 = cloned.get().v();
-	val r2 = dispatch_direct(&h);
+	val r2 = dispatch_direct(h);
 	if r1 != 7 { return 1; }
 	if r2 != 7 { return 2; }
 	return 0;

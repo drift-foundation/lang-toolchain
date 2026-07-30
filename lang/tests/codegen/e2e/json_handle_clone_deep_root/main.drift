@@ -6,12 +6,12 @@ import std.core as core;
 pub fn main() nothrow -> Int {
 	// Use array to get deterministic encode order.
 	val text = "[1,true,\"hi\",null]";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
-			val orig_enc = json.encode_compact(&node);
+			val orig_enc = json.encode_compact(node);
 			val handle = json.share(move node);
 			val cloned = handle.clone_deep();
-			val cloned_enc = json.encode_compact(&cloned);
+			val cloned_enc = json.encode_compact(cloned);
 			if orig_enc != cloned_enc { return 1; }
 			if cloned_enc != "[1,true,\"hi\",null]" { return 2; }
 			return 0;

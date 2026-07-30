@@ -262,7 +262,7 @@ pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&Req, &mut Ctx,
 \t    core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>,
 \t    core.Result<Resp, AppErr>>> = [];
-\tregister_mw(&mut slot, |req, ctx, next| => {
+\tregister_mw(slot, |req, ctx, next| => {
 \t\t// P5: field + method access through inferred params.
 \t\tval m: String = req.method.clone();
 \t\tval p: String = req.path.clone();
@@ -369,7 +369,7 @@ fn register(slot: &mut Array<core.Callback2<&Req, &mut Ctx, core.Result<Resp, Ap
 
 pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>> = [];
-\tregister(&mut slot, |req, ctx| => {
+\tregister(slot, |req, ctx| => {
 \t\tif req.n < 0 {
 \t\t\treturn core.Result::Err(AppErr(code = 400));
 \t\t}
@@ -510,7 +510,7 @@ pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&req.Req, &mut ctx.Ctx,
 \t    core.Callback2<&req.Req, &mut ctx.Ctx, core.Result<types.Resp, types.AppErr>>,
 \t    core.Result<types.Resp, types.AppErr>>> = [];
-\tapi.register_mw(&mut slot, |r, c, next| => {
+\tapi.register_mw(slot, |r, c, next| => {
 \t\tval m: String = r.method.clone();
 \t\tc.idx = c.idx + 1;
 \t\tval inner: core.Result<types.Resp, types.AppErr> = next.call(r, c);
@@ -631,7 +631,7 @@ pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&lib.Req, &mut lib.Ctx,
 \t    core.Callback2<&lib.Req, &mut lib.Ctx, core.Result<lib.Resp, lib.AppErr>>,
 \t    core.Result<lib.Resp, lib.AppErr>>> = [];
-\tlib.register_mw(&mut slot, |req, ctx, next| => {
+\tlib.register_mw(slot, |req, ctx, next| => {
 \t\tval m: String = req.method.clone();
 \t\tctx.idx = ctx.idx + 1;
 \t\tval inner: core.Result<lib.Resp, lib.AppErr> = next.call(req, ctx);
@@ -732,7 +732,7 @@ pub fn main() nothrow -> Int {
 \tvar slot: Array<core.Callback3<&Req, &mut Ctx,
 \t    core.Callback2<&Req, &mut Ctx, core.Result<Resp, AppErr>>,
 \t    core.Result<Resp, AppErr>>> = [];
-\tregister(&mut slot, |req, ctx, next| => {
+\tregister(slot, |req, ctx, next| => {
 \t\tval m: String = req.method.clone();
 \t\tctx.idx = ctx.idx + 1;
 \t\tval inner: core.Result<Resp, AppErr> = next.call(req, ctx);

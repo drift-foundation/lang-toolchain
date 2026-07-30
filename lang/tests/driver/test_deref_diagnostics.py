@@ -65,7 +65,7 @@ pub fn main() nothrow -> Int {
 	var xs: Array<Int> = [];
 	xs.push(1);
 	val b = Box(xs = move xs);
-	val out = take(&b);
+	val out = take(b);
 	return out.xs.len;
 }
 """,

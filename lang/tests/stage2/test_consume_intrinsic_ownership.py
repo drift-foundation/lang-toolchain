@@ -64,8 +64,8 @@ pub fn main() nothrow -> Int {
 \tvar b = Box(n = 1);
 \tunsafe {
 \t\tvar raw: mem.RawBuffer<Box> = mem.alloc_uninit<type Box>(1);
-\t\tmem.write<type Box>(&mut raw, 0, b);
-\t\tvar b2 = mem.read<type Box>(&mut raw, 0);
+\t\tmem.write<type Box>(raw, 0, b);
+\t\tvar b2 = mem.read<type Box>(raw, 0);
 \t\tcore.drop_value<type Box>(b2);
 \t\tmem.dealloc<type Box>(raw);
 \t}
@@ -79,7 +79,7 @@ pub fn main() nothrow -> Int {
 \tvar b = Box(n = 1);
 \tvar slot = Box(n = 0);
 \tunsafe {
-\t\tvar p = mem.ptr_from_ref_mut<type Box>(&mut slot);
+\t\tvar p = mem.ptr_from_ref_mut<type Box>(slot);
 \t\tmem.ptr_write<type Box>(p, b);
 \t}
 \treturn 0;
@@ -91,7 +91,7 @@ _FIXTURE_REPLACE_BODY = """\
 pub fn main() nothrow -> Int {
 \tvar slot = Box(n = 1);
 \tvar fresh = Box(n = 2);
-\tvar old = mem.replace<type Box>(&mut slot, fresh);
+\tvar old = mem.replace<type Box>(slot, fresh);
 \tcore.drop_value<type Box>(old);
 \treturn 0;
 }
@@ -103,8 +103,8 @@ pub fn main() nothrow -> Int {
 \tval b = Box(n = 1);
 \tunsafe {
 \t\tvar slot = mem.maybe_uninit<type Box>();
-\t\tmem.maybe_write<type Box>(&mut slot, b);
-\t\tval b2 = mem.maybe_assume_init_read<type Box>(&mut slot);
+\t\tmem.maybe_write<type Box>(slot, b);
+\t\tval b2 = mem.maybe_assume_init_read<type Box>(slot);
 \t\tcore.drop_value<type Box>(b2);
 \t}
 \treturn 0;

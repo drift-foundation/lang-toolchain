@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 6: & of a call result at a &String formal is redundant",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'mk()' directly"
+    }
+  ]
+}

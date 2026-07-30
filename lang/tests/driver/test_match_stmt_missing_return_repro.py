@@ -27,10 +27,10 @@ pub fn main() nothrow -> Int {
 	match w {
 		Ok(v) => {
 			var buf = io.buffer(3);
-			io.buffer_write(&mut buf, 0, cast<Byte>(65));
-			io.buffer_write(&mut buf, 1, cast<Byte>(66));
-			io.buffer_write(&mut buf, 2, cast<Byte>(67));
-			val wres = v.write(&buf);
+			io.buffer_write(buf, 0, cast<Byte>(65));
+			io.buffer_write(buf, 1, cast<Byte>(66));
+			io.buffer_write(buf, 2, cast<Byte>(67));
+			val wres = v.write(buf);
 			val wok = match wres {
 				Ok(n) => { (n != 3) ? 1 : 0 },
 				default => { 2 }
@@ -53,7 +53,7 @@ pub fn main() nothrow -> Int {
 	match r {
 		Ok(v2) => {
 			var buf2 = io.buffer(3);
-			val rres = v2.read(&mut buf2);
+			val rres = v2.read(buf2);
 			val n = match rres {
 				Ok(v) => { v },
 				default => { 5 }

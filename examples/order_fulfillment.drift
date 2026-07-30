@@ -17,8 +17,8 @@ fn verify(order: &Order) nothrow -> Bool {
 
 fn ship(order: Order) -> Void {
 	console.println("debug-start");
-	console.println(fmt.format_bool(verify(&order)));
-	if verify(&order) {
+	console.println(fmt.format_bool(verify(order)));
+	if verify(order) {
 		val shipping_id: String = "Trk:" + order.sku;
 		// `^` captures the binding as a diagnostic attribute on any
 		// error thrown while it is in scope.

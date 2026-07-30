@@ -8,14 +8,14 @@ pub fn main() nothrow -> Int {
 	var d = codec.hex_decoder();
 	d.allow_whitespace(true);
 	d.allow_prefix_0x(true);
-	match d.decode(&fixture) {
+	match d.decode(fixture) {
 		core.Result::Err(err) => { return 1; },
 		core.Result::Ok(vals) => {
 			if vals.len != 6 { return 2; }
-			if codec.hex_encode(&vals) != "deadbeef0102" { return 3; }
+			if codec.hex_encode(vals) != "deadbeef0102" { return 3; }
 		}
 	}
-	match codec.hex_decode(&fixture) {
+	match codec.hex_decode(fixture) {
 		core.Result::Ok(v) => { return 4; },
 		core.Result::Err(err) => { }
 	}

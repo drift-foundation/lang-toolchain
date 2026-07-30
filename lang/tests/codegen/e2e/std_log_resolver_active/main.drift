@@ -51,30 +51,30 @@ fn run() -> Int {
 	// Explicit ctx: resolver suppressed; only explicit attrs surface.
 	var explicit = log.log_context();
 	explicit.put("scope", "explicit");
-	main.info("explicit-info", &explicit);
+	main.info("explicit-info", explicit);
 
 	// Explicit ctx + pre-projected JSON-text attrs: merge with attrs winning.
 	// Slice 7a: the 3-arg `info(ev, ctx, attrs: HashMap<String, String>)` form
 	// splices values verbatim — the user must hand it canonical JSON via
 	// `core.diagnostic_json_*`.  This is the migration shape for what was
 	// previously the `HashMap<String, DiagnosticValue>` mixed-type override.
-	main.info("explicit-info-attrs", &explicit, {"scope": core.diagnostic_json_string(&"override")});
+	main.info("explicit-info-attrs", explicit, {"scope": core.diagnostic_json_string("override")});
 
 	// Explicit ctx + typed (single-type) attrs: same merge semantics, no JSON-text projection.
-	main.info("explicit-info-typed-attrs", &explicit, {"size": 42});
+	main.info("explicit-info-typed-attrs", explicit, {"size": 42});
 
 	// Explicit empty ctx: per-call opt-out from resolver.
-	main.info("opt-out-info", &log.log_context());
+	main.info("opt-out-info", log.log_context());
 
 	// Same patterns at debug, including typed ctx+attrs.
 	main.debug("bare-debug");
-	main.debug("explicit-debug-typed-attrs", &explicit, {"size": 42});
-	main.debug("opt-out-debug", &log.log_context());
+	main.debug("explicit-debug-typed-attrs", explicit, {"size": 42});
+	main.debug("opt-out-debug", log.log_context());
 
 	// Same patterns at error, including typed ctx+attrs.
 	main.error("bare-error");
-	main.error("explicit-error-typed-attrs", &explicit, {"size": 42});
-	main.error("opt-out-error", &log.log_context());
+	main.error("explicit-error-typed-attrs", explicit, {"size": 42});
+	main.error("opt-out-error", log.log_context());
 	return 0;
 }
 

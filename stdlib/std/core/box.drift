@@ -69,7 +69,7 @@ pub struct Box<T> {
 pub fn box<T>(var value: T) nothrow -> Box<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type T>(1);
-		mem.write<type T>(&mut buf, 0, move value);
+		mem.write<type T>(buf, 0, move value);
 		return Box<type T>(buf = move buf);
 	}
 }
@@ -79,7 +79,7 @@ implement<T> Box<T> {
 	/// of `self`; there is no implicit deref — access is always explicit.
 	pub fn get(self: &Box<T>) nothrow -> &T {
 		unsafe {
-			return mem.ptr_at_ref<type T>(&self.buf, 0);
+			return mem.ptr_at_ref<type T>(self.buf, 0);
 		}
 	}
 
@@ -87,7 +87,7 @@ implement<T> Box<T> {
 	/// the exclusive borrow of `self`.
 	pub fn get_mut(self: &mut Box<T>) nothrow -> &mut T {
 		unsafe {
-			return mem.ptr_at_mut<type T>(&mut self.buf, 0);
+			return mem.ptr_at_mut<type T>(self.buf, 0);
 		}
 	}
 
@@ -98,8 +98,8 @@ implement<T> Box<T> {
 	/// is a no-op (no double free, no double drop of `T`).
 	pub fn take(var self: Box<T>) nothrow -> T {
 		unsafe {
-			var old = mem.replace<type mem.RawBuffer<T>>(&mut self.buf, mem.rawbuffer_empty<type T>());
-			var v = mem.read<type T>(&mut old, 0);
+			var old = mem.replace<type mem.RawBuffer<T>>(self.buf, mem.rawbuffer_empty<type T>());
+			var v = mem.read<type T>(old, 0);
 			mem.dealloc<type T>(move old);
 			return move v;
 		}
@@ -127,6 +127,6 @@ implement<T> Box<T> {
 /// because the helper is read-only.)
 pub fn _box_is_drained<T>(self: &Box<T>) nothrow -> Bool {
 	unsafe {
-		return mem.ptr_is_null<type Byte>(mem.rawbuffer_ptr<type T>(&self.buf));
+		return mem.ptr_is_null<type Byte>(mem.rawbuffer_ptr<type T>(self.buf));
 	}
 }

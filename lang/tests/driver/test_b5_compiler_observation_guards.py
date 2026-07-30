@@ -57,7 +57,7 @@ pub fn observe_bytes_base(s: String) nothrow -> Int {
 	// guard aborts BEFORE the bytes-base pointer is computed.
 	val cb: core.Callback2<mem.Ptr<Byte>, Int, Int> =
 		core.callback2(|p: mem.Ptr<Byte>, len: Int| => { len + 1 });
-	return ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(&s, cb);
+	return ffi.with_bytes<type Int, core.Callback2<mem.Ptr<Byte>, Int, Int> >(s, cb);
 }
 
 pub fn main() nothrow -> Int {

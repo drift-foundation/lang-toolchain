@@ -4,19 +4,19 @@ import std.core as core;
 
 // Ordered (UTF-8 key-sorted) encoding as a deep-equality proxy for JsonNode.
 fn ord(node: &json.JsonNode) nothrow -> String {
-	return json.encode_with_config(node, &json.JsonConfig(key_order = json.JsonKeyOrder::OrderedLexUtf8()));
+	return json.encode_with_config(node, json.JsonConfig(key_order = json.JsonKeyOrder::OrderedLexUtf8()));
 }
 
 // Assert parse_located(x,cfg).root encodes identically to parse_with_config(x,cfg)
 // — the sidecar must never change duplicate resolution or values.
 fn check(src: String, cfg: &json.JsonParseConfig) nothrow -> Bool {
 	var a_ok = false; var a_enc = "";
-	match json.parse_with_config(&src, cfg) {
-		core.Result::Ok(a) => { a_ok = true; a_enc = ord(&a); },
+	match json.parse_with_config(src, cfg) {
+		core.Result::Ok(a) => { a_ok = true; a_enc = ord(a); },
 		core.Result::Err(ea) => { a_enc = "ERR:" + ea.tag; }
 	}
 	var b_enc = "";
-	match json.parse_located(&src, cfg) {
+	match json.parse_located(src, cfg) {
 		core.Result::Ok(doc) => { b_enc = ord(doc.root()); },
 		core.Result::Err(eb) => { b_enc = "ERR:" + eb.tag; }
 	}
@@ -45,9 +45,9 @@ pub fn main() nothrow -> Int {
 	var i = 0;
 	while i < corpus.len {
 		val x = corpus[i];
-		if not check(x, &perm) { return 10 + i; }
-		if not check(x, &kf) { return 30 + i; }
-		if not check(x, &st) { return 50 + i; }
+		if not check(x, perm) { return 10 + i; }
+		if not check(x, kf) { return 30 + i; }
+		if not check(x, st) { return 50 + i; }
 		i = i + 1;
 	}
 	return 0;

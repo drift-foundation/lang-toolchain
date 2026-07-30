@@ -87,7 +87,7 @@ pub fn main() nothrow -> Int {
 	rows.push(Row(key = "k"));
 	rows.push(Row(key = "k"));
 	rows.push(Row(key = "x"));
-	if collect(&rows) == 2 {
+	if collect(rows) == 2 {
 		if rows[0].key == "k" { return 0; }
 		return 2;
 	}

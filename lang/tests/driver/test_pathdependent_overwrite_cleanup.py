@@ -81,9 +81,9 @@ fn zu_straight(moved: Bool) nothrow -> Int {
 	var cur = mk_res(1);
 	if moved {
 		val taken = move cur;      // moved on this branch only
-		acc = acc + use_res(&taken);
+		acc = acc + use_res(taken);
 	} else {
-		acc = acc + use_res(&cur); // live on this branch
+		acc = acc + use_res(cur); // live on this branch
 	}
 	cur = mk_res(2);               // OVERWRITE — drop old iff live
 	acc = acc + cur.tag;
@@ -99,9 +99,9 @@ fn zu_loop(reps: Int, moved: Bool) nothrow -> Int {
 	while i < reps {
 		if moved and (i % 2 == 0) {
 			val taken = move cur;
-			acc = acc + use_res(&taken);
+			acc = acc + use_res(taken);
 		} else {
-			acc = acc + use_res(&cur);
+			acc = acc + use_res(cur);
 		}
 		cur = mk_res(200 + i);     // repeated OVERWRITE
 		i = i + 1;
@@ -140,9 +140,9 @@ fn zu_2c(moved: Bool) nothrow -> Int {
 	var cur = mk_res(40);
 	if moved {
 		val taken = move cur;
-		acc = acc + use_res(&taken);
+		acc = acc + use_res(taken);
 	} else {
-		acc = acc + use_res(&cur);
+		acc = acc + use_res(cur);
 	}
 	cur = mk_res(41);              // OVERWRITE — 2c PathDependent site
 	acc = acc + consume(move cur); // UNCONDITIONAL move-out → moved at exit
@@ -157,9 +157,9 @@ fn zu_throwing(moved: Bool, blow: Bool) -> Int {
 	var cur = mk_res(30);
 	if moved {
 		val taken = move cur;
-		acc = acc + use_res(&taken);
+		acc = acc + use_res(taken);
 	} else {
-		acc = acc + use_res(&cur);
+		acc = acc + use_res(cur);
 	}
 	cur = mk_res(31);              // OVERWRITE (guarded, throwing lowering)
 	if blow {

@@ -69,7 +69,7 @@ fn caller(s_ref: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val s: String = "hello";
-	return caller(&s);
+	return caller(s);
 }
 """.lstrip(),
 	)
@@ -92,7 +92,7 @@ fn caller(n_ref: &Int) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val n: Int = 41;
-	return caller(&n);
+	return caller(n);
 }
 """.lstrip(),
 	)
@@ -117,7 +117,7 @@ fn caller(s_mref: &mut String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var s: String = "abc";
-	return caller(&mut s);
+	return caller(s);
 }
 """.lstrip(),
 	)
@@ -144,7 +144,7 @@ fn caller(s_mref: &mut String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	var s: String = "xy";
-	val total = caller(&mut s);
+	val total = caller(s);
 	return total + s.byte_length();
 }
 """.lstrip(),
@@ -173,7 +173,7 @@ fn caller(s_ref: &String) nothrow -> Int {
 
 pub fn main() nothrow -> Int {
 	val s: String = "original";
-	return caller(&s);
+	return caller(s);
 }
 """.lstrip(),
 	)
@@ -229,99 +229,11 @@ pub fn main() nothrow -> Int {
 	assert call_site_diag, f"expected call-site rejection, got: {payload}"
 
 
-def test_ref_to_value_coercion_loses_to_exact_ref_overload(tmp_path: Path) -> None:
-	"""Overload disambiguation: when both `fn pick(s: &T)` and
-	`fn pick(s: T)` exist and the caller passes `&t`, the exact
-	`&T → &T` match must win.  The new `&T → T` coercion is a
-	strict fallback — only considered when no exact / borrow-coerce
-	candidate exists.
-
-	Compile-and-run: the two overload bodies return different
-	values (`byte_length()` vs `byte_length() + 1000`), so the exit
-	code proves WHICH overload was selected.  `rc == 0` alone would
-	pass even if the wrong overload was picked.
-	"""
-	root = Path(__file__).resolve().parents[3]
-	src = tmp_path / "main.drift"
-	src.write_text(
-		"""
-module main;
-
-fn pick(s: &String) nothrow -> Int { return s.byte_length(); }
-fn pick(s: String) nothrow -> Int { return s.byte_length() + 100; }
-
-pub fn main() nothrow -> Int {
-	val s: String = "hello";
-	return pick(&s);
-}
-""".lstrip(),
-		encoding="utf-8",
-	)
-	out_bin = tmp_path / "bin"
-	res = subprocess.run(
-		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
-		 "--stdlib-root", str(root / "stdlib"),
-		 str(src), "--entry", "main::main", "-o", str(out_bin)],
-		cwd=root, capture_output=True, text=True, timeout=sanitizer_timeout(60),
-	)
-	assert res.returncode == 0, f"compile failed: {res.stderr[:1500]}"
-	assert out_bin.exists(), "binary not produced"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(20))
-	# "hello".byte_length() == 5.  Exact `&String` overload returns 5.
-	# The `String` (coerced) overload would return 105.
-	assert run.returncode == 5, (
-		f"wrong overload chosen: exit={run.returncode}; expected 5 "
-		f"(&String overload), 105 would indicate the coerced "
-		f"String overload was selected instead"
-	)
-
-
-def test_ref_to_value_method_overload_prefers_exact_ref(tmp_path: Path) -> None:
-	"""Method-call sibling of the free-function overload pin: when
-	`Box.pick(self, &String)` and `Box.pick(self, String)` both
-	exist and the caller passes `&s`, the exact `&String` overload
-	must win.
-
-	The method-call resolver routes through `_apply_autoborrow_args`
-	for HIR rewriting, but candidate selection happens before the
-	rewrite; this test pins that the rewrite cannot silently
-	upgrade a coerced match to win against an exact one.
-	"""
-	root = Path(__file__).resolve().parents[3]
-	src = tmp_path / "main.drift"
-	src.write_text(
-		"""
-module main;
-
-pub struct Box { v: Int }
-
-implement Box {
-	pub fn pick(self: &Box, s: &String) nothrow -> Int { return self.v + s.byte_length(); }
-	pub fn pick(self: &Box, s: String) nothrow -> Int { return self.v + s.byte_length() + 100; }
-}
-
-pub fn main() nothrow -> Int {
-	val b = Box(v = 10);
-	val s: String = "hello";
-	return b.pick(&s);
-}
-""".lstrip(),
-		encoding="utf-8",
-	)
-	out_bin = tmp_path / "bin"
-	res = subprocess.run(
-		[sys.executable, "-m", "lang.driftc.driftc", "--dev",
-		 "--stdlib-root", str(root / "stdlib"),
-		 str(src), "--entry", "main::main", "-o", str(out_bin)],
-		cwd=root, capture_output=True, text=True, timeout=sanitizer_timeout(60),
-	)
-	assert res.returncode == 0, f"compile failed: {res.stderr[:1500]}"
-	assert out_bin.exists(), "binary not produced"
-	run = subprocess.run([str(out_bin)], capture_output=True, text=True, timeout=sanitizer_timeout(20))
-	# v=10 + "hello".byte_length()=5 → exact `&String` overload returns 15.
-	# The `String` (coerced) overload would return 115.
-	assert run.returncode == 15, (
-		f"wrong method overload chosen: exit={run.returncode}; "
-		f"expected 15 (Box.pick(&String) overload); 115 would "
-		f"indicate the coerced String overload was selected"
-	)
+# RETIRED (reject-redundant-call-borrows, D5 §C1):
+# test_ref_to_value_coercion_loses_to_exact_ref_overload and
+# test_ref_to_value_method_overload_prefers_exact_ref pinned call-site
+# `&` as an overload SELECTOR between `f(s: T)` and `f(s: &T)`.  R2
+# rejects such mode-only-differing overload sets at definition site
+# (E_OVERLOAD_PARAM_MODE_ONLY_DIFF) — the behavior they asserted no
+# longer exists.  Replacement pin: the e2e fixture
+# overload_param_mode_only_diff_rejected (all four ratified shapes).

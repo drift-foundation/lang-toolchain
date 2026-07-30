@@ -5,7 +5,7 @@ import std.json as json;
 
 fn run() -> Int {
 	val t1 = "{\n\"a\":}\n";
-	match json.parse(&t1) {
+	match json.parse(t1) {
 		core.Result::Ok(_) => { return 10; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-syntax" { return 11; }
@@ -15,7 +15,7 @@ fn run() -> Int {
 		}
 	}
 	val t2 = "[1,\n2,\n]";
-	match json.parse(&t2) {
+	match json.parse(t2) {
 		core.Result::Ok(_) => { return 20; },
 		core.Result::Err(e) => {
 			if e.tag != "invalid-syntax" { return 21; }

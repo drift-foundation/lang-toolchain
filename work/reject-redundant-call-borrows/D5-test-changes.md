@@ -37,10 +37,10 @@ Two harness facts drive most dispositions (both verified in source):
 - Python tests: **2 retirements** (the two `&`-as-selector tests, replaced by the
   R2 fixture below), ~14 repurposed/rewritten, the rest mechanical or unaffected.
 - Corpus promotion (D2=include): **426 content-hash deltas** (392 `compiled_ok` +
-  34 `failed`, incl. 13 regenerated `om_*` dirs) **+ exactly 20 additions
-  (enumerated in §D) + 0 removals**; 16 more edited dirs are corpus-`excluded`
-  (no manifest impact). **Universe 1,269 → 1,289 exactly.** Expected partition
-  flips: **0**. One full reviewed promotion.
+  34 `failed`, incl. 13 regenerated `om_*` dirs) **+ exactly 23 additions
+  (enumerated in §D: 15 `failed` + 8 `compiled_ok`) + 0 removals**; 16 more
+  edited dirs are corpus-`excluded` (no manifest impact). **Universe 1,269 →
+  1,292 exactly.** Expected partition flips: **0**. One full reviewed promotion.
 - Two **soundness-shaped verification gates** (B19, C4): if their bare forms stop
   producing their diagnostics, that is a compiler defect to fix in-slice, never an
   expectation edit.
@@ -142,8 +142,8 @@ file incl. expected.json).
 
 > **Promotion arithmetic (exact, authoritative — matches the enumeration below):
 > 426 content-hash deltas** (392 `compiled_ok` + 34 `failed`; includes the 13
-> regenerated `om_*` dirs) **+ 20 additions (13 `failed` + 7 `compiled_ok`) + 0
-> removals. Universe 1,269 → 1,289.** 16 further edited dirs are corpus-`excluded`
+> regenerated `om_*` dirs) **+ 23 additions (15 `failed` + 8 `compiled_ok`) + 0
+> removals. Universe 1,269 → 1,292.** 16 further edited dirs are corpus-`excluded`
 > (no manifest impact). **Expected partition flips: 0.**
 > `environment.driftc_version` moves off 0.33.89; ABI held at 22.
 
@@ -159,10 +159,12 @@ there is a soundness signal, not a promotable delta. All 8 `swap_*`/`replace_*`
 W3-risk fixtures are corpus-excluded, so B-iii expectation churn cannot flip the
 manifest.
 
-**New e2e fixtures — exactly 20, enumerated** (reviewers see concrete files at
-implementation; names and partitions are binding):
+**New e2e fixtures — exactly 23, enumerated** (all exist on disk; names and
+partitions are binding). #21-#23 joined during implementation with their own
+mandates (round-1 findings 2 and 5; the round-3 LANGUAGE_BUG-#3 pin),
+superseding the original 20-count:
 
-`failed` partition — 13:
+`failed` partition — 15:
 1. `redundant_arg_borrow_shared_local_rejected` (row 2, `read(&name)`)
 2. `redundant_arg_borrow_mut_local_rejected` (row 2, `edit(&mut buffer)`)
 3. `redundant_arg_borrow_mut_at_shared_param_rejected` (row 3)
@@ -187,15 +189,24 @@ implementation; names and partitions are binding):
     own set, so the subset-matching harness cannot satisfy multiple expectations
     from one diagnostic; this is the replacement for the two C1 retirements)
 
-`compiled_ok` partition — 7:
-14. `autoborrow_bare_assoc_fn` (assoc-fn family positive)
-15. `autoborrow_bare_interface_arg` (W2 positive)
-16. `autoborrow_bare_mem_intrinsics` (W3 bare-form matrix across all 11 intrinsics)
-17. `autoborrow_bare_lambda_iife` (W5 positive)
-18. `autoborrow_bare_alias_param` (D6 positive — bare at `Handle` formal)
-19. `autoborrow_bare_builtin_extend` (D2 positive — `a.extend(src)`)
-20. `rvalue_arg_temp_drop_bare` (the bare half of the R-2 A/B gate; memcheck lane;
+14. `array_extend_elem_mismatch_rejected` (LANGUAGE_BUG regression, round-1
+    finding 2 — `Array<T>.extend()` accepted a mismatched source element type
+    and mislowered it; see LANGUAGE_BUGS-found-during-implementation.md §2)
+15. `redundant_arg_borrow_assoc_rejected` (round-1 finding 5 — the explicit-
+    rejection half of the associated-function miscompile pins)
+
+`compiled_ok` partition — 8:
+16. `autoborrow_bare_assoc_fn` (assoc-fn family positive)
+17. `autoborrow_bare_interface_arg` (W2 positive)
+18. `autoborrow_bare_mem_intrinsics` (W3 bare-form matrix across all 11 intrinsics)
+19. `autoborrow_bare_lambda_iife` (W5 positive)
+20. `autoborrow_bare_alias_param` (D6 positive — bare at `Handle` formal)
+21. `autoborrow_bare_builtin_extend` (D2 positive — `a.extend(src)`)
+22. `rvalue_arg_temp_drop_bare` (the bare half of the R-2 A/B gate; memcheck lane;
     paired with repurposed A6)
+23. `trait_qualified_ref_type_arg_impl_lookup` (round-3 LANGUAGE_BUG-#3 pin —
+    `Taker<&String>`-style reference type-args resolve their trait impl; see
+    LANGUAGE_BUGS-found-during-implementation.md §3)
 
 **A/B rvalue-gate baseline (round-1 correction 2):** the "explicit baseline" half
 cannot be an e2e fixture — its source would be rejected by the rule itself. The
@@ -248,3 +259,30 @@ validator-assert unit test, post-rename `json._encode_node` pin, D8(b) pins
 - B15/B16: **messages finalized during W3**, under two binding constraints: they
   must remain user-facing type-conflict diagnostics (never internal-flavored), and
   the post-W3 strings are presented for review BEFORE any `expected.json` change.
+
+
+## Change log (rounds 2-3)
+
+The addition enumeration and arithmetic above are AUTHORITATIVE (consolidated
+in round 3, corrected post-round-3 review to a single 23-count list; the
+earlier 20-count appendix flow and the interim "22 + one non-enumerated"
+phrasing are both retired). History: round 2 added
+`array_extend_elem_mismatch_rejected` (now failed #14) and
+`redundant_arg_borrow_assoc_rejected` (now failed #15); round 3 added
+`trait_qualified_ref_type_arg_impl_lookup` (now compiled_ok #23, the
+LANGUAGE_BUG-#3 pin). The earlier
+PROGRESS phrase "11 remaining negatives including assoc" was a counting slip in
+the log, not a dropped approval — all 13 originally approved `failed`-partition
+fixtures verified on disk. Driver-level (non-corpus) additions:
+test_rvalue_arg_temp_drop_ab.py, test_borrow_provenance_stripped.py,
+test_w0_policy_totality_validator.py, test_trait_path_declared_ref_masks.py,
+test_array_extend_source_type.py, test_declared_ref_formal_classifier.py,
+test_fnptr_ref_arg_autoborrow.py (0.33.91 bug slice), and
+test_autoborrow_reresolution_pins.py (round-4/5 corpus-fix pins: both
+stale-arg-types idempotency branches + both Borrow-inference head-selection
+directions; plus the round-5 negative companion row added to
+test_autoborrow_receiver_place.py), and
+test_callback_iface_generic_ref_param_exemption.py (LANGUAGE_BUG #5
+regression: 4 compile/run rows, direct + require-bound boxed callbacks ×
+shared/mutable; unit rows for all three param_index producer shapes added
+to test_declared_ref_formal_classifier.py).

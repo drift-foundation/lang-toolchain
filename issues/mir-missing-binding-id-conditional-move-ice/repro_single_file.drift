@@ -180,7 +180,7 @@ implement Storage for FailingStorage {
         val fs = g.get_mut();
         if fs.mode == MODE_FAIL_F_PUTS_AFTER_FIRST {
             val fpfx = invocation_f_prefix();
-            if bytes_starts_with(key, &fpfx) {
+            if bytes_starts_with(key, fpfx) {
                 fs.fPuts = fs.fPuts + 1;
                 if fs.fPuts >= 2 {
                     return core.Result::Err(injected_unavailable("namespace-F put #" + fmt.format_int(fs.fPuts)));
@@ -208,7 +208,7 @@ pub fn main() nothrow -> Int {
     var w: Storage = FailingStorage(inner = move inner, state = conc.arc(conc.mutex(FailState(mode = 0, fPuts = 0))));
     match w.begin_read() {
         Err(_) => { return 1; },
-        Ok(t) => { w.end_read(&t); },
+        Ok(t) => { w.end_read(t); },
     }
     return 0;
 }

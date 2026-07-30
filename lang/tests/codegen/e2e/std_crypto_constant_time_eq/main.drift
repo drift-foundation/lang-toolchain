@@ -13,7 +13,7 @@ pub fn main() nothrow -> Int {
 	b.push(cast<Byte>(2));
 	b.push(cast<Byte>(3));
 
-	if not crypto.constant_time_eq(&a, &b) {
+	if not crypto.constant_time_eq(a, b) {
 		return 1;
 	}
 
@@ -22,7 +22,7 @@ pub fn main() nothrow -> Int {
 	c.push(cast<Byte>(2));
 	c.push(cast<Byte>(4));
 
-	if crypto.constant_time_eq(&a, &c) {
+	if crypto.constant_time_eq(a, c) {
 		return 2;
 	}
 
@@ -30,18 +30,18 @@ pub fn main() nothrow -> Int {
 	d.push(cast<Byte>(1));
 	d.push(cast<Byte>(2));
 
-	if crypto.constant_time_eq(&a, &d) {
+	if crypto.constant_time_eq(a, d) {
 		return 3;
 	}
 
 	var e1: Array<Byte> = [];
 	var e2: Array<Byte> = [];
 
-	if not crypto.constant_time_eq(&e1, &e2) {
+	if not crypto.constant_time_eq(e1, e2) {
 		return 4;
 	}
 
-	if crypto.constant_time_eq(&e1, &a) {
+	if crypto.constant_time_eq(e1, a) {
 		return 5;
 	}
 
@@ -55,7 +55,7 @@ pub fn main() nothrow -> Int {
 	g.push(cast<Byte>(0));
 	g.push(cast<Byte>(1));
 
-	if crypto.constant_time_eq(&f, &g) {
+	if crypto.constant_time_eq(f, g) {
 		return 6;
 	}
 
@@ -67,7 +67,7 @@ pub fn main() nothrow -> Int {
 	j.push(cast<Byte>(255));
 	j.push(cast<Byte>(255));
 
-	if not crypto.constant_time_eq(&h, &j) {
+	if not crypto.constant_time_eq(h, j) {
 		return 7;
 	}
 

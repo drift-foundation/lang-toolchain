@@ -20,7 +20,7 @@ fn _push_hex(out: &mut Array<Byte>, hex: &String) nothrow -> Void {
 
 fn _hex_bytes(hex: &String) nothrow -> Array<Byte> {
 	var out: Array<Byte> = [];
-	_push_hex(&mut out, hex);
+	_push_hex(out, hex);
 	return move out;
 }
 
@@ -31,25 +31,25 @@ pub fn main() nothrow -> Int {
 	val info1 = _hex_bytes("f0f1f2f3f4f5f6f7f8f9");
 
 	// 1. Extract
-	val prk1 = crypto.hkdf_extract_sha256(&salt1, &ikm1);
+	val prk1 = crypto.hkdf_extract_sha256(salt1, ikm1);
 	if prk1.len != 32 { return 1; }
-	if codec.hex_encode(&prk1) != "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5" { return 2; }
+	if codec.hex_encode(prk1) != "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5" { return 2; }
 
 	// 2. Expand to 42 bytes
-	val expand1 = crypto.hkdf_expand_sha256(&prk1, &info1, 42);
+	val expand1 = crypto.hkdf_expand_sha256(prk1, info1, 42);
 	match expand1 {
 		core.Result::Ok(okm) => {
 			if okm.len != 42 { return 3; }
-			if codec.hex_encode(&okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 4; }
+			if codec.hex_encode(okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 4; }
 		},
 		core.Result::Err(_) => { return 5; }
 	}
 
 	// 3. Full hkdf_sha256
-	val full1 = crypto.hkdf_sha256(&salt1, &ikm1, &info1, 42);
+	val full1 = crypto.hkdf_sha256(salt1, ikm1, info1, 42);
 	match full1 {
 		core.Result::Ok(okm) => {
-			if codec.hex_encode(&okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 6; }
+			if codec.hex_encode(okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 6; }
 		},
 		core.Result::Err(_) => { return 7; }
 	}
@@ -60,20 +60,20 @@ pub fn main() nothrow -> Int {
 	var empty_info: Array<Byte> = [];
 
 	// 4. Extract with empty salt
-	val prk3 = crypto.hkdf_extract_sha256(&empty_salt, &ikm3);
-	if codec.hex_encode(&prk3) != "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04" { return 8; }
+	val prk3 = crypto.hkdf_extract_sha256(empty_salt, ikm3);
+	if codec.hex_encode(prk3) != "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04" { return 8; }
 
 	// 5. Expand with empty info
-	val expand3 = crypto.hkdf_expand_sha256(&prk3, &empty_info, 42);
+	val expand3 = crypto.hkdf_expand_sha256(prk3, empty_info, 42);
 	match expand3 {
 		core.Result::Ok(okm) => {
-			if codec.hex_encode(&okm) != "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8" { return 9; }
+			if codec.hex_encode(okm) != "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8" { return 9; }
 		},
 		core.Result::Err(_) => { return 10; }
 	}
 
 	// 6. Expand len=0 returns empty
-	val expand_zero = crypto.hkdf_expand_sha256(&prk1, &info1, 0);
+	val expand_zero = crypto.hkdf_expand_sha256(prk1, info1, 0);
 	match expand_zero {
 		core.Result::Ok(okm) => {
 			if okm.len != 0 { return 11; }
@@ -82,10 +82,10 @@ pub fn main() nothrow -> Int {
 	}
 
 	// 7. Determinism: same inputs produce same output
-	val full1b = crypto.hkdf_sha256(&salt1, &ikm1, &info1, 42);
+	val full1b = crypto.hkdf_sha256(salt1, ikm1, info1, 42);
 	match full1b {
 		core.Result::Ok(okm) => {
-			if codec.hex_encode(&okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 13; }
+			if codec.hex_encode(okm) != "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865" { return 13; }
 		},
 		core.Result::Err(_) => { return 14; }
 	}

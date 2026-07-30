@@ -30,7 +30,7 @@ pub fn main() nothrow -> Int {
 	val m1 = pred_lock.clone();
 	var waiter1 = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1) nothrow => {
 		var g = m1.get().lock();
-		match cv1.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = -1)) {
+		match cv1.get().wait_timeout<type Bool>(g, conc.Duration(millis = -1)) {
 			core.Result::Ok(_) => { return 91; },
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_FAILED { return 0; }
@@ -48,7 +48,7 @@ pub fn main() nothrow -> Int {
 	val m2 = pred_lock.clone();
 	var waiter2 = conc.spawn_cb(core.callback0(| | captures(move cv2, move m2) nothrow => {
 		var g = m2.get().lock();
-		match cv2.get().wait_timeout<type Bool>(&mut g, conc.Duration(millis = -1000)) {
+		match cv2.get().wait_timeout<type Bool>(g, conc.Duration(millis = -1000)) {
 			core.Result::Ok(_) => { return 91; },
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_FAILED { return 0; }

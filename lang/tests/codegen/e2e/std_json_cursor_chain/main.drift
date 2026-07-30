@@ -18,14 +18,14 @@ fn str_eq(a: &String, b: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val text = "{\"meta\":{\"callback\":{\"status\":\"ok\",\"count\":42,\"ratio\":1.5,\"on\":true}},\"items\":[1,2]}";
 
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Err(_) => { return 100; },
 		core.Result::Ok(root) => {
 
 			// ── Chained .field traversal to String leaf ─────────────
 			val want_ok = "ok";
 			match root.select().field("meta").field("callback").field("status").as_string() {
-				Optional::Some(s) => { if !str_eq(&s, &want_ok) { return 1; } },
+				Optional::Some(s) => { if !str_eq(s, want_ok) { return 1; } },
 				Optional::None() => { return 2; }
 			}
 
@@ -60,12 +60,12 @@ pub fn main() nothrow -> Int {
 
 			// ── Terminal defaults: as_string_or returns fallback on miss ──
 			val fb_str = "fallback";
-			val got_str = root.select().field("meta").field("nope").as_string_or(&fb_str);
-			if !str_eq(&got_str, &fb_str) { return 50; }
+			val got_str = root.select().field("meta").field("nope").as_string_or(fb_str);
+			if !str_eq(got_str, fb_str) { return 50; }
 
 			// Terminal default on success: returns the actual value
-			val got_ok = root.select().field("meta").field("callback").field("status").as_string_or(&fb_str);
-			if !str_eq(&got_ok, &want_ok) { return 51; }
+			val got_ok = root.select().field("meta").field("callback").field("status").as_string_or(fb_str);
+			if !str_eq(got_ok, want_ok) { return 51; }
 
 			val got_int = root.select().field("meta").field("nope").as_int_or(0 - 1);
 			if got_int != 0 - 1 { return 60; }

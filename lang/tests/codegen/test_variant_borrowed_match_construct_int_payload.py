@@ -76,7 +76,7 @@ fn dup(v: &V) nothrow -> V {
 
 pub fn main() nothrow -> Int {
 \tval v = V::N(42);
-\tval v2 = dup(&v);
+\tval v2 = dup(v);
 \treturn 0;
 }
 """

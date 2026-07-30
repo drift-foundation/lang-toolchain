@@ -95,7 +95,7 @@ fn set(p: &mut String, v: String) nothrow -> Void {
 pub fn main() nothrow -> Int {
 	var x = "old" + "";
 	val y = "new";
-	set(&mut x, y);
+	set(x, y);
 	if x == "new" {
 		if y == "new" { return 0; }
 		return 2;

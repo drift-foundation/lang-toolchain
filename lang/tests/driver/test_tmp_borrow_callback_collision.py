@@ -160,14 +160,14 @@ import std.core as core;
 import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
-	val _ = node.get(&"key");
+	val _ = node.get("key");
 	val _: core.Callback1<Int, Void> = core.callback1(|i: Int| => {});
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -204,14 +204,14 @@ import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
 	val key: String = "key";
-	val _ = node.get(&key);
+	val _ = node.get(key);
 	val _: core.Callback1<Int, Void> = core.callback1(|i: Int| => {});
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -234,14 +234,14 @@ import std.core as core;
 import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
-	val _ = node.get(&"key");
+	val _ = node.get("key");
 	val _: core.Callback0<Void> = core.callback0(|| => {});
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -267,13 +267,13 @@ import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
 	val _: core.Callback1<Int, Void> = core.callback1(|i: Int| => {});
-	val _ = node.get(&"key");
+	val _ = node.get("key");
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -299,14 +299,14 @@ import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
 	val key: String = "key";
-	val _ = node.get(&key);
+	val _ = node.get(key);
 	val _: core.Callback1<Int, Void> = core.callback1(|i: Int| => {});
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -314,7 +314,7 @@ pub fn main() nothrow -> Int {
 
 def test_v5_named_local_borrow_no_collision(tmp_path: Path) -> None:
 	"""`&named_local` (where the local has its own SSA slot)
-	doesn't trigger -- only `&"literal"` (which materializes
+	doesn't trigger -- only the bare `"literal"` form (which materializes
 	as anonymous `__tmp_borrowN`) does.  Pinned so future
 	collision fixes don't accidentally affect this path."""
 	cc_rc, cc_err, run_rc, _ = _compile_and_run(tmp_path, "v5", _V5_NAMED_LOCAL_BORROW)
@@ -331,14 +331,14 @@ import std.core as core;
 import std.json as json;
 
 fn use_node(node: &json.JsonNode) nothrow -> Void {
-	val _ = node.get(&"key");
+	val _ = node.get("key");
 	val _: core.Callback2<Int, Int, Void> = core.callback2(|a: Int, b: Int| => {});
 }
 
 pub fn main() nothrow -> Int {
 	val obj = json.new_object();
 	val node: json.JsonNode = obj.to_node();
-	use_node(&node);
+	use_node(node);
 	return 0;
 }
 """
@@ -366,7 +366,7 @@ import std.core as core;
 import std.json as json;
 
 fn use_node(node: &json.JsonNode) -> Void {
-	val _ = node.get(&"key");
+	val _ = node.get("key");
 	val _: core.CallbackThrow1<Int, Void> = core.callback_throw1(|i: Int| => {});
 }
 
@@ -374,7 +374,7 @@ pub fn main() nothrow -> Int {
 	try {
 		val obj = json.new_object();
 		val node: json.JsonNode = obj.to_node();
-		use_node(&node);
+		use_node(node);
 		return 0;
 	} catch any { return 99; }
 }

@@ -28,7 +28,7 @@ def test_match_ref_variant_binder_deref_infers_payload_types(tmp_path: Path) -> 
 
 		pub fn main() nothrow -> Int {
 			val a = Arg::Int(7);
-			val s = enc(&a);
+			val s = enc(a);
 			if s == "i" { return 0; }
 			return 1;
 		}

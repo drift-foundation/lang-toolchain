@@ -1917,7 +1917,35 @@ class Checker:
 				# expression-form `match &x { ... }` makes the outer-arm
 				# binder setup fall back to Unknown for any nested match
 				# whose scrutinee is the binder (F3 nested case).
-				inner_ty = self._infer_expr_type(expr.subject) if expr.subject is not None else None
+				# A borrow of an indexed element reads it by reference, not
+				# by value — suppress the element Copy check, same as the
+				# HField projection-through-index arm above.  Auto-borrow
+				# synthesis (typed checker) wraps bare `f(chain[i])` args in
+				# an HBorrow that is never rewritten by borrow_materialize,
+				# so this arm sees live HIndex subjects.  Suppression must
+				# cover EVERY HIndex on the borrow-subject projection SPINE
+				# (`f(make_matrix()[0][0])` — the inner index otherwise
+				# reaches the element-copy gate), walking HIndex/HField
+				# hops only; expressions INSIDE `[...]` are genuine value
+				# reads and keep their copy checks.
+				_suppress_ids: list[int] = []
+				_spine = expr.subject
+				while _spine is not None:
+					if isinstance(_spine, H.HIndex):
+						_suppress_ids.append(id(_spine))
+						_spine = _spine.subject
+						continue
+					if isinstance(_spine, H.HField):
+						_spine = _spine.subject
+						continue
+					break
+				for _sid in _suppress_ids:
+					self.suppress_index_copy_check_expr_ids.add(_sid)
+				try:
+					inner_ty = self._infer_expr_type(expr.subject) if expr.subject is not None else None
+				finally:
+					for _sid in _suppress_ids:
+						self.suppress_index_copy_check_expr_ids.discard(_sid)
 				if inner_ty is None:
 					return None
 				if bool(getattr(expr, "is_mut", False)):

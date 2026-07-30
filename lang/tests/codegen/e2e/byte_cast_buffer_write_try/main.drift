@@ -6,7 +6,7 @@ import std.core as core;
 fn write_byte() throws -> Int {
 	var buf = io.buffer(1);
 	val b = cast<Byte>(65);
-	io.buffer_write(&mut buf, 0, b);
+	io.buffer_write(buf, 0, b);
 	return 0;
 }
 

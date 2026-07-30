@@ -4,7 +4,7 @@ import std.mem as mem;
 
 pub fn main() nothrow -> Int {
 	var x = 10;
-	val p = unsafe { mem.ptr_from_ref<type Int>(&x) };
+	val p = unsafe { mem.ptr_from_ref<type Int>(x) };
 	val r = mem.ptr_as_mut_ref<type Int>(p);
 	return 0;
 }

@@ -226,7 +226,7 @@ pub fn doit(x: &mut Foo) throws MyErr -> Int {
 pub fn main() nothrow -> Int {
 	var x: Foo = Foo(n = 7);
 	try {
-		val n = doit(&mut x);
+		val n = doit(x);
 		if n == 7 { return 0; }
 		return 1;
 	} catch main:MyErr(e) {

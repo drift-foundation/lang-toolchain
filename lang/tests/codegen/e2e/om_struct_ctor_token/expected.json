@@ -1,4 +1,4 @@
 {
-  "description": "Auto-generated ownership-transfer regression: site=struct_ctor, type=token (non-Copy, core.Destructible).  Token carries an observable `&mut Session { drops: Int }` side channel; every destroy() increments sess.drops.  Each scenario asserts sess.drops == 0 while the token is in flight through the transfer site, then sess.drops == 1 after the destination container goes out of scope.  Shapes: hvar_move (`move tok`) and hcall_rvalue (`make_token(&mut sess)` directly).  Must pass plain + ASAN + memcheck.",
+  "description": "Auto-generated ownership-transfer regression: site=struct_ctor, type=token (non-Copy, core.Destructible).  Token carries an observable `&mut Session { drops: Int }` side channel; every destroy() increments sess.drops.  Each scenario asserts sess.drops == 0 while the token is in flight through the transfer site, then sess.drops == 1 after the destination container goes out of scope.  Shapes: hvar_move (`move tok`) and hcall_rvalue (`make_token(sess)` directly).  Must pass plain + ASAN + memcheck.",
   "exit_code": 0
 }

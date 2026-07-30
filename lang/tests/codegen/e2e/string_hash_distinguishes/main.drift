@@ -3,9 +3,9 @@ module main;
 import std.core.hash as hash;
 
 pub fn main() nothrow -> Int {
-	val h_empty = hash.hash_value(&"");
-	val h_a = hash.hash_value(&"a");
-	val h_b = hash.hash_value(&"b");
+	val h_empty = hash.hash_value("");
+	val h_a = hash.hash_value("a");
+	val h_b = hash.hash_value("b");
 	if h_empty == h_a {
 		return 10;
 	}

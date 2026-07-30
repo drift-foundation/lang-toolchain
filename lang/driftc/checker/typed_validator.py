@@ -137,6 +137,24 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 						if isinstance(node, H.HMethodCall):
 							msg = "internal: method call resolved to trait target in typed mode (checker bug)"
 						diagnostics.append(tc_diag(message=msg, severity="error", span=getattr(node, "loc", None)))
+					# W0 totality (reject-redundant-call-borrows): every
+					# source-written borrow surviving typed mode in a call-
+					# argument slot must carry a policy classification, and
+					# never REDUNDANT (those were rejected). Constructor
+					# targets are outside the rule (fields, not parameters).
+					if call_info is not None and call_info.target.kind is not CallTargetKind.CONSTRUCTOR:
+						for _arg in getattr(node, "args", []) or []:
+							if not isinstance(_arg, H.HBorrow):
+								continue
+							if not getattr(_arg, "source_written", False):
+								continue
+							_pc = getattr(_arg, "policy_class", None)
+							if _pc is None:
+								diagnostics.append(tc_diag(message="internal: unclassified source-written borrow argument survived typed mode (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
+							elif _pc == "redundant":
+								diagnostics.append(tc_diag(message="internal: REDUNDANT-classified borrow argument was accepted (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
+							elif _pc == "mut_rvalue_binding":
+								diagnostics.append(tc_diag(message="internal: MUT_RVALUE_BINDING-classified borrow argument was accepted (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
 			for child in _iter_expr_children(node):
 				_walk_node(child)
 			return

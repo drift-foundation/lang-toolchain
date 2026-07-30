@@ -60,8 +60,8 @@ fn f() -> Int {
 	match rs() {
 		core.Result::Err(e) => { return -1; },
 		core.Result::Ok(s) => {
-			try { val n = boom(); return n + use_s(&s); }
-			catch Me(e) { return use_s(&s); }
+			try { val n = boom(); return n + use_s(s); }
+			catch Me(e) { return use_s(s); }
 		}
 	}
 }
@@ -77,7 +77,7 @@ def test_matcharm_binding_visible_in_bare_block(tmp_path: Path) -> None:
 fn f() nothrow -> Int {
 	match rs() {
 		core.Result::Err(e) => { return -1; },
-		core.Result::Ok(s) => { { return use_s(&s); } }
+		core.Result::Ok(s) => { { return use_s(s); } }
 	}
 }
 pub fn main() nothrow -> Int { return f(); }
@@ -93,8 +93,8 @@ fn f() -> Int {
 		core.Result::Err(e) => { return -1; },
 		core.Result::Ok(s) => {
 			{
-				try { val n = boom(); return n + use_s(&s); }
-				catch Me(e) { return use_s(&s); }
+				try { val n = boom(); return n + use_s(s); }
+				catch Me(e) { return use_s(s); }
 			}
 		}
 	}
@@ -112,8 +112,8 @@ fn f() nothrow -> Int {
 	match rs() {
 		core.Result::Err(e) => { return -1; },
 		core.Result::Ok(s) => {
-			if true { return use_s(&s); }
-			var i = 0; while i < 1 { return use_s(&s); }
+			if true { return use_s(s); }
+			var i = 0; while i < 1 { return use_s(s); }
 			return 0;
 		}
 	}
@@ -134,8 +134,8 @@ fn f() -> Int {
 	match rs() {
 		core.Result::Err(e) => { return -1; },
 		core.Result::Ok(s) => {
-			try { val n = boom(); return n + use_s(&s); }
-			catch Me(s) { val t: String = s.tag; return use_s(&t); }
+			try { val n = boom(); return n + use_s(s); }
+			catch Me(s) { val t: String = s.tag; return use_s(t); }
 		}
 	}
 }

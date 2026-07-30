@@ -32,7 +32,7 @@ fn try_past_deadline(cv_arc: core.Arc<conc.Condvar>, pred_lock: core.Arc<conc.Mu
 	val m1 = pred_lock.clone();
 	var waiter = conc.spawn_cb(core.callback0(| | captures(move cv1, move m1, copy deadline_ms) nothrow => {
 		var g = m1.get().lock();
-		match cv1.get().wait_until<type Bool>(&mut g, deadline_ms) {
+		match cv1.get().wait_until<type Bool>(g, deadline_ms) {
 			core.Result::Ok(_) => { return 91; },
 			core.Result::Err(e) => {
 				if e.kind == conc.CONCURRENCY_KIND_TIMEOUT { return 0; }

@@ -20,9 +20,11 @@ pub fn main() nothrow -> Int {
 	val b = Box(v = 10);
 
 	// Concrete-typed argument (String literal) — must dispatch to the
-	// concrete &String overload, not the generic fallback.
+	// concrete &String overload, not the generic fallback. This pin is
+	// R2's justification for exempting concrete/generic mixed sets from
+	// the mode-erasure overload ban: the BARE call selects the concrete
+	// overload.
 	if b.pick("hello") != 110 { return 1; }
-	if b.pick(&"world") != 110 { return 2; }
 
 	// Argument that doesn't match the concrete overload — must
 	// dispatch to the generic fallback.

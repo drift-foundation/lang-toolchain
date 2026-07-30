@@ -29,19 +29,19 @@ pub fn main() nothrow -> Int {
 
 	// First key must be "driftc".
 	val k0 = "driftc";
-	if !str_eq(pairs[0].key(), &k0) {
+	if !str_eq(pairs[0].key(), k0) {
 		return 2;
 	}
 
 	// Second key must be "abi".
 	val k1 = "abi";
-	if !str_eq(pairs[1].key(), &k1) {
+	if !str_eq(pairs[1].key(), k1) {
 		return 3;
 	}
 
 	// Third key must be "word".
 	val k2 = "word";
-	if !str_eq(pairs[2].key(), &k2) {
+	if !str_eq(pairs[2].key(), k2) {
 		return 4;
 	}
 
@@ -50,7 +50,7 @@ pub fn main() nothrow -> Int {
 	var found_build = false;
 	var i = 0;
 	while i < pairs.len {
-		if str_eq(pairs[i].key(), &k_build) {
+		if str_eq(pairs[i].key(), k_build) {
 			found_build = true;
 		}
 		i = i + 1;

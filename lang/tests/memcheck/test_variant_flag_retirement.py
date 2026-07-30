@@ -66,7 +66,7 @@ fn fill(slot: &mut Optional<D>, name: String) nothrow -> Void {
 // Row A: the parse_located `sp` shape.
 fn row_a(consume: Bool, name: String) nothrow -> Int {
 	var sp: Optional<D> = Optional::None();
-	fill(&mut sp, move name);
+	fill(sp, move name);
 	if consume {
 		match sp {
 			Optional::Some(tree) => { return tree.name.byte_length(); },

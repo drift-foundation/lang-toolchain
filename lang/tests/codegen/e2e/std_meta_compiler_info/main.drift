@@ -37,19 +37,19 @@ fn contains(haystack: &String, needle: &String) nothrow -> Bool {
 pub fn main() nothrow -> Int {
 	val info = meta.compiler_info();
 	val k_driftc = "driftc";
-	if !contains(&info, &k_driftc) {
+	if !contains(info, k_driftc) {
 		return 1;
 	}
 	val k_abi = "abi";
-	if !contains(&info, &k_abi) {
+	if !contains(info, k_abi) {
 		return 2;
 	}
 	val k_word = "word";
-	if !contains(&info, &k_word) {
+	if !contains(info, k_word) {
 		return 3;
 	}
 	val k_build_utc = "build_utc";
-	if !contains(&info, &k_build_utc) {
+	if !contains(info, k_build_utc) {
 		return 4;
 	}
 	// `profile` is the app-visible build-profile tag.  The normal
@@ -57,7 +57,7 @@ pub fn main() nothrow -> Int {
 	// sanitizer modes => "asan"/"ubsan"/"asan_ubsan").  We only
 	// assert presence here so this test stays lane-agnostic.
 	val k_profile = "profile";
-	if !contains(&info, &k_profile) {
+	if !contains(info, k_profile) {
 		return 5;
 	}
 	// `vendor` and `license` are constants of this toolchain build
@@ -67,11 +67,11 @@ pub fn main() nothrow -> Int {
 	// test will surface that as a fail, which is what we want for the
 	// canonical Drift Foundation build.
 	val k_vendor = "vendor The Drift Language Foundation";
-	if !contains(&info, &k_vendor) {
+	if !contains(info, k_vendor) {
 		return 6;
 	}
 	val k_license = "license GPL-3.0";
-	if !contains(&info, &k_license) {
+	if !contains(info, k_license) {
 		return 7;
 	}
 	return 0;

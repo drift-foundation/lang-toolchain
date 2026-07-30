@@ -1,0 +1,20 @@
+module main;
+
+trait Taker<V> {
+	fn take(self: &Self, v: V) nothrow -> Int;
+}
+
+struct Sink { tag: Int }
+
+implement Taker<&String> for Sink {
+	fn take(self: &Sink, v: &String) nothrow -> Int {
+		return v.byte_length();
+	}
+}
+
+pub fn main() nothrow -> Int {
+	val k = Sink(tag = 1);
+	val s: String = "hello";
+	if Taker<&String>::take(k, &s) == 5 { return 0; }
+	return 1;
+}

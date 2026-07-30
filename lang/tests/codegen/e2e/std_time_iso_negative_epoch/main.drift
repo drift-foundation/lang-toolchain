@@ -13,7 +13,7 @@ fn parse_or_fail(s: String) -> core.Result<time.UtcTimestamp, Int> {
 fn expect_canon(s: String, want: String) -> Int {
 	match parse_or_fail(s) {
 		core.Result::Ok(ts) => {
-			if time.format_iso8601_utc(&ts) != want {
+			if time.format_iso8601_utc(ts) != want {
 				return 1;
 			}
 			return 0;
@@ -27,7 +27,7 @@ fn expect_delta(a: String, b: String, want: Int) -> Int {
 		core.Result::Ok(ta) => {
 			match parse_or_fail(b) {
 				core.Result::Ok(tb) => {
-					if time.duration_micros_between(&ta, &tb) != want {
+					if time.duration_micros_between(ta, tb) != want {
 						return 1;
 					}
 					return 0;

@@ -417,7 +417,7 @@ fn take_one(it: &mut containers.ArrayBorrowMutIter<Int>) -> Int {
 pub fn main() -> Int {
 	var xs = [1, 2];
 	var it: containers.ArrayBorrowMutIter<Int> = iter.Iterable::iter(&mut xs);
-	take_one(&mut it);
+	take_one(it);
 	val b = iter.SinglePassIterator::next(&mut it);
 	return 0;
 }

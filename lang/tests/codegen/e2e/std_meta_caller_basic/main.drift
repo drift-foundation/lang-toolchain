@@ -15,7 +15,7 @@ fn run() nothrow -> Int {
 	var j = 0;
 	while j < module_m {
 		val a = core.string_byte_at(module_id, j);
-		val b = core.string_byte_at(&expected_module, j);
+		val b = core.string_byte_at(expected_module, j);
 		if a != b {
 			return 1;
 		}
@@ -31,7 +31,7 @@ fn run() nothrow -> Int {
 	var i = 0;
 	while i < m {
 		val a = core.string_byte_at(file, n - m + i);
-		val b = core.string_byte_at(&suffix, i);
+		val b = core.string_byte_at(suffix, i);
 		if a != b {
 			return 2;
 		}

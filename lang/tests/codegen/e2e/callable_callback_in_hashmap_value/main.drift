@@ -12,9 +12,9 @@ fn run() -> Int {
 	m.insert("triple", core.callback1(triple));
 	if m.len() != 2 { return 1; }
 	val k1 = "double";
-	if m.contains_key(&k1) != true { return 2; }
+	if m.contains_key(k1) != true { return 2; }
 	val k2 = "triple";
-	if m.contains_key(&k2) != true { return 3; }
+	if m.contains_key(k2) != true { return 3; }
 	return 0;
 }
 

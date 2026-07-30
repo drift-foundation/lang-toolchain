@@ -1,0 +1,10 @@
+module main;
+
+fn read_len(arg: &String) nothrow -> Int {
+	return arg.byte_length();
+}
+
+pub fn main() nothrow -> Int {
+	var buffer: String = "hello";
+	return read_len(&mut buffer);
+}

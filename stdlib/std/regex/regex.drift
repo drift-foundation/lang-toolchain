@@ -210,11 +210,11 @@ fn _peek(p: &mut Parser) nothrow -> Int {
 	if p.pos >= p.len {
 		return 0 - 1;
 	}
-	return cast<Int>(core.string_byte_at(&p.src, p.pos));
+	return cast<Int>(core.string_byte_at(p.src, p.pos));
 }
 
 fn _advance(p: &mut Parser) nothrow -> Byte {
-	val b = core.string_byte_at(&p.src, p.pos);
+	val b = core.string_byte_at(p.src, p.pos);
 	p.pos = p.pos + 1;
 	return b;
 }
@@ -246,13 +246,13 @@ fn _err(tag: &String, offset: Int) nothrow -> core.Result<RegexNode, RegexError>
 /// **See also:** `Regex`, `RegexError`, `is_match`, `find_first`.
 pub fn compile(pattern: &String) nothrow -> core.Result<Regex, RegexError> {
 	var p = _new_parser(pattern);
-	match _parse_alternation(&mut p) {
+	match _parse_alternation(p) {
 		core.Result::Ok(node) => {
-			if not _at_end(&mut p) {
+			if not _at_end(p) {
 				val tag = "unexpected-char";
 				return core.Result::Err(RegexError(tag = tag, offset = p.pos));
 			}
-			val nfa = _nfa_compile(&node);
+			val nfa = _nfa_compile(node);
 			return core.Result::Ok(Regex(root = move node, nfa = move nfa));
 		},
 		core.Result::Err(e) => {
@@ -373,7 +373,7 @@ fn _parse_atom(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 			core.Result::Ok(inner) => {
 				if _at_end(p) or _peek(p) != 41 {
 					val tag = "unclosed-group";
-					return _err(&tag, p.pos);
+					return _err(tag, p.pos);
 				}
 				p.pos = p.pos + 1;
 				return core.Result::Ok(move inner);
@@ -394,13 +394,13 @@ fn _parse_atom(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	// Bare closing paren without matching open.
 	if ch == 41 {
 		val tag = "unexpected-paren";
-		return _err(&tag, p.pos);
+		return _err(tag, p.pos);
 	}
 
 	// Bare quantifier with no preceding atom.
 	if ch == 42 or ch == 43 or ch == 63 {
 		val tag = "dangling-quantifier";
-		return _err(&tag, p.pos);
+		return _err(tag, p.pos);
 	}
 
 	// Literal byte.
@@ -417,7 +417,7 @@ fn _parse_escape(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	p.pos = p.pos + 1;
 	if _at_end(p) {
 		val tag = "trailing-backslash";
-		return _err(&tag, start);
+		return _err(tag, start);
 	}
 	val ch = cast<Int>(_advance(p));
 
@@ -465,7 +465,7 @@ fn _parse_escape(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexError> {
 	}
 
 	val tag = "invalid-escape";
-	return _err(&tag, start);
+	return _err(tag, start);
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +522,7 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 			p.pos = p.pos + 1;
 			if _at_end(p) {
 				val tag = "trailing-backslash-in-class";
-				return _err(&tag, p.pos - 1);
+				return _err(tag, p.pos - 1);
 			}
 			val esc = cast<Int>(_advance(p));
 			// Shorthand classes inside []: \d \w \s and their negations.
@@ -546,37 +546,37 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 			}
 			// \t \n \r inside class.
 			if esc == 116 {
-				match _maybe_range(p, cast<Byte>(9), &mut ranges) {
+				match _maybe_range(p, cast<Byte>(9), ranges) {
 					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			if esc == 110 {
-				match _maybe_range(p, cast<Byte>(10), &mut ranges) {
+				match _maybe_range(p, cast<Byte>(10), ranges) {
 					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			if esc == 114 {
-				match _maybe_range(p, cast<Byte>(13), &mut ranges) {
+				match _maybe_range(p, cast<Byte>(13), ranges) {
 					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			// Metachar escapes inside class: \] \\ \^ \-
 			if esc == 93 or esc == 92 or esc == 94 or esc == 45 {
-				match _maybe_range(p, cast<Byte>(esc), &mut ranges) {
+				match _maybe_range(p, cast<Byte>(esc), ranges) {
 					core.Result::Err(e) => { return core.Result::Err(move e); },
 					core.Result::Ok(_) => { continue; }
 				}
 			}
 			val tag = "invalid-escape-in-class";
-			return _err(&tag, p.pos - 2);
+			return _err(tag, p.pos - 2);
 		}
 
 		// Regular byte — might be start of a range (a-z).
 		val lo = _advance(p);
-		match _maybe_range(p, lo, &mut ranges) {
+		match _maybe_range(p, lo, ranges) {
 			core.Result::Err(e) => { return core.Result::Err(move e); },
 			core.Result::Ok(_) => { }
 		}
@@ -584,13 +584,13 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 
 	if _at_end(p) {
 		val tag = "unclosed-class";
-		return _err(&tag, start);
+		return _err(tag, start);
 	}
 	p.pos = p.pos + 1;
 
 	if ranges.len == 0 {
 		val tag = "empty-class";
-		return _err(&tag, start);
+		return _err(tag, start);
 	}
 
 	return core.Result::Ok(RegexNode::Class(cls = CharClass(negated = negated, ranges = move ranges)));
@@ -600,7 +600,7 @@ fn _parse_char_class(p: &mut Parser) nothrow -> core.Result<RegexNode, RegexErro
 fn _maybe_range(p: &mut Parser, lo: Byte, ranges: &mut Array<CharRange>) nothrow -> core.Result<Void, RegexError> {
 	if not _at_end(p) and _peek(p) == 45 {
 		// Peek ahead: if next-next is ']' or end, treat '-' as literal.
-		if p.pos + 1 < p.len and cast<Int>(core.string_byte_at(&p.src, p.pos + 1)) != 93 {
+		if p.pos + 1 < p.len and cast<Int>(core.string_byte_at(p.src, p.pos + 1)) != 93 {
 			p.pos = p.pos + 1;
 			if _at_end(p) {
 				val tag = "incomplete-range";
@@ -686,7 +686,7 @@ pub fn _node_size(node: &RegexNode) nothrow -> Int {
 			var total = 0;
 			var i = 0;
 			while i < children.len {
-				total = total + _node_size(&children[i]);
+				total = total + _node_size(children[i]);
 				i = i + 1;
 			}
 			return total;
@@ -696,7 +696,7 @@ pub fn _node_size(node: &RegexNode) nothrow -> Int {
 			var total = 0;
 			var i = 0;
 			while i < branches.len {
-				total = total + _node_size(&branches[i]);
+				total = total + _node_size(branches[i]);
 				i = i + 1;
 			}
 			if branches.len > 1 {
@@ -705,7 +705,7 @@ pub fn _node_size(node: &RegexNode) nothrow -> Int {
 			return total;
 		},
 		RegexNode::Repeat(child, quant) => {
-			val cs = _node_size(&child[0]);
+			val cs = _node_size(child[0]);
 			match quant {
 				Quantifier::Star => { return cs + 2; },
 				Quantifier::Plus => { return cs + 1; },
@@ -747,7 +747,7 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 		RegexNode::Group(children) => {
 			var i = 0;
 			while i < children.len {
-				_emit_node(&children[i], nfa);
+				_emit_node(children[i], nfa);
 				i = i + 1;
 			}
 		},
@@ -756,13 +756,13 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 			if n == 0 {
 				// empty alternation — nothing to emit
 			} else { if n == 1 {
-				_emit_node(&branches[0], nfa);
+				_emit_node(branches[0], nfa);
 			} else {
 				// Pre-compute branch sizes for absolute target calculation.
 				var sizes = Array<type Int>::with_capacity(n);
 				var si = 0;
 				while si < n {
-					sizes.push(_node_size(&branches[si]));
+					sizes.push(_node_size(branches[si]));
 					si = si + 1;
 				}
 				// end_pos = current_pos + sum(sizes) + 2*(n-1)
@@ -777,16 +777,16 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 					val body_start = nfa.ops.len + 1;
 					val after_jump = body_start + sizes[bi] + 1;
 					nfa.ops.push(_NfaOp::Split(a = body_start, b = after_jump));
-					_emit_node(&branches[bi], nfa);
+					_emit_node(branches[bi], nfa);
 					nfa.ops.push(_NfaOp::Jump(target = end_pos));
 					bi = bi + 1;
 				}
 				// Last branch — no wrapper.
-				_emit_node(&branches[n - 1], nfa);
+				_emit_node(branches[n - 1], nfa);
 			} }
 		},
 		RegexNode::Repeat(child, quant) => {
-			val child_size = _node_size(&child[0]);
+			val child_size = _node_size(child[0]);
 			match quant {
 				Quantifier::Star => {
 					// Split(body, after) | body | Jump(split)
@@ -794,13 +794,13 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 					val body_start = split_pos + 1;
 					val after = body_start + child_size + 1;
 					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
-					_emit_node(&child[0], nfa);
+					_emit_node(child[0], nfa);
 					nfa.ops.push(_NfaOp::Jump(target = split_pos));
 				},
 				Quantifier::Plus => {
 					// body | Split(body, after)
 					val body_start = nfa.ops.len;
-					_emit_node(&child[0], nfa);
+					_emit_node(child[0], nfa);
 					val after = nfa.ops.len + 1;
 					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
 				},
@@ -809,7 +809,7 @@ pub fn _emit_node(node: &RegexNode, nfa: &mut _NfaProg) nothrow -> Void {
 					val body_start = nfa.ops.len + 1;
 					val after = body_start + child_size;
 					nfa.ops.push(_NfaOp::Split(a = body_start, b = after));
-					_emit_node(&child[0], nfa);
+					_emit_node(child[0], nfa);
 				},
 				default => { }
 			}
@@ -824,7 +824,7 @@ pub fn _nfa_compile(root: &RegexNode) nothrow -> _NfaProg {
 		ops = Array<type _NfaOp>::with_capacity(_node_size(root) + 1),
 		ranges = Array<type CharRange>::with_capacity(16)
 	);
-	_emit_node(root, &mut nfa);
+	_emit_node(root, nfa);
 	nfa.ops.push(_NfaOp::Accept());
 	return move nfa;
 }
@@ -1011,7 +1011,7 @@ pub fn _byte_matches(nfa: &_NfaProg, pc: Int, b: Byte) nothrow -> Bool {
 pub fn _try_match_at(nfa: &_NfaProg, input: &String, start: Int) nothrow -> Int {
 	val src = text._byte_source_all(input);
 	var sc = _scratch_new(nfa.ops.len);
-	return _try_match_at_scratch(nfa, &src, start, &mut sc);
+	return _try_match_at_scratch(nfa, src, start, sc);
 }
 
 // THE matcher authority: every entry point (String or view) funnels
@@ -1108,7 +1108,7 @@ pub fn is_match_view(re: &Regex, v: &text.StringByteView) nothrow -> Bool {
 pub fn find_first_view(re: &Regex, v: &text.StringByteView) nothrow -> Optional<RegexMatch> {
 	val src = text._byte_source(v);
 	var sc = _scratch_new(re.nfa.ops.len);
-	return _find_from_scratch(&re.nfa, &src, 0, &mut sc);
+	return _find_from_scratch(re.nfa, src, 0, sc);
 }
 
 /// Checked, OPT-IN conversion: a `RegexMatch` over `s` into a
@@ -1158,7 +1158,7 @@ pub fn is_match(re: &Regex, input: &String) nothrow -> Bool {
 	val input_len = src.size();
 	var start = 0;
 	while start <= input_len {
-		if _try_match_at_scratch(&re.nfa, &src, start, &mut sc) >= 0 {
+		if _try_match_at_scratch(re.nfa, src, start, sc) >= 0 {
 			return true;
 		}
 		start = start + 1;
@@ -1187,7 +1187,7 @@ pub fn find_first(re: &Regex, input: &String) nothrow -> Optional<RegexMatch> {
 pub fn _find_from(re: &Regex, input: &String, from: Int) nothrow -> Optional<RegexMatch> {
 	val src = text._byte_source_all(input);
 	var sc = _scratch_new(re.nfa.ops.len);
-	return _find_from_scratch(&re.nfa, &src, from, &mut sc);
+	return _find_from_scratch(re.nfa, src, from, sc);
 }
 
 /// Internal TEST HOOK for the epoch-overflow reset: identical to
@@ -1198,7 +1198,7 @@ pub fn _find_from_gen_saturated(re: &Regex, input: &String, from: Int) nothrow -
 	val src = text._byte_source_all(input);
 	var sc = _scratch_new(re.nfa.ops.len);
 	sc.gen = 9223372036854775806;
-	return _find_from_scratch(&re.nfa, &src, from, &mut sc);
+	return _find_from_scratch(re.nfa, src, from, sc);
 }
 
 // Windowed search loop (see _try_match_at_scratch).  Returned match
@@ -1230,10 +1230,10 @@ pub fn _substr(s: &String, start: Int, len: Int) nothrow -> String {
 	var b = io.buffer(len);
 	var i = 0;
 	while i < len {
-		io.buffer_write(&mut b, i, core.string_byte_at(s, start + i));
+		io.buffer_write(b, i, core.string_byte_at(s, start + i));
 		i = i + 1;
 	}
-	return core.string_from_utf8_bytes(io.buffer_ptr(&b), len);
+	return core.string_from_utf8_bytes(io.buffer_ptr(b), len);
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,7 +1286,7 @@ pub fn replace_all(re: &Regex, input: &String, repl: &String) nothrow -> String 
 	var result = "";
 	var cursor = 0;
 	while cursor <= input_len {
-		match _find_from_scratch(&re.nfa, &src, cursor, &mut sc) {
+		match _find_from_scratch(re.nfa, src, cursor, sc) {
 			Optional::Some(m) => {
 				// Append text between previous cursor and match start.
 				if m.start > cursor {

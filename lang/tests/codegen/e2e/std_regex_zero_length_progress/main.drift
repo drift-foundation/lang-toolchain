@@ -6,7 +6,7 @@ import std.regex as regex;
 fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			match regex.find_first(&re, input) {
+			match regex.find_first(re, input) {
 				Optional::Some(m) => {
 					if m.start != exp_start { return fail_code; }
 					if m.end != exp_end { return fail_code + 1; }
@@ -22,7 +22,7 @@ fn check_match(pattern: &String, input: &String, exp_start: Int, exp_end: Int, f
 fn check_is_match(pattern: &String, input: &String, expected: Bool, fail_code: Int) nothrow -> Int {
 	match regex.compile(pattern) {
 		core.Result::Ok(re) => {
-			val got = regex.is_match(&re, input);
+			val got = regex.is_match(re, input);
 			if got != expected { return fail_code; }
 			return 0;
 		},
@@ -34,35 +34,35 @@ pub fn main() nothrow -> Int {
 	var rc = 0;
 
 	// --- §7: empty pattern match on empty input ---
-	rc = check_match(&"", &"", 0, 0, 1);
+	rc = check_match("", "", 0, 0, 1);
 	if rc != 0 { return rc; }
 
 	// --- §7: empty pattern match on non-empty input → zero-length at 0 ---
-	rc = check_match(&"", &"abc", 0, 0, 5);
+	rc = check_match("", "abc", 0, 0, 5);
 	if rc != 0 { return rc; }
 
 	// --- §7: a* on empty input → zero-length match at 0 ---
-	rc = check_match(&"a*", &"", 0, 0, 9);
+	rc = check_match("a*", "", 0, 0, 9);
 	if rc != 0 { return rc; }
 
 	// --- §7: a* on non-matching input → zero-length at 0 ---
-	rc = check_match(&"a*", &"bbb", 0, 0, 13);
+	rc = check_match("a*", "bbb", 0, 0, 13);
 	if rc != 0 { return rc; }
 
 	// --- §7: a* on matching input → greedy, longest at start ---
-	rc = check_match(&"a*", &"aaab", 0, 3, 17);
+	rc = check_match("a*", "aaab", 0, 3, 17);
 	if rc != 0 { return rc; }
 
 	// --- §7: a? on empty → zero-length at 0 ---
-	rc = check_match(&"a?", &"", 0, 0, 21);
+	rc = check_match("a?", "", 0, 0, 21);
 	if rc != 0 { return rc; }
 
 	// --- §7: a? on "b" → zero-length at 0 ---
-	rc = check_match(&"a?", &"b", 0, 0, 25);
+	rc = check_match("a?", "b", 0, 0, 25);
 	if rc != 0 { return rc; }
 
 	// --- §7: a? on "a" → length-1 at 0 ---
-	rc = check_match(&"a?", &"a", 0, 1, 29);
+	rc = check_match("a?", "a", 0, 1, 29);
 	if rc != 0 { return rc; }
 
 	// --- §8: forward progress — simulated find_all loop.
@@ -70,7 +70,7 @@ pub fn main() nothrow -> Int {
 	// A manual loop calling find_first with advancing start must terminate.
 	// We simulate by checking matches at positions 0, 1, 2, 3 on "abc".
 	val p_empty = "";
-	match regex.compile(&p_empty) {
+	match regex.compile(p_empty) {
 		core.Result::Ok(re) => {
 			// Simulated find_all with forward-progress guard:
 			// After a zero-length match at position P, next search starts at P+1.
@@ -79,7 +79,7 @@ pub fn main() nothrow -> Int {
 			var pos = 0;
 			var match_count = 0;
 			while pos <= input_len {
-				match regex.find_first(&re, &input) {
+				match regex.find_first(re, input) {
 					Optional::Some(m) => {
 						match_count = match_count + 1;
 						// Guarantee forward progress.
@@ -105,17 +105,17 @@ pub fn main() nothrow -> Int {
 	}
 
 	// --- anchored empty: ^$ matches only empty ---
-	rc = check_is_match(&"^$", &"", true, 50);
+	rc = check_is_match("^$", "", true, 50);
 	if rc != 0 { return rc; }
 
-	rc = check_is_match(&"^$", &"a", false, 52);
+	rc = check_is_match("^$", "a", false, 52);
 	if rc != 0 { return rc; }
 
 	// --- ^a* on "bbb" should still match (zero-length at start) ---
-	rc = check_is_match(&"^a*", &"bbb", true, 54);
+	rc = check_is_match("^a*", "bbb", true, 54);
 	if rc != 0 { return rc; }
 
-	rc = check_match(&"^a*", &"bbb", 0, 0, 56);
+	rc = check_match("^a*", "bbb", 0, 0, 56);
 	if rc != 0 { return rc; }
 
 	return 0;

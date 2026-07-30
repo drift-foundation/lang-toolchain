@@ -14,7 +14,7 @@ pub struct Tracked
 
 implement core.Destructible for Tracked {
 	pub fn destroy(var self: Tracked) nothrow -> Void {
-		val _ = atomic.atomic_fetch_add_int(&self.destruct_count.get(), 1, 2);
+		val _ = atomic.atomic_fetch_add_int(self.destruct_count.get(), 1, 2);
 	}
 }
 
@@ -56,7 +56,7 @@ pub fn main() nothrow -> Int {
 		{ val _ = move sender; }
 		{ val _ = move receiver; }
 	}
-	val n1 = atomic.atomic_load_int(&ctr.get(), 1);
+	val n1 = atomic.atomic_load_int(ctr.get(), 1);
 	if n1 != 2 { return 100 + n1; }
 
 	/* Path 2: queued Some(Arc) destroyed on receiver drop */
@@ -78,7 +78,7 @@ pub fn main() nothrow -> Int {
 		}
 		{ val _ = move sender; }
 	}
-	val n2 = atomic.atomic_load_int(&ctr.get(), 1);
+	val n2 = atomic.atomic_load_int(ctr.get(), 1);
 	/* prev 2 + 3 new (a, b queued+drained, c rejected-send) = 5 */
 	if n2 != 5 { return 200 + n2; }
 

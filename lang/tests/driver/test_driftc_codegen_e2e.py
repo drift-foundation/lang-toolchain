@@ -388,7 +388,7 @@ implement StateMachine {
 pub fn arc<T>(value: T) nothrow -> Arc<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type ArcInner<T>>(1);
-		mem.write<type ArcInner<T>>(&mut buf, 0, ArcInner(refcnt = 1, value = move value));
+		mem.write<type ArcInner<T>>(buf, 0, ArcInner(refcnt = 1, value = move value));
 		return Arc(buf = buf);
 	}
 }
@@ -397,8 +397,8 @@ implement<T> Arc<T> {
 	pub fn clone(self: &Arc<T>) nothrow -> Arc<T> {
 		unsafe {
 			var buf = self.buf;
-			val inner = mem.read<type ArcInner<T>>(&mut buf, 0);
-			mem.write<type ArcInner<T>>(&mut buf, 0, ArcInner(refcnt = inner.refcnt + 1, value = inner.value));
+			val inner = mem.read<type ArcInner<T>>(buf, 0);
+			mem.write<type ArcInner<T>>(buf, 0, ArcInner(refcnt = inner.refcnt + 1, value = inner.value));
 			return Arc(buf = buf);
 		}
 	}
@@ -406,7 +406,7 @@ implement<T> Arc<T> {
 	pub fn as_mut(self: &mut Arc<T>) nothrow -> &mut T {
 		unsafe {
 			var buf = self.buf;
-			val inner = mem.ptr_at_mut<type ArcInner<T>>(&mut buf, 0);
+			val inner = mem.ptr_at_mut<type ArcInner<T>>(buf, 0);
 			return &mut inner.value;
 		}
 	}
@@ -415,7 +415,7 @@ implement<T> Arc<T> {
 pub fn mutex<T>(value: T) nothrow -> Mutex<T> {
 	unsafe {
 		var buf = mem.alloc_uninit<type T>(1);
-		mem.write<type T>(&mut buf, 0, value);
+		mem.write<type T>(buf, 0, value);
 		return Mutex(buf = buf);
 	}
 }
@@ -428,7 +428,7 @@ implement<T> Mutex<T> {
 
 implement<T> MutexGuard<T> {
 	pub fn get_mut(self: &mut MutexGuard<T>) nothrow -> &mut T {
-		unsafe { return mem.ptr_at_mut<type T>(&mut self.buf, 0); }
+		unsafe { return mem.ptr_at_mut<type T>(self.buf, 0); }
 	}
 }
 
@@ -442,12 +442,12 @@ implement core.Destructible for Arc<Mutex<StateMachine>> {
 	pub fn destroy(self: Arc<Mutex<StateMachine>>) nothrow -> Void {
 		unsafe {
 			var buf = self.buf;
-			val inner = mem.read<type ArcInner<Mutex<StateMachine>>>( &mut buf, 0);
+			val inner = mem.read<type ArcInner<Mutex<StateMachine>>>(buf, 0);
 			val rc = inner.refcnt - 1;
 			if rc == 0 {
 				mem.dealloc<type ArcInner<Mutex<StateMachine>>>(buf);
 			} else {
-				mem.write<type ArcInner<Mutex<StateMachine>>>(&mut buf, 0, ArcInner(refcnt = rc, value = inner.value));
+				mem.write<type ArcInner<Mutex<StateMachine>>>(buf, 0, ArcInner(refcnt = rc, value = inner.value));
 			}
 		}
 	}

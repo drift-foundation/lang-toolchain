@@ -1,0 +1,14 @@
+{
+  "description": "matrix row 3: source-written &mut at a declared &String formal is redundant (the bare form auto-borrows shared)",
+  "exit_code": 1,
+  "diagnostics": [
+    {
+      "phase": "typecheck",
+      "message_contains": "redundant borrow for parameter 'arg: &String'"
+    },
+    {
+      "phase": "typecheck",
+      "message_contains": "pass 'buffer' directly"
+    }
+  ]
+}

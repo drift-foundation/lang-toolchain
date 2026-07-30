@@ -11,7 +11,7 @@ fn run() -> Int {
 	s.insert(3);
 	var it = s.iter();
 	val k1 = 1;
-	val _g = s.contains(&k1);
+	val _g = s.contains(k1);
 	var count = 0;
 	var done = false;
 	while not done {

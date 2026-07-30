@@ -80,10 +80,10 @@ pub fn main() nothrow -> Int {
 	var acc = 0;
 	var i = 0;
 	while i < 8 {
-		acc = acc + compare_elems(&names, i, (i + 1) % 8);
-		acc = acc + compare_elems(&names, i, i);
-		acc = acc + compare_fields(&rows, i, (i + 1) % 8);
-		acc = acc + compare_fields(&rows, i, i);
+		acc = acc + compare_elems(names, i, (i + 1) % 8);
+		acc = acc + compare_elems(names, i, i);
+		acc = acc + compare_fields(rows, i, (i + 1) % 8);
+		acc = acc + compare_fields(rows, i, i);
 		i = i + 1;
 	}
 	if acc > 0 { return 0; }
