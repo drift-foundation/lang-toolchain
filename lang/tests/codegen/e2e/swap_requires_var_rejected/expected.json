@@ -3,7 +3,7 @@
   "dev_allow_reserved_namespaces": true,
   "diagnostics": [
     {
-      "message_contains": "cannot take &mut of an immutable binding; declare it with `var`",
+      "message_contains": "is an immutable binding; declare it with `var`",
       "phase": "typecheck"
     }
   ],

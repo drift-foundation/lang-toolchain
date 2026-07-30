@@ -11,12 +11,12 @@ fn _with_ctx() -> Int {
 	val st = rt.expect<type applog.AppLoggerState>(rt.global_registry(), "missing-logger-state");
 	match applog.current_context() {
 		Some(ctx) => {
-			log.info!(&st.security, "auth-start", ctx);
+			log.info!(st.security, "auth-start", ctx);
 			// Slice 7a: typed-V Debuggable form encodes raw values into
 			// canonical JSON.  Mixed types (originally `DV::String + DV::Int`)
 			// are out of scope for the slice surface; pin the override-merge
 			// behavior with a single-V map (V=String).
-			log.info!(&st.security, "auth-failed", ctx, {"req": "r-2"});
+			log.info!(st.security, "auth-failed", ctx, {"req": "r-2"});
 		},
 		None => {
 			return 5;
@@ -30,12 +30,12 @@ fn run() -> Int {
 		return 1;
 	}
 	val st = rt.expect<type applog.AppLoggerState>(rt.global_registry(), "missing-logger-state");
-	log.info!(&st.security, "startup");
+	log.info!(st.security, "startup");
 	val rc = _with_ctx();
 	if rc != 0 {
 		return rc;
 	}
-	log.info!(&st.security, "after-scope");
+	log.info!(st.security, "after-scope");
 	return 0;
 }
 

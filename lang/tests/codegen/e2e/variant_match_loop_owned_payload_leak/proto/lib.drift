@@ -80,7 +80,7 @@ pub fn skip_remaining(stmt: &mut Statement) nothrow -> core.Result<Void, String>
 implement core.Destructible for Statement {
 	pub fn destroy(var self: Statement) nothrow -> Void {
 		if self.remaining <= 0 { return; }
-		match skip_remaining(&mut self) {
+		match skip_remaining(self) {
 			core.Result::Ok(_) => { return; },
 			core.Result::Err(_) => { return; }
 		}

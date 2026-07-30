@@ -6,6 +6,6 @@ struct Point(x: Int, y: Int);
 pub fn main() nothrow -> Int{
 	var p = Point(1, 2);
 	val r = &p.x;
-	mem.swap(&mut p.x, &mut p.y);
+	mem.swap(p.x, p.y);
 	return 0;
 }

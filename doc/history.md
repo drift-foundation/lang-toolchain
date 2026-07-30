@@ -77,7 +77,17 @@ one-token deletion: mutable-temporary arguments become bindings
 rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
 dead). D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
 Python selector-test retirements (replaced by the four-shape R2 fixture), 23
-new fixtures. The frozen ownership-corpus baseline was advanced by one
+new fixtures. The first full e2e pass exposed a sweep blind spot — the
+corpus sweeper only compiled audit-includable fixtures, so the audit's
+failed partition plus its rule-excluded set (393 fixtures: multi-module,
+C-helper, package-mode, and audit-uncompilable shapes) were never
+migrated; a dedicated rescan with a runner-faithful harness closed it
+(22 fixtures swept, one verified already-legal). The auto-borrow `&mut`
+rejection is cause-specific: an immutable binding says "declare it with
+`var`", a path through a shared reference names the reference and asks
+for a `&mut T` source (the `var` hint appears only where `var` is
+actually the fix), with the generic wording kept as fallback.
+The frozen ownership-corpus baseline was advanced by one
 reviewed promotion (record
 `lang/tests/ownership_corpus/promotions/0.33.91-reject-redundant-call-borrows/`):
 408 content deltas + 23 additions, 0 removals, universe 1,269 → 1,292, 0

@@ -8,6 +8,6 @@ pub fn main() nothrow -> Int {
 	if time.__test_micros_to_millis(1000) != 1 { return 3; }
 
 	val start = time.now_monotonic();
-	if time.elapsed_ms(&start) < 0 { return 4; }
+	if time.elapsed_ms(start) < 0 { return 4; }
 	return 0;
 }

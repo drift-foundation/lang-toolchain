@@ -68,7 +68,7 @@ pub fn main() nothrow -> Int {
 	var c1 = io.buffer(2);
 	io.buffer_write(&mut c1, 0, cast<Byte>(10));
 	io.buffer_write(&mut c1, 1, cast<Byte>(10));
-	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c1.bin"), &c1, t) != 0 { return 10; }
+	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c1.bin"), c1, t) != 0 { return 10; }
 	val r1 = _open_input(env.drift_tmp_path("drift_std_io_line_matrix_c1.bin"), t, 128);
 	match r1 {
 		Ok(input1) => {
@@ -104,7 +104,7 @@ pub fn main() nothrow -> Int {
 	io.buffer_write(&mut c3, 2, cast<Byte>(99));
 	io.buffer_write(&mut c3, 3, cast<Byte>(100));
 	io.buffer_write(&mut c3, 4, cast<Byte>(10));
-	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c3.bin"), &c3, t) != 0 { return 30; }
+	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c3.bin"), c3, t) != 0 { return 30; }
 	val r3 = _open_input(env.drift_tmp_path("drift_std_io_line_matrix_c3.bin"), t, 3);
 	match r3 {
 		Ok(input3) => {
@@ -128,7 +128,7 @@ pub fn main() nothrow -> Int {
 	io.buffer_write(&mut c4, 4, cast<Byte>(120));
 	io.buffer_write(&mut c4, 5, cast<Byte>(121));
 	io.buffer_write(&mut c4, 6, cast<Byte>(122));
-	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c4.bin"), &c4, t) != 0 { return 40; }
+	if _write_buf(env.drift_tmp_path("drift_std_io_line_matrix_c4.bin"), c4, t) != 0 { return 40; }
 	val r4 = _open_input(env.drift_tmp_path("drift_std_io_line_matrix_c4.bin"), t, 128);
 	match r4 {
 		Ok(input4) => {

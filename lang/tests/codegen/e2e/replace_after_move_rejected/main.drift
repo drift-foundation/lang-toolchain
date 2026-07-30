@@ -4,6 +4,6 @@ import std.mem as mem;
 pub fn main() nothrow -> Int{
 	var x = 1;
 	val y = move x;
-	val old = mem.replace(&mut x, 2);
+	val old = mem.replace(x, 2);
 	return old;
 }

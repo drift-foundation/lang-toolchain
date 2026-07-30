@@ -17,7 +17,7 @@ fn do_work() throws -> Int {
 	var w = m.make_widget(42);
 	// If auto-try didn't fire, w is Result<Widget, AcmeError>
 	// and this &mut ref doesn't match &mut Widget
-	m.configure(&mut w, 10);
+	m.configure(w, 10);
 	// move w must be Widget, not Result<Widget, AcmeError>
 	val result = m.run_widget(move w);
 	return result;

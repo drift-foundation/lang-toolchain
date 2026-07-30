@@ -1,0 +1,49 @@
+{
+  "approval": "ownership-corpus-promotion",
+  "predecessor": {
+    "aggregate_sha256": "2aa424c72d2d6a3ee0f8fa899ff7fb8bc75e23bcf73eb56fbe78be4cf71768b7",
+    "manifest_sha256": "9297f3aa8f0e5394d2ee16a3fbe66d5db937de2a6f562d1a1f59a68f6368ca75",
+    "metadata_sha256": "6c34074f64ce3c24482c79419b70f88f0871a19bdc9361c43cd305d92ae29971",
+    "fixture_counters_sha256": "ca8dffb411e8ac3e28a5eff59f2e307cc038881a5a1e9aff605f9ca33bfd3a56"
+  },
+  "candidate": {
+    "run_dir": "lang/tests/ownership_corpus/promotions/0.33.91-unswept-fixture-rescan/candidate",
+    "aggregate_sha256": "2aa424c72d2d6a3ee0f8fa899ff7fb8bc75e23bcf73eb56fbe78be4cf71768b7",
+    "manifest_sha256": "b02ed7f7a7e07d52dce0c4f8c206578c69a77cfe86a9e3e4704d7b35bd8e774a",
+    "metadata_sha256": "293e91e4676595bc15d022003bc5cf7dea945a02d921462d069b01630ec4bebe",
+    "fixture_counters_sha256": "ca8dffb411e8ac3e28a5eff59f2e307cc038881a5a1e9aff605f9ca33bfd3a56"
+  },
+  "expected_universe": {
+    "compiled_added": [],
+    "compiled_removed": [],
+    "failed_added": [],
+    "failed_removed": [],
+    "prehash_changes": [
+      "macro_log_app_logging_context",
+      "pkgb_throws_auto_try_result",
+      "std_io_block_on_read_timeout",
+      "std_io_block_on_write_timeout",
+      "std_io_nonblocking_wouldblock",
+      "std_io_read_wouldblock_then_success",
+      "std_io_stdin_line_edge_matrix",
+      "std_time_elapsed_ms_projection"
+    ],
+    "compiled_count": 933,
+    "failed_count": 359,
+    "excluded_count": 49
+  },
+  "expected_counter_deltas": {},
+  "counter_keys_added": [],
+  "counter_keys_removed": [],
+  "attribution_facts": {
+    "modal": {},
+    "modal_fixture_count": 933,
+    "outliers": {},
+    "new_fixture_contributions": {}
+  },
+  "baseline_md": {
+    "title": "The checked-in reference for `just ownership-corpus-check` \u2014 candidate driftc 0.33.91 / ABI 22: 933 compiled, 359 compile-failed, 49 rule-excluded.",
+    "predecessor_description": "The prior reviewed baseline (driftc 0.33.91 / ABI 22; origin run started_unix 1785398027.0169559), preserved verbatim in this record's predecessor/ directory; earlier chain in the Git history of reviewed-baseline/BASELINE.md.",
+    "attribution": "Machine attribution_facts in this approval, re-proven from the record's fixture-counters on every dry-run and apply: modal delta no shared-fixture drift (933 fixtures unchanged); zero outliers; no new fixtures.  Residual zero on every counter; hard gates zero."
+  }
+}

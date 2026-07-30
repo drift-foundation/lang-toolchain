@@ -3063,44 +3063,70 @@ class TypeChecker:
 			param_names: list[str | None] | None = None,
 			synth_cache: dict | None = None,
 		) -> tuple[list[TypeId], bool]:
-			def _can_autoborrow_mut(place_expr: H.HExpr, place: Place) -> bool:
+			_AUTOBORROW_MUT_GENERIC = "cannot auto-borrow as &mut; argument is not mutable"
+
+			def _autoborrow_mut_failure(place_expr: H.HExpr, place: Place) -> str | None:
+				"""None when a &mut auto-borrow of the place is permitted;
+				otherwise the cause-specific rejection message (the `var`
+				hint only where a `var` declaration is actually the fix)."""
+				base_name = None
+				if hasattr(H, "HPlaceExpr") and isinstance(place_expr, getattr(H, "HPlaceExpr")):
+					if isinstance(place_expr.base, H.HVar):
+						base_name = place_expr.base.name
+				elif isinstance(place_expr, H.HVar):
+					base_name = place_expr.name
 				has_deref = any(isinstance(p, DerefProj) for p in place.projections)
 				if not has_deref:
 					if place.base.local_id is None:
-						return False
+						return _AUTOBORROW_MUT_GENERIC
 					base_ty = binding_types.get(place.base.local_id)
 					if base_ty is not None:
 						base_def = self.type_table.get(base_ty)
-						if base_def.kind is TypeKind.REF and bool(base_def.ref_mut):
-							return True
-					return bool(binding_mutable.get(place.base.local_id, False))
+						if base_def.kind is TypeKind.REF:
+							if bool(base_def.ref_mut):
+								return None
+							if base_name:
+								return (f"cannot auto-borrow as &mut through '{base_name}': "
+								        f"'{base_name}' is not a mutable reference (&mut T)")
+							return _AUTOBORROW_MUT_GENERIC
+					if bool(binding_mutable.get(place.base.local_id, False)):
+						return None
+					if base_name:
+						return (f"cannot auto-borrow '{base_name}' as &mut: "
+						        f"'{base_name}' is an immutable binding; declare it with `var`")
+					return _AUTOBORROW_MUT_GENERIC
 				if not hasattr(H, "HPlaceExpr") or not isinstance(place_expr, getattr(H, "HPlaceExpr")):
-					return False
+					return _AUTOBORROW_MUT_GENERIC
 				cur = type_expr(place_expr.base, used_as_value=False)
 				if cur is None:
-					return False
-				for pr in place_expr.projections:
+					return _AUTOBORROW_MUT_GENERIC
+				for hop, pr in enumerate(place_expr.projections):
 					if isinstance(pr, H.HPlaceDeref):
 						ptr_def = self.type_table.get(cur)
 						if ptr_def.kind is not TypeKind.REF or not ptr_def.ref_mut:
-							return False
+							if hop == 0 and base_name:
+								return (f"cannot auto-borrow as &mut through *{base_name}: "
+								        f"'{base_name}' is not a mutable reference (&mut T)")
+							return ("cannot auto-borrow as &mut: the place passes through "
+							        "a shared reference; a mutable reference (&mut T) "
+							        "source is required")
 						cur = ptr_def.param_types[0] if ptr_def.param_types else None
 						if cur is None:
-							return False
+							return _AUTOBORROW_MUT_GENERIC
 					elif isinstance(pr, H.HPlaceField):
 						td = self.type_table.get(cur)
 						if td.kind is not TypeKind.STRUCT:
-							return False
+							return _AUTOBORROW_MUT_GENERIC
 						info = self.type_table.struct_field(cur, pr.name)
 						if info is None:
-							return False
+							return _AUTOBORROW_MUT_GENERIC
 						_, cur = info
 					elif isinstance(pr, H.HPlaceIndex):
 						td = self.type_table.get(cur)
 						if td.kind is not TypeKind.ARRAY or not td.param_types:
-							return False
+							return _AUTOBORROW_MUT_GENERIC
 						cur = td.param_types[0]
-				return True
+				return None
 
 			def _try_borrow_coerce(
 				idx: int,
@@ -3266,10 +3292,12 @@ class TypeChecker:
 					_assign_place_expr_ids(place_expr)
 					if ref_mut:
 						place = place_from_expr(place_expr, base_lookup=_receiver_base_lookup)
-						if place is None or not _can_autoborrow_mut(place_expr, place):
+						_mut_fail = (_AUTOBORROW_MUT_GENERIC if place is None
+						             else _autoborrow_mut_failure(place_expr, place))
+						if _mut_fail is not None:
 							diagnostics.append(
 								_tc_diag(
-									message="cannot auto-borrow as &mut; argument is not mutable",
+									message=_mut_fail,
 									severity="error",
 									phase="typecheck",
 									span=getattr(arg_expr, "loc", span),
@@ -3479,10 +3507,12 @@ class TypeChecker:
 				_assign_place_expr_ids(place_expr)
 				if ref_mut:
 					place = place_from_expr(place_expr, base_lookup=_receiver_base_lookup)
-					if place is None or not _can_autoborrow_mut(place_expr, place):
+					_mut_fail = (_AUTOBORROW_MUT_GENERIC if place is None
+					             else _autoborrow_mut_failure(place_expr, place))
+					if _mut_fail is not None:
 						diagnostics.append(
 							_tc_diag(
-								message="cannot auto-borrow as &mut; argument is not mutable",
+								message=_mut_fail,
 								severity="error",
 								phase="typecheck",
 								span=getattr(arg_expr, "loc", span),

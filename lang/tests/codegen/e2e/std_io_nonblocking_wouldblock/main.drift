@@ -10,7 +10,7 @@ pub fn main() nothrow -> Int {
 	val f = io.file_from_fd(fd);
 	val c = io.configure_file(&f, conc.Duration(millis = 0));
 	var buf = io.buffer(8);
-	val r = c.read(&mut buf);
+	val r = c.read(buf);
 	match r {
 		Ok(_) => { return 2; },
 		Err(e) => {

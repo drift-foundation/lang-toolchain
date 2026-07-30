@@ -14,7 +14,7 @@ pub fn main() nothrow -> Int {
         arr.push(cast<Byte>(104));
         arr.push(cast<Byte>(0));
         // BUG: inline ptr_from_ref as first argument, null as second.
-        val r = cast<Int>(takes_two_ptrs(mem.ptr_from_ref(&arr[0]), _null_ptr()));
+        val r = cast<Int>(takes_two_ptrs(mem.ptr_from_ref(arr[0]), _null_ptr()));
     }
     return 0;
 }

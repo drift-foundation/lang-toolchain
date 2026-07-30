@@ -3,7 +3,7 @@
   "dev_allow_reserved_namespaces": true,
   "diagnostics": [
     {
-      "message_contains": "cannot write through *p unless p is a mutable reference",
+      "message_contains": "'p' is not a mutable reference (&mut T)",
       "phase": "typecheck"
     }
   ],

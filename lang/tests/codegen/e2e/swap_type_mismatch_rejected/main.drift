@@ -4,6 +4,6 @@ import std.mem as mem;
 pub fn main() nothrow -> Int{
 	var a = 1;
 	var b = true;
-	mem.swap(&mut a, &mut b);
+	mem.swap(a, b);
 	return 0;
 }

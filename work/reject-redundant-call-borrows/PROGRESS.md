@@ -447,3 +447,32 @@
       checkpoint replaced). Sanitizer lanes deferred to run-all-tests.sh per
       user instruction. GREEN LIGHT given for run-all-tests.sh; commits and
       corpus-baseline promotion remain with the user.
+- [x] 2026-07-30 POST-PROMOTION run-all-tests.sh MIGRATION GAP (first full
+      e2e on the final tree): the corpus sweeper only ever compiled
+      audit-includable fixtures — the audit's failed partition (344) +
+      rule-excluded (49, module_paths/c_sources) = 393 e2e fixtures were
+      NEVER swept, and corpus zero-delta cannot see them (failed stays
+      failed, excluded stays excluded). Systematic rescan with a faithful
+      runner-mirror harness (all *.drift rglob, -M roots, --dev, --entry,
+      compiler_flags; scratchpad fixture_compile.py) over all 393:
+      23 fixtures resolved — 22 swept diagnostic-guided (~40 sites: ffi
+      ptr_from_ref, json parse/get/encode_compact, the full mem
+      replace/swap family, variant_match_loop cross-module, macro_log
+      logger args, five std_io read/write buf args, std_time elapsed_ms,
+      pkgb_throws_auto_try_result package-mode) + hash_wrap_overflow
+      verified LEGAL as-is (trait-qualified generic-by-value formals).
+      Scan false-positives filtered against each fixture's own pins (the
+      D5 rejection fixtures report their own diagnostics).
+- [x] 2026-07-30 AUTO-BORROW &mut REJECTION MADE CAUSE-SPECIFIC (user-
+      approved follow-up, not a new LANGUAGE_BUG): _can_autoborrow_mut →
+      _autoborrow_mut_failure returning a tailored message — immutable
+      binding → "declare it with `var`" (hint only where var IS the fix);
+      shared-ref deref/binding → "'p' is not a mutable reference
+      (&mut T)"; unnameable/structural → generic fallback unchanged.
+      Both type_checker call sites routed through it. e2e pins updated:
+      swap_requires_var_rejected + replace_requires_mut_ref_rejected pin
+      the tailored texts (runner is contains-based; extra cascade diags in
+      replace_type_mismatch/swap_same_place are non-failing).
+      Verification: all 23 touched fixtures PIN-OK/CLEAN on the final
+      tree; checker + fnptr/reresolution/callback-exemption driver suites
+      92 passed. User reruns run-all-tests.sh.

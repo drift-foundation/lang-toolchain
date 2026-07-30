@@ -3882,7 +3882,7 @@
       },
       {
         "name": "macro_log_app_logging_context",
-        "sha256": "f6c260c51dafd64cbf0114eb71bd06c2484ed41d608f5263c214cdaf5d662296"
+        "sha256": "9df807b19d616275f588a20c2f49e2885f60e9e523cb79d692aa539328c4d282"
       },
       {
         "name": "macro_log_registry_stub_smoke",
@@ -4498,7 +4498,7 @@
       },
       {
         "name": "pkgb_throws_auto_try_result",
-        "sha256": "1df427a42be90f631323f34c4823e284dbbbf8a443a286b56c3115acc2f67d48"
+        "sha256": "dd60999f8771d97ca5f42449eb6031c3fe48081acfaf63487e49eb86d1c705e2"
       },
       {
         "name": "pkgb_variant_ctor_string_heap",
@@ -5234,11 +5234,11 @@
       },
       {
         "name": "std_io_block_on_read_timeout",
-        "sha256": "d61d7435cfe2b0473938708389cb1891b3ca99a50d143374b12d76983b28cf69"
+        "sha256": "979ae09f6e91add9a9ffc1e06e96bdebc47a0e1f92fc6f03c11bef538a4ebb00"
       },
       {
         "name": "std_io_block_on_write_timeout",
-        "sha256": "8c33b660e8b46fcd2bfa3c7669e2ca351957c2118c303148c4bf81d030c1d175"
+        "sha256": "33b5ed07461a9e0ef8233ce8246174990a46d629bd72bdc29d8bb4faeeeb2362"
       },
       {
         "name": "std_io_buffer_len_updates",
@@ -5290,7 +5290,7 @@
       },
       {
         "name": "std_io_nonblocking_wouldblock",
-        "sha256": "7aab3f3e56d0f1d83ceb5e11855569707f765cdf344c973320869ed717ddab46"
+        "sha256": "c0291ab33f73b8f72b354d37db633b96c44db85339a21579d7aefa51cc108725"
       },
       {
         "name": "std_io_pipe_reverse_stdout",
@@ -5306,7 +5306,7 @@
       },
       {
         "name": "std_io_read_wouldblock_then_success",
-        "sha256": "0365d7fd3a03c77c55ea83412d8def37de98edddf8008efd313bb6aaaaec2de3"
+        "sha256": "ee4ff6b5c67a35acb9204adb1461a7d6e9101e05bc2ddf2a3009d62a4c925e0a"
       },
       {
         "name": "std_io_requires_vt_variant",
@@ -5314,7 +5314,7 @@
       },
       {
         "name": "std_io_stdin_line_edge_matrix",
-        "sha256": "d4c8470dfce72bd1dd6026531fdd36a52a4d215b06f7202df8134dbd7c223d2d"
+        "sha256": "6f5585d246a2523e739e9089d90ad595ad47acb4c0a03bccbac5dc370cd75ec9"
       },
       {
         "name": "std_io_stdin_read_line_eof_helper",
@@ -6090,7 +6090,7 @@
       },
       {
         "name": "std_time_elapsed_ms_projection",
-        "sha256": "ff6d0c0a9e30de377c567910f01f8f20396427906bb523a1149863524bf670d5"
+        "sha256": "05f3c4432c388d4314990bc8764ee8fcfcdd2d3f2293f8cce17cf146a513ef9d"
       },
       {
         "name": "std_time_epoch_accessors",

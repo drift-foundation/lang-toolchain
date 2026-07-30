@@ -14,7 +14,7 @@ pub fn main() nothrow -> Int {
 
 	var i = 0;
 	while i < 3 {
-		val r = short_c.read(&mut buf);
+		val r = short_c.read(buf);
 		match r {
 			Ok(_) => { return 2; },
 			Err(e) => {
@@ -30,7 +30,7 @@ pub fn main() nothrow -> Int {
 	thread.test_eventfd_write(fd, 1);
 	val long_t = conc.Duration(millis = 1000);
 	val long_c = io.configure_file(&f, long_t);
-	val r2 = long_c.read(&mut buf);
+	val r2 = long_c.read(buf);
 	match r2 {
 		Ok(n) => {
 			if n <= 0 { return 5; }

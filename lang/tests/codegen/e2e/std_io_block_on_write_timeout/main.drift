@@ -12,7 +12,7 @@ pub fn main() nothrow -> Int {
 	val c = io.configure_file(&f, conc.Duration(millis = 1));
 	var buf = io.buffer(1);
 	io.buffer_write(&mut buf, 0, cast<Byte>(1));
-	val r = c.write(&buf);
+	val r = c.write(buf);
 	match r {
 		Ok(_) => { return 2; },
 		Err(e) => {

@@ -3,6 +3,6 @@ module std.mem.test;
 import std.mem as mem;
 pub fn main() nothrow -> Int{
 	var a = 7;
-	val old = mem.replace(&mut a, 9);
+	val old = mem.replace(a, 9);
 	return old * 10 + a;
 }

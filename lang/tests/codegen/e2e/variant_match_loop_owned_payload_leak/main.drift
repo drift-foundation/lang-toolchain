@@ -6,7 +6,7 @@ import proto;
 // Pattern 1: consume one row via RPC wrapper, let Destructible auto-drain the rest
 fn scenario_drop_auto_drain() nothrow -> Int {
 	var stmt = proto.Statement(remaining = 3);
-	match proto.rpc_next_event(&mut stmt) {
+	match proto.rpc_next_event(stmt) {
 		core.Result::Ok(ev) => {
 			match ev {
 				proto.RpcEvent::Row(row) => {
@@ -23,7 +23,7 @@ fn scenario_drop_auto_drain() nothrow -> Int {
 // Pattern 2: explicit skip_remaining (wildcard drops via wire-level events)
 fn scenario_explicit_skip() nothrow -> Int {
 	var stmt = proto.Statement(remaining = 3);
-	match proto.skip_remaining(&mut stmt) {
+	match proto.skip_remaining(stmt) {
 		core.Result::Ok(_) => { return 0; },
 		core.Result::Err(_) => { return 10; }
 	}
@@ -34,7 +34,7 @@ fn scenario_loop_drain_bind() nothrow -> Int {
 	var stmt = proto.Statement(remaining = 3);
 	var total = 0;
 	while true {
-		match proto.rpc_next_event(&mut stmt) {
+		match proto.rpc_next_event(stmt) {
 			core.Result::Err(_) => { break; },
 			core.Result::Ok(ev) => {
 				match ev {
@@ -67,7 +67,7 @@ fn drain_expect_end(stmt: &mut proto.Statement) nothrow -> Int {
 
 fn scenario_drain_expect_end() nothrow -> Int {
 	var stmt = proto.Statement(remaining = 3);
-	return drain_expect_end(&mut stmt);
+	return drain_expect_end(stmt);
 }
 
 pub fn main() nothrow -> Int {

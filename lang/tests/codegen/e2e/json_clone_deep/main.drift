@@ -5,13 +5,13 @@ import std.core as core;
 
 pub fn main() nothrow -> Int {
 	val text = "{\"x\":[1,2]}";
-	match json.parse(&text) {
+	match json.parse(text) {
 		core.Result::Ok(node) => {
 			val handle = json.share(move node);
 			// clone_deep from handle root.
 			val root_copy = handle.clone_deep();
 			val k = "x";
-			match root_copy.get(&k) {
+			match root_copy.get(k) {
 				Optional::Some(arr_node) => {
 					match arr_node.as_array() {
 						Optional::Some(arr) => { if arr.len != 2 { return 1; } },
@@ -21,10 +21,10 @@ pub fn main() nothrow -> Int {
 				Optional::None() => { return 3; }
 			}
 			// clone_deep from borrowed sub-node.
-			match handle.get(&k) {
+			match handle.get(k) {
 				Optional::Some(sub) => {
 					val sub_copy = sub.clone_deep();
-					val enc = json.encode_compact(&sub_copy);
+					val enc = json.encode_compact(sub_copy);
 					if enc != "[1,2]" { return 4; }
 				},
 				Optional::None() => { return 5; }
