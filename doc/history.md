@@ -94,11 +94,15 @@ reviewed promotion (record
 partition flips; per-fixture attribution is a uniform −1 fn / −1
 owned-moveout on 919 of 925 shared fixtures (the deleted dead
 `json._encode_node` wrapper, visible in every fixture's stdlib compile)
-plus 6 approved outliers, residual zero on every counter. Promotion
-drafting is now clone-sufficient: `drift_corpus_promote.py --draft` takes
-its predecessor evidence from the checked-in record chain (the approved
-record whose candidate byte-equals the live baseline), with
-`--predecessor-run` retained only as the raw-log bootstrap escape hatch.
+plus 6 approved outliers, residual zero on every counter. A second,
+prehash-only promotion followed the blind-spot rescan (record
+`0.33.91-unswept-fixture-rescan`: the 8 failed-partition fixtures the
+rescan re-spelled; zero universe, counter, or partition deltas).
+Promotion drafting is now clone-sufficient: `drift_corpus_promote.py
+--draft` takes its predecessor evidence from the checked-in record chain
+(the approved record whose candidate byte-equals the live baseline), with
+`--predecessor-run` retained only as the raw-log bootstrap escape hatch —
+the rescan promotion was that flow's first production use.
 
 **Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
 fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —

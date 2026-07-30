@@ -476,3 +476,14 @@
       Verification: all 23 touched fixtures PIN-OK/CLEAN on the final
       tree; checker + fnptr/reresolution/callback-exemption driver suites
       92 passed. User reruns run-all-tests.sh.
+- [x] 2026-07-30 FULL run-all-tests.sh GREEN end-to-end on the final tree
+      (corpus zero-delta against the twice-promoted baseline + memcheck
+      lane + ASAN lane). Promotion #2 applied (record
+      0.33.91-unswept-fixture-rescan: prehash-only, the 8 failed-partition
+      fixtures from the blind-spot rescan, zero universe/counter/partition
+      deltas) — FIRST production use of the clone-sufficient record-chain
+      draft flow. history.md promotion paragraph updated to cover both
+      promotions. SLICE COMPLETE: ready for commit + certification; both
+      remain with the user. Follow-up (not blocking): teach the corpus
+      sweeper/audit to cover audit-excluded and failed-partition fixture
+      sources, so future language-rule sweeps see the whole e2e corpus.
