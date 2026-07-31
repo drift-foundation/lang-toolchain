@@ -50,3 +50,15 @@
       Suite: test_drift_lock.py 30 passed; full tools/drift_deploy
       287 passed. Trigger scan: remaining "0.33.91" strings are
       accurate historical citations only.
+- [x] 2026-07-31 ROUND-2 REVIEW RESOLVED: (1) --source-rebuild help no
+      longer claims --package-root is required — "a candidate pool
+      (--package-root or DRIFT_PKG_ROOT)". (2) Stage-exemption now
+      GENUINELY pinned: replaced the overlay-only test (which passed in
+      any mode) with a two-artifact world carrying an ON-DISK
+      co-artifact .dmp absent from the snapshot —
+      test_stage_exemption_admits_disk_co_artifact (stage: admitted via
+      snapshot_exempt_ids, peer pin in flags) +
+      test_certify_fails_closed_on_unsnapshotted_disk_co_artifact
+      (certify: index gate rejects, rc 1, EMPTY stdout). Loader mock
+      keys on .dmp path so each package reads its own manifest.
+      test_drift_lock.py 31 passed; full tools/drift_deploy suite green.
