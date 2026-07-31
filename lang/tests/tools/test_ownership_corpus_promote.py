@@ -747,3 +747,85 @@ def test_draft_explicit_predecessor_run_still_bootstraps(world, tmp_path):
 	base, run, approval = world
 	record = tmp_path / "boot-record"
 	assert run_tool_draft(run, record, base) == 0
+
+
+# ── removed-fixture attribution (0.33.93 promotion surfaced this) ────
+# The first removal-bearing promotion failed apply-time re-proof:
+# attribution modeled added fixtures but never SUBTRACTED removed ones.
+# Pinned here: a removal world drafts removed_fixture_contributions,
+# re-proves residual zero through --apply, and a tampered/mismatched
+# removed set fails closed.
+
+
+def _removal_world(tmp_path: Path):
+	"""Baseline carries compiled fixtures a+gone; the run keeps a
+	(unchanged) and REMOVES gone (counters must be subtracted)."""
+	base = tmp_path / "baseline"
+	run = tmp_path / "run"
+	fixtures_b = [{"name": "a", "sha256": "1" * 64},
+	              {"name": "gone", "sha256": "9" * 64},
+	              {"name": "bad", "sha256": "2" * 64}]
+	write_side(base, {"events": 130, "fns": 12, "unclassified": 0},
+	           fixtures_b, ["a", "gone"], ["bad"],
+	           per_fixture={"a": {"events": 100, "fns": 10},
+	                        "gone": {"events": 30, "fns": 2}})
+	fixtures_n = [{"name": "a", "sha256": "1" * 64},
+	              {"name": "bad", "sha256": "2" * 64}]
+	write_side(run, {"events": 100, "fns": 10, "unclassified": 0},
+	           fixtures_n, ["a"], ["bad"],
+	           per_fixture={"a": {"events": 100, "fns": 10}})
+	pred_run = tmp_path / "pred-run"
+	pred_run.mkdir()
+	for name in ("aggregate.json", "manifest.json", "metadata.json"):
+		(pred_run / name).write_bytes((base / name).read_bytes())
+	(pred_run / "audit").mkdir()
+	for fx in ("a", "gone"):
+		(pred_run / "audit" / f"{fx}.jsonl").write_bytes(
+			(base / "audit" / f"{fx}.jsonl").read_bytes())
+	return base, run, pred_run
+
+
+def _main_rc(argv: list) -> int:
+	try:
+		return promote.main(argv)
+	except SystemExit as e:
+		return int(e.code or 0)
+
+
+def test_removed_fixture_attribution_round_trip(tmp_path) -> None:
+	base, run, pred_run = _removal_world(tmp_path)
+	record = tmp_path / "removal-record"
+	rc = _main_rc([str(run), str(record), "--draft",
+	                   "--predecessor-run", str(pred_run),
+	                   "--baseline-dir", str(base)])
+	assert rc == 0
+	draft = json.loads((record / "approval-DRAFT.json").read_text())
+	assert draft["expected_universe"]["compiled_removed"] == ["gone"]
+	assert draft["attribution_facts"]["removed_fixture_contributions"] == {
+		"gone": {"events": 30, "fns": 2}}
+	assert draft["expected_counter_deltas"] == {"events": -30, "fns": -2}
+	# Approve by rename; apply must RE-PROVE residual zero WITH the
+	# removed contribution subtracted.
+	(record / "approval-DRAFT.json").rename(record / "approval.json")
+	rc = _main_rc([str(record / "candidate"),
+	                   str(record / "approval.json"),
+	                   "--baseline-dir", str(base), "--apply"])
+	assert rc == 0
+
+
+def test_removed_fixture_facts_tamper_fails_closed(tmp_path) -> None:
+	base, run, pred_run = _removal_world(tmp_path)
+	record = tmp_path / "removal-record2"
+	assert _main_rc([str(run), str(record), "--draft",
+	                     "--predecessor-run", str(pred_run),
+	                     "--baseline-dir", str(base)]) == 0
+	# Drop the removed entry from the facts — the pre-fix bug shape.
+	app_path = record / "approval-DRAFT.json"
+	app = json.loads(app_path.read_text())
+	app["attribution_facts"]["removed_fixture_contributions"] = {}
+	app_path.write_text(json.dumps(app, indent=2))
+	(record / "approval-DRAFT.json").rename(record / "approval.json")
+	rc = _main_rc([str(record / "candidate"),
+	                   str(record / "approval.json"),
+	                   "--baseline-dir", str(base), "--apply"])
+	assert rc == 1

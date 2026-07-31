@@ -297,7 +297,7 @@ def load_record_fixture_counters(rec: Path, compiled: list) -> dict:
 
 def verify_attribution(app: dict, approval_dir: Path,
                        base_agg: dict, new_agg: dict,
-                       added_ok: list) -> None:
+                       added_ok: list, removed_ok: list) -> None:
 	"""Re-prove the per-fixture attribution from the COMPACT checked-in
 	evidence: hash-pinned fixture-counters on both sides, exact modal
 	delta on every shared fixture, exact approved outliers, exact
@@ -351,6 +351,19 @@ def verify_attribution(app: dict, approval_dir: Path,
 	require(new_contribs == facts_new,
 	        f"attribution: new-fixture contributions differ:\n"
 	        f"  found    {new_contribs}\n  approved {facts_new}")
+	removed_contribs = {}
+	for name in removed_ok:
+		require(name in sides["predecessor"],
+		        f"attribution: removed fixture {name} missing from "
+		        f"predecessor fixture-counters")
+		removed_contribs[name] = {k: v for k, v in
+		                          sides["predecessor"][name].items() if v}
+	facts_removed = {n: {k: int(v) for k, v in d.items()}
+	                 for n, d in facts.get(
+	                     "removed_fixture_contributions", {}).items()}
+	require(removed_contribs == facts_removed,
+	        f"attribution: removed-fixture contributions differ:\n"
+	        f"  found    {removed_contribs}\n  approved {facts_removed}")
 	# RESIDUAL ZERO: aggregate delta == modal*count + outlier deltas +
 	# new-fixture contributions, per counter
 	bc, nc = base_agg["counters"], new_agg["counters"]
@@ -361,12 +374,15 @@ def verify_attribution(app: dict, approval_dir: Path,
 			explained += d.get(k, 0)
 		for d in new_contribs.values():
 			explained += d.get(k, 0)
+		for d in removed_contribs.values():
+			explained -= d.get(k, 0)
 		require(agg_delta == explained,
 		        f"attribution: RESIDUAL NONZERO on {k}: aggregate "
 		        f"{agg_delta:+d} vs explained {explained:+d}")
 	print(f"attribution OK: modal on {facts['modal_fixture_count']} shared "
 	      f"fixtures, {len(outliers_found)} outliers, "
-	      f"{len(new_contribs)} new fixtures, residual ZERO on every counter")
+	      f"{len(new_contribs)} new / {len(removed_contribs)} removed "
+	      f"fixtures, residual ZERO on every counter")
 
 
 def check_universe_integrity(side: str, u: dict) -> None:
@@ -473,6 +489,9 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 	new_contribs = {name: {k: v for k, v in
 	                        cand_fc["fixtures"][name].items() if v}
 	                for name in sorted(n_ok - b_ok)}
+	removed_contribs = {name: {k: v for k, v in
+	                            pred_fc["fixtures"][name].items() if v}
+	                    for name in sorted(b_ok - n_ok)}
 
 	# materialize the record
 	(record_dir / "predecessor").mkdir(parents=True)
@@ -505,6 +524,9 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 	new_txt = ("; ".join(f"{n} contributes {d}" for n, d in
 	           sorted(new_contribs.items()))
 	           if new_contribs else "no new fixtures")
+	removed_txt = ("; ".join(f"{n} withdrew {d}" for n, d in
+	               sorted(removed_contribs.items()))
+	               if removed_contribs else "no removed fixtures")
 	auto_md = {
 		"title": (f"The checked-in reference for `just ownership-corpus-check` "
 		          f"— candidate driftc {env.get('driftc_version', '?')} / "
@@ -521,8 +543,8 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 		"attribution": (
 			f"Machine attribution_facts in this approval, re-proven from the "
 			f"record's fixture-counters on every dry-run and apply: modal "
-			f"delta {modal_txt}; {outlier_txt}; {new_txt}.  Residual zero on "
-			f"every counter; hard gates zero."),
+			f"delta {modal_txt}; {outlier_txt}; {new_txt}; {removed_txt}.  "
+			f"Residual zero on every counter; hard gates zero."),
 	}
 	draft = {
 		"approval": "ownership-corpus-promotion",
@@ -560,6 +582,7 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 			"modal_fixture_count": len(shared) - len(outliers),
 			"outliers": outliers,
 			"new_fixture_contributions": new_contribs,
+			"removed_fixture_contributions": removed_contribs,
 		},
 		"baseline_md": auto_md,
 	}
@@ -779,7 +802,7 @@ def main(argv=None) -> int:
 	# ── per-fixture attribution from checked-in compact evidence ────
 	if "attribution_facts" in app:
 		verify_attribution(app, approval_path.parent, base_agg, new_agg,
-		                   sorted(n_ok - b_ok))
+		                   sorted(n_ok - b_ok), sorted(b_ok - n_ok))
 
 	# ── BASELINE.md content (regenerated from the approval) ─────────
 	md = app["baseline_md"]

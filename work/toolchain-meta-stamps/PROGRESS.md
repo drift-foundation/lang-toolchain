@@ -549,3 +549,25 @@
         semantics; effective-drift CLI pattern migrated to
         parse_with_builtins (matches examples/cli again); driver
         docstring says four compiles.
+- [x] 2026-07-31 PROMOTE-TOOL GAP FIXED (surfaced by THIS slice's
+      promotion — the first ever to REMOVE compiled fixtures): apply-
+      time attribution re-proof failed RESIDUAL NONZERO on c1_agree
+      (+23370 aggregate vs +25408 explained; the 2038 gap == exactly
+      the two deleted std_meta fixtures' c1_agree). Root cause:
+      attribution modeled added-fixture contributions but never
+      SUBTRACTED removed ones. Fix in drift_corpus_promote.py: draft
+      records removed_fixture_contributions (from the predecessor
+      evidence); verify_attribution re-derives them, compares to the
+      approval (backward-compat: absent field == {}), and SUBTRACTS in
+      the residual; call site passes compiled_removed; baseline_md
+      attribution mentions withdrawals. Teeth: 46/46 — removal world
+      round-trips draft→approve→apply, and a facts-tamper (dropping
+      the removed entry — the pre-fix bug shape) fails closed.
+      Also corrected my own verification failure: the earlier "dry-run
+      passes" claim had tailed 2 lines and missed the attribution
+      FAIL — this round's dry-run was checked in FULL with rc.
+      RECORD REGENERATED (stale pre-fix record deleted):
+      0.33.93-build-info-stamps drafted with removed contribs
+      (std_meta_compiler_info 1035 + _pairs 1003 c1_agree), full
+      dry-run rc 0, attribution OK "2 new / 2 removed fixtures,
+      residual ZERO". Awaiting re-approval by rename + --apply.
