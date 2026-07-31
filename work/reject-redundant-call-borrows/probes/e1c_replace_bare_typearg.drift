@@ -1,9 +1,0 @@
-module main;
-
-import std.mem as mem;
-
-pub fn main() nothrow -> Int {
-	var x: Int = 1;
-	val old = mem.replace<type Int>(x, 5);
-	return old * 10 + x;
-}

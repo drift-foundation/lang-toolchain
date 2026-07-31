@@ -1,9 +1,0 @@
-module main;
-
-fn read(arg: &String) nothrow -> Int {
-	return arg.byte_length();
-}
-
-pub fn main() nothrow -> Int {
-	return read("alice");
-}
