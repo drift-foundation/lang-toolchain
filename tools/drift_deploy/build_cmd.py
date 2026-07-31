@@ -272,6 +272,17 @@ def build_package_cmd(
 		"--package-version", art.version,
 		"--package-target", target,
 	]
+	# drift-build-info/v1 identity stamp (work/toolchain-meta-stamps
+	# §2.7): the four manifest identity fields, atomically — the
+	# manifest loader guarantees all four non-empty. Stamps materialize
+	# only in executable codegen outputs; passing them on package-emit
+	# compiles is harmless and keeps the invocation uniform.
+	cmd.extend([
+		"--artifact-name", art.name,
+		"--artifact-version", art.version,
+		"--artifact-description", art.description,
+		"--artifact-license", art.license,
+	])
 	if source_content_id is not None:
 		cmd.extend(["--source-content-id", source_content_id])
 
@@ -350,6 +361,16 @@ def build_app_cmd(
 ) -> list[str]:
 	"""Build the driftc command for an app artifact."""
 	cmd = [str(driftc), "-o", str(output_path)]
+	# drift-build-info/v1 identity stamp (work/toolchain-meta-stamps
+	# §2.7): the four manifest identity fields, atomically — the
+	# manifest loader guarantees all four non-empty. The app binary is
+	# exactly where the stamp materializes.
+	cmd.extend([
+		"--artifact-name", art.name,
+		"--artifact-version", art.version,
+		"--artifact-description", art.description,
+		"--artifact-license", art.license,
+	])
 
 	# Native target: emit --target-word-bits for host.
 	if target == "native":

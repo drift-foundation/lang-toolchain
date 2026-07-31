@@ -367,3 +367,185 @@
       inspect build-info (self-contained ELF walk per G2) +
       build/deploy --artifact-* wiring + lane-divergence and
       post-deploy extraction tests.
+- [x] 2026-07-31 W3 CORE LANDED (reader + CLI + wiring; reviewer
+      refinements honored):
+      * SHARED PRODUCTION READER in lang/driftc/build_info.py:
+        read_build_info_section (self-contained ELF64 walk per G2 —
+        bounds-checked headers/string table/content, fail-closed on
+        non-ELF/class/endian/truncation/out-of-bounds, MISSING section,
+        DUPLICATE sections — exactly one is the contract) +
+        extract_build_info (read → the EXISTING
+        validate_build_info_payload, per the refinement: the extractor
+        is centered on the payload validator).
+      * drift inspect build-info <binary> [--json]
+        (tools/drift_deploy/drift_inspect.py + lang/drift/cli.py
+        dispatch + help entry): every failure row exits 1 with EMPTY
+        stdout + stderr diag; --json success = the section's exact
+        canonical bytes + one newline; default pretty-prints; the
+        binary is NEVER executed. End-to-end smoke green.
+      * build/deploy wiring: build_package_cmd + build_app_cmd pass the
+        four --artifact-* flags atomically from the manifest artifact
+        (loader guarantees non-empty; harmless on package-emit —
+        stamps only materialize in executable codegen). Argv pinned
+        for both builders in test_build.py.
+      * DUPLICATED TEST READERS REMOVED per refinement: both
+        test_build_info_stamp and test_abi_version_stamp now use the
+        shared reader (survives-link test = the same code path drift
+        inspect uses; dedup initially swallowed _link_flags_for_lib —
+        restored, file 22/22).
+      * tools/drift_deploy/test_inspect_build_info.py 9/9: exact-bytes
+        --json, pretty default, missing section (objcopy-crafted),
+        DUPLICATE section (hand-synthesized minimal ELF64 — objcopy
+        refuses to create duplicates), corrupted payload, non-ELF,
+        truncated, nonexistent/directory, reader unit matrix.
+      * Suites: test_build.py 145; stamp+abi+full drift_deploy 376
+        total green after the helper restore.
+      REMAINING IN W3: lane-divergence dependency-stamp test (strict
+      lock vs certify fresh-resolve visible in stamps when the pool
+      moved) + post-deploy extraction pin (drift inspect on a
+      deploy-produced binary).
+- [x] 2026-07-31 W3 CORE REVIEW FINDINGS CLOSED (24/24 inspect pins):
+      * P1 section-type discipline: reader now requires the string
+        table to be SHT_STRTAB and .drift_build_info to be
+        SHT_PROGBITS, rejects SHF_COMPRESSED, validates EI_VERSION and
+        e_ehsize — a hostile SHT_NOBITS section aliasing unrelated
+        file bytes can no longer be served.
+      * P1 byte-exact --json: sys.stdout.buffer.write(utf8 + b"\n")
+        replaces print(); pinned with a Unicode document under
+        PYTHONIOENCODING=ascii (exact bytes, rc 0).
+      * P1 full CLI hostile matrix: factored _synth_elf synthesizer
+        (valid-by-default, one knob per mutation) + 18 parameterized
+        CLI rows (missing/duplicate/class/endian/ident-version/table/
+        strtab/content bounds/strtab-type/NOBITS/compressed/empty/
+        oversized/UTF-8/JSON/discriminator/schema/noncanonical) each
+        proving exit 1 + EMPTY stdout + stderr diag; objcopy dependency
+        REMOVED from the suite entirely (deterministic, no skips);
+        synthetic-valid-ELF success control added.
+      * P2: read_bytes() wrapped — reader raises BuildInfoError only
+        (pinned incl. an unreadable-permissions file).
+      * Cleanup: app-builder stamp comment no longer mentions
+        package-emit.
+      REMAINING IN W3 (unchanged): lane-divergence dependency-stamp
+      test + post-deploy extraction pin.
+- [x] 2026-07-31 W3 residuals closed (25/25 inspect pins): pretty mode
+      writes through the binary UTF-8 stream too (hostile-encoding pin
+      covers BOTH modes); unreadable-file regression now mocks
+      Path.read_bytes with PermissionError (deterministic under root/
+      CAP_DAC_OVERRIDE); e_ehsize rejection pinned via a new
+      synthesizer knob + matrix row (19 hostile rows total).
+- [x] 2026-07-31 W3 FINAL GATES LANDED (test_stamp_lane_integration.py
+      2/2, confirmed twice):
+      * LANE DIVERGENCE on production paths per review: two DISTINCT
+        pools model actual movement (strict = only 1.0.0, certify =
+        only 1.0.1, snapshot authorizes only 1.0.1 — no
+        double-authorization); lock written by REAL drift prepare
+        against the strict pool; BOTH lanes resolve through
+        drift_build._resolve_deps (strict: lock +
+        verify_lock_compatibility; certify: source-rebuild authority
+        with the stale lock as evidence); binaries via production
+        build_app_cmd; stamps extracted FROM THE BINARIES diverge
+        (1.0.0 vs 1.0.1) with identical artifact identity. First
+        attempt's hand-built strict graph + both-versions-one-pool
+        design REPLACED per review (the initial failure was certify's
+        index gate correctly rejecting the unsnapshotted 1.0.0 —
+        the gate working as specified).
+      * POST-DEPLOY: real stamped build → production smoke
+        (_run_baseline_smoke_app executes it) → cert-claim signing
+        (_emit_cert_claim_for_artifact, real sidecar) → publish
+        (_publish_app copytree) → PUBLIC drift inspect build-info CLI
+        reads the PUBLISHED binary; output byte-identical to the
+        staged stamp (processing never perturbs the section).
+      W3 COMPLETE. W4 (std.cli) + W5 (closeout) remain.
+- [x] 2026-07-31 W4 LANDED (std.cli builtins; 8/8 driver pins + 9/9
+      std_cli fixtures):
+      * cli.drift: ParseOutcome variant (Args/Terminal/Err),
+        version_output() verbatim setter (field version_output_v, ctor
+        kwargs follow field order — v1 ctor constraint hit and fixed),
+        parse_with_builtins() owning --help/--version output + terminal
+        semantics; _version_render with the THREE-mode precedence
+        (verbatim > simple "<app> <version>" > stamped default block:
+        "<app> <artifact.version>" / description / "driftc <v>, abi
+        <n>" / "license:" / "deps:" — unstamped fallback "<app>
+        (unstamped)" + compiler line); module-level _int_decimal_digits
+        (Int→decimal; implement-block free fns aren't bare-callable —
+        hoisted); imports std.meta + std.console (no cycle).
+      * parse() BYTE-UNCHANGED and pinned behaviorally: plainparse mode
+        proves empty stdout + cli-version-requested tag.
+      * Pins: one dispatching program, three compiles (unstamped /
+        stamped / stamped+real-.dmp-dep) — stamped default block exact,
+        deps: line from a real consume, unstamped fallback exact,
+        simple mode, verbatim override wins, --help terminal
+        (Usage: prefix, exit 0), Err passthrough (unknown-option,
+        empty stdout).
+      W5 NEXT (revised scope per maintainer): docs/history/migration
+      notes/corpus enumeration/closeout gates; /tmp/drift-announce
+      release note + DriftQuery reply DEFERRED to certification
+      readiness.
+- [x] 2026-07-31 W5 DOCS LANDED:
+      * doc/history.md: full dated 0.33.93 entry — the stamp (schema,
+        inputs, frameless section, .dmp exclusion), the read paths
+        (std.meta accessors + drift inspect contract), std.cli
+        builtins with the no-pool-stdout-shape caveat, and the THREE
+        numbered COMPAT BREAKS with migration lines (compiler_info
+        family → build_info; --version pipe grammar → human line +
+        --json with fail-closed validation; json.parse strict — all
+        FOUR behavior changes + "replace json.parse_strict(x) with
+        json.parse(x)" + permissive-scope clarification). Corpus
+        enumeration embedded. ABI 22 stated.
+      * doc/effective-drift.md: "Version facts" section (stamp is the
+        contract / stdout is app policy, typed-accessor-first
+        guidance, parse_with_builtins pattern, inspect + --version
+        --json machine paths).
+      * DEFERRED per maintainer: /tmp/drift-announce release note +
+        DriftQuery reply wait for certification readiness.
+- [x] 2026-07-31 W5 CLOSEOUT RECORDED: PLAN §6 carries the consolidated
+      corpus enumeration (net -1 universe, 8 json content deltas,
+      stdlib-wide modal) and the four release gates (run-all-tests,
+      reviewed promotion, certification with the three downstream
+      migration surfaces, then the deferred announce/reply). SLICE
+      IMPLEMENTATION COMPLETE — W1-W5 all landed; commits, gates, and
+      promotion remain with the maintainer.
+- [x] 2026-07-31 W3/W4 REVIEW ROUND CLOSED (79 pins green in the final
+      wave; 26 inspect / 2 gates / 40 stamp / 11 cli-driver + e2e
+      fixture ok):
+      * P1 bounded reader: read_build_info_section rewritten — never
+        loads the whole file (fstat + bounded seek/read with short-read
+        detection; section table capped via e_shentsize sanity bound;
+        shstrtab capped at 1 MiB; payload cap enforced from the
+        section HEADER before any copy — pinned via a new
+        oversized-declared-size matrix row with a lying sh_size);
+        failure-injection pin re-pointed from Path.read_bytes to
+        builtins.open (the reader streams now).
+      * P1 version_output(""): presence tracked via
+        version_output_set — the empty verbatim override prints
+        exactly nothing (pinned driver + e2e).
+      * P1 unstamped fallback purity: description/license/deps render
+        ONLY in the stamped branch — an unstamped dependency-bearing
+        binary prints EXACTLY "<app> (unstamped)" + the compiler line
+        (pinned with a 4th fixture binary: deps without stamp).
+      * P2: examples/build_info.drift CREATED (compiles+runs; the
+        meta.drift doc link is real now); CliError/parse() docstrings
+        list cli-version-requested; examples/cli migrated to
+        parse_with_builtins (compiles; --version renders through the
+        builtins); hand-rolled _int_decimal_digits REPLACED with
+        std.format.format_int (one spelling per meaning).
+      * Args path pinned at runtime (driver mode + e2e); PLANNED E2E
+        COVERAGE ADDED: std_cli_parse_with_builtins fixture (unstamped
+        default/simple/verbatim/empty-verbatim/Args/Err in one run;
+        stamped modes remain driver-side by recorded necessity — the
+        in-process runner cannot pass stamp flags). Real Err tag is
+        cli-unknown-option (fixture pins it exactly; driver pin had
+        matched by substring).
+      * Corpus enumeration updated in PLAN §6 + history: universe now
+        NET 0 (-2 +2 with the new cli fixture).
+- [x] 2026-07-31 DOC-TRUTHFULNESS ROUND CLOSED (39 pins green: 28
+      inspect incl. two NEW hostile rows — oversized e_shentsize +
+      lying oversized shstrtab sh_size — and 11 cli driver):
+      * P1: CliError docstring enumerates the TWELVE actual stable
+        tags (cli-* prefixed); invented names removed.
+      * P2: both independent reader caps (section-entry size, string
+        table) now represented in the CLI hostile matrix.
+      * _version_render docstring states real per-mode newline
+        semantics; effective-drift CLI pattern migrated to
+        parse_with_builtins (matches examples/cli again); driver
+        docstring says four compiles.

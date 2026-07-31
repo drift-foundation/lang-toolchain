@@ -418,8 +418,8 @@ pub fn main(argv: Array<String>) nothrow -> Int {
     p.option_int("port", "p", "PORT", "control plane port", true);
     p.positional("target", "target directory", true, false);
 
-    match p.parse(argv) {
-        core.Result::Ok(parsed) => {
+    match p.parse_with_builtins(argv) {
+        cli.ParseOutcome::Args(parsed) => {
             var port = 3306;
             var target = "";
             if parsed.has_flag("verbose", p) {
@@ -435,10 +435,8 @@ pub fn main(argv: Array<String>) nothrow -> Int {
             }
             return 0;
         },
-        core.Result::Err(err) => {
-            if err.tag == "cli-help-requested" { return 0; }
-            return 2;
-        }
+        cli.ParseOutcome::Terminal(code) => { return code; },
+        cli.ParseOutcome::Err(err) => { return 2; }
     }
 }
 ```
@@ -2536,6 +2534,45 @@ For expression-level conditionals, prefer ternary for simple two-way choices
 and expression `match` for state or variant dispatch. Drift v1 does not have
 block-valued `if`; statement-form `if` is for control flow, not for producing
 a value.
+
+## Version facts: the stamp is the contract, stdout is your policy
+
+Never hand-copy version facts into source. Every executable carries a
+compiler-assembled `drift-build-info/v1` JSON document — baked as a
+constant AND embedded in the binary's `.drift_build_info` section —
+with the toolchain identity, build-instance facts, the manifest
+artifact identity (`drift build` stamps it automatically), and the
+EXACT dependency pins the binary was compiled against. Hand-carried
+copies skew (dep pins are wrong by construction in certify-lane
+builds); the stamp cannot.
+
+In-language, prefer the typed accessors over parsing:
+`meta.toolchain_version()`, `meta.runtime_abi()`,
+`meta.artifact_name()` / `artifact_version()` / `artifact_description()`
+/ `artifact_license()` (each `Optional<String>` — `None` on an
+unstamped compile), and `meta.dep_versions()`. Parse
+`meta.build_info()` directly only for what they do not cover (`extra`,
+the `--meta key=value` channel).
+
+For `--version`, the opt-in `std.cli` builtins render a sensible
+default from the stamps:
+
+	var p = cli.parser("mytool", "", "…");
+	match p.parse_with_builtins(argv) {
+		cli.ParseOutcome::Args(args) => { /* run */ },
+		cli.ParseOutcome::Terminal(code) => { return code; },
+		cli.ParseOutcome::Err(e) => { /* report e */ }
+	}
+
+An empty `version` string renders the stamped block; a non-empty one
+prints `<app> <version>`; `p.version_output(text)` overrides verbatim.
+Plain `parse()` remains policy-free (it prints nothing and reports
+`cli-help-requested` / `cli-version-requested`) — nothing forces the
+builtins on you, and no tool should assume any pool-wide stdout shape.
+Machines read stamps, not stdout: `drift inspect build-info <binary>
+--json` extracts the document from a binary without executing it, and
+`driftc --version --json` / `drift --version --json` report toolchain
+identity (`drift-toolchain-info/v1`).
 
 ## Blocking FFI: isolate it, and make it diagnosable
 

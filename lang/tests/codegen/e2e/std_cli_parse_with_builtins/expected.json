@@ -1,0 +1,6 @@
+{
+  "description": "e2e: std.cli parse_with_builtins \u2014 unstamped default block, simple mode, verbatim + empty-verbatim override, Args and Err passthrough (stamped modes live driver-side: the in-process runner cannot pass stamp flags)",
+  "exit_code": 0,
+  "stdout": "e2ecli (unstamped)\ndriftc 0.33.93, abi 22\ne2ecli 7.7.7\nverbatim-block\n<args>\n<err:cli-unknown-option>\n",
+  "stderr": ""
+}

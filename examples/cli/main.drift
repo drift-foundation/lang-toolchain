@@ -12,8 +12,13 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 	p.option_string("mode", "m", "MODE", "Backup mode: full or diff.", false);
 	p.positional("target", "Target directory.", true, false);
 	p.positional("paths", "Additional relative paths.", false, true);
-	match p.parse(argv) {
-		core.Result::Ok(parsed) => {
+	// parse_with_builtins owns --help / --version output: --help
+	// prints the usage text, --version renders "backup-tool 0.1.0"
+	// (a non-empty version string selects the simple mode; an empty
+	// one renders the stamped build-info block — see
+	// examples/build_info.drift), and both yield Terminal(0).
+	match p.parse_with_builtins(argv) {
+		cli.ParseOutcome::Args(parsed) => {
 			var target = "";
 			var port = 3306;
 			var mode = "full";
@@ -38,11 +43,10 @@ pub fn main(argv: Array<String>) nothrow -> Int {
 			console.println("extra_paths=" + format.format_int(parsed.positional_len() - 1));
 			return 0;
 		},
-		core.Result::Err(err) => {
-			if err.tag == "cli-help-requested" {
-				console.println(p.help_text());
-				return 0;
-			}
+		cli.ParseOutcome::Terminal(code) => {
+			return code;
+		},
+		cli.ParseOutcome::Err(err) => {
 			console.println("cli error: " + err.tag + " at argv[" + format.format_int(err.index) + "] " + err.message);
 			return 2;
 		}

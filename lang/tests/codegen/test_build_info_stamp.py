@@ -573,35 +573,6 @@ class TestIntrinsicTotality:
 		assert "CompilerTag" not in meta_src
 
 
-def _read_elf_sections(path: Path, name: str) -> list[bytes]:
-	"""Minimal self-contained ELF64 section extractor (duplicated from
-	test_abi_version_stamp by design — test dirs are separate pytest
-	roots; the supported production reader lands in W3's
-	`drift inspect`)."""
-	import struct
-	data = path.read_bytes()
-	assert data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1
-	e_shoff, = struct.unpack_from("<Q", data, 0x28)
-	e_shentsize, = struct.unpack_from("<H", data, 0x3A)
-	e_shnum, = struct.unpack_from("<H", data, 0x3C)
-	e_shstrndx, = struct.unpack_from("<H", data, 0x3E)
-	def hdr(i):
-		off = e_shoff + i * e_shentsize
-		sh_name, = struct.unpack_from("<I", data, off)
-		sh_offset, = struct.unpack_from("<Q", data, off + 0x18)
-		sh_size, = struct.unpack_from("<Q", data, off + 0x20)
-		return sh_name, sh_offset, sh_size
-	_, str_off, str_size = hdr(e_shstrndx)
-	shstr = data[str_off:str_off + str_size]
-	out = []
-	for i in range(e_shnum):
-		sh_name, sh_offset, sh_size = hdr(i)
-		nul = shstr.index(b"\x00", sh_name)
-		if shstr[sh_name:nul].decode("utf-8", "replace") == name:
-			out.append(data[sh_offset:sh_offset + sh_size])
-	return out
-
-
 class TestRawIntrinsicRuntime:
 	"""P1 (W2 review round 2): the RAW build_info() intrinsic — which
 	has its own lowering arm, so accessor coverage proves nothing about
@@ -643,11 +614,11 @@ class TestRawIntrinsicRuntime:
 		runtime_doc = stdout.rstrip("\n")
 		# The runtime string is the validated canonical document...
 		assert validate_build_info_payload(runtime_doc.encode("utf-8")) == runtime_doc
-		# ...and is byte-identical to the externally extracted section
-		# of the SAME binary.
-		sections = _read_elf_sections(out, BUILD_INFO_SECTION)
-		assert len(sections) == 1
-		assert sections[0].decode("utf-8") == runtime_doc
+		# ...and is byte-identical to the SHARED PRODUCTION reader's
+		# extraction from the SAME binary (exactly-one-section enforced
+		# inside read_build_info_section).
+		from lang.driftc.build_info import extract_build_info
+		assert extract_build_info(out) == runtime_doc
 		doc = json.loads(runtime_doc)
 		assert doc["artifact"] == {
 			"name": "rawapp", "version": "3.2.1",
@@ -658,8 +629,7 @@ class TestRawIntrinsicRuntime:
 		out, stdout = self._build_and_run(tmp_path, [])
 		runtime_doc = stdout.rstrip("\n")
 		assert validate_build_info_payload(runtime_doc.encode("utf-8")) == runtime_doc
-		sections = _read_elf_sections(out, BUILD_INFO_SECTION)
-		assert len(sections) == 1
-		assert sections[0].decode("utf-8") == runtime_doc
+		from lang.driftc.build_info import extract_build_info
+		assert extract_build_info(out) == runtime_doc
 		doc = json.loads(runtime_doc)
 		assert doc["artifact"] is None and doc["extra"] == {}

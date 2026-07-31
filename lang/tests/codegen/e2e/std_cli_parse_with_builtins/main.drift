@@ -1,0 +1,38 @@
+module m;
+
+import std.cli as cli;
+import std.console as cons;
+
+fn drive(p: &cli.ArgParser, argv: &Array<String>) nothrow -> Int {
+	match p.parse_with_builtins(argv) {
+		cli.ParseOutcome::Args(_) => { cons.println("<args>"); return 0; },
+		cli.ParseOutcome::Terminal(code) => { return code; },
+		cli.ParseOutcome::Err(e) => { cons.println("<err:" + e.tag + ">"); return 0; }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	// 1. unstamped default block
+	var p1 = cli.parser("e2ecli", "", "demo");
+	val v1: Array<String> = ["e2ecli", "--version"];
+	if drive(p1, v1) != 0 { return 1; }
+	// 2. simple mode
+	var p2 = cli.parser("e2ecli", "7.7.7", "demo");
+	if drive(p2, v1) != 0 { return 2; }
+	// 3. verbatim override (incl. empty)
+	var p3 = cli.parser("e2ecli", "7.7.7", "demo");
+	p3.version_output("verbatim-block\n");
+	if drive(p3, v1) != 0 { return 3; }
+	var p4 = cli.parser("e2ecli", "7.7.7", "demo");
+	p4.version_output("");
+	if drive(p4, v1) != 0 { return 4; }
+	// 4. Args + Err passthrough
+	var p5 = cli.parser("e2ecli", "", "demo");
+	p5.flag("go", "g", "run");
+	val a5: Array<String> = ["e2ecli", "--go"];
+	if drive(p5, a5) != 0 { return 5; }
+	var p6 = cli.parser("e2ecli", "", "demo");
+	val a6: Array<String> = ["e2ecli", "--nope"];
+	if drive(p6, a6) != 0 { return 6; }
+	return 0;
+}

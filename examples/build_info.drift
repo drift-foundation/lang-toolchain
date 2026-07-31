@@ -1,0 +1,41 @@
+// Build-information stamps: read your own artifact's identity.
+//
+// Every executable carries a compiler-assembled `drift-build-info/v1`
+// document — toolchain identity, build-instance facts, the manifest
+// artifact identity (`drift build` stamps it automatically, or pass
+// `--artifact-name/-version/-description/-license` to driftc), and
+// the EXACT dependency pins compiled against. Prefer the typed
+// accessors; parse the raw `build_info()` JSON only for fields they
+// do not cover (e.g. `extra` from `--meta key=value`). Machines can
+// read the same document from the binary without executing it:
+// `drift inspect build-info <binary> --json`.
+module main;
+
+import std.meta as meta;
+import std.console as cons;
+import std.format as format;
+
+fn show(label: String, v: Optional<String>) nothrow -> Void {
+	match v {
+		Optional::Some(s) => { cons.println(label + ": " + s); },
+		Optional::None() => { cons.println(label + ": (unstamped)"); }
+	}
+}
+
+pub fn main() nothrow -> Int {
+	cons.println("compiled by driftc " + meta.toolchain_version()
+		+ " (ABI " + format.format_int(meta.runtime_abi()) + ")");
+	show("artifact", meta.artifact_name());
+	show("version", meta.artifact_version());
+	show("license", meta.artifact_license());
+	val deps = meta.dep_versions();
+	var i = 0;
+	while i < deps.len {
+		cons.println("dep: " + *deps[i].name() + "@" + *deps[i].version());
+		i = i + 1;
+	}
+	// The raw document is canonical JSON — hand it to std.json for
+	// anything beyond the accessors.
+	cons.println(meta.build_info());
+	return 0;
+}

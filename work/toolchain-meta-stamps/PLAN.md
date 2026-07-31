@@ -1,15 +1,9 @@
 # toolchain-meta-stamps: compiler-owned build info (drift-build-info/v1 JSON)
 
-Status: v4.2 — W1 Stage A IMPLEMENTED (frameless section contract,
-backend-neutral lang/driftc/build_info.py, both codegen paths wired,
-strict schema/canonicality reader, BuildInfoError CLI boundary,
-DRIFTC_VERSION 0.33.93; 33 pins green incl. the G1 package-consume
-stamp pin — pulled forward from W3 per review round 3). W3 retains the
-build/deploy lane-divergence and post-deploy extraction tests. W1's
---version half: LANDED (human lines, --version --json on both CLIs,
-parse_toolchain_info fail-closed incl. the exactly-one-newline and
-identity-floor contracts, pipe parser deleted, deploy consumer
-hard-fails). W1 complete pending review confirmation.
+Status: W1-W5 IMPLEMENTED (v4.2 contract; all review rounds closed).
+Remaining before release: the closeout gates below, the reviewed corpus
+promotion, and — deferred to certification readiness by maintainer
+decision — the /tmp/drift-announce release note + DriftQuery reply.
 Origin: drift-query proposal
 /tmp/drift-announce/2026-07-31T073017Z-driftquery-toolchain-version-facts-proposal.md
 (cc build-orchestrator, drift-workflows, drift-web, drift-mariadb-client,
@@ -388,3 +382,32 @@ fixtures are universe changes — enumerate for the reviewed promotion.
   inspect build-info <binary> --json` (one format contract, no
   execution of the probed binary); stdout stays per-app policy unless a
   repo opts into the `parse_with_builtins()` default.
+
+## 6. Closeout (W5)
+
+CORPUS ENUMERATION (one reviewed promotion, drafted via the
+clone-sufficient record-chain flow):
+- universe: -2 (std_meta_compiler_info, std_meta_compiler_info_pairs)
+  +2 (std_meta_build_info_unstamped, std_cli_parse_with_builtins) →
+  net 0;
+- content deltas: the 8 strict-parse json fixture migrations
+  (std_json_parse_basic_duplicate_keys, 3× duplicate family,
+  encode_determinism_duplicate_reencode, canonical, rfc_strings_limits,
+  parse_policy);
+- counters: stdlib-wide per-fixture modal expected (std.meta rewrite,
+  std.meta→std.json dependency, std.cli additions) — same class as the
+  0.33.91 promotion's json._encode_node modal; attribution re-proven
+  residual-zero by the promote tool.
+
+RELEASE GATES (maintainer runs):
+1. Full run-all-tests.sh on the final tree (corpus zero-delta after
+   the promotion above; memcheck + ASan lanes).
+2. Corpus reviewed promotion (draft → approve-by-rename → apply).
+3. Certification (both lanes + downstream repos). The 0.33.93 compat
+   breaks land on downstreams at their rebuild: compiler_info callers,
+   --version parsers, and json.parse permissive-dependent inputs are
+   the three migration surfaces (history entry carries the migration
+   lines verbatim).
+4. THEN: release note to /tmp/drift-announce + DriftQuery reply
+   (stamps, drift inspect, stdout policy, deferred piece 3) — deferred
+   until certification readiness per maintainer.

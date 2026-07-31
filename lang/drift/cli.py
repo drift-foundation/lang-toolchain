@@ -636,6 +636,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	sub.add_parser("verify-package", help="Canonical read-only verifier for a deployed package artifact (.zdmp + sidecars) (see: drift verify-package --help)")
 	sub.add_parser("verify-app", help="Verify a deployed app artifact (binary + sidecars); read-only, never executes (see: drift verify-app --help)")
 	sub.add_parser("manifest", help="Manifest maintenance helpers: `drift manifest migrate` converts v1 → v2 (see: drift manifest --help)")
+	sub.add_parser("inspect", help="Read-only artifact inspection: `drift inspect build-info` prints the embedded drift-build-info/v1 document (see: drift inspect --help)")
 	sub.add_parser("lock", help="Lock inspection helpers: `drift lock emit` emits --dep flags for an artifact's resolved graph (see: drift lock --help)")
 	return p
 
@@ -736,6 +737,31 @@ def main(argv: list[str] | None = None) -> int:
 	# resolved `--dep` flags into `driftc` without parsing
 	# `drift/lock.json` on the bash side.  No write surface here;
 	# the lock is authored only by `drift prepare`.
+	# `drift inspect <subcmd>` — read-only artifact inspection.
+	# `build-info` (0.33.93) prints the drift-build-info/v1 document
+	# from an executable's `.drift_build_info` section: the SUPPORTED
+	# gate read path — self-contained ELF parsing, the binary is never
+	# executed, fail-closed on missing/duplicate/malformed content.
+	if effective_argv and effective_argv[0] == "inspect":
+		rest = effective_argv[1:]
+		if not rest or rest[0] in ("-h", "--help"):
+			print(
+				"usage: drift inspect <subcommand> [options]\n\n"
+				"subcommands:\n"
+				"  build-info   Print the drift-build-info/v1 document embedded in an executable\n",
+				file=sys.stderr if not rest else sys.stdout,
+			)
+			return 0 if rest else 1
+		if rest[0] == "build-info":
+			from tools.drift_deploy.drift_inspect import run as inspect_build_info_run
+			return inspect_build_info_run(rest[1:])
+		print(
+			f"error: unknown `drift inspect` subcommand: {rest[0]!r}\n"
+			f"       known subcommands: build-info",
+			file=sys.stderr,
+		)
+		return 1
+
 	if effective_argv and effective_argv[0] == "lock":
 		rest = effective_argv[1:]
 		if not rest or rest[0] in ("-h", "--help"):

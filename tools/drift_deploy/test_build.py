@@ -3602,3 +3602,44 @@ class TestE2E:
 		])
 		assert rc == 0
 		assert (tmp_path / "build" / "test-pkg.dmp").exists()
+
+
+# ── drift-build-info/v1 identity stamp flags (W3, 0.33.93) ───────────
+
+
+class TestArtifactStampFlags:
+	"""Both cmd builders pass the four --artifact-* identity flags,
+	atomically, from the manifest artifact (loader guarantees non-empty
+	values)."""
+
+	def _flag_pairs(self, cmd: list[str]) -> dict[str, str]:
+		return {cmd[i]: cmd[i + 1] for i in range(len(cmd) - 1)
+		        if cmd[i].startswith("--artifact-")}
+
+	def test_package_cmd_carries_identity_stamp(self):
+		art = _make_artifact()
+		cmd = build_package_cmd(
+			art, driftc=Path("/usr/bin/driftc"), target="drift-dev",
+			resolved_deps={}, output_path=Path("/b/p.dmp"),
+			manifest_dir=Path("/proj"), package_roots=[],
+		)
+		assert self._flag_pairs(cmd) == {
+			"--artifact-name": art.name,
+			"--artifact-version": art.version,
+			"--artifact-description": art.description,
+			"--artifact-license": art.license,
+		}
+
+	def test_app_cmd_carries_identity_stamp(self):
+		art = _make_artifact(kind="app")
+		cmd = build_app_cmd(
+			art, driftc=Path("/usr/bin/driftc"), target="native",
+			resolved_deps={}, output_path=Path("/b/app"),
+			manifest_dir=Path("/proj"), package_roots=[],
+		)
+		assert self._flag_pairs(cmd) == {
+			"--artifact-name": art.name,
+			"--artifact-version": art.version,
+			"--artifact-description": art.description,
+			"--artifact-license": art.license,
+		}

@@ -1,5 +1,91 @@
 # Drift development history
 
+## 2026-07-31 (0.33.93: compiler-owned build info — stamps, `drift inspect`, `--version` break, `compiler_info` retirement, strict `json.parse()`; ABI 22 unchanged)
+
+Toolchain absorption of artifact version facts (drift-query proposal,
+2026-07-31; precedent: 0.33.92's dep-flag absorption). Every fact the
+toolchain knows at build time — compiler identity, build-instance
+facts, manifest artifact identity, and the exact dependency pins
+actually compiled against — is now stamped into the artifact itself,
+replacing per-repo hand-carried copies.
+
+**The stamp.** Every executable carries one canonical
+`drift-build-info/v1` JSON document (repo JSON convention: sort_keys,
+ensure_ascii=False, compact): `toolchain` (driftc/abi/git/vendor/
+license — compiler identity), `build` (word/profile/utc —
+build-instance facts), `artifact` (name/version/description/license
+from the manifest, atomic, or `null` when unstamped), `dependencies`
+(derived from the VALIDATED `--dep` pin map — skew against the compiled
+graph is inexpressible), `extra` (application metadata from `--meta`,
+structurally isolated). Inputs: `driftc --artifact-{name,version,
+description,license}` (all four or none, non-empty values) + `--meta
+key=value`; `drift build`/`deploy` pass the identity flags from the
+manifest automatically. The document is baked as a compile-time
+constant (zero runtime I/O) AND embedded verbatim as the executable's
+`.drift_build_info` section — frameless: the section IS the canonical
+JSON bytes (the section header supplies identity/offset/length; the
+`format` field supplies the schema version), so standard binutils work
+as a manual read path. `.dmp` packages are unstamped by design (their
+identity story is the existing package/cert metadata); no
+package-format change.
+
+**Reading it.** In-language: `std.meta.build_info()` plus typed
+accessors — `toolchain_version()`, `runtime_abi()`,
+`artifact_name/version/description/license()` (Optional<String>), and
+`dep_versions() -> Array<DependencyVersion>` (strict, canonical order,
+invariant-asserting). Externally: `drift inspect build-info <binary>
+[--json]` — the SUPPORTED gate read path: a self-contained ELF64
+section walk (never readelf/objdump, never executing the target),
+exactly ONE named SHT_PROGBITS section enforced, the 1 MiB cap checked
+before decoding, full schema + canonical-encoding validation, and
+every failure row = exit 1 + empty stdout + stderr diagnostic; `--json`
+success output is the section's exact canonical bytes + one newline
+(binary stdout stream — locale-proof). Gates read stamps from
+binaries, not stdout.
+
+**std.cli builtins (opt-in).** `parse()` is BYTE-UNCHANGED and
+policy-free. New `parse_with_builtins()` + `ParseOutcome`
+(Args/Terminal/Err) owns `--help`/`--version` output with three
+explicit version modes: a `version_output(...)` verbatim override; a
+non-empty ctor `version` string as `<app> <version>`; else the stamped
+default block (`<app> <artifact.version>`, description,
+`driftc <v>, abi <n>`, `license:`, `deps:`; unstamped fallback
+`<app> (unstamped)`). There is NO pool-wide stdout shape guarantee —
+stdout stays application policy; the stamps are the machine contract.
+
+**SOURCE/TOOLING COMPAT BREAKS (deliberate; ABI 22 unchanged —
+runtime boundary and layouts untouched):**
+
+1. `std.meta.compiler_info()` / `compiler_info_pairs()` / `CompilerTag`
+   are REMOVED (with the pipe-format `@__drift_compiler_build`
+   provenance global). Migrate to `build_info()` and the typed
+   accessors.
+2. `driftc --version` and `drift --version` are now the concise human
+   line `<tool> X (ABI N)` — the pipe grammar is gone from every
+   output. Machine consumers use `--version --json`
+   (`drift-toolchain-info/v1`, canonical + one newline) and must
+   validate fail-closed; the deploy pipeline's own probe does
+   (`parse_toolchain_info`; the old pipe parser is deleted and deploy
+   HARD-FAILS rather than recording "unknown" identity).
+3. `std.json.parse()` IS now the strict entry point. FOUR behavior
+   changes: duplicate object keys are REJECTED; leading zeros are
+   REJECTED; `\uXXXX` escapes (incl. surrogate pairs) are DECODED;
+   unescaped control bytes are REJECTED. `parse_strict()` is REMOVED —
+   replace `json.parse_strict(x)` with `json.parse(x)`. The private
+   legacy parser mode is deleted; explicit
+   `parse_with_config(text, permissive())` restores duplicate
+   keep-last ONLY — it does not restore invalid-JSON forms.
+
+**Corpus (next reviewed promotion):** universe −2
+(`std_meta_compiler_info`, `std_meta_compiler_info_pairs`) +2
+(`std_meta_build_info_unstamped`, `std_cli_parse_with_builtins`); 8
+json fixture content deltas (the strict-parse migration); stdlib-wide
+per-fixture modal expected (std.meta rewrite + std.json dependency +
+std.cli additions).
+
+**Versioning:** `DRIFTC_VERSION` **0.33.93**; **no ABI change —
+`DRIFT_RT_ABI_VERSION` stays 22**.
+
 ## 2026-07-31 (0.33.92: `drift lock emit --source-rebuild` — cert gates exec the toolchain, never import it; ABI 22 unchanged)
 
 The drift-workflows/build-orchestrator consumer contract (2026-07-31

@@ -355,6 +355,157 @@ def validate_build_info_payload(blob: bytes) -> str:
 	return text
 
 
+def read_build_info_section(path) -> bytes:
+	"""Read the raw `.drift_build_info` section from an executable.
+
+	SELF-CONTAINED (guardrail G2): parses the ELF container directly —
+	never readelf/objdump, and the target is NEVER executed; this is
+	pure file reading. BOUNDED reads throughout: the whole file is
+	never loaded (a huge or sparse hostile binary cannot exhaust
+	memory), every table/string/content read is size-capped and
+	verified against the file size, and the 1 MiB payload cap is
+	enforced from the section HEADER before any payload byte is
+	copied. Fail-closed on every malformed shape: not a regular file,
+	not ELF, unsupported class/endianness/version, truncated or
+	out-of-bounds section table, wrong section types
+	(string table must be SHT_STRTAB, the stamp must be SHT_PROGBITS,
+	never compressed), MISSING section, and DUPLICATE sections
+	(exactly one `.drift_build_info` is the contract). Raises
+	BuildInfoError only.
+	"""
+	import os
+	import struct
+	from pathlib import Path as _Path
+	p = _Path(path)
+	if not p.is_file():
+		raise BuildInfoError(f"not a regular file: {p}")
+
+	_SHT_PROGBITS, _SHT_STRTAB = 1, 3
+	_SHF_COMPRESSED = 0x800
+	_MAX_SHENTSIZE = 1024          # sanity cap; real ELF64 uses 0x40
+	_MAX_SHSTR = 1 << 20           # section-NAME table cap (names are tiny)
+
+	try:
+		f = open(p, "rb")
+	except OSError as e:
+		raise BuildInfoError(f"cannot read {p}: {e}")
+	try:
+		try:
+			file_size = os.fstat(f.fileno()).st_size
+		except OSError as e:
+			raise BuildInfoError(f"cannot stat {p}: {e}")
+
+		def _read_at(off: int, n: int, what: str) -> bytes:
+			if off < 0 or n < 0 or off + n > file_size:
+				raise BuildInfoError(f"{p}: {what} out of bounds")
+			try:
+				f.seek(off)
+				buf = f.read(n)
+			except OSError as e:
+				raise BuildInfoError(f"cannot read {p}: {e}")
+			if len(buf) != n:
+				raise BuildInfoError(f"{p}: truncated read for {what}")
+			return buf
+
+		if file_size < 0x40:
+			raise BuildInfoError(f"{p}: too small to be an ELF binary")
+		hdr = _read_at(0, 0x40, "ELF header")
+		if hdr[:4] != b"\x7fELF":
+			raise BuildInfoError(f"{p}: not an ELF binary")
+		if hdr[4] != 2:
+			raise BuildInfoError(f"{p}: unsupported ELF class {hdr[4]} (reader supports ELF64)")
+		if hdr[5] != 1:
+			raise BuildInfoError(f"{p}: unsupported ELF byte order {hdr[5]} (reader supports little-endian)")
+		if hdr[6] != 1:
+			raise BuildInfoError(f"{p}: unsupported ELF identification version {hdr[6]}")
+		e_shoff, = struct.unpack_from("<Q", hdr, 0x28)
+		e_ehsize, = struct.unpack_from("<H", hdr, 0x34)
+		e_shentsize, = struct.unpack_from("<H", hdr, 0x3A)
+		e_shnum, = struct.unpack_from("<H", hdr, 0x3C)
+		e_shstrndx, = struct.unpack_from("<H", hdr, 0x3E)
+		if e_ehsize < 0x40:
+			raise BuildInfoError(f"{p}: malformed ELF header size {e_ehsize}")
+		if (e_shentsize < 0x40 or e_shentsize > _MAX_SHENTSIZE
+				or e_shnum == 0 or e_shstrndx >= e_shnum):
+			raise BuildInfoError(f"{p}: malformed ELF section table header")
+		if e_shoff == 0 or e_shoff + e_shnum * e_shentsize > file_size:
+			raise BuildInfoError(f"{p}: section table out of bounds")
+		# One bounded read for the whole table (u16 count × capped
+		# entry size ≤ 64 MiB worst case; real tables are tiny).
+		table = _read_at(e_shoff, e_shnum * e_shentsize, "section table")
+
+		def _header(i: int) -> tuple[int, int, int, int, int]:
+			off = i * e_shentsize
+			sh_name, sh_type = struct.unpack_from("<II", table, off)
+			sh_flags, = struct.unpack_from("<Q", table, off + 0x08)
+			sh_offset, = struct.unpack_from("<Q", table, off + 0x18)
+			sh_size, = struct.unpack_from("<Q", table, off + 0x20)
+			return sh_name, sh_type, sh_flags, sh_offset, sh_size
+
+		_, str_type, _, str_off, str_size = _header(e_shstrndx)
+		if str_type != _SHT_STRTAB:
+			raise BuildInfoError(
+				f"{p}: section string table has type {str_type}, expected "
+				f"SHT_STRTAB")
+		if str_size > _MAX_SHSTR:
+			raise BuildInfoError(
+				f"{p}: section string table {str_size} bytes exceeds the "
+				f"{_MAX_SHSTR}-byte cap")
+		if str_off + str_size > file_size:
+			raise BuildInfoError(f"{p}: string table out of bounds")
+		shstr = _read_at(str_off, str_size, "section string table")
+
+		found: list[tuple[int, int]] = []
+		for i in range(e_shnum):
+			sh_name, sh_type, sh_flags, sh_offset, sh_size = _header(i)
+			if sh_name >= len(shstr):
+				raise BuildInfoError(f"{p}: section {i} name offset out of bounds")
+			nul = shstr.find(b"\x00", sh_name)
+			if nul < 0:
+				raise BuildInfoError(f"{p}: unterminated section name for section {i}")
+			if shstr[sh_name:nul].decode("utf-8", "replace") != BUILD_INFO_SECTION:
+				continue
+			# Type discipline: the stamp is emitted as PROGBITS file
+			# content. A hostile SHT_NOBITS (or any other type) section
+			# merely NAMED .drift_build_info has no real file content
+			# at its claimed offset — never serve bytes from one.
+			if sh_type != _SHT_PROGBITS:
+				raise BuildInfoError(
+					f"{p}: {BUILD_INFO_SECTION} section has type {sh_type}, "
+					f"expected SHT_PROGBITS")
+			if sh_flags & _SHF_COMPRESSED:
+				raise BuildInfoError(
+					f"{p}: {BUILD_INFO_SECTION} section is compressed "
+					f"(SHF_COMPRESSED); the contract is raw canonical JSON")
+			# Cap enforced from the HEADER, before any payload copy.
+			if sh_size > BUILD_INFO_MAX_PAYLOAD:
+				raise BuildInfoError(
+					f"{p}: {BUILD_INFO_SECTION} section {sh_size} bytes "
+					f"exceeds the cap of {BUILD_INFO_MAX_PAYLOAD} bytes")
+			if sh_offset + sh_size > file_size:
+				raise BuildInfoError(
+					f"{p}: {BUILD_INFO_SECTION} section content out of bounds")
+			found.append((sh_offset, sh_size))
+		if not found:
+			raise BuildInfoError(f"{p}: no {BUILD_INFO_SECTION} section")
+		if len(found) > 1:
+			raise BuildInfoError(
+				f"{p}: {len(found)} {BUILD_INFO_SECTION} sections (exactly "
+				f"one is the contract)")
+		off, size = found[0]
+		return _read_at(off, size, f"{BUILD_INFO_SECTION} content")
+	finally:
+		f.close()
+
+
+def extract_build_info(path) -> str:
+	"""The production extraction path (`drift inspect build-info`):
+	read the single named section, then run the FULL gate-facing
+	payload validation (cap before decode, UTF-8, JSON, v1 schema,
+	canonical encoding). Raises BuildInfoError."""
+	return validate_build_info_payload(read_build_info_section(path))
+
+
 def parse_meta_flags(pairs: list[str]) -> dict[str, str]:
 	"""Validate `--meta key=value` occurrences (PLAN §2.2).
 

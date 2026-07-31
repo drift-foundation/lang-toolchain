@@ -630,37 +630,6 @@ def test_build_info_values(tmp_path: Path) -> None:
 	assert doc["build"]["profile"] == "optimized"
 
 
-def _read_elf_sections(path: Path, name: str) -> list[bytes]:
-	"""Minimal self-contained ELF64 section extractor (no readelf/
-	objdump, target never executed): returns the CONTENT of every
-	section named `name` — callers assert on the count, so duplicate
-	sections are detectable."""
-	import struct
-	data = path.read_bytes()
-	assert data[:4] == b"\x7fELF", "not an ELF binary"
-	assert data[4] == 2, "test expects ELF64"
-	assert data[5] == 1, "test expects little-endian"
-	e_shoff, = struct.unpack_from("<Q", data, 0x28)
-	e_shentsize, = struct.unpack_from("<H", data, 0x3A)
-	e_shnum, = struct.unpack_from("<H", data, 0x3C)
-	e_shstrndx, = struct.unpack_from("<H", data, 0x3E)
-	def section_header(i: int):
-		off = e_shoff + i * e_shentsize
-		sh_name, = struct.unpack_from("<I", data, off)
-		sh_offset, = struct.unpack_from("<Q", data, off + 0x18)
-		sh_size, = struct.unpack_from("<Q", data, off + 0x20)
-		return sh_name, sh_offset, sh_size
-	_, str_off, str_size = section_header(e_shstrndx)
-	shstr = data[str_off:str_off + str_size]
-	out: list[bytes] = []
-	for i in range(e_shnum):
-		sh_name, sh_offset, sh_size = section_header(i)
-		nul = shstr.index(b"\x00", sh_name)
-		if shstr[sh_name:nul].decode("utf-8", "replace") == name:
-			out.append(data[sh_offset:sh_offset + sh_size])
-	return out
-
-
 def _link_flags_for_lib(name: str) -> list[str]:
 	"""Return linker flag for a system library if available."""
 	for d in [Path("/usr/lib"), Path("/usr/lib/x86_64-linux-gnu"), Path("/usr/lib64")]:
@@ -670,10 +639,10 @@ def _link_flags_for_lib(name: str) -> list[str]:
 
 
 def test_build_info_survives_link(tmp_path: Path) -> None:
-	"""The `.drift_build_info` SECTION — checked by name via the ELF
-	section table, not merely by JSON bytes existing somewhere in the
-	binary — must survive linking with exactly one instance whose
-	content passes the full validator."""
+	"""The `.drift_build_info` SECTION — checked by name via the SHARED
+	production reader (lang.driftc.build_info.extract_build_info, the
+	same code path `drift inspect build-info` uses), which enforces
+	exactly one named section and runs the full validator."""
 	import json as _json
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
 	from lang.driftc.build_info import validate_build_info_payload
@@ -702,11 +671,8 @@ def test_build_info_survives_link(tmp_path: Path) -> None:
 	]
 	result = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	assert result.returncode == 0, f"link failed: {result.stderr[:500]}"
-	sections = _read_elf_sections(bin_path, ".drift_build_info")
-	assert len(sections) == 1, (
-		f"expected exactly one .drift_build_info section, got {len(sections)}"
-	)
-	doc = _json.loads(validate_build_info_payload(sections[0]))
+	from lang.driftc.build_info import extract_build_info
+	doc = _json.loads(extract_build_info(bin_path))
 	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
 
 

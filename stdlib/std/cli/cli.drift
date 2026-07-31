@@ -3,31 +3,53 @@ module std.cli;
 import std.core as core;
 import std.parse as parse_std;
 import std.text as text;
+import std.meta as meta;
+import std.console as cons;
+import std.format as format;
 
 export {
 	CliError,
 	ParsedArgs,
 	ArgParser,
+	ParseOutcome,
 	parser
 };
 
 /// Error returned by `ArgParser.parse` when argv is malformed.
 ///
-/// `tag` is a stable machine-readable code (`"unknown-option"`,
-/// `"missing-value"`, `"invalid-int"`, `"missing-required"`,
-/// `"too-many-positional"`, `"cli-help-requested"`).  `arg` is the
+/// `tag` is a stable machine-readable code — one of
+/// `"cli-unknown-option"`, `"cli-missing-option-value"`,
+/// `"cli-unexpected-option-value"`, `"cli-invalid-int"`,
+/// `"cli-missing-required-option"`,
+/// `"cli-missing-required-positional"`, `"cli-unexpected-positional"`,
+/// `"cli-duplicate-option"`, `"cli-unsupported-short-cluster"`,
+/// `"cli-invalid-schema"`, `"cli-help-requested"`,
+/// `"cli-version-requested"`.  `arg` is the
 /// offending argv entry; `message` is a human-readable summary;
 /// `index` is the zero-based argv position where the parser gave
 /// up.
 ///
-/// Note: the special tag `"cli-help-requested"` is returned when
-/// `--help` is encountered; callers typically treat it as "exit 0",
-/// not as an error.
+/// Note: the special tags `"cli-help-requested"` /
+/// `"cli-version-requested"` are returned when `--help` / `--version`
+/// are encountered; callers typically treat them as "exit 0", not as
+/// errors — or use `parse_with_builtins`, which handles both.
 pub error CliError {
 	tag: String,
 	arg: String,
 	message: String,
 	index: Int,
+}
+
+/// Outcome of `ArgParser.parse_with_builtins`.
+///
+/// `Args` carries parsed arguments; `Terminal` means the parser
+/// already produced the complete `--help` / `--version` output and
+/// the process should exit with the carried code; `Err` is a
+/// malformed-argv error exactly as `parse` would report it.
+pub variant ParseOutcome {
+	Args(args: ParsedArgs),
+	Terminal(code: Int),
+	Err(err: CliError)
 }
 
 /// Result of a successful `ArgParser.parse`.
@@ -64,7 +86,9 @@ pub struct ArgParser {
 	pos_names: Array<String>,
 	pos_helps: Array<String>,
 	pos_required: Array<Bool>,
-	pos_multiple: Array<Bool>
+	pos_multiple: Array<Bool>,
+	version_output_v: String,
+	version_output_set: Bool
 }
 
 const OPTION_KIND_FLAG: Int = 0;
@@ -93,7 +117,7 @@ pub fn parser(app: String, version: String, about: String) nothrow -> ArgParser 
 	var pos_helps: Array<String> = [];
 	var pos_required: Array<Bool> = [];
 	var pos_multiple: Array<Bool> = [];
-	return ArgParser(app = app, version = version, about = about, option_longs = move option_longs, option_shorts = move option_shorts, option_value_names = move option_value_names, option_helps = move option_helps, option_required = move option_required, option_kinds = move option_kinds, pos_names = move pos_names, pos_helps = move pos_helps, pos_required = move pos_required, pos_multiple = move pos_multiple);
+	return ArgParser(app = app, version = version, about = about, option_longs = move option_longs, option_shorts = move option_shorts, option_value_names = move option_value_names, option_helps = move option_helps, option_required = move option_required, option_kinds = move option_kinds, pos_names = move pos_names, pos_helps = move pos_helps, pos_required = move pos_required, pos_multiple = move pos_multiple, version_output_v = "", version_output_set = false);
 }
 
 fn _err(tag: String, arg: String, message: String, index: Int) nothrow -> core.Result<ParsedArgs, CliError> {
@@ -367,9 +391,11 @@ implement ArgParser {
 	/// `argv` unchanged from `main(argv)`.
 	///
 	/// **Returns:** `Ok(ParsedArgs)` on success.  `Err(CliError)`
-	/// on malformed input; the special tag `"cli-help-requested"`
-	/// is returned when `--help` / `-h` appears (callers usually
-	/// treat this as exit-zero, not an error).
+	/// on malformed input; the special tags `"cli-help-requested"` /
+	/// `"cli-version-requested"` are returned when `--help` / `-h` or
+	/// `--version` / `-V` appear (callers usually treat these as
+	/// exit-zero, not errors; `parse_with_builtins` handles both and
+	/// owns the output).
 	///
 	/// **See also:** `ParsedArgs`, `CliError`.
 	pub fn parse(self: &ArgParser, argv: &Array<String>) nothrow -> core.Result<ParsedArgs, CliError> {
@@ -575,5 +601,102 @@ implement ParsedArgs {
 	/// Returns the number of positional arguments observed.
 	pub fn positional_len(self: &ParsedArgs) nothrow -> Int {
 		return self.positionals.len;
+	}
+}
+
+
+implement ArgParser {
+	/// Sets a VERBATIM `--version` output override: the full text is
+	/// printed exactly as given (no `<app>` prefix, no stamped
+	/// block).  Takes precedence over both the stamped default and a
+	/// non-empty `version` string.
+	pub fn version_output(self: &mut ArgParser, output: String) nothrow -> Void {
+		self.version_output_v = move output;
+		self.version_output_set = true;
+	}
+
+	/// `parse` plus built-in `--help` / `--version` handling.
+	///
+	/// `parse()` itself remains policy-free (it prints nothing and
+	/// reports `cli-help-requested` / `cli-version-requested`); THIS
+	/// method owns the output and terminal semantics for callers that
+	/// opt in:
+	///
+	/// - `--help` prints `help_text()` and yields `Terminal(0)`;
+	/// - `--version` prints one of THREE explicit modes and yields
+	///   `Terminal(0)`:
+	///     1. a `version_output(...)` override — verbatim;
+	///     2. a non-empty `version` ctor string — `<app> <version>`;
+	///     3. otherwise the stamped default from the build-info
+	///        document (`std.meta`): `<app> <artifact.version>`,
+	///        the artifact description, `driftc <v>, abi <n>`,
+	///        `license: <spdx>`, and a `deps:` line when the artifact
+	///        was compiled against packages.  Unstamped binaries
+	///        render `<app> (unstamped)` plus the compiler line.
+	/// - anything else is `Args(...)` or `Err(...)` exactly as
+	///   `parse` reports it.
+	pub fn parse_with_builtins(self: &ArgParser, argv: &Array<String>) nothrow -> ParseOutcome {
+		match self.parse(argv) {
+			core.Result::Ok(a) => {
+				return ParseOutcome::Args(args = move a);
+			},
+			core.Result::Err(e) => {
+				if e.tag == "cli-help-requested" {
+					cons.print(self.help_text());
+					return ParseOutcome::Terminal(code = 0);
+				}
+				if e.tag == "cli-version-requested" {
+					cons.print(self._version_render());
+					return ParseOutcome::Terminal(code = 0);
+				}
+				return ParseOutcome::Err(err = move e);
+			}
+		}
+	}
+
+	/// Builds the `--version` output per the three-mode precedence
+	/// documented on `parse_with_builtins`.  The simple and stamped
+	/// modes end with a trailing newline; VERBATIM output is printed
+	/// exactly as supplied (including an empty override, which prints
+	/// nothing).
+	fn _version_render(self: &ArgParser) nothrow -> String {
+		if self.version_output_set {
+			return "" + self.version_output_v;
+		}
+		if self.version.byte_length() > 0 {
+			return self.app + " " + self.version + "\n";
+		}
+		val compiler_line = "driftc " + meta.toolchain_version() + ", abi " + format.format_int(meta.runtime_abi()) + "\n";
+		match meta.artifact_version() {
+			Optional::Some(v) => {
+				var out = self.app + " " + v + "\n";
+				match meta.artifact_description() {
+					Optional::Some(d) => { out = out + d + "\n"; },
+					Optional::None() => { }
+				}
+				out = out + compiler_line;
+				match meta.artifact_license() {
+					Optional::Some(l) => { out = out + "license: " + l + "\n"; },
+					Optional::None() => { }
+				}
+				val deps = meta.dep_versions();
+				if deps.len > 0 {
+					out = out + "deps:";
+					var i = 0;
+					while i < deps.len {
+						out = out + " " + *deps[i].name() + "@" + *deps[i].version();
+						i = i + 1;
+					}
+					out = out + "\n";
+				}
+				return move out;
+			},
+			Optional::None() => {
+				// Ratified unstamped fallback: EXACTLY these two
+				// lines — no description/license/deps, even when the
+				// binary was compiled against packages.
+				return self.app + " (unstamped)\n" + compiler_line;
+			}
+		}
 	}
 }
