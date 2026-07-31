@@ -2,7 +2,8 @@
 """LANGUAGE_BUG regression pins: thin fn-pointer values with `&T`/`&mut T`
 parameters, called with a bare place argument, miscompiled.
 
-Minimal repro (work/fnptr-ref-arg-autoborrow-miscompile/repro_minimal.drift):
+Minimal repro (probe e8d of the reject-redundant-call-borrows research;
+fixed in 0.33.91):
 
 	val f: Fn(&String) nothrow -> Int = read_len;
 	val s: String = "hello";
