@@ -76,13 +76,13 @@ def _toolchain_git_sha() -> str:
 
 
 def _resolve_build_profile(debug_style_runtime: bool) -> str:
-	"""App-visible build-profile label stamped into `meta.compiler_info()`.
+	"""App-visible build-profile label stamped into `meta.build_info()`.
 
 	Sanitizer test modes take precedence over the dual-runtime
 	normal/debug-style distinction; the unsanitized lane records
 	"debug" when DRIFT_DEBUG=1 is set and "optimized" otherwise.
 
-	"optimized" is what app teams reading `meta.compiler_info()` see;
+	"optimized" is what app teams reading `meta.build_info()` see;
 	the internal lane name `default` (the runtime-archive subdir)
 	is deliberately not surfaced -- app logs should report what the
 	binary IS, not which compiler lane built it.
@@ -131,24 +131,11 @@ def _parse_sanitize(value: str):
 
 
 def _version_string() -> str:
-	"""Build the driftc --version output."""
+	"""The concise HUMAN `--version` line (0.33.93 clean break: no
+	pipe grammar anywhere). Machine consumers use `--version --json`
+	(drift-toolchain-info/v1, via lang.driftc.build_info)."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
-	# Vendor + license come from lang.versions so the same constants
-	# stamp `--version`, `meta.compiler_info()`, and any deploy-time
-	# provenance probe -- no second source of truth.
-	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
-	git_sha = _toolchain_git_sha()
-	parts = [
-		f"driftc {DRIFTC_VERSION}",
-		f"abi {DRIFT_RT_ABI_VERSION}",
-	]
-	if git_sha:
-		parts.append(f"git {git_sha}")
-	if DRIFTC_LICENSE:
-		parts.append(f"license {DRIFTC_LICENSE}")
-	if DRIFTC_VENDOR:
-		parts.append(DRIFTC_VENDOR)
-	return " | ".join(parts)
+	return f"driftc {DRIFTC_VERSION} (ABI {DRIFT_RT_ABI_VERSION})"
 
 
 from lang.driftc import stage1 as H
@@ -1581,6 +1568,7 @@ def _emit_codegen(
 	debug_enabled: bool = True,
 	provenance_git_sha: str = "",
 	provenance_build_profile: str = "default",
+	provenance_build_info: dict | None = None,
 ) -> str:
 	"""Shared codegen entry: validate contract, lower to LLVM IR, emit wrappers, render."""
 	assert unit.type_table is not None, "_emit_codegen: CompilationUnit.type_table is None"
@@ -1629,6 +1617,7 @@ def _emit_codegen(
 			debug_enabled=debug_enabled,
 			provenance_git_sha=provenance_git_sha,
 			provenance_build_profile=provenance_build_profile,
+			provenance_build_info=provenance_build_info,
 		)
 		module.emit_abi_stamp()
 		if unit.entry_id is not None and argv_wrapper is None:
@@ -8676,6 +8665,7 @@ def compile_to_llvm_ir_for_tests(
 	reserved_namespace_policy: ReservedNamespacePolicy = ReservedNamespacePolicy.ALLOW_DEV,
 	debug_enabled: bool = True,
 	root_vt: bool = True,
+	provenance_build_info: dict | None = None,
 ) -> tuple[str, CheckedProgramById]:
 	"""
 	End-to-end helper: HIR -> MIR -> throw checks -> SSA -> LLVM IR for tests.
@@ -8886,6 +8876,7 @@ def compile_to_llvm_ir_for_tests(
 				# info and defaults to True even on optimized runs); same
 				# logic as the CLI path at line 8033's `debug_style_runtime`.
 				provenance_build_profile=_resolve_build_profile(_env_true("DRIFT_DEBUG")),
+				provenance_build_info=provenance_build_info,
 			)
 	except AssertionError as err:
 		_append_boundary_contract_diag(
@@ -9294,7 +9285,11 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# Handle --version before argparse so it works without required positional args.
 	raw_argv = argv if argv is not None else sys.argv[1:]
 	if "--version" in raw_argv or "-V" in raw_argv:
-		print(_version_string())
+		if "--json" in raw_argv:
+			from lang.driftc.build_info import toolchain_info_json
+			print(toolchain_info_json(git_sha=_toolchain_git_sha()))
+		else:
+			print(_version_string())
 		return 0
 	parser = argparse.ArgumentParser(description="lang driftc stub")
 	parser.add_argument("source", type=Path, nargs="+", help="Path(s) to Drift source file(s)")
@@ -9490,7 +9485,49 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 		help="Suppress auto-linking of native deps declared by consumed packages")
 	parser.add_argument("--dep", action="append", default=[], metavar="PKG@VERSION",
 		help="Select exact dependency version for consumed package (repeatable; e.g., --dep net.tls@0.3.0)")
+	# ── drift-build-info/v1 stamp inputs (work/toolchain-meta-stamps) ──
+	# Artifact identity allowlist: ATOMIC — all four with non-empty
+	# values, or none (unstamped compile stamps `"artifact": null`).
+	# `drift build`/`deploy` pass these from the selected manifest
+	# artifact; version is an arbitrary non-empty string by design.
+	parser.add_argument("--artifact-name", default=None, metavar="S",
+		help="Build-info stamp: manifest artifact name (atomic with the other three --artifact-* flags)")
+	parser.add_argument("--artifact-version", default=None, metavar="S",
+		help="Build-info stamp: manifest artifact version (arbitrary non-empty string)")
+	parser.add_argument("--artifact-description", default=None, metavar="S",
+		help="Build-info stamp: manifest artifact description")
+	parser.add_argument("--artifact-license", default=None, metavar="S",
+		help="Build-info stamp: manifest artifact license")
+	parser.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE",
+		help="Build-info stamp: application-defined metadata under the isolated `extra` "
+			"section (repeatable; key grammar [a-z0-9_.]+; empty value allowed; duplicate "
+			"key is an error). Toolchain/build/artifact/dependency facts are never "
+			"settable here — the compiler generates them.")
 	args = parser.parse_args(argv)
+	# Validate stamp inputs FIRST (pure helpers; unit-tested in
+	# lang/tests/codegen/test_build_info_stamp.py): fail before any
+	# compilation work with the standard diagnostic shape.
+	from lang.driftc.build_info import (
+		BuildInfoError,
+		parse_artifact_flags,
+		parse_meta_flags,
+	)
+	try:
+		_stamp_artifact = parse_artifact_flags(
+			args.artifact_name, args.artifact_version,
+			args.artifact_description, args.artifact_license,
+		)
+		_stamp_extra = parse_meta_flags(args.meta)
+	except ValueError as _stamp_err:
+		msg = str(_stamp_err)
+		if args.json:
+			_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "cli", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
+		else:
+			print(f"error: {msg}", file=sys.stderr)
+		return 1
+	# Dependency stamps derive from the VALIDATED effective pin map
+	# (populated after --dep validation below), never raw args.dep.
+	_stamp_dep_pins: dict[str, str] = {}
 	# Dual-runtime workstream (step 4): the production default lane is
 	# "normal" (optimized, no debug info, links the unsuffixed runtime
 	# archive).  `DRIFT_DEBUG=1` flips into the explicit "debug-style" lane
@@ -9709,6 +9746,9 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			return 1
 
 		_dep_allowlist: set[str] = set(_version_pins.keys())
+		# Guardrail G1 (work/toolchain-meta-stamps): the build-info
+		# dependency stamp reads the validated pin map, not argv.
+		_stamp_dep_pins.update(_version_pins)
 		_self_pkg_id = str(args.package_id) if args.package_id else None
 
 		# ── Discover + pre-filter before load ─────────────────────────
@@ -14070,7 +14110,19 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 					debug_enabled=debug_enabled,
 					provenance_git_sha=_toolchain_git_sha(),
 					provenance_build_profile=_build_profile,
+					provenance_build_info={
+						"artifact": _stamp_artifact,
+						"dependencies": _stamp_dep_pins,
+						"extra": _stamp_extra,
+					},
 				)
+		except BuildInfoError as err:
+			msg = str(err)
+			if args.json:
+				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
+			else:
+				print(f"error: {msg}", file=sys.stderr)
+			return 1
 		except AssertionError as err:
 			msg = f"internal: LLVM lowering contract failure ({err})"
 			if args.json:
@@ -14079,21 +14131,34 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 				print(f"{_diag_label(None, source_path)}:?:?: error: {msg}", file=sys.stderr)
 			return 1
 	else:
-		ir, _checked = compile_to_llvm_ir_for_tests(
-			func_hirs=func_hirs_by_id,
-			signatures=signatures_by_id,
-			exc_env=exception_catalog,
-			entry=f"{entry_module}::{entry_name}",
-			type_table=type_table,
-			module_exports=module_exports,
-			module_deps=module_deps,
-			origin_by_fn_id=origin_by_fn_id,
-			prelude_enabled=bool(args.prelude),
-			enforce_entrypoint=True,
-			require_public_entrypoint=True,
-			emit_instantiation_index=args.emit_instantiation_index,
-			debug_enabled=debug_enabled,
-		)
+		try:
+			ir, _checked = compile_to_llvm_ir_for_tests(
+				func_hirs=func_hirs_by_id,
+				signatures=signatures_by_id,
+				exc_env=exception_catalog,
+				entry=f"{entry_module}::{entry_name}",
+				type_table=type_table,
+				module_exports=module_exports,
+				module_deps=module_deps,
+				origin_by_fn_id=origin_by_fn_id,
+				prelude_enabled=bool(args.prelude),
+				enforce_entrypoint=True,
+				require_public_entrypoint=True,
+				emit_instantiation_index=args.emit_instantiation_index,
+				debug_enabled=debug_enabled,
+				provenance_build_info={
+					"artifact": _stamp_artifact,
+					"dependencies": _stamp_dep_pins,
+					"extra": _stamp_extra,
+				},
+			)
+		except BuildInfoError as err:
+			msg = str(err)
+			if args.json:
+				_emit_compile_json({"exit_code": 1, "diagnostics": [{"phase": "codegen", "message": msg, "severity": "error", "file": None, "line": None, "column": None}]})
+			else:
+				print(f"error: {msg}", file=sys.stderr)
+			return 1
 		if _checked is not None and any(d.severity == "error" for d in _checked.diagnostics):
 			if args.json:
 				payload = {

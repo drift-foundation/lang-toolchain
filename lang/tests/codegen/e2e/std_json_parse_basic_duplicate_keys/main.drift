@@ -5,8 +5,18 @@ import std.core as core;
 
 fn run() -> Int {
 	val text = "{\"a\":1,\"a\":2,\"b\":true,\"c\":null}";
-	var root = json.JsonNode::Null();
+	// 0.33.93: parse() IS the strict entry point — duplicate keys are
+	// REJECTED there; keep-last semantics require an explicit
+	// permissive() policy.
 	match json.parse(text) {
+		core.Result::Ok(_) => { return 20; },
+		core.Result::Err(e) => {
+			if e.tag != "duplicate-key" { return 21; }
+		}
+	}
+	val perm = json.permissive();
+	var root = json.JsonNode::Null();
+	match json.parse_with_config(text, perm) {
 		core.Result::Ok(v) => {
 			root = move v;
 		},

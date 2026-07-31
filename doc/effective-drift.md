@@ -721,7 +721,12 @@ Notes:
 - parse: `json.parse(text) -> Result<JsonNode, JsonErrorData>`
 - encode: `json.encode(...)`, `json.encode_compact(...)`, and `..._with_config(...)`
 - key ordering policy: `JsonKeyOrder::Unordered()` (default) or `JsonKeyOrder::OrderedLexUtf8()`
-- parse duplicate keys: keep-last
+- `parse()` is STRICT standard JSON (0.33.93 clean break): duplicate
+  keys rejected, leading zeros rejected, `\uXXXX` escapes decoded,
+  unescaped control bytes rejected. Relaxed policy is explicit:
+  `json.parse_with_config(text, json.permissive())` restores keep-last
+  duplicate keys — it does NOT restore invalid-JSON forms (leading
+  zeros stay rejected everywhere).
 - shape mutation is wrapper-only:
 `json.new_array()/json.new_object()` with `JsonArray.push(...)` and `JsonObject.set(...)`
 - navigation: `get(key)`, `get_path(path)` (declared `&String` / `&Array<String>` formals — the call is bare)

@@ -736,10 +736,14 @@ Free functions:
 ## std.json (parser policy + located decoder + canonical encoding)
 
 Slice 2 makes "strict JSON" an orthogonal parser-policy surface and adds a
-source-location-preserving decoder and a canonical encoder. The legacy `parse()`
-behavior is preserved exactly; everything below is additive. Policies select
-**standard JSON or a stricter subset** — never a superset, never a value
-reinterpretation (sole exception: duplicate-key resolution).
+source-location-preserving decoder and a canonical encoder. As of 0.33.93
+(clean break) `parse()` IS the strict entry point — the legacy/permissive
+default and `parse_strict` are gone: `parse()` rejects duplicate keys,
+rejects leading zeros, decodes `\uXXXX` escapes, and rejects unescaped
+control bytes. Policies select **standard JSON or a stricter subset** —
+never a superset, never a value reinterpretation (sole exception:
+duplicate-key resolution, where explicit `permissive()` restores
+keep-last).
 
 ### Parser policy
 
@@ -748,8 +752,8 @@ reinterpretation (sole exception: duplicate-key resolution).
   - `TopLevelPolicy` = `AnyValue | ObjectOrArray | ObjectOnly`.
   - `JsonNumberPolicy { allow_fractions, allow_exponents, allow_negative_zero }`
     — independent toggles; each disables a *valid-JSON* number shape. There is
-    **no** public leading-zeros toggle (leading zeros are invalid JSON, rejected
-    by every public config; only legacy `parse()` accepts them).
+    **no** leading-zeros toggle (leading zeros are invalid JSON, rejected by
+    every policy — including `parse()` itself since the 0.33.93 clean break).
   - `JsonLimits { max_document_bytes, max_depth, max_string_bytes,
     max_number_bytes, max_array_items, max_object_fields }` — each
     `Optional<Int>`; `None` = unlimited; a negative `Some(n)` ⇒ `"invalid-config"`.
@@ -757,16 +761,18 @@ reinterpretation (sole exception: duplicate-key resolution).
   (reject dups; `-0` allowed), `signed_ir()` (integer-only `0 | -?[1-9][0-9]*`,
   reject dups; no bundled limits/top-level). `JsonParseConfigBuilder` with frozen
   `build() -> Result<JsonParseConfig, JsonErrorData>` (validates limits).
-- Entry points: `parse_with_config(&String, &JsonParseConfig)`,
-  `parse_strict(&String)` (== `strict()`); `parse(&String)` unchanged.
+- Entry points: `parse(&String)` — THE strict entry point (== `strict()`;
+  0.33.93 clean break: the legacy/permissive default and the
+  `parse_strict` alias are gone) — and
+  `parse_with_config(&String, &JsonParseConfig)` for explicit policy
+  (`permissive()`, `signed_ir()`, or a builder config).
 - Numeric policy inspects the verbatim `JsonNode::Number(raw)` lexeme before any
   conversion; per-number precedence: leading-zero → negative-zero → fraction →
   exponent. Duplicate-key `Reject` reports the **second** key's opening-quote
   offset.
-- **String rules**: public configs follow RFC 8259 — `\uXXXX` (incl. surrogate
+- **String rules**: every policy follows RFC 8259 — `\uXXXX` (incl. surrogate
   pairs) decodes to UTF-8, and unescaped control bytes `U+0000–U+001F` are
-  rejected (`unescaped-control`). Legacy `parse()` is bug-compatible: no `\u`
-  support (`invalid-escape`), tolerates unescaped controls.
+  rejected (`unescaped-control`).
 - **Limits are pre-consumption**: array-item / object-field limits reject the
   offending element/key before parsing its value; `max_string_bytes` /
   `max_number_bytes` are enforced incrementally; `max_object_fields` counts member

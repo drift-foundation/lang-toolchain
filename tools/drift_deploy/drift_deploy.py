@@ -43,7 +43,6 @@ from tools.drift_deploy.provenance import (
 	build_provenance,
 	build_provenance_bundle,
 	compress_provenance_bundle,
-	parse_compiler_info,
 	provenance_sha256,
 	write_provenance,
 	write_provenance_bundle,
@@ -548,14 +547,29 @@ def _resolve_native_lib_paths(args: argparse.Namespace, manifest_dir: Path) -> l
 
 
 def _get_compiler_info(driftc: Path) -> CompilerInfo:
+	# 0.33.93 clean break: the ONLY machine contract is
+	# `--version --json` (drift-toolchain-info/v1), validated
+	# fail-closed. No pipe parsing, no "unknown" fallback — provenance
+	# must record the real toolchain identity or the deploy must stop.
+	from lang.driftc.build_info import BuildInfoError, parse_toolchain_info
 	try:
 		result = subprocess.run(
-			[str(driftc), "--version"],
+			[str(driftc), "--version", "--json"],
 			capture_output=True, text=True, timeout=10, env=_clean_env(),
 		)
-		return parse_compiler_info(result.stdout)
-	except Exception:
-		return CompilerInfo(version="unknown", abi=0, commit="unknown")
+	except Exception as e:
+		raise DeployError(f"driftc --version --json failed to run: {e}")
+	if result.returncode != 0:
+		raise DeployError(
+			f"driftc --version --json exited {result.returncode}: "
+			f"{result.stderr.strip()[:300]}")
+	try:
+		tc = parse_toolchain_info(result.stdout)
+	except BuildInfoError as e:
+		raise DeployError(f"driftc --version --json output rejected: {e}")
+	return CompilerInfo(
+		version=tc["driftc"], abi=tc["abi"], commit=tc["git"] or "unknown",
+	)
 
 
 # ── Artifact ordering ────────────────────────────────────────────────

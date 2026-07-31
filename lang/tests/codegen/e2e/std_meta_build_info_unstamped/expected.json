@@ -1,0 +1,6 @@
+{
+  "description": "e2e: std.meta build_info surface on an UNSTAMPED compile — toolchain scalars present, artifact accessors None, dep_versions empty, raw doc parses with the v1 discriminator",
+  "exit_code": 0,
+  "stdout": "unstamped-ok\n",
+  "stderr": ""
+}

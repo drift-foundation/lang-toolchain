@@ -515,154 +515,150 @@ def test_abi_mismatch_driver_hint(tmp_path: Path) -> None:
 
 
 def test_driftc_version_output() -> None:
-	"""§11: driftc --version prints all required metadata fields,
-	sourced from `lang/versions.py` constants -- single source of
-	truth with `meta.compiler_info()`.
+	"""§11 (0.33.93 clean break): `--version` is the concise HUMAN
+	line only — `driftc X (ABI N)`, no pipe grammar. License/vendor/
+	git moved to the machine contract `--version --json`
+	(drift-toolchain-info/v1), sourced from the same
+	`lang/versions.py` constants — single source of truth.
 	"""
 	from lang.driftc.driftc import main as driftc_main
+	from lang.driftc.driftc_versions import DRIFTC_VERSION
 	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
+	from lang.driftc.build_info import parse_toolchain_info
 	import io
 	import contextlib
 	buf = io.StringIO()
 	with contextlib.redirect_stdout(buf):
 		rc = driftc_main(["--version"])
 	assert rc == 0
-	out = buf.getvalue().strip()
-	assert "driftc" in out
-	assert f"abi {DRIFT_RT_ABI_VERSION}" in out
-	assert DRIFTC_LICENSE in out, (
-		f"--version output must carry DRIFTC_LICENSE; got: {out!r}"
-	)
-	assert DRIFTC_VENDOR in out, (
-		f"--version output must carry DRIFTC_VENDOR; got: {out!r}"
-	)
+	out = buf.getvalue()
+	assert out == f"driftc {DRIFTC_VERSION} (ABI {DRIFT_RT_ABI_VERSION})\n"
+	assert "|" not in out
+	buf = io.StringIO()
+	with contextlib.redirect_stdout(buf):
+		rc = driftc_main(["--version", "--json"])
+	assert rc == 0
+	tc = parse_toolchain_info(buf.getvalue())
+	assert tc["driftc"] == DRIFTC_VERSION
+	assert tc["abi"] == DRIFT_RT_ABI_VERSION
+	assert tc["license"] == DRIFTC_LICENSE
+	assert tc["vendor"] == DRIFTC_VENDOR
 
 
-def _decode_provenance_payload(ir: str) -> str:
-	"""Extract and decode the @__drift_compiler_build byte array from IR text."""
+def _decode_build_info_payload(ir: str) -> dict:
+	"""Extract the @__drift_build_info section constant from IR text and
+	validate it through the gate-facing reader (schema + canonical)."""
+	import json as _json
+	from lang.driftc.build_info import validate_build_info_payload
 	for line in ir.split("\n"):
-		if "@__drift_compiler_build" not in line:
+		if "@__drift_build_info" not in line:
 			continue
-		# Parse "i8 NNN" values from the constant array.
 		import re
+		assert 'section ".drift_build_info"' in line, (
+			"build-info constant must carry the .drift_build_info section attribute"
+		)
 		byte_vals = [int(m) for m in re.findall(r"i8\s+(\d+)", line)]
-		# Strip trailing NUL.
-		if byte_vals and byte_vals[-1] == 0:
-			byte_vals = byte_vals[:-1]
-		return bytes(byte_vals).decode("utf-8")
-	return ""
+		return _json.loads(validate_build_info_payload(bytes(byte_vals)))
+	raise AssertionError("@__drift_build_info constant not found in IR")
 
 
-def test_ir_contains_compiler_provenance(tmp_path: Path) -> None:
-	"""Generated IR must contain a compiler provenance constant with required fields."""
+def test_ir_contains_build_info(tmp_path: Path) -> None:
+	"""Generated IR must contain the build-info section constant with
+	the required identity fields (migrated from the retired pipe
+	provenance global in the 0.33.93 clean break)."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
-	assert "@__drift_compiler_build" in ir, "compiler provenance global not found in IR"
-	payload = _decode_provenance_payload(ir)
-	assert f"driftc {DRIFTC_VERSION}" in payload, f"DRIFTC_VERSION not in provenance: {payload!r}"
-	assert f"abi {DRIFT_RT_ABI_VERSION}" in payload, f"ABI version not in provenance: {payload!r}"
-	assert "word " in payload, f"target word_bits not in provenance: {payload!r}"
-	assert "build_utc " in payload, f"build_utc not in provenance: {payload!r}"
+	doc = _decode_build_info_payload(ir)
+	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
+	assert doc["toolchain"]["abi"] == DRIFT_RT_ABI_VERSION
+	assert doc["build"]["word"] in (32, 64)
+	assert doc["build"]["utc"], "build.utc must be stamped"
 
 
-def test_compiler_provenance_present_without_wrapper(tmp_path: Path) -> None:
-	"""Provenance is emitted even on helper path (no entry wrapper)."""
+def test_build_info_present_without_wrapper(tmp_path: Path) -> None:
+	"""The stamp is emitted even on the helper path (no entry wrapper)."""
 	ir = _compile_simple_program(tmp_path)
-	assert "@__drift_compiler_build" in ir, "provenance should be present on helper path"
+	assert "@__drift_build_info" in ir
 
 
-def test_abi_stamp_unchanged_with_provenance(tmp_path: Path) -> None:
-	"""Provenance addition must not alter ABI stamp behavior."""
+def test_abi_stamp_unchanged_with_build_info(tmp_path: Path) -> None:
+	"""Stamp emission must not alter ABI stamp behavior."""
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	abi_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 	assert f"call void @{abi_sym}()" in ir, "ABI stamp call missing"
-	assert "@__drift_compiler_build" in ir, "provenance missing"
+	assert "@__drift_build_info" in ir, "build-info stamp missing"
 
 
-def test_compiler_provenance_grammar(tmp_path: Path) -> None:
-	"""Validate the frozen compiler_info() grammar contract on the provenance payload."""
+def test_build_info_document_contract(tmp_path: Path) -> None:
+	"""The emitted document passes the full drift-build-info/v1
+	validator (schema, types, canonical encoding) — this replaces the
+	retired pipe-grammar contract test outright."""
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
-	payload = _decode_provenance_payload(ir)
-	assert payload, "provenance payload is empty"
-
-	# Split on " | " delimiter.
-	segments = payload.split(" | ")
-	assert len(segments) >= 4, f"expected >= 4 segments, got {len(segments)}: {payload!r}"
-
-	required_keys = {"driftc", "abi", "word", "build_utc"}
-	found_keys: set[str] = set()
-
-	for seg in segments:
-		assert seg, f"empty segment in provenance: {payload!r}"
-		# Each segment must have form "<key> <value>" (first space splits).
-		space_idx = seg.find(" ")
-		assert space_idx > 0, f"segment has no space delimiter: {seg!r}"
-		key = seg[:space_idx]
-		value = seg[space_idx + 1:]
-		# Keys are [a-z_]+ only.
-		assert re.fullmatch(r"[a-z_]+", key), f"key {key!r} violates [a-z_]+ grammar"
-		# Values are non-empty.
-		assert value, f"empty value for key {key!r} in provenance"
-		found_keys.add(key)
-
-	missing = required_keys - found_keys
-	assert not missing, f"missing required keys {missing} in provenance: {payload!r}"
+	doc = _decode_build_info_payload(ir)  # validator runs inside
+	assert doc["format"] == "drift-build-info/v1"
+	assert doc["artifact"] is None, "test-path compile must be unstamped"
+	assert doc["dependencies"] == [] and doc["extra"] == {}
 
 
-def test_compiler_provenance_values(tmp_path: Path) -> None:
-	"""Pin the literal values of the app-facing identity fields in
-	`meta.compiler_info()`.
+def test_build_info_values(tmp_path: Path) -> None:
+	"""Pin the literal app-facing identity values in the stamp.
 
 	`vendor` + `license` are constants of this toolchain build; a fork
 	rebuilding under a different vendor/license must change
 	DRIFTC_VENDOR / DRIFTC_LICENSE in `lang/versions.py`, and this
 	test surfaces the change as a deliberate diff.
 
-	`profile` is environment-driven; this test gates on the normal
-	lane (no DRIFT_DEBUG / DRIFT_ASAN / DRIFT_UBSAN) so it can assert
-	the literal `optimized` -- the app-facing wording that
-	differentiates the regular release lane from sanitizer / debug
-	lanes.  Under any sanitizer or DRIFT_DEBUG lane the test skips
-	with a one-line note; the lane-agnostic shape contract still
-	lives in `test_compiler_provenance_grammar` above.
+	`profile` is environment-driven; the literal `optimized` pin gates
+	on the normal lane and skips under sanitizer / DRIFT_DEBUG lanes
+	(the lane-agnostic shape contract lives in
+	test_build_info_document_contract above).
 	"""
 	import os
 	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
 
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
-	payload = _decode_provenance_payload(ir)
-	assert payload, "provenance payload is empty"
+	doc = _decode_build_info_payload(ir)
+	assert doc["toolchain"]["vendor"] == DRIFTC_VENDOR
+	assert doc["toolchain"]["license"] == DRIFTC_LICENSE
 
-	# Parse into key->value (first space splits).
-	pairs: dict[str, str] = {}
-	for seg in payload.split(" | "):
-		idx = seg.find(" ")
-		if idx > 0:
-			pairs[seg[:idx]] = seg[idx + 1:]
-
-	# Vendor / license are unconditional in the Foundation build.
-	assert pairs.get("vendor") == DRIFTC_VENDOR, (
-		f"vendor mismatch: provenance has {pairs.get('vendor')!r}, "
-		f"DRIFTC_VENDOR is {DRIFTC_VENDOR!r}"
-	)
-	assert pairs.get("license") == DRIFTC_LICENSE, (
-		f"license mismatch: provenance has {pairs.get('license')!r}, "
-		f"DRIFTC_LICENSE is {DRIFTC_LICENSE!r}"
-	)
-
-	# Normal-lane profile pin.  Skip when an env override would have
-	# selected a different label upstream (the resolution lives in
-	# lang/driftc/driftc.py::_resolve_build_profile).
 	def _env_true(name: str) -> bool:
 		return os.environ.get(name, "").lower() in ("1", "true", "yes")
 
 	if _env_true("DRIFT_ASAN") or _env_true("DRIFT_UBSAN") or _env_true("DRIFT_DEBUG"):
 		import pytest
 		pytest.skip("profile value pin only applies to the normal compiler lane")
-	assert pairs.get("profile") == "optimized", (
-		f"profile mismatch on normal lane: provenance has "
-		f"{pairs.get('profile')!r}, expected 'optimized'"
-	)
+	assert doc["build"]["profile"] == "optimized"
+
+
+def _read_elf_sections(path: Path, name: str) -> list[bytes]:
+	"""Minimal self-contained ELF64 section extractor (no readelf/
+	objdump, target never executed): returns the CONTENT of every
+	section named `name` — callers assert on the count, so duplicate
+	sections are detectable."""
+	import struct
+	data = path.read_bytes()
+	assert data[:4] == b"\x7fELF", "not an ELF binary"
+	assert data[4] == 2, "test expects ELF64"
+	assert data[5] == 1, "test expects little-endian"
+	e_shoff, = struct.unpack_from("<Q", data, 0x28)
+	e_shentsize, = struct.unpack_from("<H", data, 0x3A)
+	e_shnum, = struct.unpack_from("<H", data, 0x3C)
+	e_shstrndx, = struct.unpack_from("<H", data, 0x3E)
+	def section_header(i: int):
+		off = e_shoff + i * e_shentsize
+		sh_name, = struct.unpack_from("<I", data, off)
+		sh_offset, = struct.unpack_from("<Q", data, off + 0x18)
+		sh_size, = struct.unpack_from("<Q", data, off + 0x20)
+		return sh_name, sh_offset, sh_size
+	_, str_off, str_size = section_header(e_shstrndx)
+	shstr = data[str_off:str_off + str_size]
+	out: list[bytes] = []
+	for i in range(e_shnum):
+		sh_name, sh_offset, sh_size = section_header(i)
+		nul = shstr.index(b"\x00", sh_name)
+		if shstr[sh_name:nul].decode("utf-8", "replace") == name:
+			out.append(data[sh_offset:sh_offset + sh_size])
+	return out
 
 
 def _link_flags_for_lib(name: str) -> list[str]:
@@ -673,23 +669,22 @@ def _link_flags_for_lib(name: str) -> list[str]:
 	return []
 
 
-def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
-	"""Provenance string must be discoverable in the linked binary via strings(1)."""
+def test_build_info_survives_link(tmp_path: Path) -> None:
+	"""The `.drift_build_info` SECTION — checked by name via the ELF
+	section table, not merely by JSON bytes existing somewhere in the
+	binary — must survive linking with exactly one instance whose
+	content passes the full validator."""
+	import json as _json
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
+	from lang.driftc.build_info import validate_build_info_payload
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	clang = shutil.which("clang")
 	assert clang, "clang not available"
 	variant = runtime_archive_variant(debug_style=False, asan_enabled=False, alloc_track_enabled=False)
 	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
-	ir_path = tmp_path / "provenance.ll"
-	bin_path = tmp_path / "provenance.out"
+	ir_path = tmp_path / "buildinfo.ll"
+	bin_path = tmp_path / "buildinfo.out"
 	ir_path.write_text(ir)
-	# `-lz` is required for every Drift binary post-0.31.77 — the
-	# runtime archive unconditionally contains codec_gzip_runtime.o,
-	# which references libz. Production driftc adds this in its link
-	# path (lang/driftc/driftc.py); test-paths that build their own
-	# link command must add it explicitly. Same shape as the e2e
-	# runner's link_libs and driftc's default link_libs.
 	link_libs = (
 		_link_flags_for_lib("dw")
 		+ _link_flags_for_lib("unwind")
@@ -707,19 +702,12 @@ def test_compiler_provenance_survives_link(tmp_path: Path) -> None:
 	]
 	result = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	assert result.returncode == 0, f"link failed: {result.stderr[:500]}"
-	assert bin_path.exists()
-	strings_bin = shutil.which("strings")
-	assert strings_bin, "strings(1) not available"
-	strings_result = subprocess.run(
-		[strings_bin, str(bin_path)],
-		capture_output=True, text=True, timeout=sanitizer_timeout(10),
+	sections = _read_elf_sections(bin_path, ".drift_build_info")
+	assert len(sections) == 1, (
+		f"expected exactly one .drift_build_info section, got {len(sections)}"
 	)
-	assert strings_result.returncode == 0
-	found = [line for line in strings_result.stdout.splitlines() if f"driftc {DRIFTC_VERSION}" in line]
-	assert found, (
-		f"provenance string 'driftc {DRIFTC_VERSION}' not found in linked binary; "
-		f"strings output has {len(strings_result.stdout.splitlines())} lines"
-	)
+	doc = _json.loads(validate_build_info_payload(sections[0]))
+	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
 
 
 def test_abi14_binary_contains_no_dv_runtime_symbols(tmp_path: Path) -> None:

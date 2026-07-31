@@ -49,7 +49,7 @@ pub fn main() nothrow -> Int {
 
 	val src = "{\\"a\\":1}";
 	val _r1: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_with_config(src, _p);
-	val _r2: core.Result<json.JsonNode, json.JsonErrorData> = json.parse_strict(src);
+	val _r2: core.Result<json.JsonNode, json.JsonErrorData> = json.parse(src);
 
 	// located surface
 	match json.parse_located(src, _s) {

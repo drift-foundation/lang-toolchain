@@ -266,7 +266,7 @@ pub fn _oracle_parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
-	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
+	val ctx = _ParseCtx(cfg = *cfg, locate = false);
 	var sp: Optional<_SpanTree> = Optional::None();
 	return _parse_document_rec(text, ctx, sp);
 }
@@ -278,7 +278,7 @@ pub fn _oracle_parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> co
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
-	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
+	val ctx = _ParseCtx(cfg = *cfg, locate = true);
 	var sp: Optional<_SpanTree> = Optional::None();
 	match _parse_document_rec(text, ctx, sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },

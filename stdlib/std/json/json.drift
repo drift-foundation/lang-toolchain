@@ -47,7 +47,6 @@ export {
 	parse_config_builder,
 	parse_config_builder_from,
 	parse_with_config,
-	parse_strict,
 	parse_located,
 	JsonDoc,
 	LocatedCursor,
@@ -417,17 +416,18 @@ pub fn encode_compact_with_config(node: &JsonNode, cfg: &JsonConfig) nothrow -> 
 	return _encode_node(node, cfg);
 }
 
-/// Parses `text` as a single JSON value (legacy/permissive behavior).  Equivalent
-/// to the unified parser under the private legacy profile — keep-last duplicate
-/// keys, any root, lenient numbers INCLUDING leading zeros — plus the default
-/// finite nesting cap (`max_depth = 128`) that `permissive()` carries: a document
-/// nested deeper than the cap returns a `limit-depth` error instead of consuming
-/// unbounded memory.  Callers needing unbounded depth use `parse_with_config`
-/// with `max_depth = None`.
+/// Parses `text` as a single STRICT JSON value (0.33.93 clean break:
+/// the legacy/permissive profile this entry point used to carry is
+/// gone, and `parse_strict()` with it — `parse()` IS the strict entry
+/// point).  Standard JSON per `strict()`: duplicate object keys
+/// rejected, RFC numbers (no leading zeros), `\uXXXX` escapes decoded
+/// (surrogate pairs validated), unescaped control bytes rejected, and
+/// the finite nesting cap (`max_depth = 128`).  Callers that need a
+/// relaxed policy state it explicitly:
+/// `parse_with_config(text, permissive())`.
 pub fn parse(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	val ctx = _ParseCtx(cfg = permissive(), legacy = true, locate = false);
-	var sp: Optional<_SpanTree> = Optional::None();
-	return _parse_document(text, ctx, sp);
+	val s = strict();
+	return parse_with_config(text, s);
 }
 
 /// Parses `text` under an explicit parser policy (§ std.json parser policy).
@@ -437,15 +437,9 @@ pub fn parse_with_config(text: &String, cfg: &JsonParseConfig) nothrow -> core.R
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
-	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = false);
+	val ctx = _ParseCtx(cfg = *cfg, locate = false);
 	var sp: Optional<_SpanTree> = Optional::None();
 	return _parse_document(text, ctx, sp);
-}
-
-/// `parse_with_config(text, strict())` — standard JSON, reject duplicate keys.
-pub fn parse_strict(text: &String) nothrow -> core.Result<JsonNode, JsonErrorData> {
-	val s = strict();
-	return parse_with_config(text, s);
 }
 
 /// Parses `text` under `cfg` AND retains a source-span sidecar, yielding a
@@ -457,7 +451,7 @@ pub fn parse_located(text: &String, cfg: &JsonParseConfig) nothrow -> core.Resul
 		Optional::Some(e) => { return core.Result::Err(move e); },
 		Optional::None() => { }
 	}
-	val ctx = _ParseCtx(cfg = *cfg, legacy = false, locate = true);
+	val ctx = _ParseCtx(cfg = *cfg, locate = true);
 	var sp: Optional<_SpanTree> = Optional::None();
 	match _parse_document(text, ctx, sp) {
 		core.Result::Err(e) => { return core.Result::Err(move e); },
@@ -1831,7 +1825,6 @@ pub struct JsonDoc {
 
 struct _ParseCtx {
 	cfg: JsonParseConfig,
-	legacy: Bool,    // legacy parse() mode: accept leading zeros, reject \u, allow unescaped controls. Never a public toggle.
 	locate: Bool  // build the _SpanTree sidecar (parse_located only)
 }
 
@@ -1907,7 +1900,7 @@ fn _num_is_negative_zero(raw: &String) nothrow -> Bool {
 /// Numeric subset policy applied to the verbatim lexeme.  Precedence:
 /// leading-zero → negative-zero → fraction → exponent.
 fn _check_number_policy(text: &String, raw: &String, start: Int, ctx: &_ParseCtx) nothrow -> Optional<JsonErrorData> {
-	if _num_has_leading_zero(raw) and not ctx.legacy {
+	if _num_has_leading_zero(raw) {
 		return Optional::Some(_err_parse(text, "number-leading-zero", start));
 	}
 	if _num_is_negative_zero(raw) and not ctx.cfg.numbers.allow_negative_zero {
@@ -1976,9 +1969,9 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 	// general loop for the clean case.  Error and limit semantics are IDENTICAL to
 	// the general loop: the incremental limit trips at the same byte
 	// (scan-consumed count stands in for the decoded length, which
-	// are equal while no escape has been seen), control bytes honor
-	// ctx.legacy, and an escape falls back to the general loop with
-	// the clean prefix pre-copied.
+	// are equal while no escape has been seen), control bytes are
+	// rejected per RFC, and an escape falls back to the general loop
+	// with the clean prefix pre-copied.
 	val content_start = *idx;
 	var scan = content_start;
 	var matched_quote = false;
@@ -1999,7 +1992,7 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 			if fub < 0 {
 				fub = fub + 256;
 			}
-			if not ctx.legacy and fub < 32 {
+			if fub < 32 {
 				*idx = scan;
 				return core.Result::Err(_err_parse(text, "unescaped-control", scan));
 			}
@@ -2041,11 +2034,7 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 			if e == cast<Byte>(114) { out = out + "\r"; *idx = *idx + 1; continue; }
 			if e == cast<Byte>(116) { out = out + "\t"; *idx = *idx + 1; continue; }
 			if e == cast<Byte>(117) {
-				// `\uXXXX` — RFC string escape (public configs).  Legacy parse()
-				// is bug-compatible and does NOT support it.
-				if ctx.legacy {
-					return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
-				}
+				// `\uXXXX` — RFC string escape.
 				match _parse_hex4(text, *idx + 1, n) {
 					Optional::None() => { return core.Result::Err(_err_parse(text, "invalid-escape", *idx)); },
 					Optional::Some(cp1) => {
@@ -2081,13 +2070,13 @@ fn _parse_string(text: &String, idx: &mut Int, ctx: &_ParseCtx) nothrow -> core.
 			}
 			return core.Result::Err(_err_parse(text, "invalid-escape", *idx));
 		}
-		// Unescaped control bytes U+0000–U+001F are forbidden by RFC 8259; legacy
-		// parse() tolerates them.
+		// Unescaped control bytes U+0000–U+001F are forbidden by RFC 8259
+		// and rejected by every parser policy.
 		var ub = cast<Int>(b);
 		if ub < 0 {
 			ub = ub + 256;
 		}
-		if not ctx.legacy and ub < 32 {
+		if ub < 32 {
 			return core.Result::Err(_err_parse(text, "unescaped-control", *idx));
 		}
 		out = out + _byte_to_string(b);

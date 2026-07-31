@@ -1,0 +1,43 @@
+module m;
+
+import std.meta as meta;
+import std.json as json;
+import std.core as core;
+import std.console as cons;
+
+pub fn main() nothrow -> Int {
+	// Toolchain identity is always present.
+	if meta.toolchain_version().byte_length() == 0 { return 1; }
+	if meta.runtime_abi() <= 0 { return 2; }
+	// Unstamped compile: no artifact identity, no dependency records.
+	match meta.artifact_name() {
+		Optional::Some(_) => { return 3; },
+		Optional::None() => { }
+	}
+	match meta.artifact_license() {
+		Optional::Some(_) => { return 4; },
+		Optional::None() => { }
+	}
+	if meta.dep_versions().len != 0 { return 5; }
+	// The raw document is canonical drift-build-info/v1 JSON and the
+	// baked scalars agree with it.
+	val doc = meta.build_info();
+	match json.parse(doc) {
+		core.Result::Ok(root) => {
+			match root.get("format") {
+				Optional::Some(f) => {
+					match f.as_string() {
+						Optional::Some(s) => {
+							if s != "drift-build-info/v1" { return 6; }
+						},
+						Optional::None() => { return 7; }
+					}
+				},
+				Optional::None() => { return 8; }
+			}
+		},
+		core.Result::Err(_) => { return 9; }
+	}
+	cons.println("unstamped-ok");
+	return 0;
+}

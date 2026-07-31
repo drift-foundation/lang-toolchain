@@ -641,41 +641,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _version_string() -> str:
-	"""Build the drift --version output, matching driftc contract."""
-	# Vendor + license come from lang.versions so the same constants
-	# stamp `--version`, `meta.compiler_info()`, and any deploy-time
-	# provenance probe -- no second source of truth.
-	from lang.versions import (
-		DRIFTC_VERSION, DRIFT_RT_ABI_VERSION, DRIFTC_GIT_SHA,
-		DRIFTC_VENDOR, DRIFTC_LICENSE,
-	)
+	"""The concise HUMAN `--version` line (0.33.93 clean break: no
+	pipe grammar anywhere). Machine consumers use `--version --json`
+	(drift-toolchain-info/v1, via lang.driftc.build_info)."""
+	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	return f"drift {DRIFTC_VERSION} (ABI {DRIFT_RT_ABI_VERSION})"
 
-	# Prefer the build-time stamp; fall back to runtime git only in dev.
-	git_sha = DRIFTC_GIT_SHA
-	if not git_sha:
-		try:
-			res = subprocess.run(
-				["git", "rev-parse", "--short", "HEAD"],
-				capture_output=True, text=True,
-				cwd=Path(__file__).resolve().parents[2],
-				timeout=5,
-			)
-			if res.returncode == 0:
-				git_sha = res.stdout.strip()
-		except Exception:
-			pass
 
-	parts = [
-		f"drift {DRIFTC_VERSION}",
-		f"abi {DRIFT_RT_ABI_VERSION}",
-	]
-	if git_sha:
-		parts.append(f"git {git_sha}")
-	if DRIFTC_LICENSE:
-		parts.append(f"license {DRIFTC_LICENSE}")
-	if DRIFTC_VENDOR:
-		parts.append(DRIFTC_VENDOR)
-	return " | ".join(parts)
+def _dev_git_sha() -> str:
+	"""Build-time stamp, else a dev-tree runtime git probe, else ''."""
+	from lang.versions import DRIFTC_GIT_SHA
+	if DRIFTC_GIT_SHA:
+		return DRIFTC_GIT_SHA
+	try:
+		res = subprocess.run(
+			["git", "rev-parse", "--short", "HEAD"],
+			capture_output=True, text=True,
+			cwd=Path(__file__).resolve().parents[2],
+			timeout=5,
+		)
+		if res.returncode == 0:
+			return res.stdout.strip()
+	except Exception:
+		pass
+	return ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -683,7 +672,11 @@ def main(argv: list[str] | None = None) -> int:
 
 	# Handle --version / -V before argparse so it works without subcommands.
 	if "--version" in effective_argv or "-V" in effective_argv:
-		print(_version_string())
+		if "--json" in effective_argv:
+			from lang.driftc.build_info import toolchain_info_json
+			print(toolchain_info_json(git_sha=_dev_git_sha()))
+		else:
+			print(_version_string())
 		return 0
 
 	# Intercept "author"/"prepare"/"deploy"/"build" before argparse — they have their own arg parsers.

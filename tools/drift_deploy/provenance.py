@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,38 +27,13 @@ except ModuleNotFoundError as _err:
 
 @dataclass(frozen=True)
 class CompilerInfo:
-	version: str   # "0.27.92"
-	abi: int       # 6
+	"""Toolchain identity for provenance records. Populated from
+	`driftc --version --json` (drift-toolchain-info/v1) via
+	`lang.driftc.build_info.parse_toolchain_info` — the pipe-format
+	parser was removed in the 0.33.93 clean break."""
+	version: str   # "0.33.93"
+	abi: int       # 22
 	commit: str    # short git sha or "unknown"
-
-
-def parse_compiler_info(version_output: str) -> CompilerInfo:
-	"""Parse `driftc --version` output.
-
-	Format: 'driftc 0.27.92 | abi 6 | git abc1234 | license ...'
-
-	Falls back to sensible defaults for missing fields.
-	"""
-	version = "unknown"
-	abi = 0
-	commit = "unknown"
-
-	# Extract version: "driftc X.Y.Z"
-	m = re.search(r"driftc\s+([\d.]+)", version_output)
-	if m:
-		version = m.group(1)
-
-	# Extract ABI: "abi N"
-	m = re.search(r"abi\s+(\d+)", version_output)
-	if m:
-		abi = int(m.group(1))
-
-	# Extract commit: "git XXXXXX"
-	m = re.search(r"git\s+([0-9a-fA-F]+)", version_output)
-	if m:
-		commit = m.group(1)
-
-	return CompilerInfo(version=version, abi=abi, commit=commit)
 
 
 @dataclass(frozen=True)

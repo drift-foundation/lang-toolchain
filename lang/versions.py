@@ -11,7 +11,7 @@
 # ownership/drop contract changes.
 # Do not bump for pure internal refactors with no boundary change.
 
-DRIFTC_VERSION: str = "0.33.92"
+DRIFTC_VERSION: str = "0.33.93"
 DRIFT_RT_ABI_VERSION: int = 22
 
 # Build-time source commit stamp.  Empty in the source tree; populated by
@@ -19,11 +19,12 @@ DRIFT_RT_ABI_VERSION: int = 22
 # they were built from, rather than probing git at runtime.
 DRIFTC_GIT_SHA: str = ""
 
-# App-visible toolchain identity stamped into `meta.compiler_info()`.
+# App-visible toolchain identity stamped into the drift-build-info/v1
+# document (`meta.build_info()` / the `.drift_build_info` section).
 # `vendor` is the org that produced this toolchain build; `license` is the
 # SPDX identifier of the toolchain's source license.  Both fields are
 # constants of THIS toolchain build (a downstream rebuild from a fork
-# would change them).  They surface to app code through the same
-# provenance constant that carries `driftc` / `abi` / `git` / `profile`.
+# would change them).  They surface to app code in the document's
+# `toolchain` section beside `driftc` / `abi` / `git`.
 DRIFTC_VENDOR: str = "The Drift Language Foundation"
 DRIFTC_LICENSE: str = "GPL-3.0"

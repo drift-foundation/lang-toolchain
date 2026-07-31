@@ -456,6 +456,7 @@ def lower_module_to_llvm(
 	debug_enabled: bool = True,
 	provenance_git_sha: str = "",
 	provenance_build_profile: str = "",
+	provenance_build_info: Optional[dict] = None,
 ) -> LlvmModuleBuilder:
 	"""
 	Lower a set of SSA functions to an LLVM module.
@@ -474,7 +475,17 @@ def lower_module_to_llvm(
 	for _fn in funcs.values():
 		validate_unchecked_string_loads(_fn)
 	mod = LlvmModuleBuilder(word_bits=word_bits, float_bits=float_bits or 64, debug_enabled=debug_enabled)
-	mod.emit_compiler_provenance(git_sha=provenance_git_sha, build_profile=provenance_build_profile)
+	# drift-build-info/v1 stamp: ALWAYS emitted (unstamped compiles get
+	# artifact null / deps [] / extra {} — the reserved sections are
+	# never absent). Inputs come pre-validated from the CLI.
+	_bi = provenance_build_info or {}
+	mod.emit_build_info(
+		git_sha=provenance_git_sha,
+		build_profile=provenance_build_profile,
+		artifact=_bi.get("artifact"),
+		dependencies=_bi.get("dependencies") or {},
+		extra=_bi.get("extra") or {},
+	)
 	mod.iface_impls = _build_interface_impl_index(module_exports, type_table)
 	# Check lowered MIR (not fn_infos) for preamble availability — the
 	# function must have a body in `funcs` so codegen produces the __impl
@@ -905,7 +916,8 @@ class LlvmModuleBuilder:
 				f"{DRIFT_FAT_FNPTR_TYPE} = type {{ ptr, ptr }}",
 			]
 		)
-		self._compiler_provenance_payload = ""
+		self._build_info_payload = ""
+		self._build_info_doc = None
 		# Seed the canonical FnResult types for supported ok payloads.
 		self._fnresult_types_by_key["Int"] = FNRESULT_INT_ERROR
 		self._fnresult_ok_llty_by_type[FNRESULT_INT_ERROR] = DRIFT_INT_TYPE
@@ -1394,45 +1406,65 @@ class LlvmModuleBuilder:
 		self._abi_version_sym = f"__drift_rt_abi_version_{DRIFT_RT_ABI_VERSION}"
 		self._global_ctors.append("@__drift_abi_check")
 
-	def emit_compiler_provenance(self, *, git_sha: str = "", build_profile: str = "", build_utc: str = "") -> None:
-		"""Emit a diagnostic-only compiler provenance constant into the module.
+	def emit_build_info(
+		self,
+		*,
+		git_sha: str = "",
+		build_profile: str = "",
+		artifact: dict | None = None,
+		dependencies: dict | None = None,
+		extra: dict | None = None,
+	) -> None:
+		"""Emit the drift-build-info/v1 stamp (PLAN §2.1/§2.4).
 
-		The global uses internal linkage so nm(1) can resolve the symbol,
-		and is registered in @llvm.used to survive optimization and linking."""
-		if getattr(self, "_compiler_provenance_emitted", False):
+		Two artifacts from one canonical JSON document:
+		- `self._build_info_payload` — served by the `std.meta.build_info`
+		  intrinsic as a baked string constant;
+		- the `.drift_build_info` SECTION constant (exactly the
+		  canonical JSON bytes) — the external read path
+		  (`drift inspect build-info`), registered in @llvm.used so
+		  linking and optimization keep it.
+		"""
+		if getattr(self, "_build_info_emitted", False):
 			return
-		self._compiler_provenance_emitted = True
-		from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
-		from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
-		if not build_utc:
-			import datetime
-			build_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-		fields = [
-			f"driftc {DRIFTC_VERSION}",
-			f"abi {DRIFT_RT_ABI_VERSION}",
-			f"word {self.word_bits}",
-		]
-		if git_sha:
-			fields.append(f"git {git_sha}")
-		if build_profile:
-			fields.append(f"profile {build_profile}")
-		# Vendor / license are constants of this toolchain build; emit
-		# AFTER profile so they sit next to it as app-visible
-		# toolchain-identity metadata, and BEFORE build_utc so the
-		# wall-clock stamp stays last (matches the field ordering used
-		# in `driftc --version` and the user-facing example).
-		if DRIFTC_VENDOR:
-			fields.append(f"vendor {DRIFTC_VENDOR}")
-		if DRIFTC_LICENSE:
-			fields.append(f"license {DRIFTC_LICENSE}")
-		fields.append(f"build_utc {build_utc}")
-		payload = " | ".join(fields)
-		self._compiler_provenance_payload = payload
-		encoded = list(payload.encode("utf-8")) + [0]
-		n = len(encoded)
-		byte_csv = ", ".join(f"i8 {b}" for b in encoded)
-		self.consts.append(f'@__drift_compiler_build = internal constant [{n} x i8] [{byte_csv}], align 1')
-		self._llvm_used.append(f'ptr @__drift_compiler_build')
+		self._build_info_emitted = True
+		# Function-local import: the schema/section contract lives in
+		# backend-neutral lang.driftc.build_info (the supported reader
+		# must not depend on the LLVM backend); deferring the import
+		# keeps the module graph acyclic.
+		from lang.driftc.build_info import (
+			BUILD_INFO_SECTION,
+			BUILD_INFO_SYMBOL,
+			assemble_build_info,
+			encode_build_info,
+		)
+		import datetime
+		build_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+		payload = assemble_build_info(
+			git_sha=git_sha,
+			word_bits=self.word_bits,
+			build_profile=build_profile,
+			build_utc=build_utc,
+			artifact=artifact,
+			dependencies=dependencies or {},
+			extra=extra or {},
+		)
+		self._build_info_payload = payload
+		# The parsed document is the single source the scalar accessor
+		# intrinsic arms read from (never flags/constants directly).
+		import json as _json
+		self._build_info_doc = _json.loads(payload)
+		# Section contract: EXACTLY the canonical JSON bytes — the
+		# executable's section header is the framing (identity, offset,
+		# exact length); no magic/version/length/NUL of our own.
+		raw = encode_build_info(payload)
+		n = len(raw)
+		byte_csv = ", ".join(f"i8 {b}" for b in raw)
+		self.consts.append(
+			f'@{BUILD_INFO_SYMBOL} = internal constant [{n} x i8] '
+			f'[{byte_csv}], section "{BUILD_INFO_SECTION}", align 1'
+		)
+		self._llvm_used.append(f'ptr @{BUILD_INFO_SYMBOL}')
 
 	def render(self) -> str:
 		lines: List[str] = []
@@ -4480,20 +4512,65 @@ class _FuncBuilder:
 					self.lines.append(f"  {dest} = insertvalue {self._llty(ret_llty)} {tmp1}, {self._llty(DRIFT_INT_TYPE)} {line_n}, 2")
 					self.value_types[dest] = ret_llty
 				return
-			if instr.fn_id.name == "compiler_info":
+			if instr.fn_id.name == "build_info":
 				if len(instr.args) != 0:
-					raise NotImplementedError(f"LLVM codegen v1: compiler_info expects 0 args, got {len(instr.args)}")
+					raise NotImplementedError(f"LLVM codegen v1: build_info expects 0 args, got {len(instr.args)}")
 				if dest is None:
-					raise NotImplementedError("LLVM codegen v1: compiler_info result must be captured")
-				payload = self.module._compiler_provenance_payload
+					raise NotImplementedError("LLVM codegen v1: build_info result must be captured")
+				payload = getattr(self.module, "_build_info_payload", "")
 				if not payload:
-					raise NotImplementedError("LLVM codegen v1: compiler_info requires provenance (emit_compiler_provenance not called)")
+					raise NotImplementedError("LLVM codegen v1: build_info requires the stamp (emit_build_info not called)")
 				if instr.can_throw:
-					raw = self._fresh("ci_raw")
+					raw = self._fresh("bi_raw")
 					self._emit_string_literal_value(payload, dest_name=raw)
-					self._wrap_ok_fnresult(raw, DRIFT_STRING_TYPE, dest, hint="ci_ok")
+					self._wrap_ok_fnresult(raw, DRIFT_STRING_TYPE, dest, hint="bi_ok")
 				else:
 					self._emit_string_literal_value(payload, dest_name=dest)
+				return
+			# Scalar build-info accessors: every value is read from the
+			# SAME assembled document build_info() returns (the parsed
+			# dict emit_build_info stored) — never re-derived from
+			# flags or version constants, so accessors cannot skew
+			# against the stamp. The artifact arms bake "" for an
+			# unstamped compile (a private sentinel: the document
+			# validator rejects empty artifact identity fields, and the
+			# public std.meta accessors wrap "" back into
+			# Optional::None).
+			_BI_SCALARS = {
+				"_bi_toolchain_version": ("toolchain", "driftc"),
+				"_bi_artifact_name": ("artifact", "name"),
+				"_bi_artifact_version": ("artifact", "version"),
+				"_bi_artifact_description": ("artifact", "description"),
+				"_bi_artifact_license": ("artifact", "license"),
+			}
+			if instr.fn_id.name in _BI_SCALARS or instr.fn_id.name == "_bi_runtime_abi":
+				if len(instr.args) != 0:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} expects 0 args, got {len(instr.args)}")
+				if dest is None:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} result must be captured")
+				doc = getattr(self.module, "_build_info_doc", None)
+				if not doc:
+					raise NotImplementedError(f"LLVM codegen v1: {instr.fn_id.name} requires the stamp (emit_build_info not called)")
+				if instr.fn_id.name == "_bi_runtime_abi":
+					n = int(doc["toolchain"]["abi"])
+					if instr.can_throw:
+						raw = self._fresh("bi_abi")
+						self.lines.append(f"  {raw} = add {self._llty(DRIFT_INT_TYPE)} 0, {n}")
+						self.value_types[raw] = DRIFT_INT_TYPE
+						self._wrap_ok_fnresult(raw, DRIFT_INT_TYPE, dest, hint="bi_abi_ok")
+					else:
+						self.lines.append(f"  {dest} = add {self._llty(DRIFT_INT_TYPE)} 0, {n}")
+						self.value_types[dest] = DRIFT_INT_TYPE
+					return
+				section, key = _BI_SCALARS[instr.fn_id.name]
+				container = doc.get(section)
+				value = "" if container is None else str(container[key])
+				if instr.can_throw:
+					raw = self._fresh("bi_scalar")
+					self._emit_string_literal_value(value, dest_name=raw)
+					self._wrap_ok_fnresult(raw, DRIFT_STRING_TYPE, dest, hint="bi_scalar_ok")
+				else:
+					self._emit_string_literal_value(value, dest_name=dest)
 				return
 		if instr.fn_id.module == "std.ffi" and instr.fn_id.name in (
 			"ffi_interior_nul_index", "ffi_string_to_owned_cstr",

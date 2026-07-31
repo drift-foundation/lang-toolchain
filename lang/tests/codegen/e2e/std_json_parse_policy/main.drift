@@ -39,14 +39,15 @@ pub fn main() nothrow -> Int {
 	val st = json.strict();
 	val si = json.signed_ir();
 
-	// 1. parse() preserved: leading zeros accepted, dup keep-last
+	// 1. 0.33.93 clean break: parse() IS the strict entry point —
+	// leading zeros and duplicate keys REJECT there.
 	match json.parse("{\"a\":0123}") {
-		core.Result::Ok(v) => { if field_a_raw(v) != "0123" { return 1; } },
-		core.Result::Err(_) => { return 2; }
+		core.Result::Ok(_) => { return 1; },
+		core.Result::Err(e) => { if e.tag != "number-leading-zero" { return 2; } }
 	}
 	match json.parse("{\"a\":1,\"a\":2}") {
-		core.Result::Ok(v) => { if field_a_raw(v) != "2" { return 3; } },
-		core.Result::Err(_) => { return 4; }
+		core.Result::Ok(_) => { return 3; },
+		core.Result::Err(e) => { if e.tag != "duplicate-key" { return 4; } }
 	}
 
 	// 2. dup-key policies
@@ -62,7 +63,7 @@ pub fn main() nothrow -> Int {
 		core.Result::Err(_) => { return 13; }
 	}
 
-	// 3. leading zeros: rejected by strict/signed_ir, accepted by parse() only
+	// 3. leading zeros: rejected by EVERY policy (strict, permissive, signed_ir — and parse() itself, pinned in §1)
 	if err_tag("{\"a\":0123}", st) != "number-leading-zero" { return 20; }
 	if err_tag("0123", perm) != "number-leading-zero" { return 21; }  // permissive rejects too
 

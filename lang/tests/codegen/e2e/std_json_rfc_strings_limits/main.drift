@@ -25,10 +25,15 @@ pub fn main() nothrow -> Int {
 	if ptag("\"\\uDE00\"", st) != "invalid-escape" { return 3; }
 	// bad hex -> invalid-escape
 	if ptag("\"\\uZZZZ\"", st) != "invalid-escape" { return 4; }
-	// legacy parse() rejects \u (compat)
+	// 0.33.93: parse() IS strict — \u decodes there too.
 	match json.parse("\"\\u00e9\"") {
-		core.Result::Ok(_) => { return 5; },
-		core.Result::Err(e) => { if e.tag != "invalid-escape" { return 6; } }
+		core.Result::Ok(n) => {
+			match n.as_string() {
+				Some(s) => { if s != "é" { return 5; } },
+				None => { return 6; }
+			}
+		},
+		core.Result::Err(_) => { return 7; }
 	}
 
 	// (2) max_object_fields counts OCCURRENCES (dups don't bypass)
@@ -133,10 +138,10 @@ pub fn main() nothrow -> Int {
 	}
 	// unescaped control byte (literal TAB in the string) — rejected by RFC configs
 	if ptag("\"a\tb\"", st) != "unescaped-control" { return 59; }
-	// legacy parse() tolerates it (compat)
+	// 0.33.93: parse() IS strict — the control byte rejects there too.
 	match json.parse("\"a\tb\"") {
-		core.Result::Ok(_) => { },
-		core.Result::Err(_) => { return 60; }
+		core.Result::Ok(_) => { return 60; },
+		core.Result::Err(e) => { if e.tag != "unescaped-control" { return 61; } }
 	}
 	return 0;
 }

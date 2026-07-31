@@ -7,7 +7,8 @@ import std.json as json;
 fn run() -> Int {
 	val text = "{\"a\":1,\"a\":2,\"b\":{\"x\":1,\"x\":2}}";
 	var node = json.JsonNode::Null();
-	match json.parse(text) {
+	val perm = json.permissive();
+	match json.parse_with_config(text, perm) {
 		core.Result::Ok(v) => { node = move v; },
 		core.Result::Err(_) => { return 10; }
 	}

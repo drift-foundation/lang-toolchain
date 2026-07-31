@@ -71,6 +71,14 @@
 		- Behavior-changing compiler/toolchain fixes that do not change ABI boundary shape must still bump compiler minor version (`DRIFTC_VERSION`).
 		- ABI shape changes require both: compiler version bump and ABI version bump.
 
+## Pre-1.0 Compatibility Policy (strict)
+
+- While `DRIFTC_VERSION` has major version `0`, Drift does **not** retain backward compatibility for replaced language, stdlib, compiler, CLI, tooling, package, metadata, or serialized-format contracts.
+- When a contract changes, keep exactly one current contract: delete the replaced API/format/parser and migrate all in-tree callers, tests, fixtures, examples, and documentation in the same change.
+- Do **not** add or retain compatibility aliases, deprecated entry points, shims, fallbacks, dual readers/writers, legacy parser modes, or old-format acceptance unless the user explicitly approves a narrowly-scoped exception.
+- Clean breaks still require the normal compiler/ABI version decisions, regression coverage, corpus enumeration where applicable, and explicit migration notes in history/release announcements.
+- Once Drift reaches major version `1`, this pre-1.0 rule no longer applies; a public compatibility and deprecation policy must be established before making 1.x compatibility decisions.
+
 ## Checker / Lowering Contract (strict)
 
 Surfaced by the G3 incident (0.31.34): a type-checker change accepted programs the lowering pipeline could not actually emit (`integer binop requires matching Int/Uint operands (have ptr, drift.int)`). These rules close that process gap.

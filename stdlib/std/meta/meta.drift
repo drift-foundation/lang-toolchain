@@ -1,9 +1,9 @@
 module std.meta;
 
 import std.core as core;
-import std.text as text;
+import std.json as json;
 
-export { Caller, caller, compiler_info, CompilerTag, compiler_info_pairs };
+export { Caller, caller, build_info, toolchain_version, runtime_abi, artifact_name, artifact_version, artifact_description, artifact_license, DependencyVersion, dep_versions };
 
 /// Source-location record captured by the `caller()` intrinsic.
 ///
@@ -56,94 +56,196 @@ implement Caller {
 /// macros so they can attach call-site metadata to their output.
 @intrinsic pub fn caller() nothrow -> Caller;
 
-/// Returns the compiler's identity string.
+/// Returns the artifact's build-information document.
 ///
-/// Format: space-separated `key value` pairs joined by ` | ` (e.g.
-/// `"driftc 0.32.16 | abi 14 | word 64 | git <sha> | profile optimized | vendor <org> | license <spdx> | build_utc <iso>"`).
-/// Field set: `driftc`, `abi`, `word`, optionally `git`, optionally
-/// `profile`, optionally `vendor`, optionally `license`, `build_utc`.
-/// Keys are stable; values change per release / build.  Use
-/// `compiler_info_pairs()` to parse into structured form.
-@intrinsic pub fn compiler_info() nothrow -> String;
+/// Canonical `drift-build-info/v1` JSON, baked into the artifact at
+/// compile time (no file or process I/O at runtime). Sections:
+/// `toolchain` (compiler identity), `build` (build-instance facts),
+/// `artifact` (manifest identity, or `null` for unstamped compiles),
+/// `dependencies` (the exact package pins actually compiled against),
+/// and `extra` (application metadata from `--meta`). The same
+/// document is embedded verbatim in the executable's
+/// `.drift_build_info` section for external readers
+/// (`drift inspect build-info`).
+///
+/// Prefer the typed accessors below; parse this JSON directly only
+/// for fields they do not cover (e.g. `extra`).
+///
+/// **See also:** `toolchain_version`, `runtime_abi`, `artifact_name`,
+/// `dep_versions`. **Example:** `examples/build_info.drift`.
+@intrinsic pub fn build_info() nothrow -> String;
 
-/// Single key/value pair from the parsed `compiler_info()` output.
-pub struct CompilerTag {
-	key_v: String,
-	value_v: String
+// Private scalar intrinsics. Each value is derived by the compiler
+// from the SAME assembled document `build_info()` returns — never
+// independently from flags or version constants — so the accessors
+// can never skew against the stamp. The artifact intrinsics use the
+// empty string as the "unstamped" sentinel; that is sound because
+// the document validator rejects empty artifact identity fields, so
+// "" is unrepresentable as a real value. The sentinel is PRIVATE:
+// public accessors return Optional<String>.
+@intrinsic fn _bi_toolchain_version() nothrow -> String;
+@intrinsic fn _bi_runtime_abi() nothrow -> Int;
+@intrinsic fn _bi_artifact_name() nothrow -> String;
+@intrinsic fn _bi_artifact_version() nothrow -> String;
+@intrinsic fn _bi_artifact_description() nothrow -> String;
+@intrinsic fn _bi_artifact_license() nothrow -> String;
+
+/// Returns the compiler version this artifact was built with (e.g.
+/// `"0.33.93"`).
+pub fn toolchain_version() nothrow -> String {
+	return _bi_toolchain_version();
 }
 
-implement CompilerTag {
-	/// Returns the tag's key (e.g. `"name"`, `"version"`).
-	pub fn key(self: &CompilerTag) nothrow -> &String {
-		return &self.key_v;
+/// Returns the runtime ABI version this artifact was built against.
+pub fn runtime_abi() nothrow -> Int {
+	return _bi_runtime_abi();
+}
+
+fn _optional_field(v: String) nothrow -> Optional<String> {
+	if v.byte_length() == 0 {
+		return Optional<type String>::None();
+	}
+	return Optional<type String>::Some(move v);
+}
+
+/// Returns the manifest artifact name, or `None` for an unstamped
+/// compile (built without the `--artifact-*` identity flags).
+pub fn artifact_name() nothrow -> Optional<String> {
+	return _optional_field(_bi_artifact_name());
+}
+
+/// Returns the manifest artifact version, or `None` for an unstamped
+/// compile.
+pub fn artifact_version() nothrow -> Optional<String> {
+	return _optional_field(_bi_artifact_version());
+}
+
+/// Returns the manifest artifact description, or `None` for an
+/// unstamped compile.
+pub fn artifact_description() nothrow -> Optional<String> {
+	return _optional_field(_bi_artifact_description());
+}
+
+/// Returns the manifest artifact license, or `None` for an unstamped
+/// compile.
+pub fn artifact_license() nothrow -> Optional<String> {
+	return _optional_field(_bi_artifact_license());
+}
+
+/// One resolved dependency record from the build-information
+/// document: the exact package pin the artifact was compiled against.
+pub struct DependencyVersion {
+	name_v: String,
+	version_v: String
+}
+
+implement DependencyVersion {
+	/// Returns the package id (e.g. `"net.tls"`).
+	pub fn name(self: &DependencyVersion) nothrow -> &String {
+		return &self.name_v;
 	}
 
-	/// Returns the tag's value (e.g. `"driftc"`, `"0.27.199"`).
-	pub fn value(self: &CompilerTag) nothrow -> &String {
-		return &self.value_v;
+	/// Returns the exact resolved version (e.g. `"0.3.15"`).
+	pub fn version(self: &DependencyVersion) nothrow -> &String {
+		return &self.version_v;
 	}
 }
 
-/// Parses `compiler_info()` into a list of `CompilerTag` pairs.
+/// Returns the dependency records from the build-information
+/// document, in the document's canonical order (sorted by package
+/// name).
 ///
-/// Splits on the canonical ` | ` separator; each pair is
-/// `key SPACE value`.  Malformed segments are silently dropped.
-///
-/// **See also:** `compiler_info`, `CompilerTag`.
-pub fn compiler_info_pairs() nothrow -> Array<CompilerTag> {
-	val info = compiler_info();
-	val n = info.byte_length();
-	var result = Array<type CompilerTag>::with_capacity(8);
-	var seg_start = 0;
-	var i = 0;
-	while i < n {
-		var at_delim = false;
-		if i + 2 < n {
-			if core.string_byte_at(info, i) == cast<Byte>(32) {
-				if core.string_byte_at(info, i + 1) == cast<Byte>(124) {
-					if core.string_byte_at(info, i + 2) == cast<Byte>(32) {
-						at_delim = true;
-					}
-				}
-			}
-		}
-		if at_delim {
-			_parse_tag(info, seg_start, i, result);
-			seg_start = i + 3;
-			i = i + 3;
-		} else {
-			i = i + 1;
-		}
-	}
-	_parse_tag(info, seg_start, n, result);
-	return move result;
-}
-
-fn _parse_tag(info: &String, start: Int, end: Int, out: &mut Array<CompilerTag>) nothrow -> Void {
-	val seg_len = end - start;
-	if seg_len <= 0 {
-		return;
-	}
-	var sp = start;
-	while sp < end {
-		if core.string_byte_at(info, sp) == cast<Byte>(32) {
-			match text.substring(info, start, sp - start) {
-				core.Result::Ok(k) => {
-					val val_start = sp + 1;
-					val val_len = end - val_start;
-					if val_len > 0 {
-						match text.substring(info, val_start, val_len) {
-							core.Result::Ok(v) => {
-								out.push(CompilerTag(key_v = k, value_v = v));
-							},
-							core.Result::Err(_) => { }
+/// Parses the baked `build_info()` JSON once per call. The document
+/// is compiler-assembled and validated at build time, so any parse
+/// or shape failure here is a compiler invariant violation and
+/// aborts — this function never silently returns an empty array for
+/// a document that HAS dependencies.
+pub fn dep_versions() nothrow -> Array<DependencyVersion> {
+	val doc_text = build_info();
+	var out = Array<type DependencyVersion>::with_capacity(4);
+	match json.parse(doc_text) {
+		core.Result::Ok(root) => {
+			match root.get("format") {
+				Optional::Some(f) => {
+					match f.as_string() {
+						Optional::Some(fs) => {
+							assert(fs == "drift-build-info/v1", "build_info invariant violated: wrong format discriminator");
+						},
+						Optional::None() => {
+							assert(false, "build_info invariant violated: format is not a string");
 						}
 					}
 				},
-				core.Result::Err(_) => { }
+				Optional::None() => {
+					assert(false, "build_info invariant violated: format key missing");
+				}
 			}
-			return;
+			match root.get("dependencies") {
+				Optional::Some(deps_node) => {
+					match deps_node.as_array() {
+						Optional::Some(entries) => {
+							val n = entries.len;
+							var i = 0;
+							while i < n {
+								out.push(_dep_record(entries[i]));
+								i = i + 1;
+							}
+						},
+						Optional::None() => {
+							assert(false, "build_info invariant violated: dependencies is not an array");
+						}
+					}
+				},
+				Optional::None() => {
+					assert(false, "build_info invariant violated: dependencies key missing");
+				}
+			}
+		},
+		core.Result::Err(_) => {
+			assert(false, "build_info invariant violated: baked document failed to parse");
 		}
-		sp = sp + 1;
 	}
+	return move out;
+}
+
+fn _dep_record(entry: &json.JsonNode) nothrow -> DependencyVersion {
+	var name = "";
+	var version = "";
+	match entry.as_object() {
+		Optional::Some(fields) => {
+			assert(fields.len() == 2, "build_info invariant violated: dependency record must have exactly name and version");
+		},
+		Optional::None() => {
+			assert(false, "build_info invariant violated: dependency record is not an object");
+		}
+	}
+	match entry.get("name") {
+		Optional::Some(nn) => {
+			match nn.as_string() {
+				Optional::Some(sv) => { name = move sv; },
+				Optional::None() => {
+					assert(false, "build_info invariant violated: dependency name is not a string");
+				}
+			}
+		},
+		Optional::None() => {
+			assert(false, "build_info invariant violated: dependency record lacks name");
+		}
+	}
+	match entry.get("version") {
+		Optional::Some(vn) => {
+			match vn.as_string() {
+				Optional::Some(sv) => { version = move sv; },
+				Optional::None() => {
+					assert(false, "build_info invariant violated: dependency version is not a string");
+				}
+			}
+		},
+		Optional::None() => {
+			assert(false, "build_info invariant violated: dependency record lacks version");
+		}
+	}
+	assert(name.byte_length() > 0, "build_info invariant violated: empty dependency name");
+	assert(version.byte_length() > 0, "build_info invariant violated: empty dependency version");
+	return DependencyVersion(name_v = move name, version_v = move version);
 }

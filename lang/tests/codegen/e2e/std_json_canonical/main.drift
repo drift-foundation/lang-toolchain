@@ -3,7 +3,8 @@ import std.json as json;
 import std.core as core;
 
 fn enc(src: String) nothrow -> String {
-	match json.parse(src) {
+	val perm = json.permissive();
+	match json.parse_with_config(src, perm) {
 		core.Result::Ok(node) => {
 			match json.encode_canonical(node) {
 				core.Result::Ok(s) => { return s; },
@@ -15,7 +16,8 @@ fn enc(src: String) nothrow -> String {
 }
 
 fn enc_err(src: String) nothrow -> String {
-	match json.parse(src) {
+	val perm = json.permissive();
+	match json.parse_with_config(src, perm) {
 		core.Result::Ok(node) => {
 			match json.encode_canonical(node) {
 				core.Result::Ok(_) => { return "<ok>"; },
@@ -40,8 +42,17 @@ pub fn main() nothrow -> Int {
 	if enc_err("{\"a\":1.5}") != "canonical-number-fraction@/a" { return 10; }
 	if enc_err("[0,1e3]") != "canonical-number-exponent@/1" { return 11; }
 	if enc_err("{\"a\":-0}") != "canonical-number-negative-zero@/a" { return 12; }
-	// leading zero: parse() accepts 01, canonical rejects
-	if enc_err("{\"a\":01}") != "canonical-number-leading-zero@/a" { return 13; }
+	// leading zero: no parser policy produces it anymore (the legacy
+	// profile is gone; permissive rejects invalid JSON) — build the
+	// node directly to pin encode_canonical's rejection + path.
+	var lz_obj = json.new_object();
+	lz_obj.set("a", json.JsonNode::Number("01"));
+	match json.encode_canonical(lz_obj.to_node()) {
+		core.Result::Ok(_) => { return 13; },
+		core.Result::Err(e) => {
+			if e.tag + "@" + e.path != "canonical-number-leading-zero@/a" { return 14; }
+		}
+	}
 
 	// deterministic first-error: two offenders, canonically-first key wins.
 	// keys "b":1.5 and "a":2e9 — sorted order a before b, so /a (exponent) first.

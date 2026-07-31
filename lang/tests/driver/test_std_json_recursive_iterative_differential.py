@@ -38,7 +38,7 @@ _FRAG = ROOT / "lang" / "tests" / "fixtures" / "json_recursive_oracle.drift.frag
 # sweep bared 18 explicit borrows in the oracle fragment (one-token
 # deletions; IR-equivalent — parity and perf-band gates below prove the
 # baseline is unchanged in behavior).
-_FRAG_SHA256 = "c3714429c75d3140b451b9f7dcf0d2fc2d4a273ce34fb788c8cac1f7782a80a6"
+_FRAG_SHA256 = "18329796b26c4add826d9d9db8f5a551cddcbe390aa0c821e6d332dd32aa4bad"
 
 
 def _dq(s: str) -> str:
