@@ -384,3 +384,547 @@ class TestLockEmitCLIDispatch:
 		err = capsys.readouterr().err
 		assert "bogus" in err
 		assert "emit" in err
+
+
+# ── `drift lock emit --source-rebuild` (0.33.92) ─────────────────────
+# The consumer cert-gate contract (drift-workflows / build-orchestrator
+# 2026-07-31 ask): gates exec the toolchain binary for source-rebuild
+# dep derivation instead of sys.path-importing a drift-lang source
+# checkout.  Pinned here:
+#   * stdout IS the flags contract: exactly the --dep list from the
+#     authority's fresh graph; evidence/diagnostics on stderr only
+#   * missing snapshot (flag AND env) → exit 1, empty stdout
+#   * DRIFT_RUN_SNAPSHOT env honoured; CLI flag wins
+#   * authority errors / snapshot-mismatch index failure → exit 1,
+#     EMPTY stdout
+#   * strict lane inert under DRIFT_CERT_MODE=certify (env alone never
+#     flips lock emit — unlike build/deploy/prepare)
+#   * --run-snapshot / --package-root without --source-rebuild rejected
+#   * --json v0 shape in both lanes
+
+
+def _sr_world(tmp_path, *, lock_version: str = "1.0.1"):
+	"""Manifest (ext.lib range '1.0'), lock pinning `lock_version`,
+	disk pool with ext.lib-1.0.1.dmp, snapshot authorising 1.0.1.
+	Returns (manifest_path, pkg_root, snapshot_path, patch_ctx)."""
+	from types import SimpleNamespace
+	from unittest.mock import patch as _patch
+	from contextlib import ExitStack
+	from tools.drift_deploy.run_snapshot import (
+		SnapshotEntry,
+		write_run_snapshot,
+	)
+
+	manifest_path = _write_manifest(tmp_path, [
+		_library_artifact("my.pkg", "0.1.0", [("ext.lib", "1.0")]),
+	])
+	scid = "sha256:" + "a" * 64
+	ak = "ed25519:orch-sig-kid"
+	sak = "ed25519:orch-sak-kid"
+	_write_lock(tmp_path, {
+		"my.pkg": {
+			"ext.lib": {
+				"version": lock_version,
+				"sha256": "lock-bytes",
+				"author_key": ak,
+				"source_content_id": scid,
+				"source_attestation_key": sak,
+			},
+		},
+	})
+	pkg_root = tmp_path / "pkg_root"
+	pkg_root.mkdir()
+	(pkg_root / "ext.lib-1.0.1.dmp").write_bytes(b"fake-ext-lib-1.0.1")
+	(pkg_root / "ext.lib-1.0.1.sig").write_text("{}")
+	snapshot_path = tmp_path / "run-snapshot.json"
+	write_run_snapshot(
+		snapshot_path,
+		run_id="20260731-lock-emit-test",
+		entries={
+			("ext.lib", "1.0.1"): SnapshotEntry(
+				source_content_id=scid,
+				author_key=ak,
+				source_attestation_key=sak,
+			),
+		},
+	)
+	disk_manifest = {
+		"package_id": "ext.lib",
+		"package_version": "1.0.1",
+		"modules": [{"module_id": "ext_lib"}],
+		"required_deps": [],
+	}
+	stack = ExitStack()
+	stack.enter_context(_patch(
+		"tools.drift_deploy.resolver._read_author_key", return_value=ak))
+	stack.enter_context(_patch(
+		"tools.drift_deploy.resolver._read_source_attestation_meta",
+		return_value=(scid, sak)))
+	stack.enter_context(_patch(
+		"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+		return_value=SimpleNamespace(manifest=disk_manifest)))
+	return manifest_path, pkg_root, snapshot_path, stack
+
+
+class TestLockEmitSourceRebuild:
+	def test_happy_path_stdout_is_exactly_the_flags(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--run-snapshot", str(snap),
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+
+	def test_evidence_goes_to_stderr_never_stdout(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""Lock pins 1.0.0; fresh resolves 1.0.1 → version drift is
+		EVIDENCE on stderr; stdout still exactly the flags."""
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(
+			tmp_path, lock_version="1.0.0")
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--run-snapshot", str(snap),
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+		assert "1.0.0 -> 1.0.1" in cap.err
+		assert "drift lock emit --source-rebuild" in cap.err
+
+	def test_missing_snapshot_hard_fails_empty_stdout(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_RUN_SNAPSHOT", raising=False)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "run snapshot" in cap.err
+
+	def test_env_snapshot_honoured(self, tmp_path, capsys, monkeypatch) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+
+	def test_snapshot_mismatch_exits_nonzero_empty_stdout(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""Disk package not authorised by the snapshot → index-time
+		hard fail: rc 1, stdout EMPTY (nothing for $(...) to eat)."""
+		from tools.drift_deploy.drift_lock import run
+		from tools.drift_deploy.run_snapshot import (
+			SnapshotEntry,
+			write_run_snapshot,
+		)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		# Overwrite the snapshot: authorises a DIFFERENT source id.
+		write_run_snapshot(
+			snap,
+			run_id="20260731-lock-emit-mismatch",
+			entries={
+				("ext.lib", "1.0.1"): SnapshotEntry(
+					source_content_id="sha256:" + "f" * 64,
+					author_key="ed25519:orch-sig-kid",
+					source_attestation_key="ed25519:orch-sak-kid",
+				),
+			},
+		)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+
+	def test_missing_package_root_rejected(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "--package-root" in cap.err
+
+	def test_strict_lane_inert_under_certify_env(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""DRIFT_CERT_MODE=certify + DRIFT_RUN_SNAPSHOT set, NO
+		--source-rebuild flag → the committed lock is read verbatim
+		(env alone never flips lock emit, unlike build/deploy/
+		prepare)."""
+		from tools.drift_deploy.drift_lock import run
+		manifest_path = _write_manifest(tmp_path, [
+			_library_artifact("my.pkg", "0.1.0", [("ext.lib", "1.0")]),
+		])
+		_write_lock(tmp_path, {
+			"my.pkg": {"ext.lib": {"version": "1.0.0"}},
+		})
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(tmp_path / "nonexistent.json"))
+		rc = run(["--manifest", str(manifest_path), "--artifact", "my.pkg"])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.0"
+
+	def test_snapshot_flag_without_source_rebuild_rejected(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path = _write_manifest(tmp_path, [
+			_library_artifact("my.pkg", "0.1.0", [("ext.lib", "1.0")]),
+		])
+		_write_lock(tmp_path, {"my.pkg": {"ext.lib": {"version": "1.0.0"}}})
+		rc = run([
+			"--manifest", str(manifest_path), "--artifact", "my.pkg",
+			"--run-snapshot", str(tmp_path / "snap.json"),
+		])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "--source-rebuild" in cap.err
+
+	def test_json_v0_source_rebuild(self, tmp_path, capsys, monkeypatch) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(
+			tmp_path, lock_version="1.0.0")
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild", "--json",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		payload = json.loads(cap.out)
+		assert payload["schema"] == "drift-lock-emit/v0"
+		assert payload["mode"] == "source-rebuild"
+		assert payload["artifact"] == "my.pkg"
+		assert payload["dep_flags"] == ["--dep", "ext.lib@1.0.1"]
+		assert payload["evidence"]["version_changed"] == [["ext.lib", "1.0.0", "1.0.1"]]
+
+	def test_json_v0_strict(self, tmp_path, capsys, monkeypatch) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path = _write_manifest(tmp_path, [
+			_library_artifact("my.pkg", "0.1.0", [("ext.lib", "1.0")]),
+		])
+		_write_lock(tmp_path, {"my.pkg": {"ext.lib": {"version": "1.0.0"}}})
+		rc = run([
+			"--manifest", str(manifest_path), "--artifact", "my.pkg", "--json",
+		])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		payload = json.loads(cap.out)
+		assert payload["schema"] == "drift-lock-emit/v0"
+		assert payload["mode"] == "strict"
+		assert payload["dep_flags"] == ["--dep", "ext.lib@1.0.0"]
+		assert "evidence" not in payload
+
+	def test_missing_lock_is_fine_in_source_rebuild(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""Certify pool is candidate-only; the lock is evidence.  No
+		lock on disk → emit still succeeds (no drift evidence)."""
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		(manifest_path.parent / "lock.json").unlink()
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+
+	def test_pkg_root_env_default_and_flag_precedence(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""No --package-root → DRIFT_PKG_ROOT supplies the pool (the
+		announced flagless invocation); an explicit flag WINS over a
+		bogus env value."""
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		# env-only: the documented cert-env-contract invocation.
+		monkeypatch.setenv("DRIFT_PKG_ROOT", str(pkg_root))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+		# flag wins: env points at an EMPTY dir, flag at the real pool.
+		empty = tmp_path / "empty_pool"
+		empty.mkdir()
+		monkeypatch.setenv("DRIFT_PKG_ROOT", str(empty))
+		(tmp_path / "second").mkdir()
+		manifest_path2, pkg_root2, snap2, stack2 = _sr_world(
+			tmp_path / "second")
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap2))
+		with stack2:
+			rc = run([
+				"--manifest", str(manifest_path2), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root2),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+
+	def test_snapshot_flag_wins_over_env(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""--run-snapshot beats DRIFT_RUN_SNAPSHOT: env points at a
+		nonexistent file; the flag's valid snapshot is used."""
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(tmp_path / "no-such.json"))
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--run-snapshot", str(snap),
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1"
+
+	def test_authority_errors_exit_nonzero_empty_stdout(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""Non-empty SourceRebuildResult.errors -> rc 1, EMPTY stdout,
+		error text on stderr.  Distinct from the index-time
+		ResolutionError path.  The structural gate producing such
+		errors is defence-in-depth that a well-formed snapshot cannot
+		reach through the CLI (the loader rejects malformed entries,
+		the index gate exact-matches the rest), so the authority is
+		mocked at its module to pin THIS command's error branch."""
+		from unittest.mock import patch as _patch
+		from tools.drift_deploy.drift_lock import run
+		from tools.drift_deploy.source_rebuild import (
+			SourceRebuildEvidence,
+			SourceRebuildResult,
+		)
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		synthetic = SourceRebuildResult(
+			resolved_graph={},
+			evidence=SourceRebuildEvidence(),
+			errors=["artifact 'my.pkg' dep 'ext.lib': no verifiable signer (synthetic)"],
+		)
+		with stack, _patch(
+			"tools.drift_deploy.source_rebuild.resolve_source_rebuild",
+			return_value=synthetic,
+		):
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "no verifiable signer" in cap.err
+
+	def test_invalid_cert_mode_exits_nonzero_empty_stdout(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		manifest_path, pkg_root, snap, stack = _sr_world(tmp_path)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		monkeypatch.setenv("DRIFT_CERT_MODE", "bogus-mode")
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "DRIFT_CERT_MODE" in cap.err
+
+	def _two_artifact_world_with_disk_co_artifact(self, tmp_path, monkeypatch):
+		"""Manifest: my.pkg (deps ext.lib@1.0 + peer my.util@0.5) and
+		co-artifact my.util@0.5.2.  Disk pool: ext.lib-1.0.1.dmp
+		(snapshot-authorised) AND my.util-0.5.2.dmp (NOT in the
+		snapshot — a producer output sitting in the pool).  Loader
+		mock keys on the .dmp path so each package reads its own
+		manifest."""
+		from types import SimpleNamespace
+		from unittest.mock import patch as _patch
+		from contextlib import ExitStack
+		from tools.drift_deploy.run_snapshot import (
+			SnapshotEntry,
+			write_run_snapshot,
+		)
+		art = _library_artifact("my.pkg", "0.1.0", [
+			("ext.lib", "1.0"), ("my.util", "0.5"),
+		])
+		manifest_path = _write_manifest(tmp_path, [
+			art, _library_artifact("my.util", "0.5.2", []),
+		])
+		scid = "sha256:" + "a" * 64
+		ak = "ed25519:orch-sig-kid"
+		sak = "ed25519:orch-sak-kid"
+		pkg_root = tmp_path / "pkg_root"
+		pkg_root.mkdir()
+		for stem in ("ext.lib-1.0.1", "my.util-0.5.2"):
+			(pkg_root / f"{stem}.dmp").write_bytes(b"fake-" + stem.encode())
+			(pkg_root / f"{stem}.sig").write_text("{}")
+		snap = tmp_path / "run-snapshot.json"
+		write_run_snapshot(
+			snap,
+			run_id="20260731-stage-exemption",
+			entries={
+				# NOTE: no entry for my.util — the exemption under test.
+				("ext.lib", "1.0.1"): SnapshotEntry(
+					source_content_id=scid,
+					author_key=ak,
+					source_attestation_key=sak,
+				),
+			},
+		)
+		monkeypatch.setenv("DRIFT_RUN_SNAPSHOT", str(snap))
+		manifests = {
+			"ext.lib-1.0.1": {
+				"package_id": "ext.lib", "package_version": "1.0.1",
+				"modules": [{"module_id": "ext_lib"}], "required_deps": [],
+			},
+			"my.util-0.5.2": {
+				"package_id": "my.util", "package_version": "0.5.2",
+				"modules": [{"module_id": "my_util"}], "required_deps": [],
+			},
+		}
+		def _load_by_path(path, *a, **kw):
+			return SimpleNamespace(manifest=manifests[Path(path).stem])
+		stack = ExitStack()
+		stack.enter_context(_patch(
+			"tools.drift_deploy.resolver._read_author_key", return_value=ak))
+		stack.enter_context(_patch(
+			"tools.drift_deploy.resolver._read_source_attestation_meta",
+			return_value=(scid, sak)))
+		stack.enter_context(_patch(
+			"lang.driftc.packages.dmir_pkg_v0.load_dmir_pkg_v0",
+			side_effect=_load_by_path))
+		return manifest_path, pkg_root, stack
+
+	def test_stage_exemption_admits_disk_co_artifact(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""DRIFT_CERT_MODE=stage: the on-disk co-artifact .dmp absent
+		from the snapshot is admitted via snapshot_exempt_ids (producer
+		output of this run) — emit succeeds, peer pin in the flags."""
+		from tools.drift_deploy.drift_lock import run
+		manifest_path, pkg_root, stack = \
+			self._two_artifact_world_with_disk_co_artifact(tmp_path, monkeypatch)
+		monkeypatch.setenv("DRIFT_CERT_MODE", "stage")
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 0, cap.err
+		assert cap.out.strip() == "--dep ext.lib@1.0.1 --dep my.util@0.5.2"
+
+	def test_certify_fails_closed_on_unsnapshotted_disk_co_artifact(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		"""Same world, DRIFT_CERT_MODE=certify (pure consumer, NO
+		exemptions): the unsnapshotted disk .dmp fails the index gate
+		— rc 1, EMPTY stdout.  Proves the exemption is stage-ONLY."""
+		from tools.drift_deploy.drift_lock import run
+		manifest_path, pkg_root, stack = \
+			self._two_artifact_world_with_disk_co_artifact(tmp_path, monkeypatch)
+		monkeypatch.setenv("DRIFT_CERT_MODE", "certify")
+		with stack:
+			rc = run([
+				"--manifest", str(manifest_path), "--artifact", "my.pkg",
+				"--source-rebuild",
+				"--package-root", str(pkg_root),
+			])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "my.util" in cap.err
+
+	def test_package_root_without_source_rebuild_rejected(
+		self, tmp_path, capsys, monkeypatch,
+	) -> None:
+		from tools.drift_deploy.drift_lock import run
+		monkeypatch.delenv("DRIFT_CERT_MODE", raising=False)
+		manifest_path = _write_manifest(tmp_path, [
+			_library_artifact("my.pkg", "0.1.0", [("ext.lib", "1.0")]),
+		])
+		_write_lock(tmp_path, {"my.pkg": {"ext.lib": {"version": "1.0.0"}}})
+		rc = run([
+			"--manifest", str(manifest_path), "--artifact", "my.pkg",
+			"--package-root", str(tmp_path),
+		])
+		cap = capsys.readouterr()
+		assert rc == 1
+		assert cap.out == ""
+		assert "--source-rebuild" in cap.err

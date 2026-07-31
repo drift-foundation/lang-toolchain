@@ -1,5 +1,43 @@
 # Drift development history
 
+## 2026-07-31 (0.33.92: `drift lock emit --source-rebuild` — cert gates exec the toolchain, never import it; ABI 22 unchanged)
+
+The drift-workflows/build-orchestrator consumer contract (2026-07-31
+ask): a certification gate's behavior must be fully determined by the
+staged binary toolchain plus the documented env contract
+(`DRIFT_CERT_MODE`, `DRIFT_RUN_SNAPSHOT`, `DRIFT_PKG_ROOT`,
+`DRIFT_TOOLCHAIN_ROOT`, `DRIFT_CERT_CAPABILITIES`) — no consumer repo
+may `sys.path`-import resolver source from a drift-lang checkout (the
+interim `DRIFT_LANG_SRC` stopgap). `drift lock emit` now takes
+`--source-rebuild [--run-snapshot <path>] [--package-root <dir>]...`:
+it fresh-resolves the artifact via `resolve_source_rebuild` — the same
+single authority `drift build`/`deploy`/`prepare --check` consume — so
+the resolver semantics a gate sees are by construction those of the
+`driftc` doing the compiling. Under the documented env contract the
+announced invocation needs no extra flags: the snapshot comes from
+`DRIFT_RUN_SNAPSHOT` and the candidate pool from `DRIFT_PKG_ROOT`
+(os.pathsep-separated; explicit flags win). stdout is the flags
+contract (exactly the `expand_to_dep_flags` list; gates consume it via
+`$(...)`); lock-vs-fresh evidence and all diagnostics go to stderr; any
+authority error or snapshot-gate failure exits non-zero with EMPTY
+stdout. The committed lock is evidence, never the graph authority, in
+this lane; a missing snapshot is a hard fail; stage-mode producer
+exemptions mirror `drift prepare` exactly. Deliberate divergence from
+build/deploy/prepare: `DRIFT_CERT_MODE` alone does NOT flip `lock emit`
+into source-rebuild — a read-only inspection command must not change
+its stdout contract on ambient environment; gate recipes select the
+lane explicitly (pinned by test). `--json` emits a structured
+`drift-lock-emit/v0` object in both lanes (`evidence` key in
+source-rebuild mode only); the strict lane is otherwise byte-for-byte
+unchanged.
+
+**Versioning:** `DRIFTC_VERSION` **0.33.92** (behavior-changing
+toolchain addition — 0.33.91 was already frozen, staged, and announced
+at ef7ebd14; reusing it would recreate exactly the version-skew class
+this feature closes); **no ABI change — `DRIFT_RT_ABI_VERSION` stays
+22** (deploy-tooling surface only; no compiler/runtime boundary
+change).
+
 ## 2026-07-29 (0.33.91: reject-redundant-call-borrows — `&` is never decoration; + thin fn-pointer `&T` bare-call miscompile fixed; ABI 22 unchanged)
 
 **SOURCE-COMPAT BREAK (language rule).** A source-written borrow in a call-

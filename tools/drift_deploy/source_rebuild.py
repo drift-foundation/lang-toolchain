@@ -84,6 +84,7 @@ authority.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -397,32 +398,41 @@ def print_evidence(
 	art_name: str,
 	channel: str,
 	evidence: SourceRebuildEvidence,
+	out: Any = None,
 ) -> None:
-	"""Print evidence to stdout with `channel` prefix.
+	"""Print evidence with `channel` prefix.
 
 	`channel` is the caller's label (`"drift prepare --check"`,
 	`"drift build"`, `"drift deploy"`) — appears verbatim in the
 	leading line so CI log scrapers can attribute the evidence to
 	the correct step.
+
+	`out` selects the stream (default stdout, the historical
+	behavior).  `drift lock emit --source-rebuild` passes stderr:
+	its stdout is a machine contract (exactly the `--dep` flags)
+	and evidence is diagnostics there.
 	"""
 	if evidence.is_empty():
 		return
+	if out is None:
+		out = sys.stdout
 	print(
 		f"{channel} --source-rebuild: artifact '{art_name}' drift "
-		f"vs. lock (compile uses fresh graph, not lock):"
+		f"vs. lock (compile uses fresh graph, not lock):",
+		file=out,
 	)
 	for pkg_id, version in evidence.added:
-		print(f"  + {pkg_id}@{version} (new in resolved graph)")
+		print(f"  + {pkg_id}@{version} (new in resolved graph)", file=out)
 	for pkg_id, version in evidence.removed:
-		print(f"  - {pkg_id}@{version} (no longer in resolved graph)")
+		print(f"  - {pkg_id}@{version} (no longer in resolved graph)", file=out)
 	for pkg_id, lv, fv in evidence.version_changed:
-		print(f"  ~ {pkg_id}: version {lv} -> {fv}")
+		print(f"  ~ {pkg_id}: version {lv} -> {fv}", file=out)
 	for pkg_id, lsha, fsha in evidence.sha_drift:
-		print(f"  ~ {pkg_id}: sha256 {lsha!r} -> {fsha!r}")
+		print(f"  ~ {pkg_id}: sha256 {lsha!r} -> {fsha!r}", file=out)
 	last_pkg: str | None = None
 	for pkg_id, field_name, lv, fv in evidence.signer_drift:
 		if pkg_id != last_pkg:
-			print(f"  ~ {pkg_id}:")
+			print(f"  ~ {pkg_id}:", file=out)
 			last_pkg = pkg_id
 		pad = max(0, 22 - len(field_name))
-		print(f"      {field_name}{' ' * pad}  locked={lv!r}  disk={fv!r}")
+		print(f"      {field_name}{' ' * pad}  locked={lv!r}  disk={fv!r}", file=out)
