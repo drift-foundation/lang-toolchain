@@ -141,18 +141,20 @@ perf-protocols:
 
 # ── Ownership CORPUS baseline PROMOTION (reviewed, manual) ───────────
 # Materializes an ALREADY-APPROVED promotion via
-# tools/drift_corpus_promote.py: dry-run by default (pass
-# FLAGS="--apply" to write); requires a reviewed approval file pinning
-# predecessor+candidate artifact hashes, the exact universe change,
-# and the exact counter deltas; fails closed on any divergence; writes
-# ONLY the four reviewed-baseline files; ends with an exact zero-delta
-# comparison.  NEVER invoked by `just test`, `just certify`, or
-# run-all-tests.sh — the tool materializes approval, it cannot grant it.
-ownership-corpus-promote RUN_DIR APPROVAL *FLAGS:
+# tools/drift_corpus_promote.py: dry-run by default (pass `--apply` to
+# write).  Single-arg TARGET is the promotion RECORD dir
+# (promotions/<name>) — candidate/ and the approval file are resolved
+# from it; the two-arg <run-dir> <approval-file> form still works.  Fails
+# closed on any divergence; writes ONLY the four reviewed-baseline files;
+# ends with an exact zero-delta comparison and prints the next step.
+# NEVER invoked by `just test`, `just certify`, or run-all-tests.sh — the
+# tool materializes approval, it cannot grant it.
+# Preview a promotion record (dry-run) or apply it with --apply.
+ownership-corpus-promote TARGET *ARGS:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
-		"{{RUN_DIR}}" "{{APPROVAL}}" {{FLAGS}}
+		"{{TARGET}}" {{ARGS}}
 	# Focused promotion teeth run AUTOMATICALLY after every successful
 	# dry run or apply — never a separately remembered step.  The
 	# broader tools lane stays covered by `just test`/run-all-tests.sh.
@@ -162,6 +164,26 @@ ownership-corpus-promote RUN_DIR APPROVAL *FLAGS:
 	echo "ownership-corpus-promote: running live-baseline sanity"
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
 		"lang/tests/tools/test_ownership_corpus_check.py::test_reviewed_baseline_matches_approved_promotion" -q
+
+# One-shot APPROVE + APPLY for a reviewed record (the agree-with-deltas
+# path): renames approval-DRAFT.json -> approval.json (the review stamp;
+# the Git commit records who/when) if not already approved, then applies.
+# Preview first with `just ownership-corpus-promote <record>`; run this
+# only once you agree with the deltas it printed.
+# Approve (rename DRAFT->approval.json) and apply a promotion record.
+ownership-corpus-approve RECORD_DIR:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	rec="{{RECORD_DIR}}"
+	if [[ ! -f "$rec/approval.json" ]]; then
+		[[ -f "$rec/approval-DRAFT.json" ]] || {
+			echo "ownership-corpus-approve: no approval-DRAFT.json in $rec" >&2
+			exit 1
+		}
+		echo "ownership-corpus-approve: approving — rename approval-DRAFT.json -> approval.json"
+		mv "$rec/approval-DRAFT.json" "$rec/approval.json"
+	fi
+	just ownership-corpus-promote "$rec" --apply
 
 # Promotion-record generation: builds a durable, self-contained record
 # (predecessor/ + candidate/ artifact copies, COMPACT per-fixture
@@ -186,6 +208,28 @@ ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN="":
 	echo "ownership-corpus-promotion-draft: running focused promotion teeth"
 	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
 		lang/tests/tools/test_ownership_corpus_promote.py -q
+
+# Acquire a FRESH full-corpus audit run into a repo-local build/tmp dir
+# and print its path — the candidate run that feeds
+# `ownership-corpus-promotion-draft` after the fixture universe
+# legitimately changes (new/removed/renamed fixtures make
+# `ownership-corpus-check` fail with UNIVERSE MISMATCH by design).  This
+# only MINTS a run (no baseline comparison, no promotion); a reviewer
+# still approves the resulting draft.  Wraps the venv + auto-jobs + tmp
+# conventions so you never hand-run `.venv/bin/python tools/...`.  Pass
+# an explicit OUT to reuse a stable path; otherwise a timestamped dir is
+# minted and echoed for the next step.
+# Mint a fresh full-corpus audit run (candidate for re-baselining).
+ownership-corpus-run OUT="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	out="{{OUT}}"
+	[[ -n "$out" ]] || out="build/tmp/ownership-corpus-run-$(date +%Y%m%d-%H%M%S)-$$"
+	echo "ownership-corpus-run: minting run at $out"
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
+		--out "$out" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}"
+	echo "ownership-corpus-run: acquired $out"
+	echo "  next: just ownership-corpus-promotion-draft $out <record_dir>"
 
 # ── Ownership CORPUS certification gate ──────────────────────────────
 # DISTINCT from `ownership-matrix-check` above: the matrix is the 51

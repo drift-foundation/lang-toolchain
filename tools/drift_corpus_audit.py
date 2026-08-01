@@ -321,20 +321,45 @@ def _compare(baseline_dir: Path, run_dir: Path,
 		      f"({type(e).__name__}: {e}) — failing closed.", file=sys.stderr)
 		return 2
 	if base_universe != new_universe:
+		bu, nu = base_universe, new_universe
+		# Classify by the WHOLE fixture set, not per-bucket, so an added
+		# fixture reads as "added" (not as noise in every bucket) and a
+		# fixture that merely changed compile outcome reads as "moved".
+		base_all = set(bu["compiled_ok"]) | set(bu["failed"])
+		new_all = set(nu["compiled_ok"]) | set(nu["failed"])
+		added = sorted(new_all - base_all)
+		removed = sorted(base_all - new_all)
+		bucket_of_base = {**{n: "compiled_ok" for n in bu["compiled_ok"]},
+		                  **{n: "failed" for n in bu["failed"]}}
+		bucket_of_new = {**{n: "compiled_ok" for n in nu["compiled_ok"]},
+		                 **{n: "failed" for n in nu["failed"]}}
+		moved = sorted(
+			n for n in base_all & new_all
+			if bucket_of_base.get(n) != bucket_of_new.get(n))
+		bh = {f["name"]: f["sha256"] for f in bu["fixtures"]}
+		nh = {f["name"]: f["sha256"] for f in nu["fixtures"]}
+		changed = sorted(k for k in bh.keys() & nh.keys() if bh[k] != nh[k])
+
+		def _emit(label: str, names: list[str], *, hint: str = "") -> None:
+			if not names:
+				return
+			suffix = f"  ({hint})" if hint else ""
+			print(f"  {label} ({len(names)}):{suffix}", file=sys.stderr)
+			for name in names:
+				print(f"      {name}", file=sys.stderr)
+
 		print("UNIVERSE MISMATCH: baseline and new run do not cover the "
 		      "identical fixture universe — deltas would be meaningless.",
 		      file=sys.stderr)
-		bu, nu = base_universe, new_universe
-		for key in ("compiled_ok", "failed"):
-			b, n = set(bu[key]), set(nu[key])
-			if b != n:
-				print(f"  {key}: only-baseline={sorted(b - n)} only-new={sorted(n - b)}",
-				      file=sys.stderr)
-		bh = {f["name"]: f["sha256"] for f in bu["fixtures"]}
-		nh = {f["name"]: f["sha256"] for f in nu["fixtures"]}
-		changed = [k for k in bh.keys() & nh.keys() if bh[k] != nh[k]]
-		if changed:
-			print(f"  fixtures with changed sources: {sorted(changed)}", file=sys.stderr)
+		_emit("added fixtures", added, hint="present only in the new run")
+		_emit("removed fixtures", removed, hint="present only in the baseline")
+		_emit("changed compile outcome", moved,
+		      hint="same fixture, compiled_ok<->failed flipped")
+		_emit("changed source (same name)", changed)
+		print("  → the fixture set changed; re-capture the baseline before "
+		      "comparing (run the audit without --baseline to mint a fresh "
+		      "reference over the current universe), or restrict --only to the "
+		      "shared set.", file=sys.stderr)
 		return 2
 
 	base = base_counters

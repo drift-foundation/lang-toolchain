@@ -135,6 +135,18 @@ def run_tool(run, approval, base, apply=False):
 		return int(e.code or 0)
 
 
+def run_tool_dir(record, base, apply=False):
+	"""Single-arg promote: pass the RECORD dir; candidate/ + the approval
+	file are resolved from it."""
+	argv = [str(record), "--baseline-dir", str(base)]
+	if apply:
+		argv.append("--apply")
+	try:
+		return promote.main(argv)
+	except SystemExit as e:
+		return int(e.code or 0)
+
+
 def snapshot(d: Path) -> dict:
 	return {p.name: sha(p) for p in sorted(d.iterdir()) if p.is_file()}
 
@@ -396,7 +408,7 @@ def test_promotion_not_wired_into_gates():
 	`just certify`, and run-all-tests.sh (wiring-isolation pin)."""
 	justfile = (ROOT / "justfile").read_text()
 	# the only mentions of the tool live in its own recipe block
-	promote_recipe = justfile.index("ownership-corpus-promote RUN_DIR")
+	promote_recipe = justfile.index("ownership-corpus-promote TARGET")
 	test_line = [l for l in justfile.splitlines()
 	             if l.startswith("test:")][0]
 	certify_line = [l for l in justfile.splitlines()
@@ -579,6 +591,41 @@ def test_baseline_md_records_full_approval_hash(world):
 		"BASELINE.md must record the FULL approval sha256"
 
 
+def test_single_dir_promote_resolves_candidate_and_approval(world, tmp_path):
+	"""A single RECORD-dir positional resolves candidate/ and the approval
+	file itself: dry-run on the DRAFT, then --apply after the rename."""
+	base, run, approval = world
+	record = tmp_path / "record"
+	assert run_tool_draft(run, record, base) == 0
+	before = snapshot(base)
+	# pending DRAFT → dry-run only, writes nothing
+	assert run_tool_dir(record, base) == 0
+	assert snapshot(base) == before, "single-dir dry-run must not write"
+	# approve (the rename IS the review stamp), then single-dir --apply
+	(record / "approval-DRAFT.json").rename(record / "approval.json")
+	assert run_tool_dir(record, base, apply=True) == 0
+	for name in ("aggregate.json", "manifest.json", "metadata.json"):
+		assert sha(base / name) == sha(record / "candidate" / name)
+
+
+def test_single_dir_promote_apply_refused_while_pending(world, tmp_path):
+	"""--apply on a record still holding approval-DRAFT.json is refused
+	(the review stamp — the rename — has not happened)."""
+	base, run, approval = world
+	record = tmp_path / "record"
+	assert run_tool_draft(run, record, base) == 0
+	before = snapshot(base)
+	assert run_tool_dir(record, base, apply=True) != 0
+	assert snapshot(base) == before
+
+
+def test_single_dir_promote_rejects_non_record(world):
+	"""A raw run dir (no candidate/ subdir) is not a promotion record —
+	fail closed with a clear error instead of a stack trace."""
+	base, run, approval = world
+	assert run_tool_dir(run, base) != 0
+
+
 def test_recipes_run_focused_teeth_automatically():
 	"""Workflow pin: after a successful tool run, the promote recipe
 	must run BOTH the promotion-mechanics suite AND the live-baseline
@@ -593,7 +640,7 @@ def test_recipes_run_focused_teeth_automatically():
 		body_end = rest.find("\n\n")
 		return rest[:body_end if body_end > 0 else len(rest)]
 
-	promote = body_of("ownership-corpus-promote RUN_DIR")
+	promote = body_of("ownership-corpus-promote TARGET")
 	assert "test_ownership_corpus_promote.py" in promote
 	assert ("test_ownership_corpus_check.py::"
 	        "test_reviewed_baseline_matches_approved_promotion") in promote, \

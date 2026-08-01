@@ -24,6 +24,56 @@ delta, and nonzero hard gates.  Tool:
 `lang/tests/tools/test_drift_corpus_audit.py`,
 `lang/tests/tools/test_ownership_corpus_check.py`.
 
+## Runbook: re-baseline after a fixture change (start here)
+
+`just ownership-corpus-check` fails with **UNIVERSE MISMATCH** whenever
+the fixture set changes — you added, removed, or renamed a corpus
+fixture (or a fixture's compile outcome flipped). That is by design:
+deltas across different universes are meaningless. To move the reviewed
+baseline forward, four commands — each prints the next one, so you never
+hunt. `<name>` follows the existing records, e.g.
+`0.33.94-bare-temp-field-projection-uaf`.
+
+```
+# 1. Acquire a candidate run over the current tree.  SKIP if you already
+#    have a COMPLETE run dir (manifest.json + aggregate.json) — e.g. the
+#    run that just reported UNIVERSE MISMATCH; use its path as <run-dir>.
+just ownership-corpus-run
+
+# 2. Build the promotion record from that run.  (Predecessor auto-resolves
+#    from the checked-in record chain — do NOT pass a predecessor run.)
+just ownership-corpus-promotion-draft <run-dir> \
+     lang/tests/ownership_corpus/promotions/<name>
+
+# 3. PREVIEW the deltas (dry-run; writes nothing).  Single RECORD-dir arg —
+#    candidate/ and the approval file are resolved for you.
+just ownership-corpus-promote \
+     lang/tests/ownership_corpus/promotions/<name>
+
+# 4. If you agree with the deltas: APPROVE + APPLY in one step.  This
+#    renames approval-DRAFT.json -> approval.json (the review stamp; the
+#    Git commit records who/when) and writes the baseline.
+just ownership-corpus-approve \
+     lang/tests/ownership_corpus/promotions/<name>
+```
+
+Then `just ownership-corpus-check` passes over the new universe, and you
+commit the four reviewed-baseline files together with the whole
+`promotions/<name>/` record and the fixtures that changed.
+
+Notes:
+* After step 2 the `build/tmp` run is disposable — the record under
+  `promotions/<name>/` is self-contained (clone-sufficient), so steps 3
+  and 4 take only the record dir.
+* `ownership-corpus-promote <record>` is dry-run; add `--apply` (or use
+  `ownership-corpus-approve`) to write. `--apply` is refused while the
+  record still holds `approval-DRAFT.json` — approval is the rename.
+* The explicit two-arg form
+  `ownership-corpus-promote <run-dir> <approval-file>` still works if you
+  ever need to point at artifacts outside a record.
+
+The sections below are the reference for what each step checks and why.
+
 ## The reviewed baseline
 
 `lang/tests/ownership_corpus/reviewed-baseline/` holds exactly four
@@ -57,7 +107,16 @@ Promotion is these six steps, in order:
    with the candidate.
 
 Steps 1–5 are automated by **`tools/drift_corpus_promote.py`** behind
-a thin wrapper:
+thin wrappers.  The everyday form takes a single promotion RECORD dir
+(candidate/ and the approval file are resolved from it):
+
+```
+just ownership-corpus-promote <record-dir>            # dry-run / preview
+just ownership-corpus-promote <record-dir> --apply    # write (approved only)
+just ownership-corpus-approve  <record-dir>           # rename DRAFT->approval + apply
+```
+
+The explicit two-arg form still works for artifacts outside a record:
 
 ```
 just ownership-corpus-promote <run-dir> <approval-file>            # dry-run
@@ -163,9 +222,13 @@ Do not hand-compute the pinned facts — generate the record:
 
 ```
 just ownership-corpus-promotion-draft <candidate-run-dir> \
-     lang/tests/ownership_corpus/promotions/<name> \
-     <predecessor-run-dir>
+     lang/tests/ownership_corpus/promotions/<name>
 ```
+
+The predecessor is resolved automatically from the checked-in record
+chain (clone-sufficient). Pass a third `<predecessor-run-dir>` argument
+ONLY as the bootstrap escape hatch for a baseline that predates
+record-keeping — normal promotions omit it.
 
 The generator reads the current reviewed baseline and the explicit
 retained candidate, validates both schemas and the candidate's hard

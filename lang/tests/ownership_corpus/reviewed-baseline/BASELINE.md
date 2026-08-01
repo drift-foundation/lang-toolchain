@@ -1,34 +1,42 @@
 # Reviewed ownership-corpus baseline
 
-The checked-in reference for `just ownership-corpus-check` — candidate driftc 0.33.93 / ABI 22: 933 compiled, 359 compile-failed, 49 rule-excluded.
+The checked-in reference for `just ownership-corpus-check` — candidate driftc 0.33.94 / ABI 22: 942 compiled, 367 compile-failed, 49 rule-excluded.
 
 ## Provenance
 
 | field | value |
 |---|---|
-| origin run | retained run dir `lang/tests/ownership_corpus/promotions/0.33.93-std-meta-cli-redesign/candidate`; promoted from the RETAINED artifacts without a rerun |
-| driftc / ABI | **0.33.93** / **ABI 22** |
+| origin run | retained run dir `lang/tests/ownership_corpus/promotions/0.33.94-bare-temp-field-projection-uaf/candidate`; promoted from the RETAINED artifacts without a rerun |
+| driftc / ABI | **0.33.94** / **ABI 22** |
 | corpus tool | v1.7.1 |
-| run started_unix | 1785528642.42006 |
-| universe | 933 compiled / 1292 discovered (359 compile-failed, 49 rule-excluded) |
-| promotion | drift_corpus_promote.py under approval `approval.json` (full sha256 772c2193c89efad5aa2caf38d1b4fe4426b5df761a7de8f665ddb5b139442865); reviewer identity and date are recorded by Git history — the commit that renamed approval-DRAFT.json to approval.json and landed this promotion |
+| run started_unix | 1785620810.4314916 |
+| universe | 942 compiled / 1309 discovered (367 compile-failed, 49 rule-excluded) |
+| promotion | drift_corpus_promote.py under approval `approval.json` (full sha256 7701cadd7284622a1185b76ecabe8a87275c982178dd4fe85933687259d727fb); reviewer identity and date are recorded by Git history — the commit that renamed approval-DRAFT.json to approval.json and landed this promotion |
 
 ## Predecessor
 
-The prior reviewed baseline (driftc 0.33.93 / ABI 22; origin run started_unix 1785516863.5298185), preserved verbatim in this record's predecessor/ directory; earlier chain in the Git history of reviewed-baseline/BASELINE.md.
+The prior reviewed baseline (driftc 0.33.93 / ABI 22; origin run started_unix 1785528642.42006), preserved verbatim in this record's predecessor/ directory; earlier chain in the Git history of reviewed-baseline/BASELINE.md.
 
 ## Approved deltas and attribution
 
 Counter deltas vs the predecessor (exact, per the approval):
 
-* `c1_agree`: -939
-* `c3_moveout_owned`: -9331
-* `events`: -10264
-* `fns`: -2799
-* `site_class:materialized_lastuse_release`: -933
-* `site_class:moveout_expansion`: -9331
+* `c1_agree`: +8955
+* `c1_path_dependent`: +288
+* `c3_moveout_flag_guarded`: +36
+* `c3_moveout_owned`: +18479
+* `c3_moveout_unreachable_block`: +18
+* `c3_moveout_zero_safe`: +27
+* `events`: +28230
+* `fns`: +11446
+* `pre_post_verdict_drift`: +468
+* `site_class:drop_before_overwrite_site4`: +45
+* `site_class:materialized_lastuse_release`: +6340
+* `site_class:moveout_expansion`: +18560
+* `site_class:overwrite_release`: +2529
+* `site_class:scope_exit_release`: +756
 
-Machine attribution_facts in this approval, re-proven from the record's fixture-counters on every dry-run and apply: modal delta c1_agree -1, c3_moveout_owned -10, events -11, fns -3, site_class:materialized_lastuse_release -1, site_class:moveout_expansion -10 on all 932 shared fixtures; 1 outlier fixture(s): std_meta_build_info_unstamped {'c1_agree': -7, 'c3_moveout_owned': -11, 'events': -12, 'fns': -3, 'site_class:materialized_lastuse_release': -1, 'site_class:moveout_expansion': -11}; no new fixtures; no removed fixtures.  Residual zero on every counter; hard gates zero.
+Machine attribution_facts in this approval, re-proven from the record's fixture-counters on every dry-run and apply: modal delta no shared-fixture drift (932 fixtures unchanged); 1 outlier fixture(s): borrow_chained_ref_projection_noncopy {'c3_moveout_owned': -8, 'events': -8, 'site_class:moveout_expansion': -8}; autoborrow_owned_rvalue_field_method_drops_once contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2053, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3136, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 704, 'site_class:moveout_expansion': 2062, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_call_field contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2056, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3141, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 706, 'site_class:moveout_expansion': 2065, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_ctor_field contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2054, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3137, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 704, 'site_class:moveout_expansion': 2063, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_hoisted_control contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2056, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3141, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 706, 'site_class:moveout_expansion': 2065, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_index_guard contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2055, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3138, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 704, 'site_class:moveout_expansion': 2064, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_mixed contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2055, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3138, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 704, 'site_class:moveout_expansion': 2064, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_nested contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2053, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3136, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 704, 'site_class:moveout_expansion': 2062, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_static_literal_mask contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2053, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3134, 'fns': 1272, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 702, 'site_class:moveout_expansion': 2062, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_ternary_bitcopy_scalar_ok contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2052, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3133, 'fns': 1271, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 702, 'site_class:moveout_expansion': 2061, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; rvalue_field_proj_throwing_edge contributes {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2057, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3142, 'fns': 1274, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 706, 'site_class:moveout_expansion': 2066, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}; autoborrow_owned_rvalue_field_method_unchanged withdrew {'c1_agree': 995, 'c1_path_dependent': 32, 'c3_moveout_flag_guarded': 4, 'c3_moveout_owned': 2057, 'c3_moveout_unreachable_block': 2, 'c3_moveout_zero_safe': 3, 'events': 3138, 'fns': 1275, 'pre_post_verdict_drift': 52, 'site_class:drop_before_overwrite_site4': 5, 'site_class:materialized_lastuse_release': 702, 'site_class:moveout_expansion': 2066, 'site_class:overwrite_release': 281, 'site_class:scope_exit_release': 84}.  Residual zero on every counter; hard gates zero.
 
 ## Update policy
 

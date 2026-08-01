@@ -592,8 +592,11 @@ def generate_draft(audit, run_dir: Path, baseline_dir: Path,
 	print(f"  modal {modal} on {len(shared) - len(outliers)}/{len(shared)} "
 	      f"shared fixtures; {len(outliers)} outliers; "
 	      f"{len(new_contribs)} new fixtures")
-	print(f"Reviewer approves by RENAMING {DRAFT_NAME} to {APPROVED_NAME} — "
-	      f"no JSON edits; identity/date are recorded by the Git commit.")
+	print("\nNEXT STEP:")
+	print(f"  preview the deltas:  just ownership-corpus-promote {record_dir}")
+	print(f"  then, if you agree:  just ownership-corpus-approve {record_dir}")
+	print(f"  (approval is the {DRAFT_NAME} -> {APPROVED_NAME} rename — no JSON "
+	      f"edits; Git records who/when.)")
 	return 0
 
 
@@ -601,8 +604,16 @@ def main(argv=None) -> int:
 	ap = argparse.ArgumentParser(
 		description="Materialize an APPROVED ownership-corpus baseline "
 		            "promotion (dry-run by default)")
-	ap.add_argument("run_dir", help="the approved retained corpus run dir")
-	ap.add_argument("approval_file", help="reviewed approval JSON")
+	ap.add_argument("run_dir",
+	                help="promote: the promotion RECORD dir (single arg — "
+	                     "candidate/ and the approval file are resolved from "
+	                     "it); or the candidate run dir when a second "
+	                     "approval-file arg is given.  --draft: the candidate "
+	                     "corpus run dir.")
+	ap.add_argument("approval_file", nargs="?", default=None,
+	                help="promote: reviewed approval JSON (OPTIONAL — omit to "
+	                     "auto-resolve it from the record dir).  --draft: the "
+	                     "promotion-record dir to create (must not exist).")
 	ap.add_argument("--apply", action="store_true",
 	                help="actually write the baseline (default: dry-run)")
 	ap.add_argument("--draft", action="store_true",
@@ -621,18 +632,43 @@ def main(argv=None) -> int:
 	args = ap.parse_args(argv)
 
 	audit = _load_audit_tool()
-	run_dir = Path(args.run_dir)
 	baseline_dir = Path(args.baseline_dir)
-	approval_path = Path(args.approval_file)
 
 	if args.draft:
+		require(args.approval_file is not None,
+		        "--draft needs two args: <candidate-run-dir> <record-dir-to-create>")
 		require(not args.apply, "--draft and --apply are mutually exclusive")
-		return generate_draft(audit, run_dir, baseline_dir, approval_path,
+		return generate_draft(audit, Path(args.run_dir), baseline_dir,
+		                      Path(args.approval_file),
 		                      Path(args.predecessor_run)
 		                      if args.predecessor_run else None,
 		                      Path(args.promotions_dir)
 		                      if args.promotions_dir
 		                      else baseline_dir.parent / "promotions")
+
+	# ── promote mode: a single self-contained RECORD dir (resolve
+	#    candidate/ + the approval file from it) OR the explicit two-arg
+	#    <run-dir> <approval-file> form ───────────────────────────────
+	if args.approval_file is None:
+		record_dir = Path(args.run_dir)
+		require(record_dir.is_dir(),
+		        f"{record_dir} is not a directory — pass a promotions/<name> "
+		        f"record dir (single-arg), or an explicit <run-dir> "
+		        f"<approval-file>")
+		run_dir = record_dir / "candidate"
+		require(run_dir.is_dir(),
+		        f"{record_dir} is not a promotion record (no candidate/ "
+		        f"inside)")
+		approved = record_dir / APPROVED_NAME
+		draft_f = record_dir / DRAFT_NAME
+		require(approved.exists() or draft_f.exists(),
+		        f"{record_dir} has neither {APPROVED_NAME} nor {DRAFT_NAME}")
+		# Prefer the approved name; approval_state() fails closed if BOTH
+		# are present (ambiguous review state).
+		approval_path = approved if approved.exists() else draft_f
+	else:
+		run_dir = Path(args.run_dir)
+		approval_path = Path(args.approval_file)
 
 	app = load_json(approval_path, "approval file")
 	validate_approval(app)
@@ -853,6 +889,17 @@ documentation: doc/ownership-corpus-gate.md.
 			print(f"  {baseline_dir / name}  <- {run_dir / name}")
 		print(f"  {baseline_dir / 'BASELINE.md'}  (regenerated, "
 		      f"{len(baseline_md)} bytes)")
+		# Self-documenting next step so nobody hunts for it.
+		record_dir = approval_path.parent
+		print("\nNEXT STEP:")
+		if state == "approved":
+			print(f"  apply it:   just ownership-corpus-approve {record_dir}")
+			print(f"  (or:        {sys.argv[0]} {record_dir} --apply)")
+		else:
+			print("  if you agree with the deltas above, approve + apply in one step:")
+			print(f"              just ownership-corpus-approve {record_dir}")
+			print("  that renames approval-DRAFT.json -> approval.json (the review")
+			print("  stamp; Git records who/when) and applies.")
 		return 0
 
 	# ── APPLY (gap 4): stage → validate staged → replace with
@@ -898,7 +945,11 @@ documentation: doc/ownership-corpus-gate.md.
 	        f"POST-WRITE zero-delta comparison FAILED (rc {rc}) — baseline "
 	        f"and candidate diverge after promotion")
 	print("post-write exact zero-delta comparison: OK")
-	print("PROMOTION COMPLETE — commit the baseline change with the candidate.")
+	print("PROMOTION COMPLETE.")
+	print("\nNEXT STEP:")
+	print("  verify:  just ownership-corpus-check   # the gate now passes over the new universe")
+	print(f"  commit:  the four baseline files under {baseline_dir} + the whole")
+	print(f"           {approval_path.parent} record + the fixtures that changed")
 	return 0
 
 

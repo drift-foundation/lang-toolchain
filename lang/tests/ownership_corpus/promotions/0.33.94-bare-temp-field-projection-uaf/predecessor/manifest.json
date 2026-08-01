@@ -1,7 +1,7 @@
 {
   "environment": {
     "abi": "22",
-    "driftc_version": "0.33.94",
+    "driftc_version": "0.33.93",
     "tool_version": "1.7.1"
   },
   "universe": {
@@ -59,7 +59,7 @@
       "autoborrow_field_receiver",
       "autoborrow_method_receiver_through_ref_rvalue_chain",
       "autoborrow_method_recv_through_ref_rvalue_field_runtime",
-      "autoborrow_owned_rvalue_field_method_drops_once",
+      "autoborrow_owned_rvalue_field_method_unchanged",
       "bitwise_uint_ops",
       "bool_match_ref_and_default",
       "bool_match_statement_form",
@@ -574,15 +574,6 @@
       "rpc_connect_state_handoff_nonnetwork_shape",
       "rpc_connect_state_handoff_pure_inmemory",
       "rvalue_arg_temp_drop_bare",
-      "rvalue_field_proj_call_field",
-      "rvalue_field_proj_ctor_field",
-      "rvalue_field_proj_hoisted_control",
-      "rvalue_field_proj_index_guard",
-      "rvalue_field_proj_mixed",
-      "rvalue_field_proj_nested",
-      "rvalue_field_proj_static_literal_mask",
-      "rvalue_field_proj_ternary_bitcopy_scalar_ok",
-      "rvalue_field_proj_throwing_edge",
       "same_module_pub_nothrow_ok",
       "scalar_match_byte",
       "scalar_match_const_local_shadows_module",
@@ -1423,14 +1414,6 @@
       "return_ref_param_via_local_ok",
       "return_ref_registry_logger_helper_rejected",
       "return_self_requires_mut_receiver_rejected",
-      "rvalue_field_proj_explicit_mut_binding_required",
-      "rvalue_field_proj_mut_field_rejected",
-      "rvalue_field_proj_mut_index_rejected",
-      "rvalue_field_proj_string_from_utf8",
-      "rvalue_field_proj_ternary_bitcopy_field_rejected",
-      "rvalue_field_proj_ternary_explicit_rejected",
-      "rvalue_field_proj_ternary_field_rejected",
-      "rvalue_field_proj_ternary_whole_rejected",
       "scalar_match_byte_overflow_rejected",
       "scalar_match_const_default_before_arm_rejected",
       "scalar_match_const_duplicate_rejected",
@@ -1838,8 +1821,8 @@
         "sha256": "3438a3f4909b4c7175d7ad7314a9829693e6cff134c55029f12a20bb99c13de9"
       },
       {
-        "name": "autoborrow_owned_rvalue_field_method_drops_once",
-        "sha256": "e0aef735bf5de196f03f288269c25a800f38f9619ec10925e8964ea376541aaf"
+        "name": "autoborrow_owned_rvalue_field_method_unchanged",
+        "sha256": "12e3bd631ef11a4f9b5836e3203c6ff968c09416fcbdbc96074dd1973742c89f"
       },
       {
         "name": "bad_index",
@@ -4890,74 +4873,6 @@
         "sha256": "fb60550bb33070b558a48443c0690deb46a0b9857ed4a94ee51c89b9f60fb3e5"
       },
       {
-        "name": "rvalue_field_proj_call_field",
-        "sha256": "23c1667c83c30cfe00419e965e5ebb18bec009b6b37513f329e9bd456e8fbbcb"
-      },
-      {
-        "name": "rvalue_field_proj_ctor_field",
-        "sha256": "d3d536eaa36a55fe9903efe2dbead26a7ae3c7d4a9ef7e56ea2048691ea44f8a"
-      },
-      {
-        "name": "rvalue_field_proj_explicit_mut_binding_required",
-        "sha256": "ba7fa61e2ad420e31dfd1d13b860221273fdb2823d51729794e7742cd5ceb60e"
-      },
-      {
-        "name": "rvalue_field_proj_hoisted_control",
-        "sha256": "5163298c437903457276feb3dac99a0f18ba9d86509293cbf3abf3be269d2d10"
-      },
-      {
-        "name": "rvalue_field_proj_index_guard",
-        "sha256": "7e52c8fa3f04ff788c77e209d9add6ce08d93ae3c7dbe5323c87c25c29a8d99d"
-      },
-      {
-        "name": "rvalue_field_proj_mixed",
-        "sha256": "07f572c3073a37d1694150f512bb8985c1f385f67863fc7357007a3e2c09aeb0"
-      },
-      {
-        "name": "rvalue_field_proj_mut_field_rejected",
-        "sha256": "977e721785e6436380989e62520ddb59c6eca496b0a2f51de2b9b6a2a2315d70"
-      },
-      {
-        "name": "rvalue_field_proj_mut_index_rejected",
-        "sha256": "29df9adccf999ec32af5cb301d6aeb065ef257969c196e44f8097dea4a62a423"
-      },
-      {
-        "name": "rvalue_field_proj_nested",
-        "sha256": "e5f74e26460c7dc9fce96a4573324bada94107ad487cc85e670694785d6883af"
-      },
-      {
-        "name": "rvalue_field_proj_static_literal_mask",
-        "sha256": "b5bcf69e0f160ae0a7e45dba58c99f98d97f5972828aa496dfb3571fcd79704e"
-      },
-      {
-        "name": "rvalue_field_proj_string_from_utf8",
-        "sha256": "4fb6b75c4f8f66443758b0308e23178daa3650e966cae53d3bf060934ef1ba87"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_bitcopy_field_rejected",
-        "sha256": "e41015ea5ed5a918b4cad1dd250b1b85800aa69446f15e8f9d9d6a92330fdc96"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_bitcopy_scalar_ok",
-        "sha256": "71856dee7741da2f4936f621cd8b70e9f27715685064df63524225032e299564"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_explicit_rejected",
-        "sha256": "556bb8c93449a1111cb361e7f0d12a959e299c56509872b4d67cfcb3de55215c"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_field_rejected",
-        "sha256": "5ee65ee602dc4798108f71dd29600efe953e1f51ce1de0a9f2a870f53e9f684f"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_whole_rejected",
-        "sha256": "008809da7b7abcc122dffca7ad979aeac3ca0567ffd695c8bc3a7aab8ae751f7"
-      },
-      {
-        "name": "rvalue_field_proj_throwing_edge",
-        "sha256": "44894f0708d41ed2084e8d4ce7aacb4fd5b9c1726a0911db97029d701d8c703f"
-      },
-      {
         "name": "same_module_pub_nothrow_ok",
         "sha256": "ee11e1e97dc97642d9721046c3c09256e8dea74fc2e409aed5c2c47c700a4077"
       },
@@ -5215,7 +5130,7 @@
       },
       {
         "name": "std_cli_parse_with_builtins",
-        "sha256": "b9b90928b86e2f12ae2d712dbaa3e322d3873545f933db6bc25f346bb69d40cb"
+        "sha256": "2da8df25b0f0c09da2a7d58cab14ee58eca20fa265d6acf961a5b0a2bc45f98a"
       },
       {
         "name": "std_cli_short_cluster_rejected",

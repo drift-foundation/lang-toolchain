@@ -70,6 +70,35 @@ from lang.language_runtime import (
 )
 
 
+def _apply_version_placeholders(expected: dict) -> dict:
+	"""Substitute toolchain-version placeholders in the expected `stdout`
+	/ `stderr` so a fixture that prints its own version (e.g. `--version`)
+	stays version-AGNOSTIC: it never needs re-blessing on a version bump,
+	and — because the fixture file is unchanged — its ownership-corpus
+	content hash stays stable across bumps too.
+
+	Placeholders (single source of truth: `lang/versions.py`):
+	  {{DRIFTC_VERSION}}        -> e.g. "0.33.94"
+	  {{DRIFT_RT_ABI_VERSION}}  -> e.g. "22"
+	"""
+	if not any(isinstance(expected.get(k), str) and "{{" in expected[k]
+	           for k in ("stdout", "stderr")):
+		return expected
+	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
+	subs = {
+		"{{DRIFTC_VERSION}}": DRIFTC_VERSION,
+		"{{DRIFT_RT_ABI_VERSION}}": str(DRIFT_RT_ABI_VERSION),
+	}
+	out = dict(expected)
+	for key in ("stdout", "stderr"):
+		val = out.get(key)
+		if isinstance(val, str):
+			for ph, real in subs.items():
+				val = val.replace(ph, real)
+			out[key] = val
+	return out
+
+
 ROOT = Path(__file__).resolve().parents[4]
 _BUILD_ROOT_DEFAULT = ROOT / "build" / "tests" / "lang" / "tests" / "codegen" / "e2e"
 _BUILD_ROOT_ENV = os.environ.get("DRIFT_E2E_BUILD_ROOT")
@@ -541,6 +570,7 @@ def _run_case(case_dir: Path, timeout_s: int, debug: bool = False) -> str:
 		return "skipped (missing .drift sources)"
 
 	expected = json.loads(expected_path.read_text())
+	expected = _apply_version_placeholders(expected)
 	if expected.get("skip"):
 		return "skipped (marked)"
 	if expected.get("package_consumer_only"):
