@@ -29,7 +29,7 @@ except ModuleNotFoundError as _err:
 class CompilerInfo:
 	"""Toolchain identity for provenance records. Populated from
 	`driftc --version --json` (drift-toolchain-info/v1) via
-	`lang.driftc.build_info.parse_toolchain_info` — the pipe-format
+	`lang.build_info.parse_toolchain_info` — the pipe-format
 	parser was removed in the 0.33.93 clean break."""
 	version: str   # "0.33.93"
 	abi: int       # 22

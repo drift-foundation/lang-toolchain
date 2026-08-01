@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.driftc.build_info import (
+from lang.build_info import (
 	BuildInfoError,
 	BUILD_INFO_FORMAT,
 	BUILD_INFO_MAX_PAYLOAD,
@@ -457,7 +457,6 @@ class TestRunLevelAccessors:
 		"\tshow(meta.artifact_license());\n"
 		"\tcons.println(meta.toolchain_version());\n"
 		"\tif meta.runtime_abi() <= 0 { return 1; }\n"
-		"\tif meta.dep_versions().len != 0 { return 2; }\n"
 		"\treturn 0;\n"
 		"}\n")
 
@@ -497,7 +496,7 @@ class TestRunLevelAccessors:
 
 class TestDepVersionsRun:
 	"""Dependency records at RUN level: a real package consume whose
-	binary prints meta.dep_versions()."""
+	binary parses meta.build_info() for the dependency."""
 
 	def test_consumed_pin_visible_at_runtime(self, tmp_path) -> None:
 		from lang.codegen.llvm.test_utils import sanitizer_timeout
@@ -517,16 +516,41 @@ class TestDepVersionsRun:
 			cwd=ROOT, capture_output=True, text=True,
 			timeout=sanitizer_timeout(150))
 		assert res.returncode == 0 and dmp.exists(), res.stderr[-800:]
+		# std.meta no longer typed-parses deps (that std.json edge was
+		# removed); the consumer parses the raw build_info() document,
+		# the same layered pattern std.cli / examples/build_info use.
 		(tmp_path / "main.drift").write_text(
 			"module main;\n"
 			"import runlib as runlib;\n"
 			"import std.meta as meta;\n"
+			"import std.json as json;\n"
+			"import std.core as core;\n"
 			"import std.console as cons;\n"
 			"pub fn main() nothrow -> Int {\n"
-			"\tval deps = meta.dep_versions();\n"
-			"\tif deps.len != 1 { return 1; }\n"
-			"\tcons.println(*deps[0].name());\n"
-			"\tcons.println(*deps[0].version());\n"
+			"\tmatch json.parse(meta.build_info()) {\n"
+			"\t\tcore.Result::Ok(root) => {\n"
+			"\t\t\tmatch root.get(\"dependencies\") {\n"
+			"\t\t\t\tOptional::Some(dn) => {\n"
+			"\t\t\t\t\tmatch dn.as_array() {\n"
+			"\t\t\t\t\t\tOptional::Some(es) => {\n"
+			"\t\t\t\t\t\t\tif es.len != 1 { return 1; }\n"
+			"\t\t\t\t\t\t\tmatch es[0].get(\"name\") {\n"
+			"\t\t\t\t\t\t\t\tOptional::Some(nn) => { match nn.as_string() { Optional::Some(s) => { cons.println(s); }, Optional::None() => { return 2; } } },\n"
+			"\t\t\t\t\t\t\t\tOptional::None() => { return 3; }\n"
+			"\t\t\t\t\t\t\t}\n"
+			"\t\t\t\t\t\t\tmatch es[0].get(\"version\") {\n"
+			"\t\t\t\t\t\t\t\tOptional::Some(vn) => { match vn.as_string() { Optional::Some(s) => { cons.println(s); }, Optional::None() => { return 4; } } },\n"
+			"\t\t\t\t\t\t\t\tOptional::None() => { return 5; }\n"
+			"\t\t\t\t\t\t\t}\n"
+			"\t\t\t\t\t\t},\n"
+			"\t\t\t\t\t\tOptional::None() => { return 6; }\n"
+			"\t\t\t\t\t}\n"
+			"\t\t\t\t},\n"
+			"\t\t\t\tOptional::None() => { return 7; }\n"
+			"\t\t\t}\n"
+			"\t\t},\n"
+			"\t\tcore.Result::Err(_) => { return 8; }\n"
+			"\t}\n"
 			"\treturn runlib.answer();\n"
 			"}\n")
 		out = tmp_path / "consumer"
@@ -617,7 +641,7 @@ class TestRawIntrinsicRuntime:
 		# ...and is byte-identical to the SHARED PRODUCTION reader's
 		# extraction from the SAME binary (exactly-one-section enforced
 		# inside read_build_info_section).
-		from lang.driftc.build_info import extract_build_info
+		from lang.build_info import extract_build_info
 		assert extract_build_info(out) == runtime_doc
 		doc = json.loads(runtime_doc)
 		assert doc["artifact"] == {
@@ -629,7 +653,7 @@ class TestRawIntrinsicRuntime:
 		out, stdout = self._build_and_run(tmp_path, [])
 		runtime_doc = stdout.rstrip("\n")
 		assert validate_build_info_payload(runtime_doc.encode("utf-8")) == runtime_doc
-		from lang.driftc.build_info import extract_build_info
+		from lang.build_info import extract_build_info
 		assert extract_build_info(out) == runtime_doc
 		doc = json.loads(runtime_doc)
 		assert doc["artifact"] is None and doc["extra"] == {}

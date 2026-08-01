@@ -4,14 +4,18 @@
 // document — toolchain identity, build-instance facts, the manifest
 // artifact identity (`drift build` stamps it automatically, or pass
 // `--artifact-name/-version/-description/-license` to driftc), and
-// the EXACT dependency pins compiled against. Prefer the typed
-// accessors; parse the raw `build_info()` JSON only for fields they
-// do not cover (e.g. `extra` from `--meta key=value`). Machines can
-// read the same document from the binary without executing it:
-// `drift inspect build-info <binary> --json`.
+// the EXACT dependency pins compiled against. `std.meta` provides the
+// scalar accessors (toolchain / abi / artifact fields); the raw
+// `build_info()` document is canonical JSON, so anything beyond the
+// scalars — the `dependencies` array, the `extra` map from `--meta` —
+// is parsed with `std.json`, which is correctly layered above
+// `std.meta`. Machines can read the same document from the binary
+// without executing it: `drift inspect build-info <binary> --json`.
 module main;
 
 import std.meta as meta;
+import std.json as json;
+import std.core as core;
 import std.console as cons;
 import std.format as format;
 
@@ -28,14 +32,50 @@ pub fn main() nothrow -> Int {
 	show("artifact", meta.artifact_name());
 	show("version", meta.artifact_version());
 	show("license", meta.artifact_license());
-	val deps = meta.dep_versions();
-	var i = 0;
-	while i < deps.len {
-		cons.println("dep: " + *deps[i].name() + "@" + *deps[i].version());
-		i = i + 1;
+	// Dependencies live in the raw document — parse it with std.json,
+	// printing the EXACT pin `name@version`. The document is
+	// compiler-assembled and validated, so a missing/mistyped field on
+	// a dependency record is a build-info invariant violation: fail
+	// loudly (exit non-zero) rather than print a partial pin.
+	match json.parse(meta.build_info()) {
+		core.Result::Ok(root) => {
+			match root.get("dependencies") {
+				Optional::Some(deps_node) => {
+					match deps_node.as_array() {
+						Optional::Some(entries) => {
+							var i = 0;
+							while i < entries.len {
+								val name = _dep_field(entries[i], "name");
+								val version = _dep_field(entries[i], "version");
+								if name.byte_length() == 0 { return 2; }
+								if version.byte_length() == 0 { return 3; }
+								cons.println("dep: " + name + "@" + version);
+								i = i + 1;
+							}
+						},
+						Optional::None() => { return 4; }
+					}
+				},
+				Optional::None() => { return 5; }
+			}
+		},
+		core.Result::Err(_) => { return 1; }
 	}
-	// The raw document is canonical JSON — hand it to std.json for
-	// anything beyond the accessors.
 	cons.println(meta.build_info());
 	return 0;
+}
+
+// Reads one string field of a compiler-owned dependency record.
+// Returns "" (→ caller fails loudly) if the field is absent or not a
+// string — states the validated document can never actually produce.
+fn _dep_field(entry: &json.JsonNode, key: String) nothrow -> String {
+	match entry.get(key) {
+		Optional::Some(node) => {
+			match node.as_string() {
+				Optional::Some(s) => { return move s; },
+				Optional::None() => { return ""; }
+			}
+		},
+		Optional::None() => { return ""; }
+	}
 }

@@ -524,7 +524,7 @@ def test_driftc_version_output() -> None:
 	from lang.driftc.driftc import main as driftc_main
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
 	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE
-	from lang.driftc.build_info import parse_toolchain_info
+	from lang.build_info import parse_toolchain_info
 	import io
 	import contextlib
 	buf = io.StringIO()
@@ -549,7 +549,7 @@ def _decode_build_info_payload(ir: str) -> dict:
 	"""Extract the @__drift_build_info section constant from IR text and
 	validate it through the gate-facing reader (schema + canonical)."""
 	import json as _json
-	from lang.driftc.build_info import validate_build_info_payload
+	from lang.build_info import validate_build_info_payload
 	for line in ir.split("\n"):
 		if "@__drift_build_info" not in line:
 			continue
@@ -640,12 +640,12 @@ def _link_flags_for_lib(name: str) -> list[str]:
 
 def test_build_info_survives_link(tmp_path: Path) -> None:
 	"""The `.drift_build_info` SECTION — checked by name via the SHARED
-	production reader (lang.driftc.build_info.extract_build_info, the
+	production reader (lang.build_info.extract_build_info, the
 	same code path `drift inspect build-info` uses), which enforces
 	exactly one named section and runs the full validator."""
 	import json as _json
 	from lang.driftc.driftc_versions import DRIFTC_VERSION
-	from lang.driftc.build_info import validate_build_info_payload
+	from lang.build_info import validate_build_info_payload
 	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
 	clang = shutil.which("clang")
 	assert clang, "clang not available"
@@ -671,7 +671,7 @@ def test_build_info_survives_link(tmp_path: Path) -> None:
 	]
 	result = subprocess.run(link_cmd, capture_output=True, text=True, cwd=ROOT)
 	assert result.returncode == 0, f"link failed: {result.stderr[:500]}"
-	from lang.driftc.build_info import extract_build_info
+	from lang.build_info import extract_build_info
 	doc = _json.loads(extract_build_info(bin_path))
 	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
 

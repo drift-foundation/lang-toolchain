@@ -6,6 +6,7 @@ import std.text as text;
 import std.meta as meta;
 import std.console as cons;
 import std.format as format;
+import std.json as json;
 
 export {
 	CliError,
@@ -679,16 +680,7 @@ implement ArgParser {
 					Optional::Some(l) => { out = out + "license: " + l + "\n"; },
 					Optional::None() => { }
 				}
-				val deps = meta.dep_versions();
-				if deps.len > 0 {
-					out = out + "deps:";
-					var i = 0;
-					while i < deps.len {
-						out = out + " " + *deps[i].name() + "@" + *deps[i].version();
-						i = i + 1;
-					}
-					out = out + "\n";
-				}
+				out = out + self._deps_line();
 				return move out;
 			},
 			Optional::None() => {
@@ -699,4 +691,72 @@ implement ArgParser {
 			}
 		}
 	}
+
+	/// Renders the `deps:` line for the stamped `--version` block by
+	/// parsing the `dependencies` array out of `meta.build_info()`.
+	/// Dependency parsing lives HERE, not in std.meta: the built-in
+	/// document is JSON, and std.cli is correctly layered above
+	/// std.json — keeping std.meta free of a std.json dependency. An
+	/// empty or dependency-free document yields the empty string (no
+	/// line). The document is compiler-assembled and validated, so a
+	/// parse failure is a build-info invariant violation and aborts.
+	fn _deps_line(self: &ArgParser) nothrow -> String {
+		var out = "";
+		match json.parse(meta.build_info()) {
+			core.Result::Ok(root) => {
+				match root.get("dependencies") {
+					Optional::Some(deps_node) => {
+						match deps_node.as_array() {
+							Optional::Some(entries) => {
+								val n = entries.len;
+								if n > 0 {
+									out = "deps:";
+									var i = 0;
+									while i < n {
+										out = out + " " + _dep_entry_text(entries[i]);
+										i = i + 1;
+									}
+									out = out + "\n";
+								}
+							},
+							Optional::None() => {
+								assert(false, "build_info invariant violated: dependencies is not an array");
+							}
+						}
+					},
+					Optional::None() => {
+						assert(false, "build_info invariant violated: dependencies key missing");
+					}
+				}
+			},
+			core.Result::Err(_) => {
+				assert(false, "build_info invariant violated: baked document failed to parse");
+			}
+		}
+		return move out;
+	}
+}
+
+fn _dep_entry_text(entry: &json.JsonNode) nothrow -> String {
+	var name = "";
+	var version = "";
+	match entry.get("name") {
+		Optional::Some(nn) => {
+			match nn.as_string() {
+				Optional::Some(sv) => { name = move sv; },
+				Optional::None() => { assert(false, "build_info invariant violated: dependency name is not a string"); }
+			}
+		},
+		Optional::None() => { assert(false, "build_info invariant violated: dependency record lacks name"); }
+	}
+	match entry.get("version") {
+		Optional::Some(vn) => {
+			match vn.as_string() {
+				Optional::Some(sv) => { version = move sv; },
+				Optional::None() => { assert(false, "build_info invariant violated: dependency version is not a string"); }
+			}
+		},
+		Optional::None() => { assert(false, "build_info invariant violated: dependency record lacks version"); }
+	}
+	return name + "@" + version;
 }

@@ -1,9 +1,8 @@
 module std.meta;
 
 import std.core as core;
-import std.json as json;
 
-export { Caller, caller, build_info, toolchain_version, runtime_abi, artifact_name, artifact_version, artifact_description, artifact_license, DependencyVersion, dep_versions };
+export { Caller, caller, build_info, toolchain_version, runtime_abi, artifact_name, artifact_version, artifact_description, artifact_license };
 
 /// Source-location record captured by the `caller()` intrinsic.
 ///
@@ -71,8 +70,11 @@ implement Caller {
 /// Prefer the typed accessors below; parse this JSON directly only
 /// for fields they do not cover (e.g. `extra`).
 ///
-/// **See also:** `toolchain_version`, `runtime_abi`, `artifact_name`,
-/// `dep_versions`. **Example:** `examples/build_info.drift`.
+/// Higher-level consumers parse the `dependencies` (and `extra`)
+/// sections from this document directly (see `std.cli`'s built-in
+/// `--version` renderer, which reads the dependency list for its
+/// `deps:` line). **See also:** `toolchain_version`, `runtime_abi`,
+/// `artifact_name`. **Example:** `examples/build_info.drift`.
 @intrinsic pub fn build_info() nothrow -> String;
 
 // Private scalar intrinsics. Each value is derived by the compiler
@@ -130,122 +132,4 @@ pub fn artifact_description() nothrow -> Optional<String> {
 /// compile.
 pub fn artifact_license() nothrow -> Optional<String> {
 	return _optional_field(_bi_artifact_license());
-}
-
-/// One resolved dependency record from the build-information
-/// document: the exact package pin the artifact was compiled against.
-pub struct DependencyVersion {
-	name_v: String,
-	version_v: String
-}
-
-implement DependencyVersion {
-	/// Returns the package id (e.g. `"net.tls"`).
-	pub fn name(self: &DependencyVersion) nothrow -> &String {
-		return &self.name_v;
-	}
-
-	/// Returns the exact resolved version (e.g. `"0.3.15"`).
-	pub fn version(self: &DependencyVersion) nothrow -> &String {
-		return &self.version_v;
-	}
-}
-
-/// Returns the dependency records from the build-information
-/// document, in the document's canonical order (sorted by package
-/// name).
-///
-/// Parses the baked `build_info()` JSON once per call. The document
-/// is compiler-assembled and validated at build time, so any parse
-/// or shape failure here is a compiler invariant violation and
-/// aborts — this function never silently returns an empty array for
-/// a document that HAS dependencies.
-pub fn dep_versions() nothrow -> Array<DependencyVersion> {
-	val doc_text = build_info();
-	var out = Array<type DependencyVersion>::with_capacity(4);
-	match json.parse(doc_text) {
-		core.Result::Ok(root) => {
-			match root.get("format") {
-				Optional::Some(f) => {
-					match f.as_string() {
-						Optional::Some(fs) => {
-							assert(fs == "drift-build-info/v1", "build_info invariant violated: wrong format discriminator");
-						},
-						Optional::None() => {
-							assert(false, "build_info invariant violated: format is not a string");
-						}
-					}
-				},
-				Optional::None() => {
-					assert(false, "build_info invariant violated: format key missing");
-				}
-			}
-			match root.get("dependencies") {
-				Optional::Some(deps_node) => {
-					match deps_node.as_array() {
-						Optional::Some(entries) => {
-							val n = entries.len;
-							var i = 0;
-							while i < n {
-								out.push(_dep_record(entries[i]));
-								i = i + 1;
-							}
-						},
-						Optional::None() => {
-							assert(false, "build_info invariant violated: dependencies is not an array");
-						}
-					}
-				},
-				Optional::None() => {
-					assert(false, "build_info invariant violated: dependencies key missing");
-				}
-			}
-		},
-		core.Result::Err(_) => {
-			assert(false, "build_info invariant violated: baked document failed to parse");
-		}
-	}
-	return move out;
-}
-
-fn _dep_record(entry: &json.JsonNode) nothrow -> DependencyVersion {
-	var name = "";
-	var version = "";
-	match entry.as_object() {
-		Optional::Some(fields) => {
-			assert(fields.len() == 2, "build_info invariant violated: dependency record must have exactly name and version");
-		},
-		Optional::None() => {
-			assert(false, "build_info invariant violated: dependency record is not an object");
-		}
-	}
-	match entry.get("name") {
-		Optional::Some(nn) => {
-			match nn.as_string() {
-				Optional::Some(sv) => { name = move sv; },
-				Optional::None() => {
-					assert(false, "build_info invariant violated: dependency name is not a string");
-				}
-			}
-		},
-		Optional::None() => {
-			assert(false, "build_info invariant violated: dependency record lacks name");
-		}
-	}
-	match entry.get("version") {
-		Optional::Some(vn) => {
-			match vn.as_string() {
-				Optional::Some(sv) => { version = move sv; },
-				Optional::None() => {
-					assert(false, "build_info invariant violated: dependency version is not a string");
-				}
-			}
-		},
-		Optional::None() => {
-			assert(false, "build_info invariant violated: dependency record lacks version");
-		}
-	}
-	assert(name.byte_length() > 0, "build_info invariant violated: empty dependency name");
-	assert(version.byte_length() > 0, "build_info invariant violated: empty dependency version");
-	return DependencyVersion(name_v = move name, version_v = move version);
 }

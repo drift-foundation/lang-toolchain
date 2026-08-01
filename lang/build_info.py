@@ -87,8 +87,10 @@ def canonical_json(obj) -> str:
 def toolchain_identity_section() -> dict:
 	"""The `toolchain` section — identity facts independent of any
 	compile. Unavailable facts are \"\" (never null/omitted)."""
-	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
-	from lang.versions import DRIFTC_VENDOR, DRIFTC_LICENSE, DRIFTC_GIT_SHA
+	from lang.versions import (
+		DRIFTC_VERSION, DRIFT_RT_ABI_VERSION,
+		DRIFTC_VENDOR, DRIFTC_LICENSE, DRIFTC_GIT_SHA,
+	)
 	return {
 		"driftc": DRIFTC_VERSION,
 		"abi": DRIFT_RT_ABI_VERSION,

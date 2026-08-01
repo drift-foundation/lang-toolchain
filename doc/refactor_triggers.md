@@ -722,7 +722,36 @@ opportunistic uplifts)" for the full rule.
 
 ---
 
-## Unify String/Arc ownership under one central transfer-policy classification
+## ~~Unify String/Arc ownership under one central transfer-policy classification~~ — COMPLETED (0.33.75 → 0.33.88 / ABI 22)
+
+> **Status — COMPLETED. Both scopes of this refactor shipped; this
+> trigger is CLOSED**, retained as historical record per the registry's
+> "record what was done" discipline. Adopted implementation sequence
+> (doc/history.md):
+> - **0.33.75 — Scope A:** structural transfer-policy classification
+>   (`String` = retain-Copy + needs-drop, mode-independent of
+>   `_copy_query`) + the centralized MIR alias contract
+>   (`_mark_ref_alias_if_non_bitcopy` / `_copy_if_ref_alias`). ABI-neutral.
+> - **0.33.79 — B-arch:** ledger-visible String stakes + release
+>   elision.
+> - **0.33.87 — string_arc endgame:** every remaining `string_arc`
+>   responsibility retired; `string_arc.py` and its driver phase
+>   DELETED.
+> - **0.33.88 / ABI 22 — Scope B (B-repr/B5):** runtime representation
+>   reshaped to the explicit `DriftRcBytes` header (from the old
+>   "pointer-1 trick"); this is the final representation.
+>
+> Neither Scope A nor Scope B is future work — both landed. A
+> genuinely new String-representation project, if ever desired, needs
+> its OWN registry entry with new concrete triggers; this completed
+> entry is NOT kept artificially open. Ongoing coverage holes in the
+> shipped ownership architecture escalate via the separate "String
+> ownership-authoring conformance matrix" entry above (still live), not
+> this one.
+
+The original filing text is preserved below for historical rationale;
+all of its "deferred" / "Scope when triggered" framing is superseded by
+the Status above.
 
 - **Improvement:** define one central transfer-policy classification
   (bitcopy / retain-copy / structural-copy / move-only) and make
@@ -841,19 +870,13 @@ opportunistic uplifts)" for the full rule.
   4. **Do NOT reshape the runtime representation (Scope B) as part of
      this work.**
 
-  Scope B (`DriftString` toward an `ArcBox`-style representation) is an
-  explicitly SEPARATE, later project, not bundled into Scope A or into
-  the projected-capture follow-up. ABI preservation is not a constraint
-  for Scope B when/if it's taken up (2026-07-05 direction: "zero effort
-  to preserve it") — if the correct representation requires an ABI bump
-  (likely — the audit enumerates the ABI-visible surface: the
-  `DriftString` by-value calling convention, all `drift_string_*`
-  exports, static-literal layout, `DRIFT_RT_ABI_VERSION`), take it. But
-  Scope B's UX/source blast radius (every by-value String param, every
-  Copy-dependent call site) is still a real scope constraint on THAT
-  project, separate from ABI — keep the three tracks (0.33.69 UAF fix,
-  projected-capture follow-up, Scope A) separate from Scope B even
-  though they share root cause.
+  Scope B (`DriftString` toward an `ArcBox`-style representation) was,
+  at filing time, an explicitly SEPARATE later project. **It has since
+  SHIPPED** as the `DriftRcBytes` representation in 0.33.88 / ABI 22
+  (see Status above); the ABI bump the audit anticipated was taken.
+  The historical framing that follows described why it was kept
+  separate from Scope A and the two in-flight fixes at filing time —
+  it is retained as record, not as live guidance.
 
 ## FFI-handle lifecycle lint (`RawPtr` field without `Destructible`)
 

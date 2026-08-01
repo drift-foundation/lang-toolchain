@@ -133,7 +133,7 @@ def _parse_sanitize(value: str):
 def _version_string() -> str:
 	"""The concise HUMAN `--version` line (0.33.93 clean break: no
 	pipe grammar anywhere). Machine consumers use `--version --json`
-	(drift-toolchain-info/v1, via lang.driftc.build_info)."""
+	(drift-toolchain-info/v1, via lang.build_info)."""
 	from lang.driftc.driftc_versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
 	return f"driftc {DRIFTC_VERSION} (ABI {DRIFT_RT_ABI_VERSION})"
 
@@ -9286,7 +9286,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	raw_argv = argv if argv is not None else sys.argv[1:]
 	if "--version" in raw_argv or "-V" in raw_argv:
 		if "--json" in raw_argv:
-			from lang.driftc.build_info import toolchain_info_json
+			from lang.build_info import toolchain_info_json
 			print(toolchain_info_json(git_sha=_toolchain_git_sha()))
 		else:
 			print(_version_string())
@@ -9507,7 +9507,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	# Validate stamp inputs FIRST (pure helpers; unit-tested in
 	# lang/tests/codegen/test_build_info_stamp.py): fail before any
 	# compilation work with the standard diagnostic shape.
-	from lang.driftc.build_info import (
+	from lang.build_info import (
 		BuildInfoError,
 		parse_artifact_flags,
 		parse_meta_flags,

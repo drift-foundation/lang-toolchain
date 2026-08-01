@@ -18,7 +18,6 @@ pub fn main() nothrow -> Int {
 		Optional::Some(_) => { return 4; },
 		Optional::None() => { }
 	}
-	if meta.dep_versions().len != 0 { return 5; }
 	// The raw document is canonical drift-build-info/v1 JSON and the
 	// baked scalars agree with it.
 	val doc = meta.build_info();

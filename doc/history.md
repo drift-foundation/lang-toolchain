@@ -31,9 +31,11 @@ package-format change.
 
 **Reading it.** In-language: `std.meta.build_info()` plus typed
 accessors — `toolchain_version()`, `runtime_abi()`,
-`artifact_name/version/description/license()` (Optional<String>), and
-`dep_versions() -> Array<DependencyVersion>` (strict, canonical order,
-invariant-asserting). Externally: `drift inspect build-info <binary>
+`artifact_name/version/description/license()` (Optional<String>). The
+`dependencies` array and `extra` map are parsed from the raw
+`build_info()` JSON by higher-level consumers (`std.cli`'s `--version`
+renderer for its `deps:` line) — `std.meta` itself carries NO
+`std.json` dependency. Externally: `drift inspect build-info <binary>
 [--json]` — the SUPPORTED gate read path: a self-contained ELF64
 section walk (never readelf/objdump, never executing the target),
 exactly ONE named SHT_PROGBITS section enforced, the 1 MiB cap checked
@@ -76,12 +78,17 @@ runtime boundary and layouts untouched):**
    `parse_with_config(text, permissive())` restores duplicate
    keep-last ONLY — it does not restore invalid-JSON forms.
 
-**Corpus (next reviewed promotion):** universe −2
+**Corpus (reviewed promotion):** universe −2
 (`std_meta_compiler_info`, `std_meta_compiler_info_pairs`) +2
 (`std_meta_build_info_unstamped`, `std_cli_parse_with_builtins`); 8
-json fixture content deltas (the strict-parse migration); stdlib-wide
-per-fixture modal expected (std.meta rewrite + std.json dependency +
-std.cli additions).
+json fixture content deltas (the strict-parse migration) plus a
+stdlib-wide prehash shift from the `std.meta` rewrite (`compiler_info`
+family removed, scalar accessors added — `std.meta` carries NO
+`std.json` dependency; dependency parsing lives in `std.cli` above
+`std.json`) and the `std.cli` additions. A stdlib-wide per-fixture
+ownership modal is expected because every fixture recompiles the
+changed stdlib; the exact modal + outliers are whatever the promotion
+measures, re-proven residual-zero by the promote tool.
 
 **Versioning:** `DRIFTC_VERSION` **0.33.93**; **no ABI change —
 `DRIFT_RT_ABI_VERSION` stays 22**.

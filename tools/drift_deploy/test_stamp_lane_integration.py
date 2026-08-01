@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from lang.codegen.llvm.test_utils import sanitizer_timeout
-from lang.driftc.build_info import extract_build_info
+from lang.build_info import extract_build_info
 from lang.driftc.packages.manifest import Artifact
 from tools.drift_deploy.build_cmd import build_app_cmd
 

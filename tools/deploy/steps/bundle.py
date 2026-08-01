@@ -108,10 +108,14 @@ def bundle_compiler(repo_root: Path, dist: Path) -> None:
 				shutil.copy2(str(src), str(dst))
 
 	# Ensure lang/__init__.py exists and shared top-level modules are bundled.
+	# These are neutral lang-level modules (above lang.drift and lang.driftc)
+	# not contained in any COMPILER_PACKAGES directory, so they must be
+	# copied individually or the deployed toolchain can't import them.
 	(compiler_lib / "lang" / "__init__.py").touch()
-	versions_src = repo_root / "lang" / "versions.py"
-	if versions_src.exists():
-		shutil.copy2(str(versions_src), str(compiler_lib / "lang" / "versions.py"))
+	for top_mod in ("versions.py", "build_info.py"):
+		src = repo_root / "lang" / top_mod
+		if src.exists():
+			shutil.copy2(str(src), str(compiler_lib / "lang" / top_mod))
 
 	# Stamp the source commit into the bundled versions.py so that deployed
 	# toolchains report the exact commit they were built from.

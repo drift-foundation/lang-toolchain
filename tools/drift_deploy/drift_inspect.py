@@ -36,7 +36,7 @@ import json
 import sys
 from pathlib import Path
 
-from lang.driftc.build_info import BuildInfoError, extract_build_info
+from lang.build_info import BuildInfoError, extract_build_info
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

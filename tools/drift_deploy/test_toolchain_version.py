@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from lang.driftc.build_info import (
+from lang.build_info import (
 	BuildInfoError,
 	TOOLCHAIN_INFO_FORMAT,
 	canonical_json,

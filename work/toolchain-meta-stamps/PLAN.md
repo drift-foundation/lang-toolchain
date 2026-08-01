@@ -25,7 +25,8 @@ Revision history:
   magic/version/length/NUL framing — no backward compat): the section
   IS the canonical JSON; reader hardening kept in full (schema +
   canonicality + cap-before-decode + exactly-one-section). Shared
-  module moved to backend-neutral lang/driftc/build_info.py.
+  module lives at backend-neutral lang/build_info.py (above
+  both lang.drift and lang.driftc).
   BuildInfoError surfaces oversized inputs as normal CLI diagnostics.
   G1 CLI-integration pin (validated --dep pins visible in the emitted
   stamp of a real package consume): LANDED in Stage A (review round 3
@@ -159,12 +160,15 @@ ADDED:
     * `artifact_version() -> Optional<String>`
     * `artifact_description() -> Optional<String>`
     * `artifact_license() -> Optional<String>`
-    * `dep_versions() -> Array<DependencyVersion>`
-- `pub struct DependencyVersion(name: String, version: String)` (exact
-  shape per stdlib conventions at implementation).
-Accessors are compile-time-cheap (sibling baked constants or parsed
-once from the baked JSON via std.json — decide at W2; the public
-contract is the signatures, not the mechanism).
+  The `dependencies` array and the `extra` map are NOT scalar
+  accessors: std.meta stays free of a std.json dependency (that
+  inversion was rejected). Consumers parse them from the raw
+  `build_info()` JSON with std.json, which is correctly layered ABOVE
+  std.meta — std.cli's `--version` renderer does this for its `deps:`
+  line. (No `dep_versions()` / `DependencyVersion` in std.meta.)
+Scalar accessors are compile-time-cheap baked-constant intrinsics
+(the `""` sentinel for absent artifact fields is private; public
+accessors return `Optional<String>`).
 
 MIGRATION (same change, enumerated at W2 start by grep, known so far):
 the std.meta module itself, e2e fixtures `std_meta_compiler_info` /
@@ -199,7 +203,8 @@ contract (gate-facing; pinned):
   stdout, stderr diagnostic;
 - `--json` success: stdout is the section's exact canonical bytes plus
   one CLI newline.
-Shared contract module: lang/driftc/build_info.py (backend-neutral —
+Shared contract module: lang/build_info.py (above lang.drift and
+lang.driftc; backend-neutral —
 LLVM only places the opaque JSON bytes into the section; the intrinsic
 and the extractor consume the same document contract).
 
@@ -343,7 +348,9 @@ No package-format or provisional-dmir change, no payload bump.
   newlines), deps == --dep set, partial `--artifact-*` rejection,
   unstamped shape (`artifact: null`), duplicate/malformed --meta keys,
   empty-string extra values.
-- W2 stdlib: `build_info` + typed accessors + `DependencyVersion`;
+- W2 stdlib: `build_info` + scalar accessors (NO `dep_versions`/
+  `DependencyVersion` — std.meta carries no std.json dependency;
+  deps parsed from the raw doc above std.meta, e.g. in std.cli);
   REMOVE compiler_info family; migrate ALL in-tree callers/fixtures
   (enumerate by grep first). COVERAGE BAR: build_info is a NEW
   LOWERING-VISIBLE INTRINSIC — full compile/link/RUN e2e fixtures
@@ -393,16 +400,31 @@ clone-sufficient record-chain flow):
 - content deltas: the 8 strict-parse json fixture migrations
   (std_json_parse_basic_duplicate_keys, 3× duplicate family,
   encode_determinism_duplicate_reencode, canonical, rfc_strings_limits,
-  parse_policy);
-- counters: stdlib-wide per-fixture modal expected (std.meta rewrite,
-  std.meta→std.json dependency, std.cli additions) — same class as the
-  0.33.91 promotion's json._encode_node modal; attribution re-proven
-  residual-zero by the promote tool.
+  parse_policy), PLUS a stdlib-wide prehash shift from the std.meta
+  rewrite (compiler_info family deleted; scalar accessors added; NO
+  std.json edge) and the std.cli additions;
+- counters: a stdlib-wide per-fixture ownership modal is expected
+  (every fixture recompiles the changed stdlib); the EXACT modal +
+  outliers are whatever the fresh promotion measures — the promote
+  tool re-proves residual-zero from that run's evidence, so no figure
+  is asserted here ahead of measurement. NOTE: the std.meta→std.json
+  inversion was rejected, so it is NOT a factor in the modal.
+- NOTE (superseded facts): an earlier promotion of THIS slice
+  (0.33.93-build-info-stamps) was drafted/applied BEFORE the
+  std.meta/std.cli redesign; the redesign changed stdlib sources +
+  std_meta_build_info_unstamped, so a FRESH promotion is required and
+  supersedes it.
 
-RELEASE GATES (maintainer runs):
-1. Full run-all-tests.sh on the final tree (corpus zero-delta after
-   the promotion above; memcheck + ASan lanes).
-2. Corpus reviewed promotion (draft → approve-by-rename → apply).
+RELEASE GATES (maintainer runs) — promotion PRECEDES the passing full
+run (run-all-tests's first step is corpus zero-delta, which FAILS
+until the baseline is re-promoted for the changed stdlib):
+1. A corpus candidate run (standalone `just ownership-corpus-check` or
+   the aborted-early first step of run-all-tests) → produces the
+   retained candidate the promotion draws from.
+2. Corpus reviewed promotion (draft via the record-chain flow →
+   approve-by-rename → --apply), advancing the reviewed baseline.
+3. Full run-all-tests.sh on the promoted tree (corpus zero-delta now
+   passes; memcheck + ASan lanes).
 3. Certification (both lanes + downstream repos). The 0.33.93 compat
    breaks land on downstreams at their rebuild: compiler_info callers,
    --version parsers, and json.parse permissive-dependent inputs are

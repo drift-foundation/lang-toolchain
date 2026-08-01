@@ -551,7 +551,7 @@ def _get_compiler_info(driftc: Path) -> CompilerInfo:
 	# `--version --json` (drift-toolchain-info/v1), validated
 	# fail-closed. No pipe parsing, no "unknown" fallback — provenance
 	# must record the real toolchain identity or the deploy must stop.
-	from lang.driftc.build_info import BuildInfoError, parse_toolchain_info
+	from lang.build_info import BuildInfoError, parse_toolchain_info
 	try:
 		result = subprocess.run(
 			[str(driftc), "--version", "--json"],

@@ -1429,10 +1429,10 @@ class LlvmModuleBuilder:
 			return
 		self._build_info_emitted = True
 		# Function-local import: the schema/section contract lives in
-		# backend-neutral lang.driftc.build_info (the supported reader
+		# backend-neutral lang.build_info (the supported reader
 		# must not depend on the LLVM backend); deferring the import
 		# keeps the module graph acyclic.
-		from lang.driftc.build_info import (
+		from lang.build_info import (
 			BUILD_INFO_SECTION,
 			BUILD_INFO_SYMBOL,
 			assemble_build_info,

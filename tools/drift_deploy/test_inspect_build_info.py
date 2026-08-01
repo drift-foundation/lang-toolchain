@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from lang.codegen.llvm.test_utils import sanitizer_timeout
-from lang.driftc.build_info import (
+from lang.build_info import (
 	BUILD_INFO_MAX_PAYLOAD,
 	BuildInfoError,
 	assemble_build_info,

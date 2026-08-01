@@ -571,3 +571,62 @@
       (std_meta_compiler_info 1035 + _pairs 1003 c1_agree), full
       dry-run rc 0, attribution OK "2 new / 2 removed fixtures,
       residual ZERO". Awaiting re-approval by rename + --apply.
+- [x] 2026-07-31 RUN-ALL-TESTS FAILURES FIXED (2 regressions the focused
+      suites missed; maintainer redirect on the design):
+      * std.meta → std.json INVERSION DELETED (not band-aided). The
+        E-AUTO-63a5e1a2 "method 'len' not visible" at meta.drift:216
+        was dep_versions/_dep_record's HashMap.len() needing
+        std.containers under --no-prelude. Per maintainer: DELETE
+        DependencyVersion + dep_versions() from std.meta entirely;
+        std.meta keeps build_info() -> String + scalar accessors only,
+        with NO std.json/std.containers import. Dependency parsing
+        moved to std.cli._deps_line (std.cli is correctly layered above
+        std.json) for the --version deps: line. examples/build_info +
+        the 3 stamp tests + e2e fixture + effective-drift + history all
+        migrated to raw-doc parsing. No array-returning intrinsics; one
+        encoding (the embedded JSON).
+      * PYTHON IMPORT BOUNDARY: lang/drift/cli.py importing
+        lang.driftc.build_info violated the lang.drift ✗→ lang.driftc
+        rule. build_info.py MOVED lang/driftc/ → lang/ (lang.build_info,
+        above both layers; already backend-neutral) + its internal
+        version import repointed to lang.versions; all 11 Python
+        importers updated.
+      * Verify: originally-failing 5 driver tests + import-boundary 19
+        passed; stamp 40; std.log/meta/cli e2e green; driver+deploy+
+        checker sweep 434 passed. drift --version --json boundary-clean.
+      * CORPUS CONSEQUENCE: this fix changes stdlib sources (meta.drift,
+        cli.drift) and one fixture (std_meta_build_info_unstamped), so
+        the reviewed-baseline promoted earlier THIS run is now STALE —
+        a FRESH corpus promotion is required before run-all-tests can
+        pass its zero-delta gate. (std_meta_compiler_info_pairs stays
+        deleted; std_meta_build_info_unstamped source changed; universe
+        otherwise per the prior promotion.)
+- [x] 2026-07-31 STATIC-FINDING CLOSEOUT (post-redesign doc/example
+      staleness): (1) examples/build_info.drift now prints the EXACT
+      pin name@version (was names-only) via a _dep_field helper that
+      fails loudly (exit non-zero) on a missing/mistyped compiler-owned
+      record — verified: real consume prints "dep: exdep@1.2.3", plain
+      build still rc 0. (2) PLAN.md updated: lang/build_info.py (not
+      lang/driftc/), dep parsing raised above std.meta (no
+      dep_versions/DependencyVersion, no std.meta→std.json), corpus
+      enumeration de-invented (fresh-promotion-measured, std.json edge
+      noted as REJECTED + superseded-earlier-promotion note), and the
+      RELEASE GATES reordered so promotion PRECEDES the passing full run
+      (run-all-tests' first step is corpus zero-delta, which fails until
+      re-promotion). (3) history.md corpus-modal wording revised off the
+      deleted std.meta→std.json dependency.
+- [x] 2026-07-31 DEPLOY-BUNDLE GAP FIXED (3 run-all-tests deploy
+      failures: ModuleNotFoundError 'lang.build_info' in the deployed
+      wrapper). Root cause: the module move lang/driftc/build_info.py →
+      lang/build_info.py put it at lang top-level, which the deploy
+      bundle copies INDIVIDUALLY (only versions.py was special-cased) —
+      COMPILER_PACKAGES enumerates directories, not top-level files.
+      Fix: tools/deploy/steps/bundle.py now copies both versions.py AND
+      build_info.py as neutral lang-level modules. Verified: the 3
+      failing deploy tests + pex-bundling suite 9 passed. (tools.
+      drift_deploy importing lang.build_info is boundary-clean — the
+      import rules restrict only lang.drift/lang.driftc source dirs.)
+      NOTE: the in-flight run-all-tests that hit these was already
+      doomed (recorded failures, won't re-run them) — must be
+      RE-LAUNCHED clean after this fix (+ the std-meta-cli-redesign
+      promotion applied).

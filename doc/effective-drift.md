@@ -2550,9 +2550,11 @@ In-language, prefer the typed accessors over parsing:
 `meta.toolchain_version()`, `meta.runtime_abi()`,
 `meta.artifact_name()` / `artifact_version()` / `artifact_description()`
 / `artifact_license()` (each `Optional<String>` — `None` on an
-unstamped compile), and `meta.dep_versions()`. Parse
-`meta.build_info()` directly only for what they do not cover (`extra`,
-the `--meta key=value` channel).
+unstamped compile). The `dependencies` array and the `extra` map
+(`--meta key=value`) are not scalar accessors — parse them from the
+raw `meta.build_info()` JSON with `std.json` (correctly layered above
+`std.meta`; `std.cli`'s built-in `--version` renderer does exactly
+this for its `deps:` line).
 
 For `--version`, the opt-in `std.cli` builtins render a sensible
 default from the stamps:

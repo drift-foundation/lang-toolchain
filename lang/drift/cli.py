@@ -644,7 +644,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _version_string() -> str:
 	"""The concise HUMAN `--version` line (0.33.93 clean break: no
 	pipe grammar anywhere). Machine consumers use `--version --json`
-	(drift-toolchain-info/v1, via lang.driftc.build_info)."""
+	(drift-toolchain-info/v1, via lang.build_info)."""
 	from lang.versions import DRIFTC_VERSION, DRIFT_RT_ABI_VERSION
 	return f"drift {DRIFTC_VERSION} (ABI {DRIFT_RT_ABI_VERSION})"
 
@@ -674,7 +674,7 @@ def main(argv: list[str] | None = None) -> int:
 	# Handle --version / -V before argparse so it works without subcommands.
 	if "--version" in effective_argv or "-V" in effective_argv:
 		if "--json" in effective_argv:
-			from lang.driftc.build_info import toolchain_info_json
+			from lang.build_info import toolchain_info_json
 			print(toolchain_info_json(git_sha=_dev_git_sha()))
 		else:
 			print(_version_string())
