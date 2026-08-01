@@ -1,0 +1,1 @@
+{"description": "reject: &mut index projection of an owned rvalue temp (bump(mk()[0]) at &mut Node) — bind-first", "exit_code": 1, "diagnostics": [{"message_contains": "borrow requires an addressable place", "phase": "typecheck"}]}

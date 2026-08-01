@@ -1,0 +1,19 @@
+module m;
+
+struct Node { text: String, children: Array<Node>, }
+struct PR { root: Node, }
+
+fn mk() nothrow -> PR {
+	var kids: Array<Node> = [];
+	var inner: Array<Node> = [];
+	kids.push(Node(text = "kid" + "", children = move inner));
+	return PR(root = Node(text = "root" + "", children = move kids));
+}
+
+fn peek(n: &Node) nothrow -> Int { return n.children.len(); }
+
+pub fn main() nothrow -> Int {
+	val pr = mk();
+	val c = peek(pr.root);
+	return c - 1;
+}

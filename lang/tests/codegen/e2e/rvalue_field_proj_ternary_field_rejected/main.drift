@@ -1,0 +1,23 @@
+module m;
+
+struct Node { text: String, children: Array<Node>, }
+struct PR { root: Node, }
+
+fn mk_a() nothrow -> PR {
+	var kids: Array<Node> = [];
+	return PR(root = Node(text = "a" + "", children = move kids));
+}
+fn mk_b() nothrow -> PR {
+	var kids: Array<Node> = [];
+	return PR(root = Node(text = "b" + "", children = move kids));
+}
+fn peek(n: &Node) nothrow -> Int { return n.children.len(); }
+
+pub fn main() nothrow -> Int {
+	// A shared borrow of a FIELD projected from a value-control-flow
+	// rvalue (ternary) cannot be lowered soundly (the ternary already
+	// drop-registers its own result); rejected bind-first upstream.
+	val cond = true;
+	val c = peek((cond ? mk_a() : mk_b()).root);
+	return c;
+}

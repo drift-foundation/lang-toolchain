@@ -1,0 +1,15 @@
+module m;
+
+struct Node { text: String, }
+struct PR { root: Node, }
+
+fn mk_lit() nothrow -> PR { return PR(root = Node(text = "static")); }
+fn peek(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	// MASK CONTROL: a static String's release is a no-op, so this
+	// stays sound EVEN IF the drop logic were wrong — proves nothing
+	// about ownership, only that the shape compiles+runs.
+	val c = peek(mk_lit().root);
+	return c - 6;
+}

@@ -410,7 +410,19 @@ class BorrowMaterializeRewriter:
 				isinstance(s, H.HLet) and str(getattr(s, "name", "")).startswith("__tmp_borrow")
 				for s in lift_pfx
 			):
-				new_borrow = replace(new_borrow, materialized_rvalue=True)
+				# Record whether the lifted rvalue base was value-control-flow
+				# (ternary / match-expr): the W0 policy rejects a source-written
+				# shared borrow of such a projection bind-first, since the bare
+				# spelling of these bases is itself rejected (the redundancy
+				# "pass directly" fix-it would be invalid).
+				deepest = subj
+				while isinstance(deepest, (H.HField, H.HIndex)):
+					deepest = deepest.subject
+				if isinstance(deepest, H.HUnary) and deepest.op is H.UnaryOp.DEREF:
+					deepest = deepest.expr
+				is_cfv = isinstance(deepest, (H.HTernary, getattr(H, "HMatchExpr", ())))
+				new_borrow = replace(new_borrow, materialized_rvalue=True,
+				                     materialized_rvalue_cfv=is_cfv)
 			return pfx + lift_pfx, new_borrow
 		if isinstance(expr, getattr(H, "HMove", ())):
 			pfx, subj = self._rewrite_expr(expr.subject)

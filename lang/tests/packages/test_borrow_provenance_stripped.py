@@ -29,7 +29,8 @@ def _dataclasses_by_name() -> dict[str, type]:
 
 def _mk_borrow() -> H.HBorrow:
 	place = H.HPlaceExpr(base=H.HVar(name="x"), projections=[], loc=Span())
-	return H.HBorrow(subject=place, is_mut=True, source_written=True, policy_class="redundant", materialized_rvalue=True)
+	return H.HBorrow(subject=place, is_mut=True, source_written=True, policy_class="redundant",
+	                 materialized_rvalue=True, materialized_rvalue_cfv=True)
 
 
 def test_encode_strips_provenance_fields() -> None:
@@ -38,6 +39,7 @@ def test_encode_strips_provenance_fields() -> None:
 	assert "source_written" not in enc
 	assert "policy_class" not in enc
 	assert "materialized_rvalue" not in enc
+	assert "materialized_rvalue_cfv" not in enc
 	assert enc["is_mut"] is True
 
 
@@ -48,6 +50,7 @@ def test_decode_defaults_keep_pre_rule_packages_valid() -> None:
 	assert back.source_written is False
 	assert back.policy_class is None
 	assert back.materialized_rvalue is False
+	assert back.materialized_rvalue_cfv is False
 	assert back.is_mut is True
 
 

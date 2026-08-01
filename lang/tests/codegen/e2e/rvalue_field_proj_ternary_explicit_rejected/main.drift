@@ -1,0 +1,17 @@
+module m;
+
+// The SOURCE-written `&` of a ternary projection must give the bind-first
+// diagnostic, NOT E_REDUNDANT_ARG_BORROW: deleting the `&` yields the bare
+// form, which is itself rejected, so a "pass directly" fix-it would be
+// contradictory.
+struct Node { text: String, }
+struct PR { root: Node, }
+
+fn mk_a() nothrow -> PR { return PR(root = Node(text = "a" + "")); }
+fn mk_b() nothrow -> PR { return PR(root = Node(text = "b" + "")); }
+fn peek(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	val cond = true;
+	return peek(&(cond ? mk_a() : mk_b()).root);
+}

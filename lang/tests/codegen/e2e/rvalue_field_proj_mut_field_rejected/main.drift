@@ -1,0 +1,6 @@
+module m;
+struct Node { text: String, }
+struct PR { root: Node, }
+fn mk() nothrow -> PR { return PR(root = Node(text = "x" + "")); }
+fn bump(n: &mut Node) nothrow -> Void { n.text = "y"; }
+pub fn main() nothrow -> Int { bump(mk().root); return 0; }

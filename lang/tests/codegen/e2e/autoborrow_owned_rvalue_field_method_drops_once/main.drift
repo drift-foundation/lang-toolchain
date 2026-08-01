@@ -1,0 +1,28 @@
+module m;
+
+// Successor to autoborrow_owned_rvalue_field_method_unchanged. That
+// fixture pinned an IMPLEMENTATION contract ("owned-rvalue field base
+// must NOT lift") that the field-projection UAF fix
+// (work/bare-temp-field-projection-uaf) intentionally invalidates: the
+// lift now DOES fire for owned-rvalue field method receivers. This is
+// a SEMANTIC pin instead — Handle carries a real owned String (not the
+// old raw:Int), so a mishandled owned-rvalue field receiver would
+// double-free at teardown (caught base/ASan). It asserts the method
+// returns the right value AND the payload drops exactly once.
+
+struct Handle { label: String }
+implement Handle {
+	fn peek(self: &Handle) nothrow -> Int { return self.label.byte_length(); }
+}
+struct Inner { handle: Handle }
+
+fn make_inner() nothrow -> Inner {
+	return Inner(handle = Handle(label = "handle" + ""));
+}
+
+pub fn main() nothrow -> Int {
+	// Owned-rvalue field method receiver: make_inner() is dropped once
+	// at scope end; the borrowed Handle must not be released twice.
+	val v = make_inner().handle.peek();
+	return v - 6;
+}

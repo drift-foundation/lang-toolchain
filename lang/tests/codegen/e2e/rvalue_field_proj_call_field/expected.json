@@ -1,0 +1,1 @@
+{"description": "e2e regression: peek(mk().root) — shared borrow of a FIELD projected from an owned rvalue temp with heap String+Array payload; must drop the leaf exactly once (was double-free/UAF, exit 134, 0.33.91-0.33.93)", "exit_code": 0, "stdout": "", "stderr": ""}

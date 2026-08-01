@@ -1,0 +1,1 @@
+{"description": "e2e regression: peek(Wrap(inner=mk_inner()).inner) — CONSTRUCTOR-produced owned rvalue base (base generality); shared field borrow drops once", "exit_code": 0, "stdout": "", "stderr": ""}

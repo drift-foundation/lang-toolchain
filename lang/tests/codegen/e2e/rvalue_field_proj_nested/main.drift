@@ -1,0 +1,13 @@
+module m;
+
+struct Leaf { s: String, }
+struct Mid { leaf: Leaf, }
+struct Top { mid: Mid, }
+
+fn mk() nothrow -> Top { return Top(mid = Mid(leaf = Leaf(s = "x" + ""))); }
+fn peek(l: &Leaf) nothrow -> Int { return l.s.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	val c = peek(mk().mid.leaf);
+	return c - 1;
+}

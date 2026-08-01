@@ -1,0 +1,1 @@
+{"description": "accept+run: a shared borrow of a bitcopy Int ternary (read(cond ? 1 : 2) at &Int) has no drop work to double, so it is NOT rejected — compiles and runs rc 0. Boundary control against over-rejecting non-droppable roots.", "exit_code": 0}

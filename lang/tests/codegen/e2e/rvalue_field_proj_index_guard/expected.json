@@ -1,0 +1,1 @@
+{"description": "e2e control: peek(mk()[0]) — pure-index projection, already sound; regression guard that the index path stays drop-once", "exit_code": 0, "stdout": "", "stderr": ""}

@@ -1,4 +1,0 @@
-{
-  "description": "Guard: the LANGUAGE_BUG fix in _lift_rvalue_ref_base_for_borrow MUST NOT fire for owned-rvalue field method calls (base type is STRUCT, not REF).  These continue to take the existing whole-expression materialization path.  `make_inner().handle.peek()` returns 7 (the field's raw value), proving the owned-rvalue lowering path is unchanged.",
-  "exit_code": 0
-}

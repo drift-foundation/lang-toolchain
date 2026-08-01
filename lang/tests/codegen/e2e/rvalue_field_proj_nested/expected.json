@@ -1,0 +1,1 @@
+{"description": "e2e regression: peek(mk().mid.leaf) — shared borrow of a NESTED field projection of an owned rvalue temp (heap String); drop-once", "exit_code": 0, "stdout": "", "stderr": ""}

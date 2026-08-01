@@ -1,0 +1,28 @@
+module m;
+
+import std.core as core;
+import std.mem as mem;
+
+struct Holder { s: String, }
+struct Wrap { held: Holder, }
+
+// Representative refcounted producer: build the String via
+// core.string_from_utf8_bytes (not concat), wrap it, and field-project
+// the wrapper's owned Holder at a declared-& formal.
+fn make() nothrow -> Wrap {
+	unsafe {
+		var raw = mem.alloc_uninit<type Byte>(2);
+		mem.write<type Byte>(raw, 0, cast<Byte>(104));  // 'h'
+		mem.write<type Byte>(raw, 1, cast<Byte>(105));  // 'i'
+		val s = core.string_from_utf8_bytes(mem.rawbuffer_ptr<type Byte>(raw), 2);
+		mem.dealloc<type Byte>(raw);
+		return Wrap(held = Holder(s = move s));
+	}
+}
+
+fn peek(h: &Holder) nothrow -> Int { return h.s.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	val c = peek(make().held);
+	return c - 2;
+}

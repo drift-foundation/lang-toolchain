@@ -1,0 +1,1 @@
+{"description": "e2e regression (throwing edge): a shared borrow of an owned-rvalue field projection passed to a throws call that THROWS — unwind cleanup drops the temp exactly once (no leak, no double-free)", "exit_code": 0, "stdout": "", "stderr": ""}

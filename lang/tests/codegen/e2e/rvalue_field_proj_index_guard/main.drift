@@ -1,0 +1,16 @@
+module m;
+
+struct Node { text: String, }
+
+fn mk() nothrow -> Array<Node> {
+	var a: Array<Node> = [];
+	a.push(Node(text = "x" + ""));
+	return move a;
+}
+
+fn peek(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	val c = peek(mk()[0]);
+	return c - 1;
+}

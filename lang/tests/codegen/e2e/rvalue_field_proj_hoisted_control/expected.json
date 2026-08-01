@@ -1,0 +1,1 @@
+{"description": "e2e control: hoisted binding val pr = mk(); peek(pr.root) — the sound baseline (NOT a workaround for the fix)", "exit_code": 0, "stdout": "", "stderr": ""}

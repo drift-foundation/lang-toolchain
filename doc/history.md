@@ -1,5 +1,111 @@
 # Drift development history
 
+## 2026-07-31 (0.33.94: LANGUAGE_BUG — field projection of an rvalue temp at a declared-& formal double-freed; ABI 22 unchanged)
+
+**Memory-safety fix (regression-first).** Under the 0.33.91
+reject-redundant-call-borrows rule, the now-mandatory bare spelling of
+a FIELD projection of an owned rvalue temporary at a declared-reference
+formal — `peek(mk().root)` — miscompiled: the projected field's backing
+was released twice at teardown (base: `[drift:contract] String flags:
+reserved bit set`, SIGABRT; ASan: heap-use-after-free in
+`drift_string_release`). The pre-0.33.91 spelling `peek(&mk().root)` was
+correct on 0.33.90 and is now rejected `E_REDUNDANT_ARG_BORROW`, so the
+span-driven `&`-deletion migration walked correct code into the unsound
+shape (drift-query hit it at 28 `normalize_module(parse_module(…).root)`
+sites). Pure-INDEX projections (`f(mk()[i])`) were already sound;
+field projections (incl. nested and constructor-produced bases) were
+the affected class, on 0.33.91–0.33.93.
+
+**Root cause & fix (`stage2/hir_to_mir.py`).** For an owned-rvalue base
+with a PURE-FIELD projection, `_lift_rvalue_ref_base_for_borrow`
+refused the chain (it admitted owned bases only when the chain had an
+index hop), so lowering fell to the whole-expression materialization:
+that path shallow-aliased the extracted field (correctly marked in
+`_ref_field_temps`) but the borrow-temp materialization
+(`_materialize_owned_temp_for_borrow`) stored it as an OWNED value
+WITHOUT the `_copy_if_ref_alias` every other ownership-transfer
+boundary performs — so the source temp AND the borrow temp both
+drop-registered the same leaf backing. Fix: admit owned-rvalue bases
+with field projections (constructor/call/… — struct constructors are
+`HCall` here) for SHARED borrows, materializing the base into ONE
+drop-registered temp and taking an `AddrOfField` address to the leaf —
+the same lowering the index-bearing chains already used, no second
+owned copy. `&mut` owned-rvalue projections stay REJECTED (bind-first:
+a mutable borrow of temp-derived storage has no argument spelling).
+This restores the unified String/Arc ownership contract shipped across
+0.33.75–0.33.88; it is a coverage hole in that architecture, not a new
+classification defect.
+
+**Adjacent fix — value-control-flow rvalue borrows rejected upstream.**
+The lift is sound only when the projection base is a CALL rvalue
+(materialized once). A borrow of a projection rooted at a
+value-control-flow rvalue — a ternary (`peek((cond ? a : b).root)`) or,
+prospectively, a match-expr — cannot be lowered the same way: that
+expression's own lowering already drop-registers its result temp, so the
+borrow-base materialization would double-free it. This shape (and the
+whole-value form `peek(cond ? a : b)`) was independently unsafe as far
+back as 0.33.90 (same exit-134 double-free). The checker now rejects it
+bind-first, `E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED`. The guard keys on
+whether the ternary's OWNER type has drop work (`type_table.has_drop` —
+the destruction authority MIR lowering uses), NOT the projected leaf's
+type: the double-registered owner is the root, so
+`peek_int((cond ? a : b).count)` (a bitcopy `Int` field on a
+`String`-owning root) is still rejected, while a bitcopy/no-drop root
+(`read(cond ? 1 : 2)` at `&Int`, and string-concat rvalue borrows) is
+left to compile. The SOURCE-written spelling `peek(&(cond ? a : b).root)`
+gets the SAME bind-first diagnostic rather than `E_REDUNDANT_ARG_BORROW`
+(stage1 stamps `materialized_rvalue_cfv` so the W0 classifier does not
+offer a "pass directly" fix-it that names the also-rejected bare form).
+A root whose type is still a type variable is fail-closed as hazardous
+(`has_drop(TypeVar)` caches False, so a generic CFV borrow instantiated
+with a droppable type would otherwise slip through — the generic body is
+checked pristinely with the type variable unresolved). Sound lowering of
+these shapes is deferred; fail-closed rejection is the v1 contract.
+
+**Migration correction (versioned).** The reject-redundant-call-borrows
+note "every site is a one-token deletion" had a second, silent,
+memory-unsafe exception beyond mutable temporaries: on **0.33.91–0.33.93
+only**, deleting an argument `&` was unsafe when the remaining
+expression was a FIELD projection from an owned temporary (bind-first:
+`val x = producer(); f(x.field)`). The pure-index case was always
+sound. As of **0.33.94 the bare field projection is again the valid,
+sound spelling** — not a permanent bind-first exception.
+
+**Tests (bounded ownership matrix).** 18 e2e rows: call-field,
+nested-field, constructor-field, `core.string_from_utf8_bytes`
+producer, and a throwing-edge case (all RED pre-fix, drop-once after,
+verified base + ASan + memcheck); pure-index / hoisted / mixed
+field-then-index / static-literal-mask as sound controls; `&mut`
+field/index rejection and the source-written `&mut` binding-required
+pins; and five value-control-flow rows — ternary field projection, whole
+ternary, a droppable-root ternary projecting a BITCOPY field (guard keys
+on the root, not the leaf), the SOURCE-written `&(cond?a:b).root` (→
+bind-first, not redundant), and a bitcopy-root accept+run control.
+Diagnostic CODES (which the e2e runner does not check) are pinned in
+`lang/tests/driver/test_cfv_rvalue_borrow_codes.py`.
+The former `autoborrow_owned_rvalue_field_method_unchanged`
+fixture (which pinned the now-invalid "owned base must not lift"
+implementation contract) was rewritten as a semantic single-drop
+receiver pin with a real owned `String` payload.
+
+The provenance/A-B row (`test_rvalue_arg_temp_drop_ab.py`) is an
+**A/B lowering-route ownership-parity** gate, not an IR byte-identity
+gate: the bare (MIR-lifted) and programmatic explicit-baseline
+(stage1-rewritten) routes of the CF field and IDX index shapes are
+compiled and RUN, asserting identical observable result, scope-end drop
+timing, and exactly-one-drop under base + ASan + memcheck (three passes
+so a premature free corrupts a later pass). A path-specific structural
+pin confirms the bare CF route materializes ONE owning base and
+address-projects the leaf, with no second owned leaf temp — without
+comparing whole IR. The two `&mut` source spellings are pinned
+separately (bare → addressable-place bind-first; explicit `&mut` →
+`E_MUT_RVALUE_ARG_BINDING_REQUIRED`), never equated through a
+programmatic bypass. 67 existing borrow/autoborrow fixtures unaffected;
+765 checker/stage2/borrow-driver tests green.
+
+**Versioning:** `DRIFTC_VERSION` **0.33.94**; internal lowering only,
+**no ABI change — `DRIFT_RT_ABI_VERSION` stays 22**.
+
 ## 2026-07-31 (0.33.93: compiler-owned build info — stamps, `drift inspect`, `--version` break, `compiler_info` retirement, strict `json.parse()`; ABI 22 unchanged)
 
 Toolchain absorption of artifact version facts (drift-query proposal,
@@ -206,7 +312,13 @@ doc samples, plus the regenerated `om_*` ownership matrix. Exceptions to
 one-token deletion: mutable-temporary arguments become bindings
 (`val p = &mut mk(...); touch(p);`), and mode-only overload sets need a
 rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
-dead). D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
+dead). **[Erratum, 0.33.94]** a third, then-undetected exception:
+deleting `&` where the remaining argument was a FIELD projection of an
+owned rvalue temporary (`peek(&mk().root)` → `peek(mk().root)`) was
+memory-unsafe on 0.33.91–0.33.93 (teardown double-free); it needed a
+bind-first (`val x = mk(); peek(x.root)`) until 0.33.94 fixed the
+lowering, after which the bare field projection is sound again. See the
+0.33.94 entry. D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
 Python selector-test retirements (replaced by the four-shape R2 fixture), 23
 new fixtures. The first full e2e pass exposed a sweep blind spot — the
 corpus sweeper only compiled audit-includable fixtures, so the audit's
@@ -238,8 +350,15 @@ the rescan promotion was that flow's first production use.
 **Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
 fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —
 `DRIFT_RT_ABI_VERSION` stays 22** (front-end acceptance + checker/lowering
-surface only; the surviving spelling's IR is byte-identical to what the
-explicit forms emitted).
+surface only). **[Erratum, 0.33.94]** the original claim that the
+surviving bare spelling's IR is "byte-identical" to the explicit form
+overstated it: the checker-synthesized borrow is injected after stage1
+and lowered by the MIR rvalue-base lift, whereas the explicit `&…`
+spelling is normalized by stage1's `BorrowMaterializeRewriter` — two
+routes that emit DIFFERENT (both sound) IR by design. The guarantee is
+SEMANTIC parity (identical observable value, scope-end drop timing, and
+exactly-one-drop), not backend-text identity, enforced by the A/B
+ownership-parity gate in `test_rvalue_arg_temp_drop_ab.py`.
 
 ### The fn-pointer half (landed first internally, commit 453a2f52)
 

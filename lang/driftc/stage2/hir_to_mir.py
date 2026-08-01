@@ -3224,10 +3224,20 @@ class HIRToMIR:
 			# is an address-level no-op — directly against that
 			# pointer: the same place-chain shape
 			# `_lower_addr_of_place` produces, but rooted at a call
-			# result instead of a local's address.  An OWNED base is
-			# admitted only for index-bearing shared chains (the
-			# shape the fallback below cannot lower); it is
-			# materialized into a drop-registered temp first.
+			# result instead of a local's address.  An OWNED CALL
+			# base (call result or constructor) is admitted for
+			# BOTH index-bearing AND pure-field shared chains: it is
+			# materialized into ONE drop-registered temp and the leaf
+			# is address-projected into it (the field-projection UAF
+			# fix, 0.33.94 — work/bare-temp-field-projection-uaf;
+			# before it, pure-field owned chains fell to the
+			# whole-expression materialization below and double-freed).
+			# A NON-call owned rvalue base (ternary / match-expr) is
+			# NOT lowered here or by the fallback — its own lowering
+			# already drop-registers its result, so the checker
+			# rejects that shape bind-first upstream
+			# (E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED); it never
+			# reaches this lowering.
 			# Index and deref-at-base hops (and the owned-base mode)
 			# were added with reject-redundant-call-borrows: the
 			# rule's bare argument spellings and the widened
@@ -3281,8 +3291,8 @@ class HIRToMIR:
 		reject-redundant-call-borrows).  Detect a borrow subject
 		that's a field/index-projection chain (optionally with an
 		explicit deref directly on the base) rooted at a call rvalue
-		— `&T`/`&mut T`-returning, or OWNED for index-bearing shared
-		chains — and lower it correctly so `&self` interior-mutation
+		— `&T`/`&mut T`-returning, or OWNED for shared field AND
+		index chains — and lower it correctly so `&self` interior-mutation
 		methods on the leaf mutate the actual storage instead of a
 		temp-local copy, and non-Copy element borrows never fall
 		into the whole-expression copy path.
@@ -3344,14 +3354,17 @@ class HIRToMIR:
 		base_call_expr, projections, base_owned = plan
 		# Validation passed.  Safe to emit.
 		if base_owned:
-			# Owned-rvalue base admitted ONLY for index-bearing chains
-			# (validator rule): materialize the owned base into a
-			# drop-registered temp — the same lifetime shape stage1's
-			# `_split_lift_place_chain` produces (`val __tmp = mk();
-			# &__tmp[i]`) — and project from its address.  Pure-field
-			# owned chains keep the whole-expression-materialization
-			# fallback pinned by `autoborrow_owned_rvalue_field_method_
-			# unchanged`.
+			# Owned-rvalue CALL base admitted for BOTH pure-field and
+			# index-bearing chains (validator rule): materialize the
+			# owned base into a drop-registered temp — the same lifetime
+			# shape stage1's `_split_lift_place_chain` produces
+			# (`val __tmp = mk(); &__tmp[i]` / `&__tmp.f`) — and project
+			# from its address, so the leaf backing is dropped exactly
+			# once via that single owner.  Admitting pure-FIELD owned
+			# chains here is the field-projection UAF fix (0.33.94 —
+			# work/bare-temp-field-projection-uaf); before it they fell
+			# to the whole-expression materialization that shallow-aliased
+			# the leaf into a SECOND droppable temp and double-freed.
 			base_ty = self._infer_expr_type(base_call_expr)
 			cur_ptr = self._materialize_owned_temp_for_borrow(
 				ty=base_ty,
@@ -3423,11 +3436,14 @@ class HIRToMIR:
 		executes against the base pointer, and `base_owned` says the
 		base call returns its value BY VALUE (the emitter then
 		materializes a drop-registered temp instead of using the
-		call's `&T` result directly).  Owned bases are accepted ONLY
-		for shared borrows whose chain contains an index hop — the
-		one shape the whole-expr fallback cannot lower (non-Copy
-		element read); pure-field owned chains keep the fallback
-		pinned by `autoborrow_owned_rvalue_field_method_unchanged`.
+		call's `&T` result directly).  Owned CALL bases are accepted
+		for shared borrows with EITHER a pure-field or an index-bearing
+		chain — both materialize one owner and address-project the leaf
+		(pure-field admission is the 0.33.94 field-projection UAF fix).
+		Owned bases stay refused for `&mut` (a mutable borrow of
+		temp-derived storage has no argument spelling — rejected
+		bind-first), and NON-call owned rvalue bases (ternary /
+		match-expr) never reach here: the checker rejects them upstream.
 		On any structural mismatch — non-projection outer chain,
 		non-call innermost, non-struct/array intermediate, unknown
 		field name, &mut through non-&mut hop, &mut over an owned
@@ -3466,9 +3482,22 @@ class HIRToMIR:
 			break
 		if not hops and not isinstance(subject, H.HUnary):
 			return None
-		# Innermost base must be a callable rvalue.  HVar /
-		# HPlaceExpr already-place cases are handled by the
-		# caller's HPlaceExpr branch.
+		# Innermost base must be a CALL rvalue (a plain call, method
+		# call, invoke — struct constructors also lower as HCall).
+		# HVar / HPlaceExpr place bases are handled by the caller's
+		# HPlaceExpr branch.  Non-call owned rvalue bases (ternary,
+		# match-expr) are deliberately NOT lifted here: their own
+		# lowering already drop-registers the result
+		# (e.g. `_visit_expr_HTernary`'s `__tern_tmp`), so materializing
+		# it into a second borrow temp would double-register.  Those
+		# shapes do NOT reach this path at all: the checker rejects a
+		# shared borrow of a projection rooted at a value-control-flow
+		# rvalue bind-first (E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED,
+		# type_checker `_reject_cfv_rvalue_borrow`).  (A prior fallback
+		# that deep-copied the aliased leaf in
+		# `_materialize_owned_temp_for_borrow` was reverted — it
+		# reintroduced a second owner — so upstream rejection, not a
+		# fallback deep-copy, is what keeps this sound.)
 		if not isinstance(cur, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ()))):
 			return None
 		base_ty = self._infer_expr_type(cur)
@@ -3477,13 +3506,20 @@ class HIRToMIR:
 		base_def = self._type_table.get(base_ty)
 		base_owned = False
 		if base_def.kind is not TypeKind.REF or not base_def.param_types:
-			# Owned-rvalue base.  Accepted only for SHARED borrows whose
-			# chain has an index hop — the shape the whole-expr fallback
-			# cannot lower (non-Copy element read).  Pure-field owned
-			# chains keep the fallback — see
-			# `lang/tests/codegen/e2e/autoborrow_owned_rvalue_field_method_unchanged/`
-			# for the pinned over-fire guard.
-			if is_mut or not any(k == "index" for k, _ in hops):
+			# Owned-rvalue CALL base (call result or constructor) with a
+			# field/index projection at a SHARED-borrow argument.
+			# Materialize the base into ONE drop-registered temp and
+			# take an address projection to the leaf — the borrow points
+			# into that single owner, dropped exactly once.  Same
+			# lowering the index-bearing chains already use; it now also
+			# covers pure-FIELD chains, which previously fell to the
+			# whole-expression materialization that shallow-aliased the
+			# leaf into a SECOND droppable temp (LANGUAGE_BUG: teardown
+			# double-free / UAF on `peek(mk().root)`, 0.33.91-0.33.93 —
+			# work/bare-temp-field-projection-uaf).  `&mut` owned-rvalue
+			# projections stay refused (bind-first: a mutable borrow of
+			# temp-derived storage has no argument spelling).
+			if is_mut:
 				return None
 			base_owned = True
 		elif is_mut and not getattr(base_def, "ref_mut", False):

@@ -1,0 +1,11 @@
+module m;
+
+// The ternary root is a bitcopy Int — no drop work, nothing to
+// double-free — so a shared borrow of it is sound and must COMPILE+RUN.
+fn read(n: &Int) nothrow -> Int { val x = n; return 7; }
+
+pub fn main() nothrow -> Int {
+	val cond = true;
+	val c = read(cond ? 1 : 2);
+	return c - 7;
+}

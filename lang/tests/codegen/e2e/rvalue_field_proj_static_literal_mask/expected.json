@@ -1,0 +1,1 @@
+{"description": "e2e control (MASK): peek(mk_lit().root) with a STATIC String — release is a no-op, so this masks ownership defects; sound-shape check only, not an ownership proof", "exit_code": 0, "stdout": "", "stderr": ""}

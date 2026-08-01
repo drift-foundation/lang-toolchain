@@ -1,0 +1,5 @@
+module m;
+struct Node { text: String, }
+fn mk() nothrow -> Array<Node> { var a: Array<Node> = []; a.push(Node(text = "x" + "")); return move a; }
+fn bump(n: &mut Node) nothrow -> Void { n.text = "y"; }
+pub fn main() nothrow -> Int { bump(mk()[0]); return 0; }

@@ -1,0 +1,16 @@
+module m;
+
+// The ternary ROOT (PR, owning a heap String) is what gets
+// drop-registered twice — NOT the projected field. Projecting a BITCOPY
+// field (`.count : Int`) must still reject: the guard keys on the root's
+// drop-ness (has_drop), not the leaf's bitcopy-ness.
+struct PR { count: Int, text: String, }
+
+fn mk_a() nothrow -> PR { return PR(count = 1, text = "a" + ""); }
+fn mk_b() nothrow -> PR { return PR(count = 2, text = "b" + ""); }
+fn peek_int(n: &Int) nothrow -> Int { val x = n; return 0; }
+
+pub fn main() nothrow -> Int {
+	val cond = true;
+	return peek_int((cond ? mk_a() : mk_b()).count);
+}

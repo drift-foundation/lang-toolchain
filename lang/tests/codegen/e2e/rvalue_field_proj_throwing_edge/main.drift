@@ -1,0 +1,25 @@
+module m;
+
+
+struct Node { text: String, children: Array<Node>, }
+struct PR { root: Node, }
+
+error Boom { }
+
+fn mk() nothrow -> PR {
+	var kids: Array<Node> = [];
+	var inner: Array<Node> = [];
+	kids.push(Node(text = "kid" + "", children = move inner));
+	return PR(root = Node(text = "root" + "", children = move kids));
+}
+
+// Borrows the projected field, then THROWS — the owned rvalue temp must
+// be dropped exactly once on the unwind edge (no leak, no double-free).
+fn peek_then_throw(n: &Node) throws -> Int {
+	if n.children.len() >= 0 { throw Boom(); }
+	return 0;
+}
+
+pub fn main() nothrow -> Int {
+	return try peek_then_throw(mk().root) catch { 0 };
+}

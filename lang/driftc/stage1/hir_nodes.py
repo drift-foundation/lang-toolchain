@@ -727,11 +727,23 @@ class HBorrow(HExpr):
 	# E_MUT_RVALUE_ARG_BINDING_REQUIRED, the sole non-redundancy rejection)
 	# from a source-written `&mut <place>` argument (redundant).
 	materialized_rvalue: bool = False
+	# Set alongside `materialized_rvalue` when the lifted rvalue base was a
+	# VALUE-CONTROL-FLOW expression (ternary / match-expr) rather than a
+	# call/constructor.  The W0 policy uses it to reject a source-written
+	# shared borrow of such a projection bind-first
+	# (E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED) instead of classifying it
+	# "redundant" — the redundancy fix-it ("pass the operand directly")
+	# would name the BARE form, which is itself rejected for these bases,
+	# so the two spellings would give contradictory guidance.
+	materialized_rvalue_cfv: bool = False
 	# W0 policy classification, stamped by the declared-reference argument
 	# policy when this borrow appears in call-argument position.  Values:
 	# "redundant" (rejected), "coercion" (D7(a) legal), "exempt" (D8(b)
 	# fn-pointer / generic-formal legal), "mut_rvalue_binding" (rejected with
-	# the binding-required diagnostic).  None = never examined; the typed
+	# the binding-required diagnostic), "cfv_rvalue_binding" (rejected: a
+	# shared borrow of a value-control-flow rvalue projection whose owner has
+	# drop work — E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED).  None = never
+	# examined; the typed
 	# validator asserts totality for source-written borrows in argument
 	# position.  Never serialized into packages.
 	policy_class: str | None = None

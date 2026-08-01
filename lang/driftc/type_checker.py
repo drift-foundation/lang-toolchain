@@ -3065,6 +3065,113 @@ class TypeChecker:
 		) -> tuple[list[TypeId], bool]:
 			_AUTOBORROW_MUT_GENERIC = "cannot auto-borrow as &mut; argument is not mutable"
 
+			def _cfv_rvalue_borrow_hazard(subject: H.HExpr) -> tuple[bool, bool]:
+				"""Classify a shared-borrow subject that is (a projection of)
+				a value-control-flow rvalue root (ternary / match-expr).
+
+				A shared rvalue borrow materializes the ROOT into one temp and,
+				for a projection, address-projects the leaf. That is sound for
+				CALL roots (a single drop-registered owner) and for pure-value
+				roots such as string concatenation. It is UNSOUND for a
+				value-control-flow root: `_visit_expr_HTernary` (and the
+				match-expr lowering) already drop-registers its OWN result
+				temp, so a second materialization double-frees that temp at
+				teardown (LANGUAGE_BUG, exit 134 —
+				work/bare-temp-field-projection-uaf).
+
+				The double-registered owner is the ROOT, NOT the projected
+				leaf — so the hazard is keyed on whether the ROOT type has drop
+				work (`has_drop`: String / Array / Destructible / a struct or
+				variant transitively owning one — the same destruction
+				authority MIR lowering uses), never on the projected field's
+				type. `read_int((cond ? a : b).count)` (bitcopy `Int` field but
+				a droppable-`String`-bearing root) is therefore still rejected,
+				while a bitcopy/no-drop root (`read(cond ? 1 : 2)` at `&Int`)
+				has nothing to double-free and is left alone.
+
+				A ROOT whose type still contains a type variable is FAIL-CLOSED
+				(hazardous): `has_drop(TypeVar)` caches `False`, so a generic
+				CFV borrow of a type-parameter-typed rvalue could be
+				instantiated with a droppable type and double-free. Requiring
+				bind-first for the unresolved case is the safe v1 contract.
+
+				`type_expr(..., used_as_value=False)` — this is a classification
+				query and must not re-apply value-use side effects.
+
+				Returns `(is_hazard, peeled)` — `peeled` is True when the
+				subject reached the root through field/index projections (for
+				diagnostic wording). `HMatchExpr` is listed defensively: a
+				match-expr in argument position currently requires a binding,
+				so it does not reach here today.
+				"""
+				root = subject
+				peeled = False
+				while isinstance(root, (H.HField, H.HIndex)):
+					peeled = True
+					root = root.subject
+				cfv = (H.HTernary, getattr(H, "HMatchExpr", ()))
+				if not isinstance(root, cfv):
+					return (False, peeled)
+				root_ty = type_expr(root, used_as_value=False)
+				if root_ty is None:
+					return (False, peeled)
+				if self.type_table.has_typevar(root_ty) or self.type_table.has_drop(root_ty):
+					return (True, peeled)
+				return (False, peeled)
+
+			def _cfv_bind_first_diag(subject: H.HExpr, *, peeled: bool, loc_node: H.HExpr) -> None:
+				lead = ("borrow of a field/index projected from a "
+				        if peeled else "borrow of a ")
+				diagnostics.append(_tc_diag(
+					message=(
+						lead
+						+ "temporary produced by a conditional (ternary or "
+						+ "match) expression; bind it to a `var` first"),
+					code="E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED",
+					severity="error", phase="typecheck",
+					span=getattr(loc_node, "loc", span)))
+
+			def _reject_cfv_rvalue_borrow(arg_expr: H.HExpr, inner: TypeId) -> bool:
+				"""Bare-autoborrow entry point: reject a shared auto-borrow of
+				a value-control-flow rvalue (whole `f(cond ? a : b)` or a
+				projection `f((cond ? a : b).root)`) whose root has drop work.
+				See `_cfv_rvalue_borrow_hazard`."""
+				hazard, peeled = _cfv_rvalue_borrow_hazard(arg_expr)
+				if not hazard:
+					return False
+				_cfv_bind_first_diag(arg_expr, peeled=peeled, loc_node=arg_expr)
+				return True
+
+			def _cfv_source_borrow_hazard(borrow: H.HExpr) -> bool:
+				"""Source-borrow (W0 classifier) entry point: True iff `borrow`
+				is a SOURCE-written shared borrow whose subject was lifted from
+				a value-control-flow rvalue (stamped `materialized_rvalue_cfv`
+				by stage1) AND that rvalue's owner type has drop work.
+
+				By the redundancy rule's own deletion-equivalence definition
+				this borrow is NOT redundant — deleting `&` yields the bare
+				projection, which is rejected for these bases — so it must not
+				take the "pass directly" fix-it. When the owner has NO drop work
+				(e.g. `&(cond ? 1 : 2)` at `&Int`), the bare form IS accepted,
+				so the redundancy classification stays correct and this returns
+				False. A still-generic owner type is fail-closed (hazardous),
+				matching `_cfv_rvalue_borrow_hazard`, since `has_drop(TypeVar)`
+				fails open. `type_expr(..., used_as_value=False)` — classification
+				query, no value-use side effects.
+				"""
+				if not getattr(borrow, "materialized_rvalue", False):
+					return False
+				if not getattr(borrow, "materialized_rvalue_cfv", False):
+					return False
+				subject = getattr(borrow, "subject", None)
+				base = getattr(subject, "base", None)
+				if base is None:
+					return False
+				root_ty = type_expr(base, used_as_value=False)
+				if root_ty is None:
+					return False
+				return self.type_table.has_typevar(root_ty) or self.type_table.has_drop(root_ty)
+
 			def _autoborrow_mut_failure(place_expr: H.HExpr, place: Place) -> str | None:
 				"""None when a &mut auto-borrow of the place is permitted;
 				otherwise the cause-specific rejection message (the `var`
@@ -3204,6 +3311,21 @@ class TypeChecker:
 						)
 					)
 					return True
+				# A SOURCE-written shared borrow of a value-control-flow
+				# rvalue (`peek(&(cond ? a : b).root)`) must NOT be classified
+				# "redundant": its deletion-equivalence fix-it ("pass the
+				# operand directly") would walk the author into the bare form,
+				# which is itself rejected (E_PROJECTED_RVALUE_ARG_BINDING_
+				# REQUIRED). Emit the SAME truthful bind-first diagnostic here
+				# so both spellings agree.
+				if not borrow.is_mut and _cfv_source_borrow_hazard(borrow):
+					borrow.policy_class = "cfv_rvalue_binding"
+					# `peeled` drives "field/index projected" vs whole-value
+					# wording — a whole `&(cond ? a : b)` materializes with NO
+					# projections, so read it off the place expression.
+					_cfv_peeled = bool(getattr(borrow.subject, "projections", None))
+					_cfv_bind_first_diag(borrow.subject, peeled=_cfv_peeled, loc_node=borrow)
+					return True
 				operand_ty = None
 				if arg_ty is not None:
 					adef = self.type_table.get(arg_ty)
@@ -3282,6 +3404,9 @@ class TypeChecker:
 									span=getattr(arg_expr, "loc", span),
 								)
 							)
+							had_error = True
+							continue
+						if _reject_cfv_rvalue_borrow(arg_expr, inner):
 							had_error = True
 							continue
 						borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)
@@ -3497,6 +3622,9 @@ class TypeChecker:
 								span=getattr(arg_expr, "loc", span),
 							)
 						)
+						had_error = True
+						continue
+					if _reject_cfv_rvalue_borrow(arg_expr, inner):
 						had_error = True
 						continue
 					borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)

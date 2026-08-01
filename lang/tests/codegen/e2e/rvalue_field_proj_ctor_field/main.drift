@@ -1,0 +1,17 @@
+module m;
+
+struct Inner { text: String, kids: Array<Inner>, }
+struct Wrap { inner: Inner, }
+
+fn mk_inner() nothrow -> Inner {
+	var kids: Array<Inner> = [];
+	return Inner(text = "inner" + "", kids = move kids);
+}
+
+fn peek(n: &Inner) nothrow -> Int { return n.kids.len(); }
+
+pub fn main() nothrow -> Int {
+	// Base is a CONSTRUCTOR-produced owned rvalue, not a call.
+	val c = peek(Wrap(inner = mk_inner()).inner);
+	return c;
+}

@@ -121,7 +121,7 @@ def _to_jsonable(obj: Any) -> Any:
 			# subject to the redundant-borrow rule. Never encode it (decoders
 			# default the fields to False/None, which also keeps every
 			# pre-rule package valid with no payload-version bump).
-			if type_name == "HBorrow" and f.name in ("source_written", "policy_class", "materialized_rvalue"):
+			if type_name == "HBorrow" and f.name in ("source_written", "policy_class", "materialized_rvalue", "materialized_rvalue_cfv"):
 				continue
 			val = getattr(obj, f.name)
 			if normalize_file and f.name == "file":

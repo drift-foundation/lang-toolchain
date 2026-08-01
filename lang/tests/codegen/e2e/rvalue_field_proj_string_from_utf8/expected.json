@@ -1,0 +1,1 @@
+{"description": "e2e regression: field projection of an owned rvalue whose String came from core.string_from_utf8_bytes (representative refcounted producer); shared field borrow drops once", "exit_code": 0, "compiler_flags": ["--allow-unsafe"], "stdout": "", "stderr": ""}
