@@ -332,35 +332,45 @@ def run_check(work: Path, *, select, jobs: int, extra, baseline: "Path | None",
 	      f"{len(failed)} failed; {len(observed)} current / {len(projected)} projected; "
 	      f"{len(counters)} counters. handoff -> {HANDOFF_PATH}", file=out)
 
+	# The developer lane is provisional and INFORMATIONAL: it prints the deltas
+	# vs the reviewed baseline (including an expected universe drift — you are
+	# developing) but never fails on them.  The reviewed gate is
+	# `ownership-corpus-promote`, which verifies the exported handoff with a fresh
+	# full compile.
 	if baseline is not None:
-		return _audit._compare(baseline, work, require_zero_delta=False)
+		_audit._compare(baseline, work, require_zero_delta=False)
 	gate_failures = _audit._hard_gate_failures(counters)
 	if gate_failures:
-		for g in gate_failures:
-			print(f"HARD GATE: {g}", file=out)
-		return 1
+		print("NOTE (informational): hard-gate counters are nonzero in this "
+		      "developer run — promotion will reject this: "
+		      + ", ".join(gate_failures), file=out)
+	print("developer check complete; handoff exported. Review the deltas above, "
+	      "then run `just ownership-corpus-promote`.", file=out)
 	return 0
 
 
 def _baseline_seed(baseline: Path) -> dict:
 	"""Per-fixture seed entries from the reviewed baseline, so a clean clone's
 	empty cache reuses baseline projections (as PROJECTED values) instead of
-	recompiling.  {name: {hash, ok, proj, toolchain}}.  Only fixtures whose
-	baseline projection is available seed a success; failures always seed."""
+	recompiling.  {name: {hash, ok, proj, toolchain}}.
+
+	Only a NEW-FORMAT baseline (carrying both per-fixture projections and a run
+	fingerprint) seeds; a legacy baseline that lacks that per-fixture data seeds
+	NOTHING, so the initial transition is a clean one-time full run rather than
+	carrying forward stale, possibly-outdated pass/fail outcomes."""
 	b = _read_baseline(baseline)
-	if b is None:
+	if b is None or b["projections"] is None or not _fp._is_hex64(b["toolchain"] or ""):
 		return {}
+	tc = b["toolchain"]
 	base_hash = {e["name"]: e["sha256"] for e in b["base_universe"]["fixtures"]}
-	tc = b["toolchain"] if _fp._is_hex64(b["toolchain"] or "") else "0" * 64
 	seed: dict[str, dict] = {}
 	for name in b["failed"]:
 		if name in base_hash:
 			seed[name] = {"hash": base_hash[name], "ok": False, "proj": {}, "toolchain": tc}
-	if b["projections"] is not None:
-		for name in b["compiled_ok"]:
-			if name in base_hash and name in b["projections"]:
-				seed[name] = {"hash": base_hash[name], "ok": True,
-				              "proj": b["projections"][name], "toolchain": tc}
+	for name in b["compiled_ok"]:
+		if name in base_hash and name in b["projections"]:
+			seed[name] = {"hash": base_hash[name], "ok": True,
+			              "proj": b["projections"][name], "toolchain": tc}
 	return seed
 
 

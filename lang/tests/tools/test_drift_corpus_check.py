@@ -206,6 +206,22 @@ def test_handoff_exported_and_cache_independent(tmp_path, monkeypatch):
 	assert handoff["origin"]["work_dir"] == str(work)   # originating dir recorded diagnostically
 
 
+def test_dev_lane_universe_drift_is_informational_not_fatal(tmp_path, monkeypatch):
+	"""The developer lane prints baseline deltas but never fails on them — a
+	changed universe is expected during development, and the handoff is still
+	exported."""
+	dirs = _mk_fixtures(tmp_path, ["a", "b"])
+	Harness(monkeypatch, tmp_path, dirs, _projs(["a", "b"]))
+	# baseline covers a DIFFERENT universe (only 'a') -> _compare would return 2
+	base = tmp_path / "baseline"
+	(base / "audit").mkdir(parents=True)
+	only_a = _mk_fixtures(tmp_path / "b1", ["a"])
+	_audit._emit_run(base, _audit._universe_dict(only_a, []), ["a"], [], {"cnt": 1}, 0.0, 1)
+	work = tmp_path / "work"
+	assert _check.run_check(work, select=set(), jobs=2, extra=[], baseline=base) == 0
+	assert _check.HANDOFF_PATH.is_file()             # handoff still exported
+
+
 def test_clean_clone_seeds_from_baseline_no_compile(tmp_path, monkeypatch):
 	names = ["a", "b"]
 	dirs = _mk_fixtures(tmp_path, names)
