@@ -45,7 +45,7 @@ def test_recorded_type_wins_over_first_arm():
 	string_ty = tt.ensure_string()
 	int_ty = tt.ensure_int()
 	h2m = _h2m(tt)
-	h2m._typed_mode = "full"
+	h2m._typed_mode = "strict"
 	m = _match(H.HLiteralString("a"), H.HLiteralString("b"), node_id=101)
 	# Arms locally infer String; recorded says Int -> recorded wins.
 	h2m._expr_types = {101: int_ty}
@@ -133,3 +133,88 @@ def test_ternary_uses_branch_types():
 	h2m._expr_types = {}
 	t = H.HTernary(cond=H.HVar("c"), then_expr=H.HLiteralInt(1), else_expr=H.HLiteralInt(2))
 	assert h2m._cfg_result_type(t) == int_ty
+
+
+def test_emit_cfg_result_extract_fails_loud_on_missing_type():
+	"""In typed mode, a control-flow result local with NO recorded type is a
+	join defect: `_emit_cfg_result_extract` would fail OPEN (shallow LoadLocal,
+	unregistered drop). It must raise instead."""
+	tt = TypeTable()
+	h2m = _h2m(tt)
+	h2m._typed_mode = "strict"
+	# result local absent from _local_types -> no type
+	with pytest.raises(AssertionError):
+		h2m._emit_cfg_result_extract("__match_result_missing")
+
+
+def test_emit_cfg_result_extract_fails_loud_on_void_type():
+	"""A Void-typed control-flow result local in typed mode is likewise a join
+	defect (a value-producing CFG expression must not be Void)."""
+	tt = TypeTable()
+	void_ty = tt.ensure_void()
+	h2m = _h2m(tt)
+	h2m._typed_mode = "strict"
+	h2m._local_types["__match_result_void"] = void_ty
+	with pytest.raises(AssertionError):
+		h2m._emit_cfg_result_extract("__match_result_void")
+
+
+def test_production_ternary_routes_through_cfg_result_type(tmp_path):
+	"""The PRODUCTION ternary lowering must type its hidden result local via the
+	`_cfg_result_type` AUTHORITY (recorded/common-type), not by picking the first
+	inferable branch. Spy that lowering a real ternary program calls
+	`_cfg_result_type` with the HTernary node."""
+	from pathlib import Path
+	from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
+	from lang.driftc.module_lowered import flatten_modules
+	from lang.driftc import driftc as D
+	import lang.driftc.stage2.hir_to_mir as HM
+
+	src = Path(tmp_path) / "main.drift"
+	src.write_text(
+		"module m;\n"
+		"fn mkStr() nothrow -> String { return \"aa\" + \"\"; }\n"
+		"fn take(x: &String) nothrow -> Int { return x.byte_length(); }\n"
+		"pub fn main() nothrow -> Int {\n"
+		"\tval s = true ? mkStr() : mkStr();\n"
+		"\treturn take(s) - 2;\n"
+		"}\n"
+	)
+	modules, tt, exc, mexp, mdeps, pdiags = parse_drift_workspace_to_hir(
+		[src], module_paths=[Path(tmp_path)], stdlib_root=stdlib_root(), test_build_only=True)
+	assert not pdiags, [d.message for d in pdiags]
+	fh, sig, _ = flatten_modules(modules)
+
+	seen_ternary = []
+	orig = HM.HIRToMIR._cfg_result_type
+
+	def _spy(self, expr):
+		if isinstance(expr, H.HTernary):
+			seen_ternary.append(expr)
+		return orig(self, expr)
+
+	HM.HIRToMIR._cfg_result_type = _spy
+	try:
+		D.compile_to_llvm_ir_for_tests(
+			func_hirs=fh, signatures=sig, exc_env=exc, type_table=tt,
+			module_exports=mexp, module_deps=mdeps, enforce_entrypoint=True, entry="m::main")
+	finally:
+		HM.HIRToMIR._cfg_result_type = orig
+	assert seen_ternary, "production ternary lowering must call _cfg_result_type(HTernary)"
+
+
+def test_emit_cfg_result_extract_recover_mode_missing_type_does_not_raise():
+	"""RECOVER mode: partial / Unknown result-local types are EXPECTED (invalid
+	user source is already diagnosed). `_emit_cfg_result_extract` must NOT add a
+	second internal-contract diagnostic — it lowers best-effort without raising."""
+	tt = TypeTable()
+	h2m = _h2m(tt)
+	h2m._typed_mode = "recover"
+	# Missing type: no raise, returns a dest.
+	dest_missing = h2m._emit_cfg_result_extract("__match_result_missing")
+	assert dest_missing is not None
+	# Unknown type: likewise no raise.
+	unknown_ty = h2m._unknown_type
+	h2m._local_types["__match_result_unknown"] = unknown_ty
+	dest_unknown = h2m._emit_cfg_result_extract("__match_result_unknown")
+	assert dest_unknown is not None

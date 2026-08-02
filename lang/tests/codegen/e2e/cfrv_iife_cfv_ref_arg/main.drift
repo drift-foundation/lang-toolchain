@@ -1,0 +1,7 @@
+module m;
+fn mkStr() nothrow -> String { return "aa" + ""; }
+pub fn main() nothrow -> Int {
+	// A CFV (match) argument at an IIFE declared-&String parameter: the match
+	// String is materialized once, borrowed for the call, dropped after.
+	return (|x: &String| => { return x.byte_length(); })(match true { true => { mkStr() }, false => { mkStr() } }) - 2;
+}

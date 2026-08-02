@@ -10,10 +10,14 @@ predicate — the split move predicate (materialize unless the borrow would
 alias the moved value ITSELF) is now pinned via the bare spelling.
 
 D1b(b) decision pinned here: `&mut <rvalue>` has NO argument spelling —
-the argument form is rejected with E_MUT_RVALUE_ARG_BINDING_REQUIRED and
-the bare form keeps its addressable-place rejection; the supported shape
-is a BINDING (`val p = &mut mk_widget(move s); touch(p)`), which is this
-file's migration exemplar (cited by the 0.33.91 MIGRATION notes). The
+BOTH the source-written `&mut` and the bare mutable-rvalue argument are
+rejected under the SAME stable category E_MUT_RVALUE_ARG_BINDING_REQUIRED
+(0.34.1: one diagnostic constructor, context-specific messages — the
+explicit form reads "mutable borrow of a temporary …", the bare form
+"borrow requires an addressable place; bind to a local first"). The
+supported shape is a BINDING (`val p = &mut mk_widget(move s); touch(p)`),
+which is this file's migration exemplar (cited by the 0.33.91 MIGRATION
+notes). The
 move guardrails (`&(move x)`, `&mut (move x)`, match-result forwarding)
 keep their targeted messages, pinned in binding position where the
 spellings remain legal.

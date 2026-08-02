@@ -1,0 +1,1 @@
+{"description": "P5.3 exit: a match-produced String is live in a function scope when a REAL throw (or_throw on a Result::Err) unwinds out of that scope; the String must be released exactly once during the unwind. Caught in main. base+ASan+memcheck.", "exit_code": 0}

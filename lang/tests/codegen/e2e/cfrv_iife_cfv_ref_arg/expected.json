@@ -1,0 +1,1 @@
+{"description": "acceptance: a control-flow (match) argument at an immediately-invoked lambda declared-&String parameter. The IIFE arg path defers ownership accounting to autoborrow; the match String is materialized once and dropped. base+ASan+memcheck.", "exit_code": 0}

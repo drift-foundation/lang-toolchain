@@ -1,0 +1,5 @@
+{
+  "description": "fail-closed: a try-expression whose attempt (String) and catch arm (Int) produce different result types must be REJECTED upstream with E-TRY-ARM-TYPE, never lowered to an LLVM 'phi with mixed incoming types' ICE.",
+  "exit_code": 1,
+  "diagnostics": [{ "message_contains": "E-TRY-ARM-TYPE" }]
+}

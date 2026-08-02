@@ -1,0 +1,1 @@
+{"description": "acceptance: a ref-taking String builtin (byte_length) applied to a match rvalue receiver. Exercises the String-builtin argument path with a CFV value; the match String is materialized once and dropped. base+ASan+memcheck.", "exit_code": 0}

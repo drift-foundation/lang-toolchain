@@ -1,0 +1,1 @@
+{"description": "P5.3 exit: move-return teardown of a match-produced String through a helper, dropped once at the caller.", "exit_code": 0}

@@ -1,5 +1,69 @@
 # Drift development history
 
+## 2026-08-02 (0.34.1: control-flow-rvalue ownership — sound value-control-flow borrows ACCEPTED; CFV rejection deleted; ABI 22 unchanged)
+
+**Supersedes the earlier 0.34.1 "value-control-flow rvalue borrows rejected
+upstream" material below.** The `E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED`
+rejection and the `materialized_rvalue_cfv` stamp described in the 2026-07-31
+and 2026-08-02 (ternary-bind) entries were **removed**; those paragraphs are
+marked SUPERSEDED where they still describe the deleted machinery.
+
+**What changed.** A `match` / ternary / `try` / unsafe-block expression is now a
+**value in every value position** — argument, kwarg, constructor field, method
+receiver, and projection base — and a **shared** borrow of a whole / field /
+index projection of such a control-flow rvalue is **accepted and drop-once**,
+lowered through one materialized owner temp (the same generalized projection
+lift the call-rvalue shapes already used). The upstream rejection was deleted
+in full; sound code that the reject-redundant-call-borrows sweep had walked into
+the previously-unsound shape now simply compiles.
+
+**Frozen source contract (control-flow rvalues at reference formals).**
+- **shared `&T`, BARE** whole/field/index projection of a match/ternary/try/
+  unsafe rvalue → **accepted, drop-once** (the canonical spelling).
+- **shared `&T`, source-written `&`** on the same shape →
+  `E_REDUNDANT_ARG_BORROW` — deleting the `&` yields the accepted bare spelling
+  (remedy: "pass … directly").
+- **mutable `&mut T`, BARE or source-written `&mut`**, same shapes →
+  bind-first rejection, one stable category `E_MUT_RVALUE_ARG_BINDING_REQUIRED`
+  (a mutable borrow of a temporary has no argument spelling; "bind it to a
+  `var` first"). **Never** a "pass directly" fix-it. The bare and explicit
+  spellings share the code via one diagnostic constructor; messages stay
+  context-appropriate. Argument-scoped: mutable method receivers, real places,
+  and immutable bindings keep their own diagnostics.
+- Preserved controls where `&` changes typing (NOT redundant): `&Concrete →
+  &Interface` widening, generic-by-value formals, and the existing W0
+  declaration-origin exemptions.
+
+**Versioned spelling.** The value-control-flow borrow contract moved in three
+steps (the CFV rejection machinery entered in b59a94a0, the 0.33.94 development
+fix, NOT at 0.33.91):
+- **0.33.91 – 0.33.93:** affected bare temporary projections of a
+  value-control-flow rvalue could be ACCEPTED but were memory-UNSAFE (the
+  double-free class this slice fixes); there was no CFV-specific rejection yet.
+- **0.33.94 development fix / the withdrawn 0.34.0 candidate:** CFV shared
+  borrows were TEMPORARILY REJECTED bind-first
+  (`E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED`; source-written `&` got the same
+  bind-first diagnostic via the `materialized_rvalue_cfv` stamp), the sound
+  interim rewrite being `val x = cond ? a : b; use(x)`.
+- **0.34.1:** the sound SHARED forms are ACCEPTED with the canonical **bare**
+  spelling (`use(cond ? a : b)`, `use((cond ? a : b).field)`); only `&mut`
+  temporaries still require the bind-first rewrite
+  (`E_MUT_RVALUE_ARG_BINDING_REQUIRED`).
+
+Older packaged artifacts compiled under the interim rejection remain valid;
+recompiling the bind-first workaround is unnecessary but harmless.
+
+**Central authorities (single source, no per-shape special cases).**
+`_emit_cfg_result_extract` (ownership transfer: MoveOut of a drop-carrying
+control-flow result, else LoadLocal) and the generalized
+`_lift_rvalue_ref_base_for_borrow` / `_materialize_owned_temp_for_borrow`
+(borrowed owned-rvalue projection lifting). A checker-boundary invariant
+(`TypedFn.expr_types`) pins that a match result never collapses to Void in the
+final typed HIR under later re-typing.
+
+**Versioning:** `DRIFTC_VERSION` **0.34.1**; argument-lowering + diagnostics
+only, **no ABI change — `DRIFT_RT_ABI_VERSION` stays 22**.
+
 ## 2026-08-02 (0.34.1: LANGUAGE_BUG — owned ternary result moved into a binding double-freed; 0.34.0 withdrawn; ABI 22 unchanged)
 
 **Memory-safety fix (regression-first).** Assigning an owned, droppable
@@ -26,7 +90,11 @@ Bitcopy/non-drop results keep the plain `LoadLocal`.
 rejection's bind-first remedy (`var x = cond ? a : b; use(x)`) is memory-safe;
 the borrow of a droppable ternary temporary remains rejected upstream
 (`E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED`), and binding it first is now the
-valid, sound rewrite.
+valid, sound rewrite. **[SUPERSEDED — see the top 0.34.1 entry:
+`E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED` was deleted; the SHARED bare borrow of
+a value-control-flow rvalue is now the accepted, drop-once canonical spelling.
+Only `&mut` temporaries still require the bind-first rewrite
+(`E_MUT_RVALUE_ARG_BINDING_REQUIRED`).]**
 
 **Withdrawal.** The staged `0.34.0` candidate was **withdrawn** before
 certification when this defect surfaced; the corrected candidate is **0.34.1**.
@@ -87,6 +155,15 @@ This restores the unified String/Arc ownership contract shipped across
 classification defect.
 
 **Adjacent fix — value-control-flow rvalue borrows rejected upstream.**
+**[SUPERSEDED by the top 0.34.1 entry — this entire rejection was DELETED.**
+`E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED` and the `materialized_rvalue_cfv`
+stamp no longer exist; a SHARED borrow of a whole/field/index projection of a
+value-control-flow rvalue (match/ternary/try/unsafe) is now ACCEPTED and
+drop-once, lowered through the generalized owned-rvalue projection lift. Only
+`&mut` temporaries stay rejected, now under `E_MUT_RVALUE_ARG_BINDING_REQUIRED`.
+The paragraph below is retained as historical record of the interim behavior of
+the 0.33.94 development fix and the withdrawn 0.34.0 candidate — NOT of
+0.33.91–0.33.93, where these bare projections were accepted-but-unsafe.]**
 The lift is sound only when the projection base is a CALL rvalue
 (materialized once). A borrow of a projection rooted at a
 value-control-flow rvalue — a ternary (`peek((cond ? a : b).root)`) or,

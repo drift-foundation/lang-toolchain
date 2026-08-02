@@ -904,9 +904,28 @@ class HIRToMIR:
 		The MoveOut both (a) cancels the ternary local's own drop
 		registration and (b) records the ownership transfer for the ledger
 		on the match/try forwarding slots (which are not drop-registered) —
-		one uniform rule.  Always stamps the dest type.
+		one uniform rule.  Stamps the destination type whenever known;
+		strict mode requires it.
 		"""
 		result_ty = self._local_types.get(result_local)
+		# STRICT mode only: the control-flow result local's type is authoritative
+		# — `_cfg_result_type` stamps it at the join and strict mode guarantees no
+		# Unknown.  A missing / Void / Unknown type there would fail OPEN:
+		# `must_move` computes False, a shallow LoadLocal co-owns the backing, and
+		# the dest goes unregistered for drop — exactly the double-free /
+		# unregistered-drop class this path fixes.  Fail loud so the join defect
+		# surfaces at lowering, not at teardown.  In "recover" mode partial /
+		# Unknown types are EXPECTED (invalid user source already diagnosed), so
+		# this invariant must NOT add a second internal-contract diagnostic; in
+		# "none" mode expr_types are ignored entirely.
+		if self._typed_mode == "strict":
+			kind = self._type_table.get(result_ty).kind if result_ty is not None else None
+			if result_ty is None or kind in (TypeKind.VOID, TypeKind.UNKNOWN):
+				got = "no type" if result_ty is None else self._type_table.get(result_ty).name
+				raise AssertionError(
+					f"stage2: control-flow result local {result_local!r} has {got} in "
+					f"strict typed mode — the CFG-result join must stamp a concrete, "
+					f"non-Void result type (checker/lowering bug)")
 		dest = self.b.new_temp()
 		must_move = result_ty is not None and (
 			not self._should_copy_value(result_ty)
@@ -917,6 +936,8 @@ class HIRToMIR:
 			self.b.emit(M.MoveOut(dest=dest, local=result_local, ty=result_ty))
 		else:
 			self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		# Stamp the destination type when known (always present in strict mode;
+		# best-effort in recover/none, where an absent type is left unstamped).
 		if result_ty is not None:
 			self._local_types[dest] = result_ty
 		return dest
@@ -3548,18 +3569,26 @@ class HIRToMIR:
 		executes against the base pointer, and `base_owned` says the
 		base call returns its value BY VALUE (the emitter then
 		materializes a drop-registered temp instead of using the
-		call's `&T` result directly).  Owned CALL bases are accepted
+		call's `&T` result directly).  Owned rvalue bases are accepted
 		for shared borrows with EITHER a pure-field or an index-bearing
 		chain — both materialize one owner and address-project the leaf
 		(pure-field admission is the 0.34.0 field-projection UAF fix).
+		The owned base may be ANY safe owned-rvalue producer, not only a
+		call: a struct constructor, and equally a value-control-flow
+		result (ternary / match / try / unsafe-block), whose join MoveOuts
+		a droppable result so the materialized borrow temp is the single
+		owner (dropped once).  A REFERENCE-returning base stays STRICTER —
+		call-only (a plain call / method call / invoke), since only a call
+		hands back a `&T` the projection can address against.
 		Owned bases stay refused for `&mut` (a mutable borrow of
 		temp-derived storage has no argument spelling — rejected
-		bind-first), and NON-call owned rvalue bases (ternary /
-		match-expr) never reach here: the checker rejects them upstream.
-		On any structural mismatch — non-projection outer chain,
-		non-call innermost, non-struct/array intermediate, unknown
-		field name, &mut through non-&mut hop, &mut over an owned
-		base — returns None and leaves the MIR state untouched.
+		bind-first).  PLACE bases (`HVar` / `HPlaceExpr`) and a `move` of a
+		named value are declined here (handled by the caller's HPlaceExpr
+		branch / the `move_would_be_borrowed` guard).
+		On any structural mismatch — non-projection outer chain, a
+		non-struct/array intermediate, an unknown field name, `&mut`
+		through a non-`&mut` hop, or `&mut` over an owned base — returns
+		None and leaves the MIR state untouched.
 
 		Walks types, never expressions.  `self._infer_expr_type` is
 		the only type-table consultation; it does not emit MIR.
@@ -3594,18 +3623,14 @@ class HIRToMIR:
 			break
 		if not hops and not isinstance(subject, H.HUnary):
 			return None
-		# Innermost base must be a CALL rvalue (a plain call, method
-		# call, invoke — struct constructors also lower as HCall).
-		# HVar / HPlaceExpr place bases are handled by the caller's
-		# HPlaceExpr branch.  Non-call owned rvalue bases (ternary,
-		# All owned CFG-result rvalues (ternary / match / try /
-		# unsafe-block) ARE lifted here now: their join MoveOuts a
-		# droppable result so the materialized borrow temp is the
-		# single owner (dropped once).  Only PLACE bases and `move`
-		# of a named value are declined below.
-		# Innermost base classification.  HVar / HPlaceExpr PLACE bases
-		# (and a `move` of a named value) are handled elsewhere (the
-		# caller's HPlaceExpr branch and the `_move_would_be_borrowed`
+		# Innermost base classification.  Owned rvalue bases are NOT
+		# call-only: a struct constructor and every value-control-flow
+		# result (ternary / match / try / unsafe-block) are lifted here
+		# too (their join MoveOuts a droppable result, so the materialized
+		# borrow temp is the single owner, dropped once).  A REFERENCE-
+		# returning base is narrowed to calls further below.  PLACE bases
+		# (HVar / HPlaceExpr) and a `move` of a named value are handled
+		# elsewhere (the caller's HPlaceExpr branch / the move-borrow
 		# guard), so decline them here.
 		if isinstance(cur, (H.HVar, getattr(H, "HPlaceExpr", ()), getattr(H, "HMove", ()))):
 			return None
@@ -8590,11 +8615,13 @@ class HIRToMIR:
 		# Register so droppable result types participate in cleanup.
 		temp_local = f"__tern_tmp{self.b.new_temp()}"
 		self.b.ensure_local(temp_local)
-		tern_ty = self._infer_expr_type(expr.then_expr)
-		if tern_ty is None:
-			tern_ty = self._infer_expr_type(expr.else_expr)
-		if tern_ty is None:
-			tern_ty = self._unknown_type
+		# The hidden ternary result local is typed by the SAME authority that
+		# types match/try results: recorded whole-expression type first, then a
+		# value-context expected type, else a common type across both branches
+		# (fail loud if the branches disagree with no recorded common type).
+		# Picking the first inferable branch alone would mis-type a branch that
+		# converges through a recorded coercion.
+		tern_ty = self._cfg_result_type(expr)
 		self._local_types[temp_local] = tern_ty
 		self._register_drop_local(temp_local, tern_ty)
 

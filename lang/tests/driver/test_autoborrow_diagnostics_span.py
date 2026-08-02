@@ -50,6 +50,10 @@ pub fn main() nothrow -> Int {
 	assert matches, errors
 	assert all(d.phase == "typecheck" for d in matches), matches
 	assert all(d.span.line is not None and d.span.column is not None for d in matches), matches
+	# Since 0.34.1 the bare mutable-rvalue ARGUMENT carries the stable
+	# E_MUT_RVALUE_ARG_BINDING_REQUIRED category (shared with the explicit
+	# `&mut` spelling), even though its message stays context-appropriate.
+	assert all(d.code == "E_MUT_RVALUE_ARG_BINDING_REQUIRED" for d in matches), matches
 
 
 def test_autoborrow_mut_receiver_rvalue_reports_span(tmp_path: Path) -> None:
@@ -77,3 +81,7 @@ pub fn main() nothrow -> Int {
 	assert matches, errors
 	assert all(d.phase == "typecheck" for d in matches), matches
 	assert all(d.span.line is not None and d.span.column is not None for d in matches), matches
+	# A mutable METHOD RECEIVER rvalue is NOT relabeled: it keeps the generic
+	# addressable-place gate, distinct from the argument E_MUT category (the
+	# 0.34.1 stable-code change is argument-scoped only).
+	assert all(d.code != "E_MUT_RVALUE_ARG_BINDING_REQUIRED" for d in matches), matches

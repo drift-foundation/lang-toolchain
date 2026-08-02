@@ -582,9 +582,14 @@ opportunistic uplifts)" for the full rule.
 ## String ownership-authoring conformance matrix
 
 - **Improvement:** the String/Arc ownership-authoring subsystem
-  (`lang/driftc/stage2/string_arc.py`, `cleanup_authoring.py`,
-  `match_cleanup_authoring.py`, `ownership_ledger.py`, and the
-  exception-edge cleanup emitted around `Goto`/landing-pad blocks)
+  (`cleanup_authoring.py`, `match_cleanup_authoring.py`,
+  `ownership_ledger.py`, the control-flow-result ownership transfer
+  authority `_emit_cfg_result_extract` and the generalized owned-rvalue
+  projection lifting `_lift_rvalue_ref_base_for_borrow` /
+  `_materialize_owned_temp_for_borrow` in `stage2/hir_to_mir.py`, and the
+  exception-edge cleanup emitted around `Goto`/landing-pad blocks — note
+  `stage2/string_arc.py` was DELETED in the 0.33.87 string_arc endgame,
+  its logic folded into the drop-policy funnel)
   decides, per local/temp, whether a `String` (and other
   `_type_needs_drop` value) is retained / released / dropped / moved
   at every producer, consumer, and exit. It is ~3.5k lines across
@@ -611,10 +616,13 @@ opportunistic uplifts)" for the full rule.
   root-cause-fix + conformance-matrix) on ANY of:
 
   - A `String`/Arc **leak, double-free, or use-after-free** whose root
-    cause is in `string_arc.py`, cleanup authoring (incl.
-    `match_cleanup_authoring.py`), the ownership ledger, exception-edge
-    cleanup, **container transfer** (array `push`/`insert`/set,
-    struct/variant field store), **move-return teardown**, or
+    cause is in the drop-policy funnel (formerly `string_arc.py`, now
+    deleted), cleanup authoring (incl. `match_cleanup_authoring.py`), the
+    ownership ledger, the control-flow-result transfer authority
+    (`_emit_cfg_result_extract`) or owned-rvalue projection lifting,
+    exception-edge cleanup, **container transfer** (array
+    `push`/`insert`/set, struct/variant field store), **move-return
+    teardown**, or
     **field/array-element projection lowering**
     (`hir_to_mir.py::_visit_expr_HField`/`_visit_expr_HIndex` — the
     `_ref_field_temps` aliasing classification of a borrowed non-Copy
@@ -655,6 +663,26 @@ opportunistic uplifts)" for the full rule.
   failing shape.  Reported by DriftQuery (M6 engine bridge).  Standing
   lesson: any two lowering paths that read a field/element must apply the
   SAME `_ref_field_temps` aliasing rule.
+
+  **Fired again (2026-08-02) — COVERED, 0.34.1 (control-flow-rvalue
+  ownership):** owned value-control-flow results (ternary / match / try /
+  unsafe-block) and their field/index projections at reference formals were a
+  recurring double-free/UAF class (the 0.33.94 interim rejected them
+  bind-first; whole-value and field-projection forms were independently unsafe
+  as far back as 0.33.90). Root-cause fix centralized the ownership decision in
+  TWO authorities rather than per-shape patches: `_emit_cfg_result_extract`
+  (MoveOut a drop-carrying control-flow result, else LoadLocal — one uniform
+  transfer rule for ternary/match/try) and the generalized
+  `_lift_rvalue_ref_base_for_borrow` / `_materialize_owned_temp_for_borrow`
+  (materialize ONE owner temp and address-project the leaf, for ANY safe
+  owned-rvalue base, not call-only). Bounded conformance matrix shipped
+  (`lang/tests/codegen/e2e/cfrv_*` + `cfrv_bare_*` / `cfrv_consume_*` /
+  `cfrv_exit_*`): the twelve accepted producer/shape cells (match/ternary/try/
+  unsafe × whole/field/index) plus consumers (array push, struct field, local
+  reassign) and exits (normal drop, throwing-edge unwind, move-return), every
+  accepted row base + ASan + memcheck clean. No cell required a further
+  per-shape patch — the two authorities covered the grid. The reusable trigger
+  stays OPEN (this is one fired instance, not the full ownership-model rewrite).
 
 - **Scope when triggered:** root-cause fix in the owning pass +
   a **bounded** conformance matrix (NOT an open-ended rewrite, NOT a

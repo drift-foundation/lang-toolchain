@@ -2098,6 +2098,14 @@ One asymmetry to know: a mutable TEMPORARY has no argument spelling. Bind it
 to a `var`-shaped reference first (`val p = &mut make(); fill2(p);`) — the
 argument form is rejected with `E_MUT_RVALUE_ARG_BINDING_REQUIRED`.
 
+Control-flow expressions (`match`, ternary, `try`, `unsafe { … }`) are ordinary
+rvalues here, including their field and index projections. A shared borrow
+passes bare and auto-borrows drop-once — `use(match c { … })`,
+`use((cond ? a : b).field)`, `use(pick(c)[0])` — and the source-written `&`
+spelling is the same redundant borrow (`E_REDUNDANT_ARG_BORROW`, pass it
+directly). A mutable borrow of such a temporary has no argument spelling either:
+bind it to a `var` first (`E_MUT_RVALUE_ARG_BINDING_REQUIRED`, bare or `&mut`).
+
 Where `&` still appears in an argument, it is doing real work: coercion
 borrows (`use(&concrete)` at a declared `&Interface` parameter — borrow plus
 widen) stay legal, generic by-value parameters instantiated at references

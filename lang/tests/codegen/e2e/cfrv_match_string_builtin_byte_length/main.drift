@@ -1,0 +1,7 @@
+module m;
+fn mkStr() nothrow -> String { return "aa" + ""; }
+pub fn main() nothrow -> Int {
+	// The ref-taking String builtin byte_length applied to a match rvalue: the
+	// match String is the &String receiver, materialized once and dropped.
+	return (match true { true => { mkStr() }, false => { mkStr() } }).byte_length() - 2;
+}

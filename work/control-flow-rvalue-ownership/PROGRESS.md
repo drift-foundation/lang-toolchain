@@ -181,7 +181,54 @@
       args typed as values w/ defer_value_use, not used_as_value=False).
       GATES: 19 focused pins green (boundary+or_throw+6 cfg_result_type+autoborrow);
       e2e or_throw fixture ok. Full suite: USER-run on frozen tree.
-- [ ] P5 restore E_REDUNDANT_ARG_BORROW + ownership matrix + docs.
+- [~] P5 IN PROGRESS (see P5_CONTRACT.md for the frozen table).
+  - [x] P5.1 Frozen contract (48-cell compile probe + structural probe). Temp
+        accounting split: stage1 materialized_rvalue (explicit only) vs stage2
+        lowered-owner materialization (shared-bare, from checked HIR/MIR);
+        mutable-bare = N/A (rejects before lowering). Probe relabeled as
+        shape/provenance, not the bare-source pipeline.
+  - [x] Diagnostic alignment (approved): bare mutable-rvalue args now carry the
+        stable E_MUT_RVALUE_ARG_BINDING_REQUIRED via shared constructor
+        `_mut_rvalue_binding_required_diag` (explicit + BOTH bare resolution-path
+        branches ~3277/~3492). Argument-scoped: mutable receivers / real places /
+        immutable bindings NOT relabeled. Affected tests updated
+        (test_rvalue_arg_temp_drop_ab, test_autoborrow_diagnostics_span,
+        test_borrow_rvalue_move_args prose, explicit-mut e2e desc).
+  - [x] P5.2 SIGNED (38 passed): exact-code table
+        test_cfrv_borrow_diagnostics_table.py = FULL 36 cells (4 producers incl.
+        unsafe-via-subprocess × 3 shapes × 3 modes), EXACT code-set equality +
+        len(errs)==1; mutable cells assert no "pass directly"; subprocess uses
+        sys.executable + preserved env + asserts nonzero status. W0 tail
+        (test_cfrv_coercion_borrow_survives_w0.py): the surviving CFV coercion
+        `hear(&(match…mkDog…))` at &Speaker classifies EXACTLY policy_class=
+        "coercion" (inspected on main's post-check body via a validate_typed_hir
+        capture) AND the bare companion `hear(match…)` REJECTS (deletion changes
+        typing) — proves the classifier was not over-broadened. e2e
+        cfrv_coerce_iface_borrow base+ASan+memcheck. W0 totality + declared-ref
+        classifier green; existing declaration-origin classifier reused.
+  - [x] Reviewer code findings (pre-freeze) closed:
+        (1) _emit_cfg_result_extract fails LOUD in typed mode on missing/Void/
+        Unknown result type + always stamps dest (unit pins). (2) production
+        ternary typing routed through _cfg_result_type (spy pin); try-expr
+        disagreeing attempt/catch types (which ICE'd as LLVM phi-mixed-types) now
+        REJECTED upstream E-TRY-ARM-TYPE (e2e cfrv_try_arm_type_disagree_rejected).
+        (3) _type_user_arg now literal single source — IIFE/direct-lambda call
+        args + String-builtin args routed through it (pins cfrv_iife_cfv_ref_arg,
+        cfrv_match_string_builtin_byte_length, base+ASan+memcheck).
+  - [x] P5.3 DONE: ownership matrix 12/12 base+ASan+memcheck (cfrv_bare_* missing
+        cells: match-index, ternary field/index, try whole/index, unsafe whole/
+        index; consumers cfrv_consume_array_push/struct_field/reassign; exits
+        cfrv_exit_move_return/throwing_unwind). No cell needed a central-authority
+        repair — _emit_cfg_result_extract + generalized projection lift covered it.
+  - [x] P5.4 DONE: history.md superseding entry + accurate 3-step version split
+        (0.33.91-93 accepted-unsafe / 0.33.94-dev+withdrawn-0.34.0 rejected /
+        0.34.1 accepted-bare; provenance b59a94a0 verified); effective-drift.md CFV
+        note; refactor_triggers.md fired-instance recorded (trigger open) + subsystem
+        list updated (string_arc.py deleted); _validate_lifted_chain prose corrected.
+  - [x] P5.5 gates GREEN: 763 checker+stage2+borrow+pins; 633 stage1+packages+
+        affected driver; 38 diagnostic table; 12×3 matrix lanes; git diff --check
+        clean; ownership-matrix corpus 51 fixtures up-to-date (no hash drift).
+        0.34.1 / ABI 22 unchanged. FROZEN pending user full-suite.
 
 ## Worktree files touched so far
 lang/versions.py (0.34.1), doc/history.md (0.34.1 ternary entry),

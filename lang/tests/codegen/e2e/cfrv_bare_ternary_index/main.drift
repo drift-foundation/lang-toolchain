@@ -1,0 +1,11 @@
+module m;
+struct S { s: String, }
+struct Node { text: String, }
+fn mkStr() nothrow -> String { return "aa" + ""; }
+fn mkS() nothrow -> S { return S(s = "aa" + ""); }
+fn mkArr() nothrow -> Array<String> { var a: Array<String> = []; a.push("aa" + ""); return move a; }
+fn mkStr_t() throws -> String { return "aa" + ""; }
+fn mkS_t() throws -> S { return S(s = "aa" + ""); }
+fn mkArr_t() throws -> Array<String> { var a: Array<String> = []; a.push("aa" + ""); return move a; }
+fn take(x: &String) nothrow -> Int { return x.byte_length(); }
+pub fn main() nothrow -> Int { return take((true ? mkArr() : mkArr())[0]) - 2; }

@@ -1,0 +1,21 @@
+module m;
+import std.core as core;
+
+pub error Boom { code: Int, }
+
+fn mkStr() nothrow -> String { return "aa" + ""; }
+
+fn throws_with_string() throws -> Int {
+	// A match-produced OWNED String, live in this scope, observed, then a real
+	// throw unwinds OUT of this scope — `s` must be released EXACTLY ONCE during
+	// the unwind (not leaked, not double-freed).
+	val s = match true { true => { mkStr() }, false => { mkStr() } };
+	val n = s.byte_length();
+	val r: core.Result<Int, Boom> = core.Result::Err(Boom(code = 1));
+	return r.or_throw() + n;
+}
+
+pub fn main() nothrow -> Int {
+	val v = try throws_with_string() catch { 0 };
+	return v;
+}

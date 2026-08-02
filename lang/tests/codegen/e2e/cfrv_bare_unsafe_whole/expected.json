@@ -1,0 +1,1 @@
+{"description": "P5.3 accepted-bare: unsafe-block whole result as a bare shared arg; drop-once.", "exit_code": 0, "compiler_flags": ["--allow-unsafe"]}

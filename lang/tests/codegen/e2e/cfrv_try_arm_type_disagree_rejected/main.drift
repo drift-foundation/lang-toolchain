@@ -1,0 +1,9 @@
+module m;
+fn mkStr_t() throws -> String { return "aa" + ""; }
+fn mkInt() nothrow -> Int { return 7; }
+pub fn main() nothrow -> Int {
+	// attempt produces String, catch produces Int — must be rejected upstream
+	// (E-TRY-ARM-TYPE), NEVER reach lowering (phi with mixed incoming types ICE).
+	val v = try mkStr_t() catch { mkInt() };
+	return 0;
+}

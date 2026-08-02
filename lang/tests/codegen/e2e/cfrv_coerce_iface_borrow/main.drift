@@ -1,0 +1,13 @@
+module m;
+interface Speaker { fn speak(self: &Self) nothrow -> Int; }
+struct Dog { tag: Int, }
+implement Speaker for Dog { fn speak(self: &Dog) nothrow -> Int { return 4; } }
+fn hear(s: &Speaker) nothrow -> Int { return s.speak(); }
+fn mkDog() nothrow -> Dog { return Dog(tag = 1); }
+pub fn main() nothrow -> Int {
+	// A SURVIVING coercion: source-written & around a match-produced Dog rvalue,
+	// widened to &Speaker. Deletion changes typing (bare `hear(match ...)` fails),
+	// so this & is NOT redundant — it must compile, run, and stay policy_class
+	// "coercion" (not over-broadened by the restored E_REDUNDANT_ARG_BORROW).
+	return hear(&(match true { true => { mkDog() }, false => { mkDog() } })) - 4;
+}

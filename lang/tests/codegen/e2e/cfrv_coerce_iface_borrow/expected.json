@@ -1,0 +1,1 @@
+{"description": "acceptance: a SURVIVING control-flow-rvalue coercion borrow. A source-written & around a match-produced Dog rvalue widens to &Speaker (&Concrete->&Interface); deletion changes typing (bare fails), so the & is a genuine coercion, not redundant. Proves restoring E_REDUNDANT_ARG_BORROW did not over-broaden the classifier. base+ASan+memcheck.", "exit_code": 0}

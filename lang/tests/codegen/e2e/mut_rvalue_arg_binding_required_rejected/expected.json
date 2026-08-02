@@ -1,5 +1,5 @@
 {
-  "description": "D1b(b) (reject-redundant-call-borrows): a mutable borrow of a temporary in argument position is the rule's sole non-redundancy rejection \u2014 E_MUT_RVALUE_ARG_BINDING_REQUIRED (bind to a var first), never E_REDUNDANT_ARG_BORROW and never a pass-directly fix-it.",
+  "description": "reject: the SOURCE-WRITTEN &mut spelling bump(&mut mk().root) -> E_MUT_RVALUE_ARG_BINDING_REQUIRED (a mutable borrow of a temporary; bind to a var first). Since 0.34.1 the BARE mutable-rvalue argument shares this SAME stable code with a context-appropriate message (addressable place; bind to a local first); both reject, neither compiles, and neither offers a pass-directly fix-it.",
   "exit_code": 1,
   "diagnostics": [
     {

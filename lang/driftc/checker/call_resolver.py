@@ -5070,7 +5070,12 @@ def resolve_call_expr(
 		expr.type_args = list(type_app.type_args or [])
 		expr.fn = type_app.fn
 	if isinstance(expr.fn, H.HLambda):
-		arg_types = [type_expr(a) for a in expr.args]
+		# Real user-value arguments defer ownership-use accounting to autoborrow
+		# (`_type_user_arg`); HLambda args stay plain type_expr (callback probes).
+		arg_types = [
+			type_expr(a) if isinstance(a, H.HLambda) else _type_user_arg(type_expr, a)
+			for a in expr.args
+		]
 		for idx, arg in enumerate(expr.args):
 			if isinstance(arg, H.HLambda):
 				ty = arg_types[idx]
@@ -5684,7 +5689,9 @@ def resolve_call_expr(
 		if getattr(expr, "type_args", None):
 			diagnostics.append(_tc_diag(message=f"{expr.fn.name} does not accept type arguments", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
-		arg_types_local = [type_expr(a) for a in expr.args]
+		# String-builtin arguments are real user values (e.g. the &String receiver
+		# of byte_length): defer ownership-use accounting to autoborrow.
+		arg_types_local = [_type_user_arg(type_expr, a) for a in expr.args]
 				# D2 (builtin formals count as declared): the ref-taking slots of
 		# the string builtins run the same W0 engine — bare places
 		# auto-borrow, source-written borrows are rejected as redundant.
@@ -5986,7 +5993,12 @@ def resolve_call_expr(
 		if call_kwargs_issues("lambda calls", getattr(expr, "kwargs", None)):
 			diagnostics.append(_tc_diag(message="keyword arguments are only supported for struct constructors in v1", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)
-		arg_types = [type_expr(a) for a in expr.args]
+		# Real user-value arguments defer ownership-use accounting to autoborrow
+		# (`_type_user_arg`); HLambda args stay plain type_expr (callback probes).
+		arg_types = [
+			type_expr(a) if isinstance(a, H.HLambda) else _type_user_arg(type_expr, a)
+			for a in expr.args
+		]
 		if len(arg_types) != len(lam.params):
 			diagnostics.append(_tc_diag(message=f"lambda expects {len(lam.params)} arguments, got {len(arg_types)}", severity="error", span=getattr(expr, "loc", Span())))
 			return record_expr(expr, ctx.unknown_ty)

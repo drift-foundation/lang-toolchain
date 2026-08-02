@@ -460,18 +460,23 @@ pub fn main() nothrow -> Int {{ bump({spelling}); return 0; }}
 
 def test_mut_bare_field_projection_rejected_bind_first(tmp_path: Path) -> None:
 	"""Bare `bump(mk().root)` at &mut: a mutable borrow of temp-derived
-	storage has no argument spelling — rejected bind-first (the
-	addressable-place gate), NOT E_MUT_RVALUE_ARG_BINDING_REQUIRED."""
+	storage has no argument spelling — rejected bind-first.  Since 0.34.1 the
+	bare mutable-rvalue ARGUMENT shares the stable
+	E_MUT_RVALUE_ARG_BINDING_REQUIRED category with the explicit `&mut`
+	spelling (its message stays context-appropriate: "addressable place; bind
+	to a local first")."""
 	res = _driftc_source(_MUT_PROGRAM.format(spelling="mk().root"), tmp_path)
 	assert res.returncode != 0
 	out = res.stderr + res.stdout
 	assert "borrow requires an addressable place; bind to a local first" in out, out[-1200:]
+	assert "E_MUT_RVALUE_ARG_BINDING_REQUIRED" in out, out[-1200:]
 
 
 def test_mut_explicit_field_projection_rejected_redundant_or_mut_rvalue(tmp_path: Path) -> None:
 	"""Explicit `bump(&mut mk().root)` at &mut: the SOURCE-written `&mut`
-	yields the mutable-rvalue diagnostic with its NAMED code — a distinct
-	spelling from the bare form; the two are pinned separately."""
+	yields the mutable-rvalue diagnostic with the same NAMED code as the bare
+	form (E_MUT_RVALUE_ARG_BINDING_REQUIRED) — one stable category, distinct
+	context-appropriate message ("mutable borrow of a temporary …")."""
 	res = _driftc_source(_MUT_PROGRAM.format(spelling="&mut mk().root"), tmp_path)
 	assert res.returncode != 0
 	out = res.stderr + res.stdout

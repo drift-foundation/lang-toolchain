@@ -125,6 +125,24 @@ def _tc_diag(*args, **kwargs):
 		kwargs["phase"] = "typecheck"
 	return Diagnostic(*args, **kwargs)
 
+
+# The single mutable-rvalue-in-argument bind-first rejection category, shared by
+# the explicit `&mut <rvalue>` argument path AND both bare `&mut`-formal
+# auto-borrow paths (the two resolution-path variants).  One stable code —
+# E_MUT_RVALUE_ARG_BINDING_REQUIRED — so the bare and explicit forms are pinnable
+# with the same category; each call site keeps a context-appropriate message.
+# NOTE: only the mutable-RVALUE (non-place) argument case routes here — NOT
+# `_autoborrow_mut_failure` results for real places, immutable bindings, or
+# mutable method receivers.
+def _mut_rvalue_binding_required_diag(message: str, span) -> "Diagnostic":
+	return _tc_diag(
+		message=message,
+		code="E_MUT_RVALUE_ARG_BINDING_REQUIRED",
+		severity="error",
+		phase="typecheck",
+		span=span,
+	)
+
 from lang.driftc.core.span import Span
 from lang.driftc.core.types_core import (
 	TypeId,
@@ -3195,12 +3213,9 @@ class TypeChecker:
 				if borrow.is_mut and getattr(borrow, "materialized_rvalue", False):
 					borrow.policy_class = "mut_rvalue_binding"
 					diagnostics.append(
-						_tc_diag(
-							message="mutable borrow of a temporary in argument position; bind it to a `var` first",
-							code="E_MUT_RVALUE_ARG_BINDING_REQUIRED",
-							severity="error",
-							phase="typecheck",
-							span=getattr(borrow, "loc", span),
+						_mut_rvalue_binding_required_diag(
+							"mutable borrow of a temporary in argument position; bind it to a `var` first",
+							getattr(borrow, "loc", span),
 						)
 					)
 					return True
@@ -3274,12 +3289,13 @@ class TypeChecker:
 					place_expr = place_expr_from_lvalue_expr(arg_expr)
 					if place_expr is None:
 						if ref_mut:
+							# Bare `&mut`-formal auto-borrow of a non-place (rvalue) argument:
+							# bind-first, SAME stable category as the explicit `&mut <rvalue>`
+							# form (message stays context-appropriate).
 							diagnostics.append(
-								_tc_diag(
-									message="borrow requires an addressable place; bind to a local first",
-									severity="error",
-									phase="typecheck",
-									span=getattr(arg_expr, "loc", span),
+								_mut_rvalue_binding_required_diag(
+									"borrow requires an addressable place; bind to a local first",
+									getattr(arg_expr, "loc", span),
 								)
 							)
 							had_error = True
@@ -3489,12 +3505,13 @@ class TypeChecker:
 				place_expr = place_expr_from_lvalue_expr(arg_expr)
 				if place_expr is None:
 					if ref_mut:
+						# Bare `&mut`-formal auto-borrow of a non-place (rvalue) argument:
+						# bind-first, SAME stable category as the explicit `&mut <rvalue>`
+						# form (message stays context-appropriate).
 						diagnostics.append(
-							_tc_diag(
-								message="borrow requires an addressable place; bind to a local first",
-								severity="error",
-								phase="typecheck",
-								span=getattr(arg_expr, "loc", span),
+							_mut_rvalue_binding_required_diag(
+								"borrow requires an addressable place; bind to a local first",
+								getattr(arg_expr, "loc", span),
 							)
 						)
 						had_error = True
@@ -10092,7 +10109,37 @@ class TypeChecker:
 								self._typed_catch_binders[bid] = self._canonical_pub_error_fqn(arm.event_fqn)
 						type_block_in_scope(arm.block)
 						if arm.result is not None:
-							type_expr(arm.result, expected_type=result_ty)
+							arm_result_ty = type_expr(arm.result, expected_type=result_ty)
+							# Explicit authoritative result-type contract: a value-
+							# producing catch arm MUST produce the try's result type
+							# (the attempt's success type).  Without this the mismatch
+							# lowers to a hidden-local reload whose branches carry
+							# different types — an LLVM `phi with mixed incoming types`
+							# ICE.  Reject upstream with a clean diagnostic instead
+							# (mirrors E-MATCH-ARM-TYPE).  Only fire when both sides are
+							# concrete and genuinely differ.
+							if arm_result_ty is not None and result_ty is not None:
+								_arm_cmp = _dealias_zero_param(arm_result_ty)
+								_res_cmp = _dealias_zero_param(result_ty)
+								if _arm_cmp != _res_cmp:
+									_arm_k = _normalize_type_key(type_key_from_typeid(self.type_table, _arm_cmp))
+									_res_k = _normalize_type_key(type_key_from_typeid(self.type_table, _res_cmp))
+									_arm_kind = self.type_table.get(_arm_cmp).kind
+									_res_kind = self.type_table.get(_res_cmp).kind
+									_soft = {TypeKind.UNKNOWN, TypeKind.TYPEVAR}
+									if _arm_k != _res_k and _arm_kind not in _soft and _res_kind not in _soft:
+										diagnostics.append(_tc_diag(
+											message=(
+												"E-TRY-ARM-TYPE: try/catch arms must produce the same type "
+												f"(the attempt produces {self.type_table.get(result_ty).name}, "
+												f"this catch arm produces {self.type_table.get(arm_result_ty).name})"
+											),
+											code="E-TRY-ARM-TYPE",
+											severity="error",
+											span=(getattr(arm.result, "loc", None)
+											      or getattr(arm, "loc", None)
+											      or getattr(expr, "loc", Span())),
+										))
 					finally:
 						scope_env.pop()
 						scope_bindings.pop()
