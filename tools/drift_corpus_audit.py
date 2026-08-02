@@ -81,6 +81,23 @@ def _scratch_base():
 		_scratch_base_cached = _drift_session_root(base=ROOT / "build" / "tmp")
 	return _scratch_base_cached
 
+
+_compile_contract_cached = None
+
+
+def _compile_contract():
+	"""The single corpus compile contract (argv / normalized env / variant /
+	tool selection).  BOTH _compile_one and the fingerprint consume it."""
+	global _compile_contract_cached
+	if _compile_contract_cached is None:
+		import importlib.util
+		spec = importlib.util.spec_from_file_location(
+			"corpus_compile_contract", ROOT / "tools" / "corpus_compile_contract.py")
+		mod = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(mod)
+		_compile_contract_cached = mod
+	return _compile_contract_cached
+
 # Hard gates: any nonzero value fails the run — BOTH for standalone
 # baseline acquisition and for the new side of a --baseline comparison.
 # A reference baseline with a nonzero gate would silently bless a
@@ -182,17 +199,18 @@ def _compile_one(fixture: Path, run_dir: Path, extra_args: list[str]) -> tuple[s
 	if entry is None:
 		return name, False
 	audit_file = run_dir / "audit" / f"{name}.jsonl"
+	cc = _compile_contract()
 	with tempfile.TemporaryDirectory(prefix="corpus-audit-", dir=str(_scratch_base())) as td:
-		env = os.environ.copy()
-		env["DRIFT_STRING_ARC_AUDIT"] = "1"
-		env["DRIFT_STRING_ARC_AUDIT_FILE"] = str(audit_file)
+		# The SINGLE compile contract builds both the normalized child env (a
+		# minimal constructed env with a CONTROLLED TMPDIR pointed at this
+		# per-fixture scratch dir) and the exact argv — the same authority the
+		# fingerprint records, so they can never diverge.
+		env = cc.normalized_child_env(scratch=td)
+		env[cc.AUDIT_FILE_ENV] = str(audit_file)
+		argv = cc.driftc_argv(fixture / "main.drift", entry, Path(td) / "bin",
+		                      extra_args, ROOT / "stdlib")
 		res = subprocess.run(
-			[sys.executable, "-m", "lang.driftc.driftc", "--dev",
-			 "--stdlib-root", str(ROOT / "stdlib"),
-			 *extra_args,
-			 str(fixture / "main.drift"),
-			 "--entry", entry,
-			 "-o", str(Path(td) / "bin")],
+			[sys.executable, "-m", "lang.driftc.driftc", *argv],
 			cwd=ROOT, env=env, capture_output=True, text=True, timeout=600,
 		)
 	ok = res.returncode == 0 and audit_file.is_file()
@@ -203,35 +221,89 @@ def _compile_one(fixture: Path, run_dir: Path, extra_args: list[str]) -> tuple[s
 	return name, ok
 
 
-def _aggregate(run_dir: Path, compiled_ok: list[str]) -> dict[str, int]:
+class CorpusProjectionError(RuntimeError):
+	"""A per-fixture audit file could not be parsed into a trustworthy
+	projection.  This is an INFRASTRUCTURE error (truncated/duplicated/malformed
+	audit output), never a compile finding — it must abort the run, never be
+	silently absorbed as an empty or under-counted projection."""
+
+
+def _fixture_projection(audit_file: Path) -> dict[str, int]:
+	"""The per-fixture PROJECTION: the ownership-authoring counters from a SINGLE
+	fixture's compile, read from its audit jsonl.  The corpus is a
+	single-compilation-unit universe, so a well-formed file carries EXACTLY ONE
+	`aggregate` record; the sum of projections IS the run aggregate.
+
+	Fails closed (CorpusProjectionError) on anything that would corrupt the
+	count: unreadable file, an audit-tagged line with malformed JSON or a
+	non-object record, ZERO aggregate records (truncated/empty output), MORE THAN
+	ONE aggregate record (duplicate — would double-count), a non-string counter
+	key, or a non-int / bool counter value."""
+	try:
+		lines = audit_file.read_text().splitlines()
+	except OSError as e:
+		raise CorpusProjectionError(f"cannot read audit file {audit_file}: {e}") from e
+	aggregates: list[tuple[int, dict]] = []
+	for lineno, line in enumerate(lines, 1):
+		m = _AUDIT_LINE_RE.search(line)
+		if not m:
+			continue
+		try:
+			rec = json.loads(m.group(1))
+		except json.JSONDecodeError as e:
+			raise CorpusProjectionError(
+				f"malformed audit JSON in {audit_file} line {lineno}: {e}") from e
+		if not isinstance(rec, dict):
+			raise CorpusProjectionError(
+				f"audit record in {audit_file} line {lineno} is not an object")
+		if rec.get("record") == "aggregate":
+			aggregates.append((lineno, rec))
+	if not aggregates:
+		raise CorpusProjectionError(
+			f"no aggregate record in {audit_file} — truncated or empty audit output")
+	if len(aggregates) > 1:
+		raise CorpusProjectionError(
+			f"{len(aggregates)} aggregate records in {audit_file} "
+			f"(lines {[ln for ln, _ in aggregates]}) — duplicate would double-count")
 	counters: dict[str, int] = {}
-	for name in compiled_ok:
-		audit_file = run_dir / "audit" / f"{name}.jsonl"
-		for line in audit_file.read_text().splitlines():
-			m = _AUDIT_LINE_RE.search(line)
-			if not m:
-				continue
-			try:
-				rec = json.loads(m.group(1))
-			except json.JSONDecodeError:
-				continue
-			if rec.get("record") != "aggregate":
-				continue
-			for key, val in rec.items():
-				if key == "record" or not isinstance(val, int):
-					continue
-				counters[key] = counters.get(key, 0) + val
+	for key, val in aggregates[0][1].items():
+		if key == "record":
+			continue
+		if not isinstance(key, str):
+			raise CorpusProjectionError(f"non-string counter key {key!r} in {audit_file}")
+		if not isinstance(val, int) or isinstance(val, bool):
+			raise CorpusProjectionError(
+				f"counter {key!r} in {audit_file} is {val!r}, not a non-bool int")
+		counters[key] = val
 	return dict(sorted(counters.items()))
+
+
+def _merge_counters(parts) -> dict[str, int]:
+	total: dict[str, int] = {}
+	for part in parts:
+		for key, val in part.items():
+			total[key] = total.get(key, 0) + val
+	return dict(sorted(total.items()))
+
+
+def _aggregate(run_dir: Path, compiled_ok: list[str]) -> dict[str, int]:
+	return _merge_counters(
+		_fixture_projection(run_dir / "audit" / f"{name}.jsonl")
+		for name in compiled_ok)
 
 
 def _stable_json(obj) -> str:
 	return json.dumps(obj, indent=2, sort_keys=True) + "\n"
 
 
-def _write_run(run_dir: Path, fixtures: list[Path], excluded: list[dict],
-               compiled_ok: list[str], failed: list[str],
-               counters: dict[str, int], started: float, jobs: int) -> None:
-	universe = _universe_dict(fixtures, excluded)
+def _emit_run(run_dir: Path, universe: dict,
+              compiled_ok: list[str], failed: list[str],
+              counters: dict[str, int], started: float, jobs: int) -> None:
+	"""Write the manifest/aggregate/metadata run files from an ALREADY-CAPTURED
+	universe dict (the resumable check passes the exact universe it validated at
+	the start of the run, so the manifest can never describe re-hashed source
+	that drifted from the projections)."""
+	universe = dict(universe)
 	universe["compiled_ok"] = sorted(compiled_ok)
 	universe["failed"] = sorted(failed)
 	try:
@@ -259,6 +331,16 @@ def _write_run(run_dir: Path, fixtures: list[Path], excluded: list[dict],
 		"repo_root": str(ROOT),
 		"python": sys.version.split()[0],
 	}))
+
+
+def _write_run(run_dir: Path, fixtures: list[Path], excluded: list[dict],
+               compiled_ok: list[str], failed: list[str],
+               counters: dict[str, int], started: float, jobs: int) -> None:
+	"""Discover-and-emit: recomputes the universe from the fixture dirs.  Used by
+	the standalone audit path; the resumable check calls _emit_run with its
+	captured universe instead."""
+	_emit_run(run_dir, _universe_dict(fixtures, excluded),
+	          compiled_ok, failed, counters, started, jobs)
 
 
 def _validate_universe_schema(side: str, universe: object) -> None:
@@ -303,6 +385,15 @@ def _validate_counters_schema(side: str, counters: object) -> None:
 		if not isinstance(val, int) or isinstance(val, bool):
 			raise ValueError(f"{side} counter {key!r} must be an integer, "
 			                 f"got {type(val).__name__}")
+
+
+def _valid_counter_map(counters) -> bool:
+	"""Boolean form of _validate_counters_schema: str keys, non-bool int values."""
+	try:
+		_validate_counters_schema("", counters)
+		return True
+	except ValueError:
+		return False
 
 
 def _compare(baseline_dir: Path, run_dir: Path,

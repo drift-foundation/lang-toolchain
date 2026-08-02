@@ -13,7 +13,7 @@ report_total() {
 		$((elapsed / 3600)) $((elapsed % 3600 / 60)) $((elapsed % 60)) "$elapsed"
 }
 trap report_total EXIT
-just ownership-corpus-check
+just ownership-corpus-promote
 echo "OWNERSHIP CORPUS OK"
 sleep 5
 just perf-protocols

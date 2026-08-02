@@ -128,14 +128,28 @@ def test_driftc_links_libz() -> None:
 	`test_maybe_uninit_local_lowering.py` (and any other stage2 test
 	that compiles to a binary) failed at link with undefined
 	deflate/inflate references.
+
+	driftc's native-library selection now lives in the shared production
+	authority lang.driftc.link_selection (which the ownership-corpus compile
+	contract also imports); the structural contract is that driftc routes its
+	link libs through that authority AND that the authority unconditionally
+	links libz.
 	"""
 	driftc_src = (ROOT / "lang" / "driftc" / "driftc.py").read_text(encoding="utf-8")
-	pat = re.compile(r'_link_flags_for_lib\(\s*"z"\s*\)', re.DOTALL)
-	assert pat.search(driftc_src) is not None, (
-		"lang/driftc/driftc.py must include _link_flags_for_lib(\"z\") "
-		"in its link_libs, otherwise every driftc-emitted binary will "
-		"fail at link with undefined deflate / inflate references "
-		"(codec_gzip_runtime.o is always in the runtime archive)."
+	assert re.search(r"link_selection\.native_link_flags\(", driftc_src), (
+		"lang/driftc/driftc.py must resolve its link libs through "
+		"link_selection.native_link_flags(...)."
+	)
+	# libz must be linked on EVERY lane (the runtime archive always contains
+	# codec_gzip_runtime.o), so the shared authority always includes it.
+	from lang.driftc import link_selection
+	assert "z" in link_selection.native_link_lib_names(False), (
+		"link_selection must unconditionally link libz on the normal lane, "
+		"otherwise every driftc-emitted binary fails at link with undefined "
+		"deflate/inflate references."
+	)
+	assert "z" in link_selection.native_link_lib_names(True), (
+		"link_selection must link libz on the debug lane too."
 	)
 
 

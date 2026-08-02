@@ -139,142 +139,50 @@ perf-protocols:
 		lang/tests/driver/test_std_json_parse_perf_gate.py
 	echo "perf-protocols: outputs in $out"
 
-# ── Ownership CORPUS baseline PROMOTION (reviewed, manual) ───────────
-# Materializes an ALREADY-APPROVED promotion via
-# tools/drift_corpus_promote.py: dry-run by default (pass `--apply` to
-# write).  Single-arg TARGET is the promotion RECORD dir
-# (promotions/<name>) — candidate/ and the approval file are resolved
-# from it; the two-arg <run-dir> <approval-file> form still works.  Fails
-# closed on any divergence; writes ONLY the four reviewed-baseline files;
-# ends with an exact zero-delta comparison and prints the next step.
-# NEVER invoked by `just test`, `just certify`, or run-all-tests.sh — the
-# tool materializes approval, it cannot grant it.
-# Preview a promotion record (dry-run) or apply it with --apply.
-ownership-corpus-promote TARGET *ARGS:
+# ── Ownership CORPUS: two public recipes ─────────────────────────────
+# DISTINCT from `ownership-matrix-check` above (the 51 curated generated
+# ownership-transfer fixtures, inside `just test`): this is the full-corpus
+# compile-audit against the checked-in reviewed baseline
+# (lang/tests/ownership_corpus/reviewed-baseline/, provenance in BASELINE.md).
+# Deliberately NOT part of `just test`.  Fast PROJECTIONS during development;
+# EXHAUSTIVE FRESH EVIDENCE at promotion.
+#
+#   just ownership-corpus-check [<dir>]
+#       Fast developer lane (default work dir build/tmp/ownership-corpus-work,
+#       or an optional override).  Full-universe expectation; records keyed on
+#       fixture CONTENT HASH so a compiler-fingerprint move keeps old
+#       observations as PROJECTED (never a full rebuild); only new / source-
+#       edited / `--select`ed fixtures recompile.  Reused successes AND failures
+#       are accounted (observed vs projected).  Exports the expectation to the
+#       cache-independent handoff build/tmp/ownership-corpus-projection.json.
+#
+#   just ownership-corpus-promote
+#       Fresh FULL compile every time (independent verification — never
+#       optimized away, never reads developer records).  The EXPECTATION is that
+#       handoff if present (a malformed/stale handoff is an error, not a silent
+#       baseline fallback), otherwise the checked-in reviewed baseline (clean
+#       clone / CI).  Requires a stable start==end fingerprint, zero hard gates,
+#       and EXACT agreement (universe + hashes, buckets, per-fixture
+#       projections, aggregate, exclusions); installs the reviewed baseline only
+#       then — a byte-preserving no-op when already equal.  On disagreement it
+#       does NOT mutate the baseline and retains the fresh actual for diagnosis.
+ownership-corpus-check DIR="" *ARGS:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
-		"{{TARGET}}" {{ARGS}}
-	# Focused promotion teeth run AUTOMATICALLY after every successful
-	# dry run or apply — never a separately remembered step.  The
-	# broader tools lane stays covered by `just test`/run-all-tests.sh.
-	echo "ownership-corpus-promote: running focused promotion teeth"
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-		lang/tests/tools/test_ownership_corpus_promote.py -q
-	echo "ownership-corpus-promote: running live-baseline sanity"
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-		"lang/tests/tools/test_ownership_corpus_check.py::test_reviewed_baseline_matches_approved_promotion" -q
+	args=()
+	[[ -n "{{DIR}}" ]] && args+=("{{DIR}}")
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
+		"${args[@]}" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
 
-# One-shot APPROVE + APPLY for a reviewed record (the agree-with-deltas
-# path): renames approval-DRAFT.json -> approval.json (the review stamp;
-# the Git commit records who/when) if not already approved, then applies.
-# Preview first with `just ownership-corpus-promote <record>`; run this
-# only once you agree with the deltas it printed.
-# Approve (rename DRAFT->approval.json) and apply a promotion record.
-ownership-corpus-approve RECORD_DIR:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	rec="{{RECORD_DIR}}"
-	if [[ ! -f "$rec/approval.json" ]]; then
-		[[ -f "$rec/approval-DRAFT.json" ]] || {
-			echo "ownership-corpus-approve: no approval-DRAFT.json in $rec" >&2
-			exit 1
-		}
-		echo "ownership-corpus-approve: approving — rename approval-DRAFT.json -> approval.json"
-		mv "$rec/approval-DRAFT.json" "$rec/approval.json"
-	fi
-	just ownership-corpus-promote "$rec" --apply
-
-# Promotion-record generation: builds a durable, self-contained record
-# (predecessor/ + candidate/ artifact copies, COMPACT per-fixture
-# counter extractions, and a facts-only pending approval draft with
-# machine-computed attribution) from the retained candidate run.
-# Predecessor evidence comes from the CHECKED-IN record chain (the one
-# approved record whose candidate byte-equals the live baseline) — a
-# clone is all a draft needs; pass PRED_RUN (a retained raw-log run
-# dir) only as the bootstrap escape hatch for a baseline predating
-# record-keeping.  The reviewer supplies judgment by APPROVING —
-# renaming approval-DRAFT.json to approval.json (approval is FILENAME-ONLY;
-# no JSON edits, and Git records the approver identity/date).  The draft is
-# already complete (baseline_md composed mechanically); the raw build/tmp
-# runs need not be preserved after the record is generated and verified.
-ownership-corpus-promotion-draft CAND_RUN RECORD_DIR PRED_RUN="":
-	#!/usr/bin/env bash
-	set -euo pipefail
-	pred="{{PRED_RUN}}"
-	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_promote.py \
-		"{{CAND_RUN}}" "{{RECORD_DIR}}" --draft \
-		${pred:+--predecessor-run "$pred"}
-	echo "ownership-corpus-promotion-draft: running focused promotion teeth"
-	PYTHONPATH=. ./.venv/bin/python3 -m pytest \
-		lang/tests/tools/test_ownership_corpus_promote.py -q
-
-# Acquire a FRESH full-corpus audit run into a repo-local build/tmp dir
-# and print its path — the candidate run that feeds
-# `ownership-corpus-promotion-draft` after the fixture universe
-# legitimately changes (new/removed/renamed fixtures make
-# `ownership-corpus-check` fail with UNIVERSE MISMATCH by design).  This
-# only MINTS a run (no baseline comparison, no promotion); a reviewer
-# still approves the resulting draft.  Wraps the venv + auto-jobs + tmp
-# conventions so you never hand-run `.venv/bin/python tools/...`.  Pass
-# an explicit OUT to reuse a stable path; otherwise a timestamped dir is
-# minted and echoed for the next step.
-# Mint a fresh full-corpus audit run (candidate for re-baselining).
-ownership-corpus-run OUT="":
-	#!/usr/bin/env bash
-	set -euo pipefail
-	out="{{OUT}}"
-	[[ -n "$out" ]] || out="build/tmp/ownership-corpus-run-$(date +%Y%m%d-%H%M%S)-$$"
-	echo "ownership-corpus-run: minting run at $out"
-	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
-		--out "$out" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}"
-	echo "ownership-corpus-run: acquired $out"
-	echo "  next: just ownership-corpus-promotion-draft $out <record_dir>"
-
-# ── Ownership CORPUS certification gate ──────────────────────────────
-# DISTINCT from `ownership-matrix-check` above: the matrix is the 51
-# curated generated ownership-transfer fixtures (generator-freshness
-# guard, runs inside `just test`); THIS is the full-corpus
-# compile-audit corpus compared EXACTLY (identical universe, every
-# counter delta +0, hard gates zero — --require-zero-delta fails closed
-# on any divergence) against the checked-in reviewed baseline
-# (lang/tests/ownership_corpus/reviewed-baseline/, provenance in its
-# BASELINE.md).  Deliberately NOT part of `just test`: run-all-tests.sh runs
-# `just test` under BOTH memcheck and ASAN, and the corpus must run
-# exactly once per certification — it is wired into `just certify`.
-# Results land in a fresh repo-local build/tmp dir, retained on failure
-# for diagnosis.
-# FAST static preflight: compares the current corpus universe to the
-# reviewed baseline WITHOUT compiling — surfaces known universe drift
-# (fixture add/remove/content-change, exclusion changes, inclusion-rule
-# change, included<->excluded transitions) and verifies baseline partition
-# integrity in seconds, so a full ~20-30 min corpus run is not spent merely
-# rediscovering it.  Exit 0=match, 1=drift, 2=error.  It CANNOT detect
-# compiler-result flips — the full `ownership-corpus-check` remains the
-# acceptance gate.  NOT wired into run-all-tests.sh.
-ownership-corpus-preflight:
-	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
-		--preflight --baseline lang/tests/ownership_corpus/reviewed-baseline
-
-ownership-corpus-check:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	out="build/tmp/ownership-corpus-$(date +%Y%m%d-%H%M%S)-$$"
-	echo "ownership-corpus-check: run dir $out (retained on failure)"
-	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
-		--out "$out" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" \
-		--baseline lang/tests/ownership_corpus/reviewed-baseline \
-		--require-zero-delta
-	echo "ownership-corpus-check: Success."
+ownership-corpus-promote *ARGS:
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
+		--promote -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
 
 # ── Certification entrypoint ─────────────────────────────────────────
-# An INDEPENDENT certification workflow: the ownership corpus EXACTLY
-# ONCE against the checked-in reviewed baseline.  It never invokes
-# run-all-tests.sh (the maintainer's private pre-handoff runner, which
-# itself runs the corpus once before its memcheck/ASAN `just test`
-# passes).  Pool rebuild / deploy remain separate maintainer-driven
-# steps.
-certify: ownership-corpus-check
+# The ownership corpus EXACTLY ONCE: a fresh full compile against the checked-in
+# reviewed baseline (clean tree -> no-op).  Independent of run-all-tests.sh (the
+# maintainer's private runner, which calls the same recipe).
+certify: ownership-corpus-promote
 	@echo "lang certify: Success."
 
 # Shard 1: everything test runs except codegen.

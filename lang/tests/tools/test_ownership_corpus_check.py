@@ -1,16 +1,16 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Negative teeth for the ownership-corpus certification gate
-(`just ownership-corpus-check` → `tools/drift_corpus_audit.py
---baseline <checked-in> --require-zero-delta`).
+"""Negative teeth for the ownership-corpus comparison engine
+(drift_corpus_audit._compare) that `just ownership-corpus-promote` relies
+on, plus wiring pins for the two public recipes.
 
 The 51-fixture ownership MATRIX (`just ownership-matrix-check`, part of
-`just test`) and the full ownership-audit CORPUS (this gate, run
-exactly once from `just certify`) are DISTINCT certification gates —
+`just test`) and the full ownership-audit CORPUS (`just ownership-corpus-
+promote`, run once from `just certify`) are DISTINCT certification gates —
 see lang/tests/ownership_corpus/reviewed-baseline/BASELINE.md.
 
-These teeth run the tool's COMPARISON stage against synthetic run
-directories (no fixture compiles — cheap), proving the recipe fails
-closed on every mandated divergence class:
+These teeth run the COMPARISON stage against synthetic run directories
+(no fixture compiles — cheap), proving it fails closed on every mandated
+divergence class:
 
   * universe drift                             → exit 2
   * nonzero counter delta (zero-delta mode)    → exit 1
@@ -31,13 +31,21 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 BASELINE = ROOT / "lang" / "tests" / "ownership_corpus" / "reviewed-baseline"
 
-_spec = importlib.util.spec_from_file_location(
-	"drift_corpus_audit", ROOT / "tools" / "drift_corpus_audit.py")
-_tool = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_tool)
+
+def _load(name: str):
+	spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
+	mod = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(mod)
+	return mod
+
+
+_tool = _load("drift_corpus_audit")
+_check = _load("drift_corpus_check")
 
 
 _UNIVERSE = {
@@ -142,116 +150,79 @@ def test_zero_delta_requires_baseline_flagging() -> None:
 	assert rc == 2
 
 
-# ── Checked-in baseline sanity + wiring pins ─────────────────────────
+# ── Checked-in baseline sanity + wiring pins ───────────────────
 
-
-def test_reviewed_baseline_matches_approved_promotion() -> None:
-	"""Durable-record sanity (replaces the stale 924 hardcode): the
-	live baseline must be exactly the candidate of ONE approved
-	promotion record, with the approval's universe expectations
-	matching the manifest, hard gates zero, and the FULL approval
-	hash recorded in BASELINE.md."""
-	import hashlib
-
-	def sha(path: Path) -> str:
-		return hashlib.sha256(path.read_bytes()).hexdigest()
-
+def test_reviewed_baseline_is_well_formed() -> None:
+	"""The checked-in reviewed baseline must be a complete, self-contained,
+	hard-gate-clean run: machine files present and consistent, universe partition
+	intact, provenance recorded.  It is produced ONLY by
+	`drift_corpus_check.py --promote` (a fresh compile that exactly reproduced a
+	reviewed developer projection); the Git commit is the approval."""
 	agg = json.loads((BASELINE / "aggregate.json").read_text())
 	man = json.loads((BASELINE / "manifest.json").read_text())
-	assert isinstance(agg["counters"], dict) and agg["counters"], "counters present"
-	assert not _tool._hard_gate_failures(agg["counters"]), (
-		"the reviewed baseline must have every hard gate at zero"
-	)
 	uni = man["universe"]
-	assert uni["inclusion_rule"], "verbatim inclusion rule recorded"
-	assert (BASELINE / "metadata.json").is_file(), "provenance metadata checked in"
-
-	promotions = ROOT / "lang" / "tests" / "ownership_corpus" / "promotions"
-	assert promotions.is_dir(), "durable promotion records directory missing"
-	live = {n: sha(BASELINE / n)
-	        for n in ("aggregate.json", "manifest.json", "metadata.json")}
-	matches = []
-	for record in sorted(promotions.iterdir()):
-		cand = record / "candidate"
-		if not cand.is_dir():
-			continue
-		if all((cand / n).is_file() and sha(cand / n) == live[n]
-		       for n in live):
-			matches.append(record)
-	assert len(matches) == 1, (
-		f"the live baseline must match EXACTLY ONE promotion record's "
-		f"candidate; matched: {[r.name for r in matches]}"
-	)
-	record = matches[0]
-
-	# Approval state is the EXACT FILENAME: approval.json = approved.
-	# Reviewer identity/date come from Git history (the commit that
-	# renamed approval-DRAFT.json); legacy records may carry inert
-	# status/approved_by fields, which are NOT consulted.
-	approval_path = record / "approval.json"
-	assert approval_path.is_file(), (
-		f"promotion record {record.name} lacks approval.json"
-	)
-	assert not (record / "approval-DRAFT.json").exists(), (
-		f"promotion record {record.name} has BOTH approval.json and "
-		f"approval-DRAFT.json — ambiguous state"
-	)
-	app = json.loads(approval_path.read_text())
-	assert app.get("approval") == "ownership-corpus-promotion"
-
-	exp = app["expected_universe"]
-	assert len(uni["compiled_ok"]) == exp["compiled_count"], (
-		f"manifest compiled count {len(uni['compiled_ok'])} != approved "
-		f"{exp['compiled_count']}"
-	)
-	assert len(uni["failed"]) == exp["failed_count"]
-	assert len(uni["excluded"]) == exp["excluded_count"]
-
-	readme = (BASELINE / "BASELINE.md").read_text()
-	assert sha(approval_path) in readme, (
-		"BASELINE.md must record the FULL sha256 of the governing approval"
-	)
-	flat = " ".join(readme.split())  # line wrapping must not hide policy
-	for needle in ("drift_corpus_promote.py", "NEVER regenerates"):
-		assert needle in flat, f"BASELINE.md must state policy: {needle!r}"
+	assert isinstance(agg["counters"], dict) and agg["counters"], "counters present"
+	assert not _tool._hard_gate_failures(agg["counters"]), "every hard gate at zero"
+	assert _tool._baseline_partition_errors(uni) == [], "universe partition intact"
+	assert uni["inclusion_rule"], "inclusion rule recorded"
+	assert (BASELINE / "metadata.json").is_file(), "provenance metadata present"
+	assert (BASELINE / "BASELINE.md").is_file(), "provenance doc present"
 
 
-def test_justfile_wiring_corpus_once_in_certify_never_in_test() -> None:
+@pytest.mark.xfail(reason="pre-bootstrap: the checked-in baseline predates the "
+                          "new tool; run `just ownership-corpus-promote` once to land "
+                          "projections.json + fingerprint.json, then drop this xfail",
+                   strict=True)
+def test_reviewed_baseline_carries_per_fixture_projections() -> None:
+	"""After the bootstrap promotion, the reviewed baseline MUST carry the
+	per-fixture projections + run fingerprint that fast clean-clone seeding and
+	exact per-fixture comparison depend on (otherwise fallback compares only
+	aggregate counters)."""
+	assert (BASELINE / "projections.json").is_file(), "per-fixture projections.json"
+	assert (BASELINE / "fingerprint.json").is_file(), "run fingerprint.json"
+	# and they must be internally consistent with the manifest/aggregate.
+	assert _check._read_baseline(BASELINE) is not None
+	b = _check._read_baseline(BASELINE)
+	assert b["projections"] is not None and b["toolchain"] is not None
+
+
+def test_baseline_md_does_not_name_deleted_promotion_tooling() -> None:
+	"""Clean break: the reviewed baseline's provenance doc must not reference the
+	removed promote tool / promotions record chain (historical prose belongs in
+	doc/history.md)."""
+	md = (BASELINE / "BASELINE.md").read_text()
+	for gone in ("drift_corpus_promote.py", "promotions/", "approval-DRAFT.json"):
+		assert gone not in md, f"BASELINE.md still names removed tooling: {gone!r}"
+
+
+def test_justfile_wiring_two_recipes_promote_in_certify() -> None:
 	justfile = (ROOT / "justfile").read_text()
-	# recipe exists and points at the checked-in baseline in zero-delta mode
-	assert "ownership-corpus-check:" in justfile
-	assert "--require-zero-delta" in justfile
-	assert "lang/tests/ownership_corpus/reviewed-baseline" in justfile
-	# certify: exactly one independent corpus dependency, and the recipe
-	# never references the private pre-handoff runner
-	# (run-all-tests.sh — a separate entrypoint).
+	# exactly the two public recipes; no separate gate/preflight/promote-dir recipe
+	assert "ownership-corpus-check DIR" in justfile
+	assert "ownership-corpus-promote " in justfile
+	assert "ownership-corpus-gate" not in justfile
+	assert "ownership-corpus-preflight" not in justfile
+	# certify depends on promote exactly once (a clean tree is a byte-preserving
+	# no-op, so promote is safe in CI)
 	certify_line = next(l for l in justfile.splitlines() if l.startswith("certify:"))
-	assert certify_line.split(":", 1)[1].split().count("ownership-corpus-check") == 1
-	certify_idx = justfile.index("certify:")
-	certify_recipe = justfile[certify_idx:].split("\n\n")[0]
+	assert certify_line.split(":", 1)[1].split().count("ownership-corpus-promote") == 1
+	certify_recipe = justfile[justfile.index("certify:"):].split("\n\n")[0]
 	assert "run-all" not in certify_recipe
-	# the corpus is NOT a dependency of `just test` (run-all-tests.sh
-	# runs test twice — the corpus must not run twice)
+	# the corpus is NOT a dependency of `just test`; the matrix stays in test
 	test_line = next(l for l in justfile.splitlines() if l.startswith("test:"))
-	assert "ownership-corpus-check" not in test_line
-	# ...and the two ownership gates remain distinct: the matrix stays in test.
+	assert "ownership-corpus" not in test_line
 	assert "ownership-matrix-check" in test_line
 
 
-def test_run_all_contains_exactly_one_corpus_invocation() -> None:
-	"""run-all-tests.sh (the maintainer's private, untracked
-	pre-handoff runner) must run the corpus exactly once before its two
-	`just test` passes.  Skipped when the private file is absent from
-	this checkout."""
+def test_run_all_contains_exactly_one_promote_invocation() -> None:
 	import pytest
 	run_all = ROOT / "run-all-tests.sh"
 	if not run_all.is_file():
 		pytest.skip("run-all-tests.sh (private maintainer runner) not present")
 	text = run_all.read_text()
-	assert text.count("ownership-corpus-check") == 1, (
-		"run-all-tests.sh must invoke the ownership corpus exactly once"
-	)
+	assert text.count("ownership-corpus-promote") == 1, "the corpus runs exactly once"
 	assert text.count("just test") == 2, "the two-mode full suite"
+
 
 
 def test_malformed_universe_shapes_fail_closed(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ describes the methodology and the toolchain primitives it rests on (`flocker`,
 `driftc --sanitize`), not any one package's layout.
 
 For the compiler repo's own certification-only gate — the full
-ownership-audit corpus with its reviewed baseline and the approval-file
+ownership-audit corpus with its reviewed baseline and the fresh-compile
 promotion process — see [ownership-corpus-gate.md](ownership-corpus-gate.md).
 
 ## Validation notes

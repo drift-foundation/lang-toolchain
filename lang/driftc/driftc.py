@@ -30,7 +30,7 @@ from enum import Enum
 import sys
 import shutil
 import subprocess
-from ctypes.util import find_library
+from lang.driftc import link_selection
 from collections import ChainMap
 from types import MappingProxyType
 from pathlib import Path
@@ -100,34 +100,20 @@ def _resolve_build_profile(debug_style_runtime: bool) -> str:
 	return "debug" if debug_style_runtime else "optimized"
 
 
-_VALID_SANITIZERS = ("address", "undefined", "none")
 
 
 def _parse_sanitize(value: str):
 	"""argparse `type=` for `--sanitize=<comma-list>`.
 
-	Returns a `frozenset[str]` of the selected sanitizer tokens (excluding the
-	`none` sentinel).  `none` means "no sanitizers" and may not be combined with
-	other tokens.  Unknown tokens are a usage error.
-
-	The flag is the supported, documented selector; `DRIFT_ASAN` / `DRIFT_UBSAN`
-	remain deprecated env aliases (see `_run_compile_cli`, where the flag — when
-	given — is authoritative over the env).
+	Delegates to the shared authority (link_selection.sanitizer_tokens) and
+	re-raises its ValueError as an argparse usage error, so the flag and the
+	corpus compile contract parse `--sanitize` identically.
 	"""
 	import argparse as _ap
-	tokens = [t.strip() for t in value.split(",") if t.strip()]
-	unknown = sorted({t for t in tokens if t not in _VALID_SANITIZERS})
-	if unknown:
-		raise _ap.ArgumentTypeError(
-			f"unknown sanitizer(s): {', '.join(unknown)}; "
-			f"valid: {', '.join(_VALID_SANITIZERS)}"
-		)
-	non_none = {t for t in tokens if t != "none"}
-	if "none" in tokens and non_none:
-		raise _ap.ArgumentTypeError(
-			"'none' cannot be combined with other sanitizers"
-		)
-	return frozenset(non_none)
+	try:
+		return link_selection.sanitizer_tokens(value)
+	except ValueError as e:
+		raise _ap.ArgumentTypeError(str(e))
 
 
 def _version_string() -> str:
@@ -14257,62 +14243,12 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 	runtime_sources = [str(p) for p in get_runtime_sources(ROOT)]
 	runtime_root = (ROOT / "lang" / "language_runtime").resolve()
 	compiler_infra_root = (ROOT / "lang" / "compiler_infra").resolve()
-	search_dirs = [
-		Path("/lib"),
-		Path("/lib64"),
-		Path("/usr/lib"),
-		Path("/usr/lib64"),
-		Path("/lib/x86_64-linux-gnu"),
-		Path("/usr/lib/x86_64-linux-gnu"),
-	]
-	def _link_flags_for_lib(name: str) -> list[str]:
-		if not find_library(name):
-			return []
-		for d in search_dirs:
-			if (d / f"lib{name}.so").exists():
-				return [f"-l{name}"]
-		return []
-	# Backtrace symbolization libraries (libdw, libunwind, libunwind-x86_64,
-	# libelf) are gated on the dual-runtime debug-style variant.  The normal
-	# lane is the production-equivalent path; production hosts must be able
-	# to run normal-lane binaries without these libraries installed.  The
-	# matching source-side gating lives in
-	# lang/language_runtime/posix/assert_runtime.c, which omits the libdwfl
-	# + libunwind walk under -DDRIFT_RT_MODE_DEBUG=0 (the normal variant)
-	# so the runtime archive's .o files have zero references to libdw /
-	# libunwind / libelf symbols, and `--as-needed` would also drop them
-	# even if they were left on the cmdline.  This branch is the
-	# defense-in-depth that keeps them off the cmdline entirely under the
-	# normal lane.
-	if debug_style_runtime:
-		link_libs = _link_flags_for_lib("dw") + _link_flags_for_lib("unwind") + _link_flags_for_lib("unwind-x86_64") + _link_flags_for_lib("elf")
-	else:
-		link_libs = []
-	# std.codec.gzip_* calls into libz via the gzip shim in
-	# codec_gzip_runtime.o (part of the runtime archive). Because
-	# stdlib is compiled monolithically, std.codec's gzip wrapper
-	# functions are emitted into every Drift binary's IR (whether
-	# called or not), they reference symbols in codec_gzip_runtime.o,
-	# and the linker pulls that .o in unconditionally. So every
-	# driftc-emitted binary needs -lz at link time, regardless of
-	# whether the source touches std.codec. (`-Wl,--as-needed` below
-	# cannot strip libz because the references are real.) The package
-	# native_deps auto-link path also adds -lz when a stdlib .dmp is
-	# loaded, but `--stdlib-root` source-mode builds (the e2e runner,
-	# stage2 tests, and any user driving driftc directly without a
-	# pre-built .dmp) need it here. Universal on x86_64 Linux — the
-	# only supported target — so the find-by-search behaviour gives
-	# us a graceful fallback if libz is somehow absent.
-	link_libs = link_libs + _link_flags_for_lib("z")
-	def _select_linker() -> str:
-		if args.linker == "ld":
-			return "ld"
-		if args.linker == "gold":
-			return "gold"
-		if shutil.which("ld.gold") is not None:
-			return "gold"
-		return "ld"
-
+	# Native link libraries: the debug-style backtrace libs (gated on
+	# DRIFT_DEBUG) followed by libz (always), each linked only when it
+	# resolves on this host.  Resolved via the shared production authority
+	# lang.driftc.link_selection, which tools/corpus_compile_contract.py also
+	# imports so a corpus compile can never model a different library set.
+	link_libs = link_selection.native_link_flags(debug_style_runtime)
 	def _linker_supports_gdb_index(use_linker: str) -> bool:
 		if use_linker == "gold":
 			ld = shutil.which("ld.gold")
@@ -14327,7 +14263,7 @@ def _run_compile_cli(argv: list[str] | None = None) -> int:
 			return "--gdb-index" in res.stdout
 		return False
 
-	use_linker = _select_linker()
+	use_linker = link_selection.select_linker(args.linker)
 	linker_flags = ["-fuse-ld=gold"] if use_linker == "gold" else []
 	gdb_index_flag = ["-Wl,--gdb-index"] if debug_enabled and _linker_supports_gdb_index(use_linker) else []
 	asan_enabled = _env_true("DRIFT_ASAN")
