@@ -1,0 +1,7 @@
+{
+  "description": "fail-closed: a match used as a method-receiver base whose arms produce DIFFERENT types (Dog vs Bird) must be REJECTED, never miscompiled. A method receiver is a real value context, so the checker emits the precise E-MATCH-ARM-TYPE arm-disagreement diagnostic (not a downstream method-not-found cascade).",
+  "exit_code": 1,
+  "diagnostics": [
+    { "message_contains": "E-MATCH-ARM-TYPE" }
+  ]
+}

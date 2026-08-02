@@ -1,0 +1,7 @@
+{
+  "description": "fail-closed: a match used as an or_throw() receiver whose Result Err type is Int (not a `pub error`) must be rejected with E_OR_THROW_NOT_ERROR_TYPE. Regression: the or_throw preflight typed its receiver used_as_value=False, collapsing the match to Void, skipping the public-error check, and cascading to a weaker E_REQUIREMENT_NOT_SATISFIED (Int is Throw).",
+  "exit_code": 1,
+  "diagnostics": [
+    { "message_contains": "requires the Err type of" }
+  ]
+}

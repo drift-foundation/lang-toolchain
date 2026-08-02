@@ -1,6 +1,56 @@
 # Drift development history
 
-## 2026-07-31 (0.34.0: LANGUAGE_BUG — field projection of an rvalue temp at a declared-& formal double-freed; ABI 22 unchanged)
+## 2026-08-02 (0.34.1: LANGUAGE_BUG — owned ternary result moved into a binding double-freed; 0.34.0 withdrawn; ABI 22 unchanged)
+
+**Memory-safety fix (regression-first).** Assigning an owned, droppable
+ternary result to a binding double-freed the backing at teardown, with **no
+borrow involved**: `var selected = flag ? make_a() : make_b(); return 0;`
+aborted `[drift:contract] String flags: reserved bit set`, exit 134. A
+**pre-existing** defect (reproduced on certified 0.33.92, independent of the
+argument-borrow rules); it was certification-blocking for 0.34.x because it
+also made the value-control-flow bind-first migration guidance unsafe.
+
+**Root cause & fix (`stage2/hir_to_mir.py`, `_visit_expr_HTernary`).** The
+ternary lowers its result through a hidden, drop-registered local
+(`__tern_tmp`) because the value is stored conditionally across the then/else
+branches. At the join it reloaded that local with a plain `LoadLocal` — a
+shallow copy — while leaving the local drop-registered, so BOTH the local and
+the consuming binding owned and dropped the same backing. Fix: when the
+result type is droppable (the same `_needs_runtime_drop`/destructible
+condition the drop registration uses), the join now emits `MoveOut` instead of
+`LoadLocal`, transferring ownership to the single consumer (binding / return /
+by-value argument / discard) and cancelling the local's scope-exit drop.
+Bitcopy/non-drop results keep the plain `LoadLocal`.
+
+**Migration guidance now sound.** With this fix the value-control-flow
+rejection's bind-first remedy (`var x = cond ? a : b; use(x)`) is memory-safe;
+the borrow of a droppable ternary temporary remains rejected upstream
+(`E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED`), and binding it first is now the
+valid, sound rewrite.
+
+**Withdrawal.** The staged `0.34.0` candidate was **withdrawn** before
+certification when this defect surfaced; the corrected candidate is **0.34.1**.
+The supported baseline stays 0.33.92, so 0.34.1 still represents the
+compatibility-breaking 0.33→0.34 transition; the `.1` only distinguishes it
+from the dead 0.34.0.
+
+**Separate finding (deferred, not memory-safety).** An inline `match` in
+argument position types as `[Void]` (`inspect(match … { … })` → "no matching
+overload … args [Void]") — a call-argument typing limitation, not the
+value-control-flow diagnostic. A bound match value compiles and runs cleanly
+(the bind-into-binding double-free was HTernary-join-specific). Whether inline
+match arguments should be supported, or get a dedicated bind-first diagnostic,
+is tracked separately.
+
+**Tests.** New e2e row `ternary_owned_result_bound_drops_once` (bind-only,
+drop-once, RED pre-fix, verified base + ASan + memcheck); the 30 existing
+ternary-using e2e fixtures and the discard/return/by-value-arg/bitcopy/nested
+consumption shapes all pass.
+
+**Versioning:** `DRIFTC_VERSION` **0.34.1**; internal lowering only, **no ABI
+change — `DRIFT_RT_ABI_VERSION` stays 22**.
+
+## 2026-07-31 (0.34.1: LANGUAGE_BUG — field projection of an rvalue temp at a declared-& formal double-freed; ABI 22 unchanged)
 
 **Memory-safety fix (regression-first).** Under the 0.33.91
 reject-redundant-call-borrows rule, the now-mandatory bare spelling of
@@ -68,7 +118,7 @@ memory-unsafe exception beyond mutable temporaries: on **0.33.91–0.33.93
 only**, deleting an argument `&` was unsafe when the remaining
 expression was a FIELD projection from an owned temporary (bind-first:
 `val x = producer(); f(x.field)`). The pure-index case was always
-sound. As of **0.34.0 the bare field projection is again the valid,
+sound. As of **0.34.1 the bare field projection is again the valid,
 sound spelling** — not a permanent bind-first exception.
 
 **Tests (bounded ownership matrix).** 18 e2e rows: call-field,
@@ -103,7 +153,7 @@ separately (bare → addressable-place bind-first; explicit `&mut` →
 programmatic bypass. 67 existing borrow/autoborrow fixtures unaffected;
 765 checker/stage2/borrow-driver tests green.
 
-**Versioning:** `DRIFTC_VERSION` **0.34.0** — a MINOR bump signalling the
+**Versioning:** `DRIFTC_VERSION` **0.34.1** — a MINOR bump signalling the
 accumulated user-facing **source-acceptance** breaks (reject-redundant-call-
 borrows: `&` at a declared-reference formal is now rejected; and the
 value-control-flow rvalue-borrow rejection above). This lowering fix is
@@ -318,13 +368,13 @@ doc samples, plus the regenerated `om_*` ownership matrix. Exceptions to
 one-token deletion: mutable-temporary arguments become bindings
 (`val p = &mut mk(...); touch(p);`), and mode-only overload sets need a
 rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
-dead). **[Erratum, 0.34.0]** a third, then-undetected exception:
+dead). **[Erratum, 0.34.1]** a third, then-undetected exception:
 deleting `&` where the remaining argument was a FIELD projection of an
 owned rvalue temporary (`peek(&mk().root)` → `peek(mk().root)`) was
 memory-unsafe on 0.33.91–0.33.93 (teardown double-free); it needed a
-bind-first (`val x = mk(); peek(x.root)`) until 0.34.0 fixed the
+bind-first (`val x = mk(); peek(x.root)`) until 0.34.1 fixed the
 lowering, after which the bare field projection is sound again. See the
-0.34.0 entry. D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
+0.34.1 entry. D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
 Python selector-test retirements (replaced by the four-shape R2 fixture), 23
 new fixtures. The first full e2e pass exposed a sweep blind spot — the
 corpus sweeper only compiled audit-includable fixtures, so the audit's
@@ -356,7 +406,7 @@ the rescan promotion was that flow's first production use.
 **Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
 fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —
 `DRIFT_RT_ABI_VERSION` stays 22** (front-end acceptance + checker/lowering
-surface only). **[Erratum, 0.34.0]** the original claim that the
+surface only). **[Erratum, 0.34.1]** the original claim that the
 surviving bare spelling's IR is "byte-identical" to the explicit form
 overstated it: the checker-synthesized borrow is injected after stage1
 and lowered by the MIR rvalue-base lift, whereas the explicit `&…`

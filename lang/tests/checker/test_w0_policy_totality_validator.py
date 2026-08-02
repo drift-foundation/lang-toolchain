@@ -73,13 +73,6 @@ def test_surviving_mut_rvalue_binding_is_internal_error() -> None:
 	assert any("MUT_RVALUE_BINDING-classified borrow argument was accepted" in d.message for d in errs), [d.message for d in errs]
 
 
-def test_surviving_cfv_rvalue_binding_is_internal_error() -> None:
-	"""CFV_RVALUE_BINDING (value-control-flow rvalue projection borrow) is a
-	REJECTION class — a borrow carrying it must never survive typed mode."""
-	block, infos, table = _mk_call("cfv_rvalue_binding")
-	errs = _validate(block, infos, table)
-	assert any("CFV_RVALUE_BINDING-classified borrow argument was accepted" in d.message for d in errs), [d.message for d in errs]
-
 
 def test_compiler_synthesized_borrow_needs_no_class() -> None:
 	block, infos, table = _mk_call(None, source_written=False)

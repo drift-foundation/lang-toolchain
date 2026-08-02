@@ -1,0 +1,10 @@
+module m;
+struct Node { text: String, }
+fn make_a() nothrow -> Node { return Node(text = "aa" + ""); }
+fn make_b() nothrow -> Node { return Node(text = "bb" + ""); }
+fn take(s: &String) nothrow -> Int { return s.byte_length(); }
+pub fn main() nothrow -> Int {
+	// A field projection of a match rvalue passed as a bare &String arg
+	// (the parameter spells the borrow; redundant-borrow policy wants it bare).
+	return take((match true { true => { make_a() }, false => { make_b() } }).text) - 2;
+}

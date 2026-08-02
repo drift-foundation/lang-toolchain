@@ -1,0 +1,1 @@
+{"description": "regression: whole shared borrow of a fresh VARIANT-match result at &Node. Same CFG-result VOID-typing leak class as the Bool case; drop-once. base+ASan+memcheck.", "exit_code": 0}

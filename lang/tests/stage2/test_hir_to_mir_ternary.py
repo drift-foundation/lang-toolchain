@@ -30,11 +30,14 @@ def test_ternary_lowering_builds_diamond_cfg():
 	entry_term = func.blocks[func.entry].terminator
 	from lang.driftc.stage2 import IfTerminator
 	assert isinstance(entry_term, IfTerminator)
-	# Join block should load the hidden temp and store into x.
+	# Join block should YIELD the hidden temp (into x).  The CFG-result
+	# extraction MoveOuts a droppable/non-cheap-copy result (transferring
+	# ownership to the single consumer) and LoadLocals a cheap-copy one;
+	# these untyped synthetic vars are non-cheap-copy, so the join moves.
 	join_block_name = [n for n in block_names if n.startswith("tern_join")][0]
 	join_instrs = func.blocks[join_block_name].instructions
-	from lang.driftc.stage2 import LoadLocal
-	assert any(isinstance(ins, LoadLocal) for ins in join_instrs)
+	from lang.driftc.stage2 import LoadLocal, MoveOut
+	assert any(isinstance(ins, (LoadLocal, MoveOut)) for ins in join_instrs)
 	# Final block (entry or join) should contain the store to x.
 	stores = [ins for blk in func.blocks.values() for ins in blk.instructions if ins.__class__.__name__ == "StoreLocal" and ins.local == "x"]
 	assert stores

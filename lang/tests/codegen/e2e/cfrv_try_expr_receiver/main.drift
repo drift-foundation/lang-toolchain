@@ -1,0 +1,6 @@
+module m;
+struct Node { text: String, }
+fn mk() throws -> Node { return Node(text = "zz" + ""); }
+pub fn main() nothrow -> Int {
+	return (try mk() catch { Node(text = "??" + "") }).text.byte_length() - 2;
+}

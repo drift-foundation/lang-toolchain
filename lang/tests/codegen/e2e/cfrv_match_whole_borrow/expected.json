@@ -1,0 +1,1 @@
+{"description": "regression (LANGUAGE_BUG): whole shared borrow of a fresh Bool-match result — inspect(match b {...}) at &Node. Was an 18-byte LEAK under memcheck (base+ASan clean): the match result local + borrow temp were typed VOID because the arg-position expected type collapsed, so neither was drop-registered. Fixed via _cfg_result_type. base+ASan+memcheck.", "exit_code": 0}

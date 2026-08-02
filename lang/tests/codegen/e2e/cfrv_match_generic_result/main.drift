@@ -1,0 +1,9 @@
+module m;
+fn pick<T>(c: Bool, x: T, y: T) nothrow -> T {
+	return match c { true => { move x }, false => { move y } };
+}
+pub fn main() nothrow -> Int {
+	val a: String = pick<type String>(true, "aa" + "", "bb" + "");
+	val b: Int = pick<type Int>(true, 7, 9);
+	return (a.byte_length() - 2) + (b - 7);
+}

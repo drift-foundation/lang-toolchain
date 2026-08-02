@@ -1,0 +1,1 @@
+{"description": "regression (LANGUAGE_BUG): an owned ternary result moved into a `var` binding must drop its heap String exactly once. Was a teardown double-free (exit 134, 'String flags: reserved bit set') with NO borrow involved — the ternary result temp and the binding both dropped the same backing. Drop-once proven by base (no abort) + ASan + memcheck.", "exit_code": 0}

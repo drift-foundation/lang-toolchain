@@ -1,0 +1,15 @@
+module m;
+
+struct Node { tag: String, }
+
+fn make_a() nothrow -> Node { return Node(tag = "a" + ""); }
+fn make_b() nothrow -> Node { return Node(tag = "b" + ""); }
+
+pub fn main() nothrow -> Int {
+	// Owned ternary result moved into a `var` binding: the binding takes
+	// ownership; the ternary result temp must NOT also drop the backing.
+	// Was a teardown double-free (exit 134), independent of any borrow.
+	var selected = true ? make_a() : make_b();
+	if selected.tag.byte_length() != 1 { return 3; }
+	return 0;
+}

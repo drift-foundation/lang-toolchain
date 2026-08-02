@@ -53,6 +53,27 @@ FIXED_WIDTH_TYPE_NAMES = {
 }
 
 
+def _type_user_arg(type_expr, arg, expected_type: TypeId | None = None) -> TypeId:
+	"""Type a USER-WRITTEN expression that appears in a VALUE position —
+	a call/constructor argument, a keyword-argument value, a constructor
+	field, or a method receiver.
+
+	Such an expression is semantically a VALUE: `used_as_value=True`, so a
+	value-control-flow expression (a `match` / ternary) in this position
+	types to its arm/branch RESULT rather than collapsing to Void.  Its
+	ownership-USE accounting (the Copy-value requirement / the move) is
+	DEFERRED to autoborrow: `defer_value_use=True`, so re-typing the same
+	argument during overload resolution never consumes it.
+
+	This is the single source of the value-context contract for user
+	arguments.  Routing every real argument/kwarg/field/receiver through it
+	keeps the whole call-resolution family from drifting back to the wrong
+	`used_as_value=False` spelling (which reads as "statement / non-value
+	inspection" and is reserved for places, assignment targets, scrutinees,
+	and explicitly documented synthesized probes)."""
+	return type_expr(arg, expected_type=expected_type, used_as_value=True, defer_value_use=True)
+
+
 def _fmt_overload_args(ctx: object, tys) -> str:
 	"""Human-readable arg list for overload diagnostics — NEVER raw TypeIds
 	(the `args [2133]` bug, DriftQuery 2026-07-08)."""
@@ -2142,7 +2163,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			arg_ty = arg_types[idx] if idx < len(arg_types) else None
 			if arg_ty is not None and arg_ty != ctx.unknown_ty and not ctx.type_table.has_typevar(arg_ty):
 				continue
-			arg_types[idx] = type_expr(arg, expected_type=exp_ty, used_as_value=False)
+			arg_types[idx] = _type_user_arg(type_expr, arg, exp_ty)
 			setattr(arg, "force_inferred_type", exp_ty)
 			if arg_types[idx] is None or arg_types[idx] == ctx.unknown_ty:
 				arg_types[idx] = exp_ty
@@ -2152,7 +2173,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	# JSON document.  Compiler-handled — no real method body to
 	# resolve.
 	if getattr(expr, "method_name", None) == "encode_compact":
-		_recv_ty = type_expr(expr.receiver, used_as_value=False)
+		_recv_ty = _type_user_arg(type_expr, expr.receiver)
 		_eff_ty = _recv_ty
 		_eff_def = ctx.type_table.get(_eff_ty)
 		while _eff_def.kind is TypeKind.REF and _eff_def.param_types:
@@ -2180,7 +2201,11 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 
 	recv_ty = getattr(expr, "receiver_type_id", None)
 	if recv_ty is None:
-		recv_ty = type_expr(expr.receiver, used_as_value=False)
+		# A method receiver is a real VALUE position (the value is borrowed
+		# for &self dispatch or consumed for by-value self); a match/ternary
+		# receiver must type to its result, not Void.  Move accounting is
+		# deferred to autoborrow.
+		recv_ty = _type_user_arg(type_expr, expr.receiver)
 	for arg in expr.args:
 		if isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
 			arg.defer_infer_diag = True
@@ -2194,7 +2219,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 			if isinstance(arg, H.HLambda):
 				arg_types.append(ctx.unknown_ty)
 				continue
-			arg_types.append(type_expr(arg, used_as_value=False))
+			arg_types.append(_type_user_arg(type_expr, arg))
 	for idx, arg in enumerate(expr.args):
 		if isinstance(arg, H.HLambda):
 			continue
@@ -4319,7 +4344,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				break
 	trait_type_params = list(getattr(trait_def, "type_params", []) or []) if trait_def is not None else []
 	if method_sig is not None and (not trait_type_params or type_arg_ids):
-		recv_ty = recv_arg_type if recv_arg_type is not None else ctx.type_expr(expr.args[0], used_as_value=False)
+		recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_arg(ctx.type_expr, expr.args[0])
 		recv_nominal = ctx.unwrap_ref_type(recv_ty)
 		if trait_type_params and type_arg_ids and ctx.type_table.get(recv_nominal).kind is not TypeKind.TYPEVAR:
 			world = ctx.global_trait_world or ctx.visible_trait_world
@@ -4580,7 +4605,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 		target = getattr(method_res.call_info, "target", None)
 		target_fn_id = target.symbol if isinstance(target, CallTarget) and target.kind is CallTargetKind.DIRECT else None
 		if ctx.record_instantiation is not None and target_fn_id is not None:
-			recv_ty = recv_arg_type if recv_arg_type is not None else ctx.type_expr(expr.args[0], used_as_value=False)
+			recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_arg(ctx.type_expr, expr.args[0])
 			recv_nominal = ctx.unwrap_ref_type(recv_ty)
 			receiver_args = _receiver_inst_args(recv_nominal)
 			if receiver_args is None:
@@ -4845,12 +4870,12 @@ def resolve_call_expr(
 				continue
 			arg.defer_infer_diag = False
 			if idx < len(arg_types):
-				arg_types[idx] = type_expr(arg, expected_type=exp_ty, used_as_value=False)
+				arg_types[idx] = _type_user_arg(type_expr, arg, exp_ty)
 				arg.force_inferred_type = exp_ty
 				if arg_types[idx] is None or arg_types[idx] == ctx.unknown_ty:
 					arg_types[idx] = exp_ty
 			else:
-				ty = type_expr(arg, expected_type=exp_ty, used_as_value=False)
+				ty = _type_user_arg(type_expr, arg, exp_ty)
 				arg.force_inferred_type = exp_ty
 	def _ref_param_info(param_ty: TypeId) -> tuple[bool, TypeId] | None:
 		pdef = ctx.type_table.get(param_ty)
@@ -5244,7 +5269,7 @@ def resolve_call_expr(
 				return record_expr(expr, ctx.unknown_ty)
 		call_type_args = getattr(expr, "type_args", None) or []
 		type_arg_ids = [resolve_opaque_type(t, ctx.type_table, module_id=current_module_name, type_params=type_param_map) for t in call_type_args]
-		arg_types_local = [type_expr(a, used_as_value=False) for a in expr.args]
+		arg_types_local = [_type_user_arg(type_expr, a) for a in expr.args]
 		# W3: parameter-directed borrowing on the std.mem strict-typed path.
 		# The intrinsic formals below are syntactically declared `&`/`&mut`
 		# in stdlib/std/mem/mem.drift; pre-normalize BEFORE the per-intrinsic
@@ -5856,9 +5881,9 @@ def resolve_call_expr(
 				arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=is_throw)
 				arg_expr.expected_fn_inferred = True
 		if arg_expected_type is not None:
-			arg_ty = type_expr(arg_expr, expected_type=arg_expected_type, used_as_value=False)
+			arg_ty = _type_user_arg(type_expr, arg_expr, arg_expected_type)
 		else:
-			arg_ty = type_expr(arg_expr, used_as_value=False)
+			arg_ty = _type_user_arg(type_expr, arg_expr)
 		if arg_ty is None:
 			return record_expr(expr, ctx.unknown_ty)
 		arg_def = ctx.type_table.get(arg_ty)
@@ -5994,7 +6019,7 @@ def resolve_call_expr(
 					arg.defer_infer_diag = False
 			elif isinstance(arg, (H.HMapLiteral, H.HArrayLiteral)):
 				arg.defer_infer_diag = True
-		kw_value_types = [type_expr(kw.value, used_as_value=False) for kw in kw_pairs]
+		kw_value_types = [_type_user_arg(type_expr, kw.value) for kw in kw_pairs]
 		call_type_args = getattr(expr, "type_args", None) or []
 		call_type_args_span = None
 		type_arg_ids: list[TypeId] | None = None
@@ -6021,7 +6046,7 @@ def resolve_call_expr(
 							if drift_debug.enabled("call_resolve") and getattr(qm, "member", None) in ("ReturnBusy", "Closed", "Cancelled", "Failed"):
 								print(f"[call_resolve] qmem {qm.member} csid={getattr(expr, 'callsite_id', None)} ctor_res preset via zero-field fastpath", file=_debug_stderr)
 							ctor_res = VariantCtorResolveResult(base_tid, [], [], [])
-		arg_types = [type_expr(a, used_as_value=False) for a in arg_exprs]
+		arg_types = [_type_user_arg(type_expr, a) for a in arg_exprs]
 		for idx, arg in enumerate(arg_exprs):
 			if isinstance(arg, H.HLambda):
 				ty = arg_types[idx]
@@ -6566,7 +6591,7 @@ def resolve_call_expr(
 				file=_debug_stderr,
 			)
 		kw_pairs = getattr(expr, "kwargs", []) or []
-		kw_value_types = [type_expr(kw.value, used_as_value=False) for kw in kw_pairs]
+		kw_value_types = [_type_user_arg(type_expr, kw.value) for kw in kw_pairs]
 		call_type_args = list(getattr(expr, "type_args", None) or [])
 		call_type_args_span = None
 		if call_type_args:
@@ -6612,7 +6637,7 @@ def resolve_call_expr(
 					# arity only — its own error message read a never-assigned
 					# `arg_types`); place-typed args are required so the
 					# auto-borrow below can borrow lvalues.
-					arg_types = [type_expr(a, used_as_value=False) for a in expr.args]
+					arg_types = [_type_user_arg(type_expr, a) for a in expr.args]
 					for _ai, _arg in enumerate(expr.args):
 						if isinstance(_arg, H.HLambda):
 							_ty = arg_types[_ai]
@@ -6678,7 +6703,7 @@ def resolve_call_expr(
 				expr.kwargs = []
 				expr.ctor_arg_field_indices = list(ctor_res.ctor_arg_field_indices)
 				arg_exprs = list(expr.args)
-				arg_types = [type_expr(a, used_as_value=False) for a in arg_exprs]
+				arg_types = [_type_user_arg(type_expr, a) for a in arg_exprs]
 				intent.arg_expected_types = _expected_arg_types_for_call(list(ctor_res.inst_params), len(arg_exprs))
 				_propagate_arg_expected_types(intent, arg_types)
 				record_call_info(expr, param_types=list(ctor_res.inst_params), return_type=ctor_res.inst_return, can_throw=False, target=CallTarget.constructor(ctor_res.inst_return, expr.fn.name, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)))
@@ -6770,7 +6795,7 @@ def resolve_call_expr(
 			if call_type_arg_ids:
 				struct_id = ctx.type_table.ensure_struct_template(struct_base, call_type_arg_ids) if any(ctx.type_table.has_typevar(t) for t in call_type_arg_ids) else ctx.type_table.ensure_struct_instantiated(struct_base, call_type_arg_ids)
 			arg_exprs = list(expr.args)
-			arg_types = [type_expr(a, used_as_value=False) for a in arg_exprs]
+			arg_types = [_type_user_arg(type_expr, a) for a in arg_exprs]
 			for idx, arg in enumerate(arg_exprs):
 				if isinstance(arg, H.HLambda):
 					ty = arg_types[idx]
@@ -7320,7 +7345,7 @@ def resolve_call_expr(
 						ret_ty = _inst_pre.type_args[_cand_kind[0]]
 						arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=_cand_kind[1])
 						arg.expected_fn_inferred = True
-						arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
+						arg_types.append(_type_user_arg(type_expr, arg, arg_expected_type))
 						continue
 				# Generic-Callback fallback: the candidate's `(arity,
 				# can_throw)` kind is determined by the interface BASE
@@ -7340,18 +7365,18 @@ def resolve_call_expr(
 				_fb_can_throw = bool(_cand_kind[1]) if _cand_kind is not None else True
 				arg_expected_type = ctx.type_table.ensure_function(fallback_params, ret_ty, can_throw=_fb_can_throw)
 				arg.expected_fn_inferred = True
-				arg_types.append(type_expr(arg, expected_type=arg_expected_type, used_as_value=False))
+				arg_types.append(_type_user_arg(type_expr, arg, arg_expected_type))
 			elif isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()))):
 				if isinstance(arg.fn, H.HQualifiedMember):
 					arg.defer_infer_diag = True
 				else:
 					arg.defer_infer_diag = False
-				arg_types.append(type_expr(arg, used_as_value=False))
+				arg_types.append(_type_user_arg(type_expr, arg))
 			elif isinstance(arg, (H.HMapLiteral, H.HArrayLiteral)):
 				arg.defer_infer_diag = True
-				arg_types.append(type_expr(arg, used_as_value=False))
+				arg_types.append(_type_user_arg(type_expr, arg))
 			else:
-				arg_types.append(type_expr(arg, used_as_value=False))
+				arg_types.append(_type_user_arg(type_expr, arg))
 		for idx, arg in enumerate(expr.args):
 			if isinstance(arg, H.HLambda):
 				# Gated retry: skip if the candidate-driven path above
@@ -7623,7 +7648,7 @@ def resolve_call_expr(
 					arg.allow_capture_invoke = False
 				arg.expected_fn_inferred = True
 				arg.expected_type_from_require = param_ty
-				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
+				arg_types[idx] = _type_user_arg(type_expr, arg, param_ty)
 			# Re-type explicit callbackN(lambda) args with the expected
 			# Callback type so the lambda inside gets concrete param types.
 			# Without this, callback2(|req, ctx| ...) inside add_route(...)
@@ -7652,7 +7677,7 @@ def resolve_call_expr(
 				if prev_ty is not None and prev_ty != ctx.unknown_ty:
 					# Already successfully typed — skip.
 					continue
-				arg_types[idx] = type_expr(arg, expected_type=param_ty, used_as_value=False)
+				arg_types[idx] = _type_user_arg(type_expr, arg, param_ty)
 			_b2_wrapped_params: dict[int, TypeId] = {}  # param_idx -> new Callback type
 			if decl.fn_id is not None and any(isinstance(a, H.HLambda) for a in expr.args):
 				req_expr = _require_for_fn(decl.fn_id)
@@ -7720,7 +7745,7 @@ def resolve_call_expr(
 							arg.allow_capture_invoke = False
 						arg.expected_fn_inferred = True
 						arg.expected_type_from_require = arg_expected_type
-						arg_types[param_idx] = type_expr(arg, expected_type=arg_expected_type, used_as_value=False)
+						arg_types[param_idx] = _type_user_arg(type_expr, arg, arg_expected_type)
 						# B2/B4: auto-wrap capturing lambdas in callback_N()
 						# so F is instantiated as Callback (not fn ptr).
 						# Includes borrowed captures — the borrow checker validates

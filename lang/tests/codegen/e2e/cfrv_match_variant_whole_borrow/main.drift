@@ -1,0 +1,7 @@
+module m;
+struct Node { text: String, }
+variant Sel { A(), B() }
+fn make_a() nothrow -> Node { return Node(text = "aa" + ""); }
+fn make_b() nothrow -> Node { return Node(text = "bb" + ""); }
+fn inspect(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+pub fn main() nothrow -> Int { val s = Sel::A(); return inspect(match s { Sel::A() => { make_a() }, Sel::B() => { make_b() } }) - 2; }

@@ -1,0 +1,1 @@
+{"description": "regression (LANGUAGE_BUG): shared field projection of an owned TRY-EXPRESSION result — peek((try make(false) catch {PR(...)}).root). Was exit-134 double-free. Fixed by generalizing _validate_lifted_chain to safe owned-rvalue bases + CFG-result MoveOut. base+ASan+memcheck.", "exit_code": 0}

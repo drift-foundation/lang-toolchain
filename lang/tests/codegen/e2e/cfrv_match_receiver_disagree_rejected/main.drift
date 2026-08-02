@@ -1,0 +1,6 @@
+module m;
+struct Dog { tag: String, }
+struct Bird { tag: String, }
+pub fn main() nothrow -> Int {
+	return (match true { true => { Dog(tag="d"+"") }, false => { Bird(tag="b"+"") } }).tag.byte_length() - 1;
+}

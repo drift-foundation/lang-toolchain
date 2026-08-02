@@ -168,5 +168,15 @@ def test_match_by_value_string_binder_copies_payload() -> None:
 	HIRToMIR(builder, type_table=type_table, call_info_by_callsite_id=call_info_by_callsite_id).lower_block(hir)
 	all_instrs = [instr for block in builder.func.blocks.values() for instr in block.instructions]
 	assert any(isinstance(instr, VariantGetFieldAddr) and instr.ctor == "Some" for instr in all_instrs)
-	assert not any(isinstance(instr, MoveOut) and instr.ty == string_tid for instr in all_instrs)
+	# The match RESULT is forwarded to `y` by a MoveOut of the CFG-result
+	# temp (`__match_expr_tmp`) — the shared control-flow-result ownership
+	# transfer, always allowed.  What must NOT happen is a MoveOut of the
+	# BINDER's String out of the scrutinee: a by-value String binder is
+	# RETAINED (CopyValue), never moved.
+	binder_moveouts = [
+		instr for instr in all_instrs
+		if isinstance(instr, MoveOut) and instr.ty == string_tid
+		and not str(getattr(instr, "local", "")).startswith("__match_expr_tmp")
+	]
+	assert not binder_moveouts, binder_moveouts
 	assert any(isinstance(instr, CopyValue) and instr.ty == string_tid for instr in all_instrs)

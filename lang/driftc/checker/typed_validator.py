@@ -155,8 +155,6 @@ def validate_typed_hir(root: H.HNode, *, call_info_by_callsite_id: Mapping[int, 
 								diagnostics.append(tc_diag(message="internal: REDUNDANT-classified borrow argument was accepted (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
 							elif _pc == "mut_rvalue_binding":
 								diagnostics.append(tc_diag(message="internal: MUT_RVALUE_BINDING-classified borrow argument was accepted (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
-							elif _pc == "cfv_rvalue_binding":
-								diagnostics.append(tc_diag(message="internal: CFV_RVALUE_BINDING-classified borrow argument was accepted (W0 checker bug)", severity="error", span=getattr(_arg, "loc", None) or getattr(node, "loc", None)))
 			for child in _iter_expr_children(node):
 				_walk_node(child)
 			return

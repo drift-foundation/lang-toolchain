@@ -1,0 +1,1 @@
+{"description": "acceptance: value-producing inline Bool match as a BY-VALUE call argument — consume(match b { true => {mk_a()}, false => {mk_b()} }). Was typed [Void] (overload fail), then cannot-copy __match_bool_tmp. The result is a fresh owned rvalue consumed without a source move. base+ASan+memcheck.", "exit_code": 0}

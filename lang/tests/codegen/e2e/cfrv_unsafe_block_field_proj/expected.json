@@ -1,0 +1,1 @@
+{"description": "regression (LANGUAGE_BUG): shared field projection of an owned value produced by an unsafe BLOCK (not a call) — peek((unsafe { PR(...) }).root). Was exit-134 teardown double-free (the projection lift was call-only; leaf-alias fallback duplicated the owner). Drop-once via base+ASan+memcheck.", "exit_code": 0, "compiler_flags": ["--allow-unsafe"]}

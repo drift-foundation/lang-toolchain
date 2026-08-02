@@ -1,0 +1,1 @@
+{"description": "acceptance: a try-expression rvalue used directly as a method-call receiver base ((try mk() catch {...}).text.byte_length()). The recovered value is materialized once, its field borrowed, then dropped. base+ASan+memcheck.", "exit_code": 0}

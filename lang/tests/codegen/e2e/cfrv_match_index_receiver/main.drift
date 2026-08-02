@@ -1,0 +1,6 @@
+module m;
+fn va() nothrow -> Array<String> { var a: Array<String> = []; a.push("xx" + ""); return move a; }
+fn vb() nothrow -> Array<String> { var b: Array<String> = []; b.push("yy" + ""); return move b; }
+pub fn main() nothrow -> Int {
+	return (match true { true => { va() }, false => { vb() } })[0].byte_length() - 2;
+}

@@ -1,0 +1,1 @@
+{"description": "acceptance: value-producing inline VARIANT match as a by-value call argument. Fresh owned rvalue consumed without source move. base+ASan+memcheck.", "exit_code": 0}

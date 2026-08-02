@@ -1,0 +1,6 @@
+module m;
+struct Node { text: String, }
+fn make_a() nothrow -> Node { return Node(text = "a" + ""); }
+fn make_b() nothrow -> Node { return Node(text = "b" + ""); }
+fn inspect(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+pub fn main() nothrow -> Int { return inspect(true ? make_a() : make_b()) - 1; }

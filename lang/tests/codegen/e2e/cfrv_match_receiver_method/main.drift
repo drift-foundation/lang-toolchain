@@ -1,0 +1,10 @@
+module m;
+struct Node { text: String, }
+fn make_a() nothrow -> Node { return Node(text = "aa" + ""); }
+fn make_b() nothrow -> Node { return Node(text = "bb" + ""); }
+pub fn main() nothrow -> Int {
+	// A match result used directly as a method-call receiver base.
+	// The match rvalue is materialized once, its field borrowed for the
+	// call, then dropped — must be base+ASan+memcheck clean.
+	return (match true { true => { make_a() }, false => { make_b() } }).text.byte_length() - 2;
+}

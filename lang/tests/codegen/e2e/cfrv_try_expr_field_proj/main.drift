@@ -1,0 +1,10 @@
+module m;
+struct Node { text: String, children: Array<Node>, }
+struct PR { root: Node, }
+error Oops { }
+fn make(ok: Bool) throws -> PR { if ok { var k: Array<Node> = []; return PR(root = Node(text = "z" + "", children = move k)); } throw Oops(); }
+fn peek(n: &Node) nothrow -> Int { return n.children.len(); }
+pub fn main() nothrow -> Int {
+	var k2: Array<Node> = [];
+	return peek((try make(false) catch { PR(root = Node(text = "y" + "", children = move k2)) }).root);
+}

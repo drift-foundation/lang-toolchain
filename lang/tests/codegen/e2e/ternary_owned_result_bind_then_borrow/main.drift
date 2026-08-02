@@ -1,0 +1,15 @@
+module m;
+
+struct Node { text: String, }
+
+fn make_a() nothrow -> Node { return Node(text = "aa" + ""); }
+fn make_b() nothrow -> Node { return Node(text = "bb" + ""); }
+fn inspect(n: &Node) nothrow -> Int { return n.text.byte_length(); }
+
+pub fn main() nothrow -> Int {
+	// The value-control-flow rejection's prescribed migration: bind the
+	// ternary to a `var` first, then borrow the binding.  Must drop the
+	// backing exactly once (the bind-first remedy is now sound).
+	var selected = true ? make_a() : make_b();
+	return inspect(selected) - 2;
+}

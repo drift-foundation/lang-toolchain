@@ -202,10 +202,13 @@ def test_autoborrow_shared_receiver_through_ref_rvalue_field_projection(
 	projection is borrowed, not copied.
 
 	Fix: type_checker.py HBorrow rvalue-subject branch types its
-	subject with used_as_value=False (was unspecified, defaulting
-	True), suppressing the spurious value-copy diagnostic on the
-	non-Copy projected field. Stage1 borrow materialize's
-	`_split_lift_place_chain` then lifts the rvalue base.
+	subject with `defer_value_use=True` (a borrow does not copy its
+	subject), which suppresses the spurious value-copy diagnostic on
+	the non-Copy projected field.  `used_as_value=True` is retained
+	so an rvalue subject (match/ternary/try, or a ref-returning base)
+	still types to the value it produces rather than Void.  Stage1
+	borrow materialize's `_split_lift_place_chain` then lifts the
+	rvalue base.
 	"""
 	mod_root = tmp_path / "mods"
 	_write_file(

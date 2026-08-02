@@ -791,6 +791,136 @@ class HIRToMIR:
 		"""
 		return self._drop_policy(ty).is_cheap_copy
 
+	def _cfg_result_subexprs(self, expr: H.HExpr):
+		"""The per-branch result expressions of a control-flow value
+		expression (ternary branches / match-arm results), unwrapping a
+		value-block arm to its trailing expression statement."""
+		if isinstance(expr, H.HTernary):
+			yield expr.then_expr
+			yield expr.else_expr
+			return
+		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
+			for arm in expr.arms:
+				r = getattr(arm, "result", None)
+				if r is not None:
+					yield r
+					continue
+				blk = getattr(arm, "block", None)
+				last = blk.statements[-1] if (blk is not None and blk.statements) else None
+				if last is not None and isinstance(last, H.HExprStmt):
+					yield last.expr
+
+	def _cfg_result_type(self, expr: H.HExpr) -> TypeId:
+		"""Result type of a value-producing control-flow expression (match /
+		ternary), for typing its hidden result local and any materialized
+		borrow temp.  A VALUE-producing CFG expression must NOT be typed VOID
+		(or those locals go un-drop-registered and LEAK — `inspect(match …)`),
+		but neither may the FIRST arm alone decide it: arms may converge
+		through a recorded interface / common-type coercion.
+
+		Precedence:
+		  1. the CHECKER-RECORDED whole-expression type (authoritative — it
+		     already accounts for arm convergence / coercion), when concrete
+		     and non-Void.  A TypeVar result is PRESERVED, not collapsed.
+		  2. a legitimate value-context expected type — non-Void and non-REF
+		     (in argument position the expected type may be the formal `&T`,
+		     which is not the produced owned value).
+		  3. a COMMON type across every value-producing arm — they must agree.
+		     A TypeVar among them is preserved; concrete arms that DISAGREE
+		     with no recorded common/coercion type are a checker invariant
+		     violation and fail loud.
+		"""
+		def _kind(ty: TypeId):
+			return self._type_table.get(ty).kind
+
+		# 1. Checker-recorded whole-expression type.
+		node_id = getattr(expr, "node_id", None)
+		recorded = (self._expr_types.get(node_id)
+		            if self._typed_mode != "none" and node_id is not None else None)
+		if recorded is not None and _kind(recorded) not in (TypeKind.VOID, TypeKind.UNKNOWN):
+			return recorded  # concrete or TypeVar (preserved)
+
+		# 2. Value-context expected type (non-Void, non-REF).
+		want = self._current_expected_type()
+		if want is not None and _kind(want) not in (TypeKind.VOID, TypeKind.UNKNOWN, TypeKind.REF):
+			return want
+
+		# 3. Common arm type.
+		arm_tys: list[TypeId] = []
+		for sub in self._cfg_result_subexprs(expr):
+			t = self._infer_expr_type(sub)
+			if t is None or _kind(t) in (TypeKind.VOID, TypeKind.UNKNOWN):
+				continue
+			arm_tys.append(t)
+		if arm_tys:
+			# With no authoritative recorded/value-context result type (steps 1
+			# & 2 above), the arms are the ONLY evidence — so every arm TypeId
+			# must AGREE, including a shared TypeVar.  Anything else (disagreeing
+			# concrete arms, a TypeVar mixed with a concrete arm, or differing
+			# TypeVars) means arm convergence was not resolved by the checker and
+			# we must NOT silently pick one — fail loud.
+			has_typevar = any(_kind(t) is TypeKind.TYPEVAR for t in arm_tys)
+			concrete = [t for t in arm_tys if _kind(t) is not TypeKind.TYPEVAR]
+			if concrete and not all(t == concrete[0] for t in concrete):
+				raise AssertionError(
+					f"stage2: control-flow result arms have disagreeing concrete "
+					f"types {sorted(set(concrete))} with no recorded common/"
+					f"coercion type (checker bug)")
+			if has_typevar and concrete:
+				# A TypeVar arm alongside a concrete arm is NOT a common type:
+				# `concrete[0]` would be a lie for the TypeVar arm.  The checker
+				# must have recorded a resolved result if these truly converge.
+				raise AssertionError(
+					f"stage2: control-flow result arms mix a TypeVar with "
+					f"concrete type(s) {sorted(set(concrete))} and no recorded "
+					f"common/coercion type resolved them (checker bug)")
+			if has_typevar:
+				# All arms are TypeVars — they must be the SAME TypeVar.
+				if not all(t == arm_tys[0] for t in arm_tys):
+					raise AssertionError(
+						f"stage2: control-flow result arms have differing TypeVar "
+						f"types {sorted(set(arm_tys))} with no recorded common "
+						f"type (checker bug)")
+				return arm_tys[0]  # preserve the shared TypeVar result
+			return concrete[0]
+
+		# Nothing usable — preserve a recorded TypeVar if present, else Unknown.
+		if recorded is not None:
+			return recorded
+		return self._unknown_type
+
+	def _emit_cfg_result_extract(self, result_local: str) -> "M.ValueId":
+		"""Yield the value of a control-flow-result local (the hidden slot a
+		ternary / match / try-expr stores its result into across branches)
+		as a single owned rvalue.
+
+		A shallow `LoadLocal` here left the result local co-owning the
+		backing with whatever consumed the value (binding / by-value
+		argument / borrow-temp), double-freeing it at teardown or forcing
+		users to write `move __match_..._tmp`.  Instead MOVE the value out
+		when it carries drop work, transferring ownership to the single
+		consumer; a cheap-copy/no-drop result keeps the plain load.
+
+		The MoveOut both (a) cancels the ternary local's own drop
+		registration and (b) records the ownership transfer for the ledger
+		on the match/try forwarding slots (which are not drop-registered) —
+		one uniform rule.  Always stamps the dest type.
+		"""
+		result_ty = self._local_types.get(result_local)
+		dest = self.b.new_temp()
+		must_move = result_ty is not None and (
+			not self._should_copy_value(result_ty)
+			or self._needs_runtime_drop(result_ty)
+			or self._type_is_destructible(result_ty)
+		)
+		if must_move:
+			self.b.emit(M.MoveOut(dest=dest, local=result_local, ty=result_ty))
+		else:
+			self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		if result_ty is not None:
+			self._local_types[dest] = result_ty
+		return dest
+
 	def _classify_value_transfer(self, ty: TypeId, *, allow_unknown_typevar: bool = False) -> str:
 		"""Single-source ownership transfer decision for lowered values.
 
@@ -1536,18 +1666,7 @@ class HIRToMIR:
 		if want_value:
 			result_local = f"__match_expr_tmp{self.b.new_temp()}"
 			self.b.ensure_local(result_local)
-			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
-			if want_ty is not None:
-				self._local_types[result_local] = want_ty
-			else:
-				arm_ty: TypeId | None = None
-				for arm in expr.arms:
-					if arm.result is None:
-						continue
-					arm_ty = self._infer_expr_type(arm.result)
-					if arm_ty is not None:
-						break
-				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
+			self._local_types[result_local] = self._cfg_result_type(expr)
 
 		dispatch_block = self.b.new_block("match_dispatch")
 		join_block = self.b.new_block("match_join")
@@ -2310,8 +2429,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		dest = self._emit_cfg_result_extract(result_local)
 		return dest
 
 	def _lower_bool_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
@@ -2342,18 +2460,7 @@ class HIRToMIR:
 		if want_value:
 			result_local = f"__match_bool_tmp{self.b.new_temp()}"
 			self.b.ensure_local(result_local)
-			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
-			if want_ty is not None:
-				self._local_types[result_local] = want_ty
-			else:
-				arm_ty: TypeId | None = None
-				for arm in expr.arms:
-					if arm.result is None:
-						continue
-					arm_ty = self._infer_expr_type(arm.result)
-					if arm_ty is not None:
-						break
-				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
+			self._local_types[result_local] = self._cfg_result_type(expr)
 
 		join_block = self.b.new_block("match_bool_join")
 		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
@@ -2465,8 +2572,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		dest = self._emit_cfg_result_extract(result_local)
 		return dest
 
 
@@ -2500,18 +2606,7 @@ class HIRToMIR:
 		if want_value:
 			result_local = f"__match_scalar_tmp{self.b.new_temp()}"
 			self.b.ensure_local(result_local)
-			want_ty = self._current_expected_type() or self._infer_expr_type(expr)
-			if want_ty is not None:
-				self._local_types[result_local] = want_ty
-			else:
-				arm_ty: TypeId | None = None
-				for arm in expr.arms:
-					if arm.result is None:
-						continue
-					arm_ty = self._infer_expr_type(arm.result)
-					if arm_ty is not None:
-						break
-				self._local_types[result_local] = arm_ty if arm_ty is not None else self._unknown_type
+			self._local_types[result_local] = self._cfg_result_type(expr)
 
 		join_block = self.b.new_block("match_scalar_join")
 		arm_blocks: list[tuple[H.HMatchArm, M.BasicBlock]] = [
@@ -2614,8 +2709,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=result_local))
+		dest = self._emit_cfg_result_extract(result_local)
 		return dest
 
 
@@ -3232,12 +3326,10 @@ class HIRToMIR:
 			# fix, 0.34.0 — work/bare-temp-field-projection-uaf;
 			# before it, pure-field owned chains fell to the
 			# whole-expression materialization below and double-freed).
-			# A NON-call owned rvalue base (ternary / match-expr) is
-			# NOT lowered here or by the fallback — its own lowering
-			# already drop-registers its result, so the checker
-			# rejects that shape bind-first upstream
-			# (E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED); it never
-			# reaches this lowering.
+			# Owned rvalue bases that are NOT calls (ternary / match /
+			# try / unsafe-block) are lifted the SAME way — materialize
+			# the root once + address-project — now that their CFG-result
+			# join MoveOuts a droppable result into a single owner.
 			# Index and deref-at-base hops (and the owned-base mode)
 			# were added with reject-redundant-call-borrows: the
 			# rule's bare argument spellings and the widened
@@ -3267,6 +3359,14 @@ class HIRToMIR:
 			if expr.is_mut:
 				raise AssertionError("non-canonical &mut borrow operand reached MIR lowering (normalize/typechecker bug)")
 			inner_ty = self._infer_expr_type(expr.subject)
+			if inner_ty is None or self._type_table.get(inner_ty).kind is TypeKind.VOID:
+				# A control-flow value subject (match / ternary / try) can
+				# infer VOID here (expected-type / whole-expression inference
+				# collapse); use the robust per-branch result type so the
+				# materialized borrow temp is typed to its OWNED value and
+				# drop-registered — otherwise the borrowed result LEAKS
+				# (`inspect(match b { … })`).
+				inner_ty = self._cfg_result_type(expr.subject)
 			if inner_ty is None:
 				raise AssertionError("borrow operand type unknown in MIR lowering (checker bug)")
 			# The synthetic local holds the materialized owned value of
@@ -3288,14 +3388,26 @@ class HIRToMIR:
 		self, subject: H.HExpr, *, is_mut: bool
 	) -> "M.ValueId | None":
 		"""LANGUAGE_BUG-fix helper (2026-05-15; extended for
-		reject-redundant-call-borrows).  Detect a borrow subject
+		reject-redundant-call-borrows and generalized 0.34.1 for
+		control-flow-rvalue ownership).  Detect a borrow subject
 		that's a field/index-projection chain (optionally with an
-		explicit deref directly on the base) rooted at a call rvalue
-		— `&T`/`&mut T`-returning, or OWNED for shared field AND
-		index chains — and lower it correctly so `&self` interior-mutation
-		methods on the leaf mutate the actual storage instead of a
-		temp-local copy, and non-Copy element borrows never fall
-		into the whole-expression copy path.
+		explicit deref directly on the base) rooted at an rvalue base,
+		and lower it correctly so `&self` interior-mutation methods on
+		the leaf mutate the actual storage instead of a temp-local copy,
+		and non-Copy element borrows never fall into the whole-expression
+		copy path.
+
+		Base admission (see `_validate_lifted_chain`): a `&T`/`&mut T`-
+		RETURNING base is restricted to a CALL result (the `arc.get().flag`
+		interior-mutation shape).  An OWNED-rvalue base is admitted for
+		BOTH shared field AND index chains and is NOT limited to calls —
+		any value producer (call/constructor, ternary/match/try
+		value-control-flow result, unsafe-block value, …) is materialized
+		ONCE into a drop-registered temp and address-projected, so the
+		leaf is dropped exactly once.  `&mut` over an owned temporary stays
+		bind-first.  PLACE bases and a `move` of a named value are declined
+		(handled by the caller's HPlaceExpr branch / the
+		`_move_would_be_borrowed` guard).
 
 		## Atomicity contract (K-review, 2026-05-15)
 
@@ -3486,19 +3598,16 @@ class HIRToMIR:
 		# call, invoke — struct constructors also lower as HCall).
 		# HVar / HPlaceExpr place bases are handled by the caller's
 		# HPlaceExpr branch.  Non-call owned rvalue bases (ternary,
-		# match-expr) are deliberately NOT lifted here: their own
-		# lowering already drop-registers the result
-		# (e.g. `_visit_expr_HTernary`'s `__tern_tmp`), so materializing
-		# it into a second borrow temp would double-register.  Those
-		# shapes do NOT reach this path at all: the checker rejects a
-		# shared borrow of a projection rooted at a value-control-flow
-		# rvalue bind-first (E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED,
-		# type_checker `_reject_cfv_rvalue_borrow`).  (A prior fallback
-		# that deep-copied the aliased leaf in
-		# `_materialize_owned_temp_for_borrow` was reverted — it
-		# reintroduced a second owner — so upstream rejection, not a
-		# fallback deep-copy, is what keeps this sound.)
-		if not isinstance(cur, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ()))):
+		# All owned CFG-result rvalues (ternary / match / try /
+		# unsafe-block) ARE lifted here now: their join MoveOuts a
+		# droppable result so the materialized borrow temp is the
+		# single owner (dropped once).  Only PLACE bases and `move`
+		# of a named value are declined below.
+		# Innermost base classification.  HVar / HPlaceExpr PLACE bases
+		# (and a `move` of a named value) are handled elsewhere (the
+		# caller's HPlaceExpr branch and the `_move_would_be_borrowed`
+		# guard), so decline them here.
+		if isinstance(cur, (H.HVar, getattr(H, "HPlaceExpr", ()), getattr(H, "HMove", ()))):
 			return None
 		base_ty = self._infer_expr_type(cur)
 		if base_ty is None:
@@ -3519,14 +3628,26 @@ class HIRToMIR:
 			# work/bare-temp-field-projection-uaf).  `&mut` owned-rvalue
 			# projections stay refused (bind-first: a mutable borrow of
 			# temp-derived storage has no argument spelling).
+			# OWNED-rvalue base: ANY value producer (call/ctor, ternary/
+			# match/try value-control-flow result, unsafe-block value, ...)
+			# is lifted the SAME way: materialize the root ONCE into a
+			# drop-registered temp and address-project to the leaf (one
+			# owner, dropped once).  Generalizes the former CALL-only gate
+			# that left unsafe-block / try-expr / VCF projections to the
+			# leaf-alias fallback (teardown double-free, exit 134).  `&mut`
+			# owned-rvalue projections stay bind-first.
 			if is_mut:
 				return None
 			base_owned = True
-		elif is_mut and not getattr(base_def, "ref_mut", False):
-			# `&mut place.field` over a base that returned `&T`
-			# (not `&mut T`) cannot produce a `&mut` field
-			# pointer.  Defer to caller's fallback / diagnostic.
-			return None
+		else:
+			# REFERENCE-returning base: STRICTER (call-only).  Only a CALL
+			# result's `&T` may be projected (the `arc.get().flag`
+			# interior-mutation shape); a materialized non-call ref rvalue
+			# would break `&self` interior mutation on the leaf.
+			if not isinstance(cur, (H.HCall, H.HMethodCall, getattr(H, "HInvoke", ()))):
+				return None
+			if is_mut and not getattr(base_def, "ref_mut", False):
+				return None
 		# Walk the hop chain innermost-first against the pointed-to
 		# type.  Build the step list for the emitter as we go.
 		hops.reverse()
@@ -8504,11 +8625,14 @@ class HIRToMIR:
 		if self.b.block.terminator is None:
 			self.b.set_terminator(M.Goto(target=join_block.name))
 
-		# Join: load the temp as the value of the ternary and continue.
+		# Join: yield the temp as the value of the ternary and continue.
+		# The stored result is OWNED; `_emit_cfg_result_extract` MoveOuts a
+		# droppable result (cancelling temp_local's drop registration and
+		# transferring ownership to the single consumer) so the backing is
+		# dropped exactly once — the shared CFG-result rule (was a
+		# `var x = cond ? a : b;` teardown double-free, exit 134).
 		self.b.set_block(join_block)
-		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
-		return dest
+		return self._emit_cfg_result_extract(temp_local)
 
 	def _visit_expr_HQualifiedMember(self, expr: H.HQualifiedMember) -> M.ValueId:
 		base_te = getattr(expr, "base_type_expr", None)
@@ -8760,11 +8884,12 @@ class HIRToMIR:
 			if self.b.block.terminator is None:
 				self.b.set_terminator(M.Goto(target=join_block.name))
 
-		# Resume at join with the merged value.
+		# Resume at join with the merged value — the shared CFG-result rule:
+		# MoveOut a droppable try-expr result so the forwarding slot does not
+		# co-own the backing with the consumer (was a projection double-free
+		# on `peek((try … catch { … }).root)`, exit 134).
 		self.b.set_block(join_block)
-		dest = self.b.new_temp()
-		self.b.emit(M.LoadLocal(dest=dest, local=temp_local))
-		return dest
+		return self._emit_cfg_result_extract(temp_local)
 
 	def _visit_expr_HMatchExpr(self, expr: "H.HMatchExpr") -> M.ValueId:
 		"""Lower `match` in expression position (value required)."""
@@ -11865,9 +11990,20 @@ class HIRToMIR:
 			# they are locally inferrable and identical.
 			arm_tys: list[TypeId] = []
 			for arm in expr.arms:
-				if getattr(arm, "result", None) is None:
-					return None
-				ty = self._infer_expr_type(arm.result)  # type: ignore[arg-type]
+				arm_result = getattr(arm, "result", None)
+				if arm_result is None:
+					# Value-BLOCK arm (`=> { expr }`): the value is the block's
+					# trailing expression statement, not `arm.result`.  Without
+					# this the whole match's type was Unknown, so a materialized
+					# borrow temp of the result went un-drop-registered and
+					# LEAKED (`inspect(match b { true => { mk() } ... })`).
+					blk = getattr(arm, "block", None)
+					last = blk.statements[-1] if (blk is not None and blk.statements) else None
+					if last is not None and isinstance(last, H.HExprStmt):
+						arm_result = last.expr
+					else:
+						return None
+				ty = self._infer_expr_type(arm_result)  # type: ignore[arg-type]
 				if ty is None:
 					return None
 				arm_tys.append(ty)

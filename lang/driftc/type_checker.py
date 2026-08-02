@@ -3065,113 +3065,6 @@ class TypeChecker:
 		) -> tuple[list[TypeId], bool]:
 			_AUTOBORROW_MUT_GENERIC = "cannot auto-borrow as &mut; argument is not mutable"
 
-			def _cfv_rvalue_borrow_hazard(subject: H.HExpr) -> tuple[bool, bool]:
-				"""Classify a shared-borrow subject that is (a projection of)
-				a value-control-flow rvalue root (ternary / match-expr).
-
-				A shared rvalue borrow materializes the ROOT into one temp and,
-				for a projection, address-projects the leaf. That is sound for
-				CALL roots (a single drop-registered owner) and for pure-value
-				roots such as string concatenation. It is UNSOUND for a
-				value-control-flow root: `_visit_expr_HTernary` (and the
-				match-expr lowering) already drop-registers its OWN result
-				temp, so a second materialization double-frees that temp at
-				teardown (LANGUAGE_BUG, exit 134 —
-				work/bare-temp-field-projection-uaf).
-
-				The double-registered owner is the ROOT, NOT the projected
-				leaf — so the hazard is keyed on whether the ROOT type has drop
-				work (`has_drop`: String / Array / Destructible / a struct or
-				variant transitively owning one — the same destruction
-				authority MIR lowering uses), never on the projected field's
-				type. `read_int((cond ? a : b).count)` (bitcopy `Int` field but
-				a droppable-`String`-bearing root) is therefore still rejected,
-				while a bitcopy/no-drop root (`read(cond ? 1 : 2)` at `&Int`)
-				has nothing to double-free and is left alone.
-
-				A ROOT whose type still contains a type variable is FAIL-CLOSED
-				(hazardous): `has_drop(TypeVar)` caches `False`, so a generic
-				CFV borrow of a type-parameter-typed rvalue could be
-				instantiated with a droppable type and double-free. Requiring
-				bind-first for the unresolved case is the safe v1 contract.
-
-				`type_expr(..., used_as_value=False)` — this is a classification
-				query and must not re-apply value-use side effects.
-
-				Returns `(is_hazard, peeled)` — `peeled` is True when the
-				subject reached the root through field/index projections (for
-				diagnostic wording). `HMatchExpr` is listed defensively: a
-				match-expr in argument position currently requires a binding,
-				so it does not reach here today.
-				"""
-				root = subject
-				peeled = False
-				while isinstance(root, (H.HField, H.HIndex)):
-					peeled = True
-					root = root.subject
-				cfv = (H.HTernary, getattr(H, "HMatchExpr", ()))
-				if not isinstance(root, cfv):
-					return (False, peeled)
-				root_ty = type_expr(root, used_as_value=False)
-				if root_ty is None:
-					return (False, peeled)
-				if self.type_table.has_typevar(root_ty) or self.type_table.has_drop(root_ty):
-					return (True, peeled)
-				return (False, peeled)
-
-			def _cfv_bind_first_diag(subject: H.HExpr, *, peeled: bool, loc_node: H.HExpr) -> None:
-				lead = ("borrow of a field/index projected from a "
-				        if peeled else "borrow of a ")
-				diagnostics.append(_tc_diag(
-					message=(
-						lead
-						+ "temporary produced by a conditional (ternary or "
-						+ "match) expression; bind it to a `var` first"),
-					code="E_PROJECTED_RVALUE_ARG_BINDING_REQUIRED",
-					severity="error", phase="typecheck",
-					span=getattr(loc_node, "loc", span)))
-
-			def _reject_cfv_rvalue_borrow(arg_expr: H.HExpr, inner: TypeId) -> bool:
-				"""Bare-autoborrow entry point: reject a shared auto-borrow of
-				a value-control-flow rvalue (whole `f(cond ? a : b)` or a
-				projection `f((cond ? a : b).root)`) whose root has drop work.
-				See `_cfv_rvalue_borrow_hazard`."""
-				hazard, peeled = _cfv_rvalue_borrow_hazard(arg_expr)
-				if not hazard:
-					return False
-				_cfv_bind_first_diag(arg_expr, peeled=peeled, loc_node=arg_expr)
-				return True
-
-			def _cfv_source_borrow_hazard(borrow: H.HExpr) -> bool:
-				"""Source-borrow (W0 classifier) entry point: True iff `borrow`
-				is a SOURCE-written shared borrow whose subject was lifted from
-				a value-control-flow rvalue (stamped `materialized_rvalue_cfv`
-				by stage1) AND that rvalue's owner type has drop work.
-
-				By the redundancy rule's own deletion-equivalence definition
-				this borrow is NOT redundant — deleting `&` yields the bare
-				projection, which is rejected for these bases — so it must not
-				take the "pass directly" fix-it. When the owner has NO drop work
-				(e.g. `&(cond ? 1 : 2)` at `&Int`), the bare form IS accepted,
-				so the redundancy classification stays correct and this returns
-				False. A still-generic owner type is fail-closed (hazardous),
-				matching `_cfv_rvalue_borrow_hazard`, since `has_drop(TypeVar)`
-				fails open. `type_expr(..., used_as_value=False)` — classification
-				query, no value-use side effects.
-				"""
-				if not getattr(borrow, "materialized_rvalue", False):
-					return False
-				if not getattr(borrow, "materialized_rvalue_cfv", False):
-					return False
-				subject = getattr(borrow, "subject", None)
-				base = getattr(subject, "base", None)
-				if base is None:
-					return False
-				root_ty = type_expr(base, used_as_value=False)
-				if root_ty is None:
-					return False
-				return self.type_table.has_typevar(root_ty) or self.type_table.has_drop(root_ty)
-
 			def _autoborrow_mut_failure(place_expr: H.HExpr, place: Place) -> str | None:
 				"""None when a &mut auto-borrow of the place is permitted;
 				otherwise the cause-specific rejection message (the `var`
@@ -3311,21 +3204,6 @@ class TypeChecker:
 						)
 					)
 					return True
-				# A SOURCE-written shared borrow of a value-control-flow
-				# rvalue (`peek(&(cond ? a : b).root)`) must NOT be classified
-				# "redundant": its deletion-equivalence fix-it ("pass the
-				# operand directly") would walk the author into the bare form,
-				# which is itself rejected (E_PROJECTED_RVALUE_ARG_BINDING_
-				# REQUIRED). Emit the SAME truthful bind-first diagnostic here
-				# so both spellings agree.
-				if not borrow.is_mut and _cfv_source_borrow_hazard(borrow):
-					borrow.policy_class = "cfv_rvalue_binding"
-					# `peeled` drives "field/index projected" vs whole-value
-					# wording — a whole `&(cond ? a : b)` materializes with NO
-					# projections, so read it off the place expression.
-					_cfv_peeled = bool(getattr(borrow.subject, "projections", None))
-					_cfv_bind_first_diag(borrow.subject, peeled=_cfv_peeled, loc_node=borrow)
-					return True
 				operand_ty = None
 				if arg_ty is not None:
 					adef = self.type_table.get(arg_ty)
@@ -3404,9 +3282,6 @@ class TypeChecker:
 									span=getattr(arg_expr, "loc", span),
 								)
 							)
-							had_error = True
-							continue
-						if _reject_cfv_rvalue_borrow(arg_expr, inner):
 							had_error = True
 							continue
 						borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)
@@ -3622,9 +3497,6 @@ class TypeChecker:
 								span=getattr(arg_expr, "loc", span),
 							)
 						)
-						had_error = True
-						continue
-					if _reject_cfv_rvalue_borrow(arg_expr, inner):
 						had_error = True
 						continue
 					borrow_expr = H.HBorrow(subject=arg_expr, is_mut=False, allow_rvalue=True)
@@ -7136,8 +7008,21 @@ class TypeChecker:
 			*,
 			allow_exception_init: bool = False,
 			used_as_value: bool = True,
+			defer_value_use: bool = False,
 			expected_type: TypeId | None = None,
 		) -> TypeId:
+			# `used_as_value` = SEMANTIC value context: True means the
+			# expression produces a value here, so value-control-flow
+			# expressions (match / ternary) type to their arm result type
+			# rather than Void.  `defer_value_use` = defer the value-USE
+			# accounting (the Copy-value requirement) to a later phase.
+			# A CALL ARGUMENT is semantically a value (used_as_value=True)
+			# even though its move/borrow accounting is deferred to
+			# autoborrow (defer_value_use=True) — the two must not be
+			# conflated (a `match`/ternary in argument position is a value,
+			# not a statement).  The two flags are independent; only the
+			# Copy-value side effect below honors `defer_value_use`.
+			_copy_use = used_as_value and not defer_value_use
 			nonlocal return_type
 			nonlocal catch_depth
 			nonlocal unsafe_context
@@ -7448,7 +7333,7 @@ class TypeChecker:
 							else:
 								bound = self.type_table.ensure_ref_mut(bound) if cap_kind == "ref_mut" else self.type_table.ensure_ref(bound)
 						binding_for_var[expr.node_id] = expr.binding_id
-						_require_copy_value(bound, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value, expr=expr)
+						_require_copy_value(bound, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=_copy_use, expr=expr)
 						return record_expr(expr, bound)
 				# Module-scoped compile-time constants.
 				#
@@ -7476,7 +7361,7 @@ class TypeChecker:
 							# mode ICEs with "missing binding_id for local
 							# read" (E-AUTO-91e8ffe5).
 							expr.module_id = const_mod
-							_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value)
+							_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=_copy_use)
 							return record_expr(expr, ty_id)
 				if expr.module_id is None and expr.binding_id is None:
 					scoped_id = _scope_lookup_binding_id(expr.name)
@@ -7490,7 +7375,7 @@ class TypeChecker:
 							ty_id = scope[expr.name]
 							# Local consts re-materialize at each use site; skip Copy check.
 							if expr.binding_id is None or int(expr.binding_id) not in local_const_binding_ids:
-								_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=used_as_value, expr=expr)
+								_require_copy_value(ty_id, span=getattr(expr, "loc", Span()), name=expr.name, used_as_value=_copy_use, expr=expr)
 							return record_expr(expr, ty_id)
 				# Function reference in value position (typed context preferred).
 				resolution = _resolve_function_reference_value(
@@ -9239,6 +9124,15 @@ class TypeChecker:
 							_assign_node_id(new_e)
 							slot_set(new_e)
 						arm_value_ty: TypeId | None = None
+						# A `match` EXPRESSION types to its arm result ONLY in a value
+						# context (`used_as_value`).  Value positions — arguments,
+						# kwargs, constructor fields, method receivers — are typed by
+						# their callers through `_type_user_arg` / receiver typing with
+						# `used_as_value=True, defer_value_use=True`, so the arm loop
+						# below sees the correct context.  `used_as_value=False` is
+						# reserved for genuine non-value inspection (places, assignment
+						# targets, scrutinees, documented probes); there a match is a
+						# statement and types to Void (see the record step below).
 						if arm.result is not None:
 							arm_value_ty = type_expr(arm.result, expected_type=expected_type)
 							_maybe_rewrite_arm_value_to_deref(
@@ -9354,6 +9248,9 @@ class TypeChecker:
 					)
 
 				if not used_as_value:
+					# Statement-context match (non-value inspection): types to Void.
+					# Every VALUE position routes through a `used_as_value=True`
+					# caller, so a match reaching here is genuinely a statement.
 					return record_expr(expr, self._void)
 				if result_ty is None:
 					diagnostics.append(
@@ -9379,7 +9276,7 @@ class TypeChecker:
 					if _origin is not None:
 						expr_id = ("ab-origin", _origin, bool(expr.is_mut))
 				if expr_id in borrow_expr_ids_in_stmt:
-					inner_ty = type_expr(expr.subject, used_as_value=False)
+					inner_ty = type_expr(expr.subject, used_as_value=True, defer_value_use=True)
 					ref_ty = self.type_table.ensure_ref_mut(inner_ty) if expr.is_mut else self.type_table.ensure_ref(inner_ty)
 					return record_expr(expr, ref_ty)
 				# Guardrail (narrowed, DriftQuery 2026-07-09): reject borrows
@@ -9444,7 +9341,10 @@ class TypeChecker:
 					)
 					return record_expr(expr, self._unknown)
 
-				inner_ty = type_expr(expr.subject, used_as_value=False)
+				# A borrow does NOT consume/copy its subject (accounting deferred),
+				# but an rvalue subject (match/ternary/try) must still type to the
+				# VALUE it produces, not collapse to Void.
+				inner_ty = type_expr(expr.subject, used_as_value=True, defer_value_use=True)
 				# MVP: borrowing is only supported from addressable places, except
 				# for shared borrows which may be materialized from rvalues.
 				#
@@ -9490,17 +9390,16 @@ class TypeChecker:
 							)
 						)
 						return record_expr(expr, self._unknown)
-					# Borrowing an rvalue subject: do not treat it as a value
-					# read. Otherwise, a non-Copy field projection through a
-					# ref-returning rvalue base (e.g. `&w.get().handle` or the
-					# method-receiver autoborrow form `w.get().handle.peek()`)
-					# trips the value-copy gate even though the subject IS being
-					# borrowed. Mirrors `_split_lift_place_chain` in stage1
-					# borrow materialize, which lifts the rvalue base into a
-					# temp so the projection becomes a valid place — but that
-					# pass runs after the type-checker, so this branch must
-					# pre-suppress the spurious copy diagnostic.
-					inner_ty = type_expr(expr.subject, used_as_value=False)
+					# Borrowing an rvalue subject.  `defer_value_use=True` suppresses
+					# the value-COPY gate (the subject is borrowed, not copied) — the
+					# correct replacement for the old `used_as_value=False` copy-
+					# suppression — while `used_as_value=True` still types an rvalue
+					# subject (match/ternary/try, or a ref-returning base like
+					# `&w.get().handle`) to the VALUE it produces rather than Void.
+					# Mirrors `_split_lift_place_chain` in stage1 borrow materialize,
+					# which lifts the rvalue base into a temp so the projection
+					# becomes a valid place — that pass runs after the type-checker.
+					inner_ty = type_expr(expr.subject, used_as_value=True, defer_value_use=True)
 					ref_ty = self.type_table.ensure_ref(inner_ty) if inner_ty is not None else self._unknown
 					return record_expr(expr, ref_ty)
 
@@ -10235,7 +10134,11 @@ class TypeChecker:
 				# without the legacy `Throw for Int/String/...` impls papering
 				# over a non-error Err type.
 				if expr.method_name == "or_throw":
-					_or_throw_recv_ty = type_expr(expr.receiver, used_as_value=False)
+					# The or_throw receiver is a VALUE position: an rvalue receiver
+					# (match/ternary/try) must type to its Result, not collapse to
+					# Void — else this preflight's public-error check is skipped and
+					# resolution falls through to a weaker `E is Throw` requirement.
+					_or_throw_recv_ty = type_expr(expr.receiver, used_as_value=True, defer_value_use=True)
 					if _or_throw_recv_ty is not None:
 						_or_throw_recv_unwrapped = _unwrap_ref_type(_or_throw_recv_ty)
 						if _is_core_result_variant(_or_throw_recv_unwrapped):
@@ -10444,7 +10347,7 @@ class TypeChecker:
 										span=getattr(expr.receiver, "loc", getattr(expr, "loc", Span())),
 									)
 								)
-						recv_ty = type_expr(expr.receiver, used_as_value=False)
+						recv_ty = type_expr(expr.receiver, used_as_value=True, defer_value_use=True)
 						if recv_ty is not None:
 							ref_info = _ref_param_info(recv_ty)
 							if ref_info is not None:
@@ -10515,7 +10418,7 @@ class TypeChecker:
 									for name, arg in zip(tp_names, getattr(inst, "type_args", ()) or ()):
 										local_type_params[name] = arg
 							if decl_sig is not None:
-								recv_ty = type_expr(expr.receiver, used_as_value=False)
+								recv_ty = type_expr(expr.receiver, used_as_value=True, defer_value_use=True)
 								impl_target = getattr(decl_sig, "impl_target_type_id", None)
 								if impl_target is not None and recv_ty is not None:
 									_base_id, base_args = _struct_base_and_args(_unwrap_ref_type(recv_ty))
@@ -10593,7 +10496,7 @@ class TypeChecker:
 										break
 					for idx, arg in enumerate(expr.args):
 						if idx < len(param_types):
-							type_expr(arg, expected_type=param_types[idx], used_as_value=False)
+							type_expr(arg, expected_type=param_types[idx], used_as_value=True, defer_value_use=True)
 				if method_res.call_info is not None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
 					decl = method_res.resolution.decl
 					fn_id_local = getattr(decl, "fn_id", None)
@@ -10693,7 +10596,7 @@ class TypeChecker:
 					if hasattr(_idx_subj, "node_id") and _idx_subj.node_id in expr_types:
 						_idx_subj_ty_hint = expr_types[_idx_subj.node_id]
 					else:
-						_idx_subj_ty_hint = type_expr(_idx_subj, used_as_value=False)
+						_idx_subj_ty_hint = type_expr(_idx_subj, used_as_value=True, defer_value_use=True)
 					if _idx_subj_ty_hint is not None:
 						_arr_def = self.type_table.get(_idx_subj_ty_hint)
 						if _arr_def.kind is TypeKind.REF and _arr_def.param_types:
@@ -10702,7 +10605,9 @@ class TypeChecker:
 							_field_suppress_id = _arr_def.param_types[0]
 							_suppress_copy_type_ids.add(_field_suppress_id)
 				try:
-					sub_ty = type_expr(expr.subject, used_as_value=False)
+					# Projection base is a VALUE position: an rvalue (match/ternary/call)
+					# subject types to its result, not Void.  Use accounting deferred.
+					sub_ty = type_expr(expr.subject, used_as_value=True, defer_value_use=True)
 				finally:
 					if _field_suppress_id is not None:
 						_suppress_copy_type_ids.discard(_field_suppress_id)
@@ -10720,8 +10625,8 @@ class TypeChecker:
 						if not _ensure_field_visible(inner_ty, expr.name, getattr(expr, "loc", Span())):
 							return record_expr(expr, self._unknown)
 						if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
-							_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
-						elif used_as_value and _contains_interface_value(field_ty):
+							_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=_copy_use)
+						elif _copy_use and _contains_interface_value(field_ty):
 							# Owned-subject field reads are lowered as a SEMANTIC
 							# deep copy (struct/array/String recursion in
 							# _emit_copy_value) — the subject keeps ownership, so
@@ -10814,7 +10719,7 @@ class TypeChecker:
 						return record_expr(expr, self._unknown)
 					_, field_ty = info
 					if subject_is_ref or _expr_reads_through_ref_projection(expr.subject):
-						_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
+						_require_copy_value(field_ty, span=_best_effort_span_for_expr(expr), used_as_value=_copy_use)
 					return record_expr(expr, field_ty)
 				# Slice 5 (slice 3 of impl): typed catch binder field projection.
 				# When the receiver is a typed catch binder (registered in
@@ -11148,7 +11053,7 @@ class TypeChecker:
 						cur = elem_ty
 				if cur is None:
 					return record_expr(expr, self._unknown)
-				_require_copy_value(cur, span=_best_effort_span_for_expr(expr), used_as_value=used_as_value)
+				_require_copy_value(cur, span=_best_effort_span_for_expr(expr), used_as_value=_copy_use)
 				return record_expr(expr, cur)
 
 			if isinstance(expr, H.HIndex):
@@ -11407,7 +11312,8 @@ class TypeChecker:
 							)
 						return record_expr(expr, self._unknown)
 
-				sub_ty = type_expr(expr.subject, used_as_value=False)
+				# Index base is a VALUE position (see HField subject above).
+				sub_ty = type_expr(expr.subject, used_as_value=True, defer_value_use=True)
 				idx_ty = type_expr(expr.index)
 				if not _require_int_index_type(idx_ty, span=getattr(expr.index, "loc", getattr(expr, "loc", Span()))):
 					return record_expr(expr, self._unknown)
@@ -11459,7 +11365,7 @@ class TypeChecker:
 					inner = _deref_inner_type(sub_ty, span=getattr(expr, "loc", Span()))
 					if inner is None:
 						return record_expr(expr, self._unknown)
-					_require_copy_value(inner, span=getattr(expr, "loc", Span()), used_as_value=used_as_value)
+					_require_copy_value(inner, span=getattr(expr, "loc", Span()), used_as_value=_copy_use)
 					return record_expr(expr, inner)
 				return record_expr(expr, self._unknown)
 
@@ -13133,12 +13039,15 @@ class TypeChecker:
 		#
 		#   2. The walker's `_consider_implicit_cs_mark_at` at
 		#      typecheck-untyped owned-arg slots — for slots typed
-		#      with `used_as_value=False` because the call resolver
-		#      determines per-param ownedness later (HCall.args[i],
+		#      as VALUES but with `defer_value_use=True` (via
+		#      `_type_user_arg`), so the call resolver determines
+		#      per-param ownedness later (HCall.args[i],
 		#      HMethodCall.args[i], HInvoke.args[i], and the
-		#      corresponding kwargs[i].value).  These would never
-		#      be marked by typecheck; the walker explicitly marks
-		#      them just before the gated wrap fires.
+		#      corresponding kwargs[i].value).  `defer_value_use`
+		#      keeps `_require_copy_value` from firing at typecheck,
+		#      so these would never be marked by typecheck; the
+		#      walker explicitly marks them just before the gated
+		#      wrap fires.
 		#
 		# A node lacking a mark is never wrapped — that prevents
 		# spurious `const_share()` calls at non-value-consumption
@@ -13230,8 +13139,9 @@ class TypeChecker:
 		def _consider_implicit_cs_mark_at(slot: object) -> None:
 			"""Walker-side mark population for owned-position slots
 			the typechecker doesn't Copy-check at value position
-			(HCall/HMethodCall/HInvoke args, HKwArg.value typed with
-			`used_as_value=False`).  If `slot` is a binding-read of a
+			(HCall/HMethodCall/HInvoke args, HKwArg.value typed as
+			VALUES with `defer_value_use=True` via `_type_user_arg`,
+			so `_require_copy_value` is deferred).  If `slot` is a binding-read of a
 			non-Copy ConstShare-provable type, add its node_id to
 			the suppression marks set so the gated wrap helpers
 			fire.  No-op if `slot` is not a binding-read or its type
@@ -13361,11 +13271,13 @@ class TypeChecker:
 				_walk_implicit_cs(node.body)
 				return
 			# Expression-level slots.  HCall / HMethodCall / HInvoke
-			# args are typechecked with `used_as_value=False` (the
-			# call resolver determines per-param ownedness later, and
-			# the borrow checker does the implicit-move-in-consuming-
-			# position pass), so `_require_copy_value` doesn't fire
-			# at typecheck time.  We mark walker-side via
+			# args are typechecked as VALUES with `defer_value_use=
+			# True` (via `_type_user_arg` — a match/ternary arg types
+			# to its result, not Void), the call resolver determines
+			# per-param ownedness later, and the borrow checker does
+			# the implicit-move-in-consuming-position pass, so
+			# `_require_copy_value` doesn't fire at typecheck time.
+			# We mark walker-side via
 			# `_consider_implicit_cs_mark_at` so the mark-gated wrap
 			# helpers fire — keeping the mark set as the single
 			# source of truth for "this is an owned-position

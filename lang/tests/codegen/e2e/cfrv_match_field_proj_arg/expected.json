@@ -1,0 +1,1 @@
+{"description": "acceptance: a field projection of a match rvalue ((match ...).text) passed as a bare &String argument. Regression: the match base typed Void so the projection typed Unknown and overload resolution failed. base+ASan+memcheck.", "exit_code": 0}

@@ -1,0 +1,8 @@
+module m;
+struct Node { text: String, children: Array<Node>, }
+struct PR { root: Node, }
+fn peek(n: &Node) nothrow -> Int { return n.children.len(); }
+pub fn main() nothrow -> Int {
+	var kids: Array<Node> = [];
+	return peek((unsafe { PR(root = Node(text = "x" + "", children = move kids)) }).root);
+}

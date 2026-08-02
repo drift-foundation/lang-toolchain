@@ -1,0 +1,1 @@
+{"description": "acceptance: a match result used DIRECTLY as a method-call receiver base ((match ...).text.byte_length()). Regression: the match receiver typed as Void so method lookup failed (no matching method for receiver Void). base+ASan+memcheck.", "exit_code": 0}

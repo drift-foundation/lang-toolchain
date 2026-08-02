@@ -1,0 +1,14 @@
+module m;
+import std.core as core;
+fn a() nothrow -> core.Result<Int, Int> { return core.Result::Err(1); }
+fn b() nothrow -> core.Result<Int, Int> { return core.Result::Err(2); }
+pub fn main() throws -> Int {
+	// A match receiver is a real value context: the or_throw preflight must
+	// see the match's Result<Int,Int> type (not a Void-collapsed receiver) and
+	// reject the non-`pub error` Err type with the PRECISE diagnostic, not a
+	// weaker downstream `Int is Throw` requirement cascade.
+	return (match true {
+		true => { a() },
+		false => { b() }
+	}).or_throw();
+}

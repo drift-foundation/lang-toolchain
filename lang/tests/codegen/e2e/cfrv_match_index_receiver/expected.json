@@ -1,0 +1,1 @@
+{"description": "acceptance: a match rvalue used as the base of an INDEX projection whose element is the method receiver ((match ...)[0].byte_length()). Exercises owned CF-expr base lift through HIndex; the array rvalue is materialized once and dropped. base+ASan+memcheck.", "exit_code": 0}

@@ -1,0 +1,1 @@
+{"description": "acceptance: whole shared borrow of a fresh ternary result — inspect(cond ? a : b) at &Node. Now sound (lowered by materializing the result into one borrow-lifetime owner, dropped once) instead of rejected. base+ASan+memcheck.", "exit_code": 0}
