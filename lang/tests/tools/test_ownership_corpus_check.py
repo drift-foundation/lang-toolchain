@@ -198,7 +198,7 @@ def test_baseline_md_does_not_name_deleted_promotion_tooling() -> None:
 def test_justfile_wiring_two_recipes_promote_in_certify() -> None:
 	justfile = (ROOT / "justfile").read_text()
 	# exactly the two public recipes; no separate gate/preflight/promote-dir recipe
-	assert "ownership-corpus-check DIR" in justfile
+	assert "ownership-corpus-check *ARGS" in justfile
 	assert "ownership-corpus-promote " in justfile
 	assert "ownership-corpus-gate" not in justfile
 	assert "ownership-corpus-preflight" not in justfile

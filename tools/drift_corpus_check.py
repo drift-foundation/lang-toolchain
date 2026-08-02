@@ -243,7 +243,7 @@ def _read_baseline(baseline: Path):
 # ══ developer mode ═══════════════════════════════════════════════════
 
 def run_check(work: Path, *, select, jobs: int, extra, baseline: "Path | None",
-              out=sys.stderr) -> int:
+              fresh: bool = False, out=sys.stderr) -> int:
 	fixtures, excluded = _audit._discover_fixtures(None)   # ALWAYS the full universe
 	if not fixtures:
 		print("no fixtures matched", file=out)
@@ -272,7 +272,9 @@ def run_check(work: Path, *, select, jobs: int, extra, baseline: "Path | None",
 	obs: dict[str, dict] = {}
 	to_compile: list[Path] = []
 	for f in fixtures:
-		force = f.name in select
+		# --fresh forces the WHOLE universe to recompile (ignore cache + seeds);
+		# --select forces the named fixtures.
+		force = fresh or f.name in select
 		rec = _load_record(records_dir / f"{f.name}.json")
 		if rec is not None and rec["fixture_hash"] == fx_hash[f.name] and not force:
 			obs[f.name] = {"ok": rec["compiled_ok"], "proj": rec["projection"],
@@ -798,6 +800,9 @@ def main(argv: "list[str] | None" = None) -> int:
 	ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
 	ap.add_argument("--select", help="comma-separated fixtures to force-recompile "
 	                                 "(developer lane; the run stays full-universe)")
+	ap.add_argument("--fresh", action="store_true",
+	                help="developer lane: force a full recompile of the whole "
+	                     "universe, ignoring the cache and baseline seeds")
 	ap.add_argument("--baseline", default=str(ROOT / "lang" / "tests" / "ownership_corpus" / "reviewed-baseline"),
 	                help="reviewed baseline dir")
 	ap.add_argument("--driftc-args", default="", help="extra args for every driftc invocation")
@@ -819,8 +824,8 @@ def main(argv: "list[str] | None" = None) -> int:
 	# diagnostic — never a traceback.
 	try:
 		if args.promote:
-			if args.select:
-				print("--select is a developer-lane option; not used with --promote", file=sys.stderr)
+			if args.select or args.fresh:
+				print("--select/--fresh are developer-lane options; not used with --promote", file=sys.stderr)
 				return 2
 			if args.work:
 				print("--promote takes no work directory (it reads only the canonical "
@@ -830,7 +835,8 @@ def main(argv: "list[str] | None" = None) -> int:
 
 		work = Path(args.work) if args.work else DEFAULT_WORK_DIR
 		select = set(args.select.split(",")) if args.select else set()
-		return run_check(work, select=select, jobs=args.jobs, extra=extra, baseline=baseline)
+		return run_check(work, select=select, jobs=args.jobs, extra=extra,
+		                 baseline=baseline, fresh=args.fresh)
 	except InfraError as e:
 		print(str(e), file=sys.stderr)
 		return 2

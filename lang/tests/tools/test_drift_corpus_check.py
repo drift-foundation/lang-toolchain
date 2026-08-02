@@ -180,6 +180,21 @@ def test_select_forces_recompile(tmp_path, monkeypatch):
 	assert h.compiles == ["a"]                           # forced despite unchanged
 
 
+def test_fresh_forces_full_recompile_ignoring_cache(tmp_path, monkeypatch):
+	names = ["a", "b", "c"]
+	h = Harness(monkeypatch, tmp_path, _mk_fixtures(tmp_path, names), _projs(names))
+	work = tmp_path / "work"
+	_check.run_check(work, select=set(), jobs=2, extra=[], baseline=None)
+	assert len(h.compiles) == 3
+	h.seed = "tc-CHANGED"                       # would otherwise all be projected/reused
+	h.compiles.clear()
+	assert _check.run_check(work, select=set(), jobs=2, extra=[], baseline=None,
+	                        fresh=True) == 0
+	assert sorted(h.compiles) == names          # --fresh recompiled everything
+	rep = json.loads((work / "report.json").read_text())
+	assert rep["observed"] == names and rep["projected"] == []
+
+
 def test_reused_failures_are_accounted(tmp_path, monkeypatch):
 	names = ["a", "b"]
 	h = Harness(monkeypatch, tmp_path, _mk_fixtures(tmp_path, names),

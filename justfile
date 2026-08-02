@@ -166,13 +166,14 @@ perf-protocols:
 #       projections, aggregate, exclusions); installs the reviewed baseline only
 #       then — a byte-preserving no-op when already equal.  On disagreement it
 #       does NOT mutate the baseline and retains the fresh actual for diagnosis.
-ownership-corpus-check DIR="" *ARGS:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	args=()
-	[[ -n "{{DIR}}" ]] && args+=("{{DIR}}")
+# Args pass straight through to the tool (argparse sorts the optional <dir>
+# positional from flags like --fresh / --select).  Examples:
+#   just ownership-corpus-check                    # default work dir
+#   just ownership-corpus-check --fresh            # force a full recompile
+#   just ownership-corpus-check build/tmp/altwork  # override the work dir
+ownership-corpus-check *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
-		"${args[@]}" -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
+		-j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
 
 ownership-corpus-promote *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
