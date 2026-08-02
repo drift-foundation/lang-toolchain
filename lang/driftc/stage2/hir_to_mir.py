@@ -3229,7 +3229,7 @@ class HIRToMIR:
 			# BOTH index-bearing AND pure-field shared chains: it is
 			# materialized into ONE drop-registered temp and the leaf
 			# is address-projected into it (the field-projection UAF
-			# fix, 0.33.94 — work/bare-temp-field-projection-uaf;
+			# fix, 0.34.0 — work/bare-temp-field-projection-uaf;
 			# before it, pure-field owned chains fell to the
 			# whole-expression materialization below and double-freed).
 			# A NON-call owned rvalue base (ternary / match-expr) is
@@ -3361,7 +3361,7 @@ class HIRToMIR:
 			# (`val __tmp = mk(); &__tmp[i]` / `&__tmp.f`) — and project
 			# from its address, so the leaf backing is dropped exactly
 			# once via that single owner.  Admitting pure-FIELD owned
-			# chains here is the field-projection UAF fix (0.33.94 —
+			# chains here is the field-projection UAF fix (0.34.0 —
 			# work/bare-temp-field-projection-uaf); before it they fell
 			# to the whole-expression materialization that shallow-aliased
 			# the leaf into a SECOND droppable temp and double-freed.
@@ -3439,7 +3439,7 @@ class HIRToMIR:
 		call's `&T` result directly).  Owned CALL bases are accepted
 		for shared borrows with EITHER a pure-field or an index-bearing
 		chain — both materialize one owner and address-project the leaf
-		(pure-field admission is the 0.33.94 field-projection UAF fix).
+		(pure-field admission is the 0.34.0 field-projection UAF fix).
 		Owned bases stay refused for `&mut` (a mutable borrow of
 		temp-derived storage has no argument spelling — rejected
 		bind-first), and NON-call owned rvalue bases (ternary /

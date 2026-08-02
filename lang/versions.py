@@ -3,7 +3,9 @@
 # This module is the neutral shared metadata point for both lang.drift and
 # lang.driftc.  It is packaged as part of the PEX tool artifact.
 #
-# DRIFTC_VERSION: compiler/toolchain release version (SemVer).
+# DRIFTC_VERSION: compiler/toolchain release version (SemVer).  Before 1.0,
+# actual or suspected user-visible impact bumps MINOR and resets PATCH
+# (0.Y.Z -> 0.(Y+1).0); PATCH is reserved for changes proven user-neutral.
 #
 # DRIFT_RT_ABI_VERSION: bump when changing any compiler/runtime boundary
 # contract: runtime-exported helper signatures, data layouts crossing the
@@ -11,7 +13,7 @@
 # ownership/drop contract changes.
 # Do not bump for pure internal refactors with no boundary change.
 
-DRIFTC_VERSION: str = "0.33.94"
+DRIFTC_VERSION: str = "0.34.0"
 DRIFT_RT_ABI_VERSION: int = 22
 
 # Build-time source commit stamp.  Empty in the source tree; populated by

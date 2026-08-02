@@ -68,8 +68,10 @@
 		- If a fix changes only internal lowering/analysis behavior (no boundary signature/layout/call-convention change), do **not** bump ABI.
 		- If any compiler/runtime boundary shape changes, bump ABI in the same patch and update the mismatch regression.
 - Compiler versioning rule:
-		- Behavior-changing compiler/toolchain fixes that do not change ABI boundary shape must still bump compiler minor version (`DRIFTC_VERSION`).
-		- ABI shape changes require both: compiler version bump and ABI version bump.
+		- Any actual **or suspected user-visible impact** requires a SemVer **minor** bump of `DRIFTC_VERSION`: `0.Y.Z` → `0.(Y+1).0`. User-visible impact includes language acceptance or semantics, stdlib API/behavior, compiler or `drift` CLI output/flags, tooling contracts, package/metadata/serialized formats, and migration requirements.
+		- A SemVer **patch** bump (`0.Y.Z` → `0.Y.(Z+1)`) is permitted only when the change is proven user-neutral. Do not use a patch bump merely because the runtime ABI is unchanged.
+		- If user impact is uncertain, fail toward the minor bump. This decision must be made before staging so downstreams never synchronize to a patch-numbered compatibility break.
+		- ABI shape changes require both: a compiler minor-version bump and an ABI-version bump.
 
 ## Pre-1.0 Compatibility Policy (strict)
 

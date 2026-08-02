@@ -1,6 +1,6 @@
 # Drift development history
 
-## 2026-07-31 (0.33.94: LANGUAGE_BUG — field projection of an rvalue temp at a declared-& formal double-freed; ABI 22 unchanged)
+## 2026-07-31 (0.34.0: LANGUAGE_BUG — field projection of an rvalue temp at a declared-& formal double-freed; ABI 22 unchanged)
 
 **Memory-safety fix (regression-first).** Under the 0.33.91
 reject-redundant-call-borrows rule, the now-mandatory bare spelling of
@@ -68,7 +68,7 @@ memory-unsafe exception beyond mutable temporaries: on **0.33.91–0.33.93
 only**, deleting an argument `&` was unsafe when the remaining
 expression was a FIELD projection from an owned temporary (bind-first:
 `val x = producer(); f(x.field)`). The pure-index case was always
-sound. As of **0.33.94 the bare field projection is again the valid,
+sound. As of **0.34.0 the bare field projection is again the valid,
 sound spelling** — not a permanent bind-first exception.
 
 **Tests (bounded ownership matrix).** 18 e2e rows: call-field,
@@ -103,8 +103,14 @@ separately (bare → addressable-place bind-first; explicit `&mut` →
 programmatic bypass. 67 existing borrow/autoborrow fixtures unaffected;
 765 checker/stage2/borrow-driver tests green.
 
-**Versioning:** `DRIFTC_VERSION` **0.33.94**; internal lowering only,
-**no ABI change — `DRIFT_RT_ABI_VERSION` stays 22**.
+**Versioning:** `DRIFTC_VERSION` **0.34.0** — a MINOR bump signalling the
+accumulated user-facing **source-acceptance** breaks (reject-redundant-call-
+borrows: `&` at a declared-reference formal is now rejected; and the
+value-control-flow rvalue-borrow rejection above). This lowering fix is
+itself internal, but it ships in the release that carries those breaks, so
+the version reflects the source-compat impact rather than a patch. **No ABI
+change — `DRIFT_RT_ABI_VERSION` stays 22**; existing ABI-22 packages and
+binaries remain runtime-compatible.
 
 ## 2026-07-31 (0.33.93: compiler-owned build info — stamps, `drift inspect`, `--version` break, `compiler_info` retirement, strict `json.parse()`; ABI 22 unchanged)
 
@@ -312,13 +318,13 @@ doc samples, plus the regenerated `om_*` ownership matrix. Exceptions to
 one-token deletion: mutable-temporary arguments become bindings
 (`val p = &mut mk(...); touch(p);`), and mode-only overload sets need a
 rename (in-tree: the `json._encode_node` by-value wrapper was deleted as
-dead). **[Erratum, 0.33.94]** a third, then-undetected exception:
+dead). **[Erratum, 0.34.0]** a third, then-undetected exception:
 deleting `&` where the remaining argument was a FIELD projection of an
 owned rvalue temporary (`peek(&mk().root)` → `peek(mk().root)`) was
 memory-unsafe on 0.33.91–0.33.93 (teardown double-free); it needed a
-bind-first (`val x = mk(); peek(x.root)`) until 0.33.94 fixed the
+bind-first (`val x = mk(); peek(x.root)`) until 0.34.0 fixed the
 lowering, after which the bare field projection is sound again. See the
-0.33.94 entry. D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
+0.34.0 entry. D5-approved test dispositions: 0 e2e retirements (13 repurposes), 2
 Python selector-test retirements (replaced by the four-shape R2 fixture), 23
 new fixtures. The first full e2e pass exposed a sweep blind spot — the
 corpus sweeper only compiled audit-includable fixtures, so the audit's
@@ -350,7 +356,7 @@ the rescan promotion was that flow's first production use.
 **Versioning:** the rule ships in the same 0.33.91 release the fn-pointer
 fix opened — `DRIFTC_VERSION` stays **0.33.91**; **no ABI change —
 `DRIFT_RT_ABI_VERSION` stays 22** (front-end acceptance + checker/lowering
-surface only). **[Erratum, 0.33.94]** the original claim that the
+surface only). **[Erratum, 0.34.0]** the original claim that the
 surviving bare spelling's IR is "byte-identical" to the explicit form
 overstated it: the checker-synthesized borrow is injected after stage1
 and lowered by the MIR rvalue-base lift, whereas the explicit `&…`

@@ -78,7 +78,7 @@ def _apply_version_placeholders(expected: dict) -> dict:
 	content hash stays stable across bumps too.
 
 	Placeholders (single source of truth: `lang/versions.py`):
-	  {{DRIFTC_VERSION}}        -> e.g. "0.33.94"
+	  {{DRIFTC_VERSION}}        -> e.g. "0.34.0"
 	  {{DRIFT_RT_ABI_VERSION}}  -> e.g. "22"
 	"""
 	if not any(isinstance(expected.get(k), str) and "{{" in expected[k]
