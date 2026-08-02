@@ -216,6 +216,98 @@ live baseline to equal the approved predecessor.
 
 Commit the whole record with the promoted baseline.
 
+## Reviewing the ownership counters by hand
+
+The tool proves the deltas match the approval, but a *human* review should
+answer a different question: **is every counter change explained by a real
+lowering change I can point at?** The counters are plain JSON at three
+levels — you never need the compare CLI to read them.
+
+**1. Corpus totals** — the 14 counters summed over every compiled fixture:
+
+```
+cat lang/tests/ownership_corpus/reviewed-baseline/aggregate.json
+```
+
+**2. Per-fixture breakdown** — each fixture's contribution, checked into the
+record (`predecessor/` and `candidate/`):
+
+```
+python3 -m json.tool \
+  lang/tests/ownership_corpus/promotions/<name>/candidate/fixture-counters.json | less
+```
+
+**3. What actually changed** — diff the record's predecessor vs candidate
+per fixture; this is the real review view (which fixtures moved, and by how
+much):
+
+```
+python3 - lang/tests/ownership_corpus/promotions/<name> <<'PY'
+import json, sys
+rec = sys.argv[1]
+pre  = json.load(open(f"{rec}/predecessor/fixture-counters.json"))["fixtures"]
+cand = json.load(open(f"{rec}/candidate/fixture-counters.json"))["fixtures"]
+for n in sorted(set(pre) | set(cand)):
+    p, c = pre.get(n, {}), cand.get(n, {})
+    if p == c:
+        continue
+    delta = {k: c.get(k, 0) - p.get(k, 0)
+             for k in sorted(set(p) | set(c)) if c.get(k, 0) != p.get(k, 0)}
+    tag = "NEW" if n not in pre else ("REMOVED" if n not in cand else "changed")
+    print(f"[{tag}] {n}: {delta}")
+PY
+```
+
+Every line should fall into one of three explainable buckets:
+
+* **NEW** — a fixture added this promotion; it simply adds its counts.
+* **REMOVED** — a fixture (or rename) dropped; it subtracts its counts.
+* **changed** — a *pre-existing* fixture whose counts moved. These are the
+  ones to scrutinize: the move must correspond to an intended compiler
+  change. (Example, the 0.33.94 field-projection fix:
+  `borrow_chained_ref_projection_noncopy` shifted by
+  `{c3_moveout_owned: -8, moveout_expansion: -8, events: -8}` — the pure-field
+  lift replaced a move-out *expansion* (copying the leaf into a second owned
+  temp, the double-free cause) with an address projection, so those move-outs
+  simply disappear. Fewer move-outs, one owner: the fix's fingerprint.)
+
+The aggregate deltas equal `(NEW) − (REMOVED) + (changed)` exactly — that
+identity is what the tool reports as `residual ZERO on every counter`; the
+diff above lets you see it by name.
+
+**Regenerate one fixture from scratch** (no audit tool — just the compiler
+with the flag the tool sets), to confirm a number or inspect a fixture the
+diff flagged:
+
+```
+DRIFT_STRING_ARC_AUDIT=1 DRIFT_STRING_ARC_AUDIT_FILE=/tmp/x.jsonl \
+  PYTHONPATH=. .venv/bin/python -m lang.driftc.driftc --dev \
+  lang/tests/codegen/e2e/<fixture>/main.drift -o /dev/null
+cat /tmp/x.jsonl        # the `"record":"aggregate"` line IS that fixture's counters
+```
+
+That is exactly what `tools/drift_corpus_audit.py` does per fixture
+(`DRIFT_STRING_ARC_AUDIT` + `..._FILE` → `<run>/audit/<name>.jsonl`), then it
+sums the single `aggregate` record from each.
+
+### What the counters mean
+
+| counter | meaning |
+|---|---|
+| `events` / `fns` | total ownership-lowering events walked / functions processed |
+| `c1_agree` / `c1_path_dependent` | the two analysis passes agree / the verdict is path-dependent |
+| `c3_moveout_owned` / `_zero_safe` / `_flag_guarded` / `_unreachable_block` | how each move-out was classified |
+| `site_class:scope_exit_release` | a release emitted at scope exit |
+| `site_class:materialized_lastuse_release` | a release at the last use of a materialized temp |
+| `site_class:overwrite_release` | a release before overwriting a slot |
+| `site_class:moveout_expansion` | a move-out expanded into an explicit ownership transfer |
+| `site_class:drop_before_overwrite_site4` | the site-4 drop-before-overwrite class |
+| `pre_post_verdict_drift` | sites where the pre- vs post-ledger verdict differed |
+
+A promotion is sound when every changed line has such an explanation; an
+*unexplained* `changed` delta is the signal to stop and investigate before
+approving.
+
 ## Authoring an approval file
 
 Do not hand-compute the pinned facts — generate the record:
