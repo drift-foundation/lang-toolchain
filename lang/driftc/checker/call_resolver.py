@@ -54,9 +54,10 @@ FIXED_WIDTH_TYPE_NAMES = {
 
 
 def _type_user_arg(type_expr, arg, expected_type: TypeId | None = None) -> TypeId:
-	"""Type a USER-WRITTEN expression that appears in a VALUE position —
-	a call/constructor argument, a keyword-argument value, a constructor
-	field, or a method receiver.
+	"""Type a USER-WRITTEN expression that appears in a VALUE ARGUMENT position —
+	a call/constructor argument, a keyword-argument value, or a constructor
+	field.  (Method RECEIVERS go through `_type_user_receiver`, which applies the
+	value contract only to a direct control-flow receiver.)
 
 	Such an expression is semantically a VALUE: `used_as_value=True`, so a
 	value-control-flow expression (a `match` / ternary) in this position
@@ -66,12 +67,39 @@ def _type_user_arg(type_expr, arg, expected_type: TypeId | None = None) -> TypeI
 	argument during overload resolution never consumes it.
 
 	This is the single source of the value-context contract for user
-	arguments.  Routing every real argument/kwarg/field/receiver through it
-	keeps the whole call-resolution family from drifting back to the wrong
+	arguments.  Routing every real argument/kwarg/field through it keeps the
+	whole call-resolution family from drifting back to the wrong
 	`used_as_value=False` spelling (which reads as "statement / non-value
 	inspection" and is reserved for places, assignment targets, scrutinees,
 	and explicitly documented synthesized probes)."""
 	return type_expr(arg, expected_type=expected_type, used_as_value=True, defer_value_use=True)
+
+
+def _is_value_cf_receiver(expr) -> bool:
+	"""A DIRECT value-control-flow receiver (match / ternary / try / unsafe-
+	block) types to Void under used_as_value=False, so it must be value-typed to
+	resolve its method.  EVERY other receiver — a place, a reference-typed
+	binding, a call, or a projection (whose rvalue base is value-typed by the
+	projection-subject path, not here) — keeps place semantics: value-typing an
+	already-`&`-typed receiver would autoborrow a SECOND time (Ref<Ref<T>>)."""
+	return isinstance(expr, (
+		H.HMatchExpr,
+		getattr(H, "HTernary", ()),
+		getattr(H, "HTryExpr", ()),
+		getattr(H, "HUnsafeExpr", ()),
+	))
+
+
+def _type_user_receiver(type_expr, receiver) -> TypeId:
+	"""The single authority for typing a METHOD RECEIVER.  A DIRECT control-flow
+	receiver is value-typed (via `_type_user_arg`) so it resolves its method
+	instead of collapsing to Void; every other receiver keeps place semantics
+	(`used_as_value=False`) so an already-`&`-typed receiver is not autoborrowed
+	twice into `Ref<Ref<T>>`.  Encapsulates the CFV/place distinction so it lives
+	in ONE place, not repeated at each call/method-resolution site."""
+	if _is_value_cf_receiver(receiver):
+		return _type_user_arg(type_expr, receiver)
+	return type_expr(receiver, used_as_value=False)
 
 
 def _fmt_overload_args(ctx: object, tys) -> str:
@@ -2173,7 +2201,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	# JSON document.  Compiler-handled — no real method body to
 	# resolve.
 	if getattr(expr, "method_name", None) == "encode_compact":
-		_recv_ty = _type_user_arg(type_expr, expr.receiver)
+		_recv_ty = _type_user_receiver(type_expr, expr.receiver)
 		_eff_ty = _recv_ty
 		_eff_def = ctx.type_table.get(_eff_ty)
 		while _eff_def.kind is TypeKind.REF and _eff_def.param_types:
@@ -2205,7 +2233,7 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 		# for &self dispatch or consumed for by-value self); a match/ternary
 		# receiver must type to its result, not Void.  Move accounting is
 		# deferred to autoborrow.
-		recv_ty = _type_user_arg(type_expr, expr.receiver)
+		recv_ty = _type_user_receiver(type_expr, expr.receiver)
 	for arg in expr.args:
 		if isinstance(arg, (H.HCall, getattr(H, "HInvoke", ()), H.HMapLiteral, H.HArrayLiteral)):
 			arg.defer_infer_diag = True
@@ -4344,7 +4372,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 				break
 	trait_type_params = list(getattr(trait_def, "type_params", []) or []) if trait_def is not None else []
 	if method_sig is not None and (not trait_type_params or type_arg_ids):
-		recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_arg(ctx.type_expr, expr.args[0])
+		recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_receiver(ctx.type_expr, expr.args[0])
 		recv_nominal = ctx.unwrap_ref_type(recv_ty)
 		if trait_type_params and type_arg_ids and ctx.type_table.get(recv_nominal).kind is not TypeKind.TYPEVAR:
 			world = ctx.global_trait_world or ctx.visible_trait_world
@@ -4605,7 +4633,7 @@ def resolve_qualified_member_ufcs(ctx: MethodResolverContext, expr: object, qm: 
 		target = getattr(method_res.call_info, "target", None)
 		target_fn_id = target.symbol if isinstance(target, CallTarget) and target.kind is CallTargetKind.DIRECT else None
 		if ctx.record_instantiation is not None and target_fn_id is not None:
-			recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_arg(ctx.type_expr, expr.args[0])
+			recv_ty = recv_arg_type if recv_arg_type is not None else _type_user_receiver(ctx.type_expr, expr.args[0])
 			recv_nominal = ctx.unwrap_ref_type(recv_ty)
 			receiver_args = _receiver_inst_args(recv_nominal)
 			if receiver_args is None:

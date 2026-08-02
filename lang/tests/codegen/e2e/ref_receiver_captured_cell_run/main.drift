@@ -1,0 +1,14 @@
+module m;
+import std.core as core;
+
+// Run companion for the reference-receiver regression: a captured `&Cell<Int>`
+// method receiver (count.get()/count.set() on `&Cell`, not `&&Cell`) must
+// compile, link, and RUN — the captured cell reaches 1 through the ref receiver.
+pub fn main() nothrow -> Int {
+	var count = core.cell(0);
+	(| | captures(&count) => {
+		count.set(count.get() + 1);
+		return 0;
+	})();
+	return count.get();
+}

@@ -889,7 +889,20 @@ class HIRToMIR:
 			return recorded
 		return self._unknown_type
 
-	def _emit_cfg_result_extract(self, result_local: str) -> "M.ValueId":
+	def _join_has_predecessor(self, join_name: str) -> bool:
+		"""True iff some other block's terminator targets `join_name` — i.e. the
+		join is reachable (at least one arm/branch falls through to it).  Used to
+		derive `allow_void`: only an UNREACHABLE join (all arms diverge) may carry
+		a Void result."""
+		from lang.driftc.stage2.cfg import terminator_successors
+		for name, blk in self.b.func.blocks.items():
+			if name == join_name:
+				continue
+			if join_name in terminator_successors(blk.terminator):
+				return True
+		return False
+
+	def _emit_cfg_result_extract(self, result_local: str, *, allow_void: bool) -> "M.ValueId":
 		"""Yield the value of a control-flow-result local (the hidden slot a
 		ternary / match / try-expr stores its result into across branches)
 		as a single owned rvalue.
@@ -908,24 +921,35 @@ class HIRToMIR:
 		strict mode requires it.
 		"""
 		result_ty = self._local_types.get(result_local)
-		# STRICT mode only: the control-flow result local's type is authoritative
-		# — `_cfg_result_type` stamps it at the join and strict mode guarantees no
-		# Unknown.  A missing / Void / Unknown type there would fail OPEN:
-		# `must_move` computes False, a shallow LoadLocal co-owns the backing, and
-		# the dest goes unregistered for drop — exactly the double-free /
-		# unregistered-drop class this path fixes.  Fail loud so the join defect
-		# surfaces at lowering, not at teardown.  In "recover" mode partial /
-		# Unknown types are EXPECTED (invalid user source already diagnosed), so
-		# this invariant must NOT add a second internal-contract diagnostic; in
-		# "none" mode expr_types are ignored entirely.
+		# STRICT mode invariant.  A MISSING (None) or UNKNOWN result type ALWAYS
+		# fails loud: it fails OPEN — `must_move` computes False, a shallow
+		# LoadLocal co-owns the backing, and the dest goes unregistered for drop
+		# (the double-free / unregistered-drop class this path fixes) — and strict
+		# mode's contract is that expr_types carry no Unknown.  A VOID result is
+		# allowed ONLY when `allow_void` is set, which the caller derives from a
+		# PROVEN-UNREACHABLE join (all arms diverge, e.g.
+		# `match c { … => { return … } }`): there the join is dead code and no
+		# value is produced.  A Void result at a REACHABLE join is a real defect (a
+		# value-producing control-flow expression mis-typed Void) and still fails.
+		# "recover" mode expects partial/Unknown types (invalid source already
+		# diagnosed); "none" mode ignores expr_types.
 		if self._typed_mode == "strict":
 			kind = self._type_table.get(result_ty).kind if result_ty is not None else None
-			if result_ty is None or kind in (TypeKind.VOID, TypeKind.UNKNOWN):
-				got = "no type" if result_ty is None else self._type_table.get(result_ty).name
+			bad = (
+				result_ty is None
+				or kind is TypeKind.UNKNOWN
+				or (kind is TypeKind.VOID and not allow_void)
+			)
+			if bad:
+				got = ("no type" if result_ty is None
+				       else "an Unknown type" if kind is TypeKind.UNKNOWN
+				       else "a Void type at a REACHABLE join")
 				raise AssertionError(
 					f"stage2: control-flow result local {result_local!r} has {got} in "
-					f"strict typed mode — the CFG-result join must stamp a concrete, "
-					f"non-Void result type (checker/lowering bug)")
+					f"strict typed mode — the CFG-result join must stamp a KNOWN, "
+					f"non-Unknown authoritative type (a preserved TypeVar is fine; "
+					f"checker/lowering bug); Void is allowed only for a "
+					f"proven-unreachable (all-diverging) join")
 		dest = self.b.new_temp()
 		must_move = result_ty is not None and (
 			not self._should_copy_value(result_ty)
@@ -2450,7 +2474,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self._emit_cfg_result_extract(result_local)
+		dest = self._emit_cfg_result_extract(result_local, allow_void=not join_reachable)
 		return dest
 
 	def _lower_bool_match(self, expr: "H.HMatchExpr", *, want_value: bool) -> M.ValueId | None:
@@ -2593,7 +2617,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self._emit_cfg_result_extract(result_local)
+		dest = self._emit_cfg_result_extract(result_local, allow_void=not join_reachable)
 		return dest
 
 
@@ -2730,7 +2754,7 @@ class HIRToMIR:
 				self.b.set_terminator(M.Unreachable())
 			return None
 		assert result_local is not None
-		dest = self._emit_cfg_result_extract(result_local)
+		dest = self._emit_cfg_result_extract(result_local, allow_void=not join_reachable)
 		return dest
 
 
@@ -8659,7 +8683,8 @@ class HIRToMIR:
 		# dropped exactly once — the shared CFG-result rule (was a
 		# `var x = cond ? a : b;` teardown double-free, exit 134).
 		self.b.set_block(join_block)
-		return self._emit_cfg_result_extract(temp_local)
+		return self._emit_cfg_result_extract(
+			temp_local, allow_void=not self._join_has_predecessor(join_block.name))
 
 	def _visit_expr_HQualifiedMember(self, expr: H.HQualifiedMember) -> M.ValueId:
 		base_te = getattr(expr, "base_type_expr", None)
@@ -8916,7 +8941,8 @@ class HIRToMIR:
 		# co-own the backing with the consumer (was a projection double-free
 		# on `peek((try … catch { … }).root)`, exit 134).
 		self.b.set_block(join_block)
-		return self._emit_cfg_result_extract(temp_local)
+		return self._emit_cfg_result_extract(
+			temp_local, allow_void=not self._join_has_predecessor(join_block.name))
 
 	def _visit_expr_HMatchExpr(self, expr: "H.HMatchExpr") -> M.ValueId:
 		"""Lower `match` in expression position (value required)."""

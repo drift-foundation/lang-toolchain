@@ -1,0 +1,1 @@
+{"description": "run companion (lowering-visible acceptance): a captured &Cell<Int> method receiver increments the cell through the reference receiver (no double-borrow). Exits 1 = the cell reached 1. base+ASan+memcheck.", "exit_code": 1}

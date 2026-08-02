@@ -69,7 +69,17 @@ FIXTURE_ROOT = ROOT / "lang" / "tests" / "codegen" / "e2e"
 sys.path.insert(0, str(ROOT))
 from lang.test_support.drift_tmp import session_root as _drift_session_root  # noqa: E402
 
-_SCRATCH_BASE = _drift_session_root(base=ROOT / "build" / "tmp")
+_scratch_base_cached = None
+
+
+def _scratch_base():
+	"""Lazily create the compile scratch root — ONLY when actually compiling.
+	The compile-free preflight imports this module but must not create a
+	session directory as an import side effect."""
+	global _scratch_base_cached
+	if _scratch_base_cached is None:
+		_scratch_base_cached = _drift_session_root(base=ROOT / "build" / "tmp")
+	return _scratch_base_cached
 
 # Hard gates: any nonzero value fails the run — BOTH for standalone
 # baseline acquisition and for the new side of a --baseline comparison.
@@ -172,7 +182,7 @@ def _compile_one(fixture: Path, run_dir: Path, extra_args: list[str]) -> tuple[s
 	if entry is None:
 		return name, False
 	audit_file = run_dir / "audit" / f"{name}.jsonl"
-	with tempfile.TemporaryDirectory(prefix="corpus-audit-", dir=str(_SCRATCH_BASE)) as td:
+	with tempfile.TemporaryDirectory(prefix="corpus-audit-", dir=str(_scratch_base())) as td:
 		env = os.environ.copy()
 		env["DRIFT_STRING_ARC_AUDIT"] = "1"
 		env["DRIFT_STRING_ARC_AUDIT_FILE"] = str(audit_file)
@@ -221,15 +231,9 @@ def _stable_json(obj) -> str:
 def _write_run(run_dir: Path, fixtures: list[Path], excluded: list[dict],
                compiled_ok: list[str], failed: list[str],
                counters: dict[str, int], started: float, jobs: int) -> None:
-	universe = {
-		"inclusion_rule": INCLUSION_RULE,
-		"fixtures": [
-			{"name": f.name, "sha256": _fixture_hash(f)} for f in fixtures
-		],
-		"excluded": sorted(excluded, key=lambda e: e["name"]),
-		"compiled_ok": sorted(compiled_ok),
-		"failed": sorted(failed),
-	}
+	universe = _universe_dict(fixtures, excluded)
+	universe["compiled_ok"] = sorted(compiled_ok)
+	universe["failed"] = sorted(failed)
 	try:
 		versions = (ROOT / "lang" / "versions.py").read_text()
 		driftc_version = re.search(r'DRIFTC_VERSION: str = "([^"]+)"', versions).group(1)
@@ -400,13 +404,185 @@ def _compare(baseline_dir: Path, run_dir: Path,
 	return 0
 
 
+# ── Static preflight ─────────────────────────────────────────────────
+# A fast, COMPILE-FREE universe check against the reviewed baseline.  It
+# CANNOT detect compiler-result flips (compiled_ok/failed) — that needs a
+# full corpus run — but it immediately reveals KNOWN universe drift
+# (fixture add/remove/content-change, exclusion changes, inclusion-rule
+# changes, included<->excluded transitions) so a full run is not spent
+# merely to rediscover it.  This is also the single static-universe
+# authority a later --resume layer will reuse.
+
+def _universe_dict(fixtures, excluded) -> dict:
+	"""The SINGLE builder of the static-universe shape — inclusion rule +
+	included {name, content-sha256} + exclusions {name, reason}.  Used by BOTH
+	the preflight (`_static_universe`) and the full run (`_write_run`) so the
+	manifest universe authority is never duplicated."""
+	return {
+		"inclusion_rule": INCLUSION_RULE,
+		"fixtures": [{"name": f.name, "sha256": _fixture_hash(f)} for f in fixtures],
+		"excluded": sorted(excluded, key=lambda e: e["name"]),
+	}
+
+
+def _static_universe(only: list[str] | None = None) -> dict:
+	"""The current STATIC corpus universe — inclusion rule, included fixtures
+	(name + content sha256), and exclusions (name + reason) — computed WITHOUT
+	compiling.  Deliberately omits compiled_ok/failed: those are compiler
+	RESULTS a static preflight cannot know and must not guess."""
+	return _universe_dict(*_discover_fixtures(only))
+
+
+def _baseline_partition_errors(u: dict) -> list[str]:
+	"""Integrity of the BASELINE partition itself (independent of the current
+	tree): included / excluded / compiled_ok / failed must be a well-formed
+	partition — no duplicates, no name in two sets, and compiled_ok∪failed must
+	equal the included set exactly.  A broken baseline is a HARD error: it
+	cannot be a trustworthy comparison point."""
+	errs: list[str] = []
+	inc = [f["name"] for f in u.get("fixtures", [])]
+	exc = [e["name"] for e in u.get("excluded", [])]
+	ok = list(u.get("compiled_ok", []))
+	failed = list(u.get("failed", []))
+
+	def _dups(names: list[str], label: str) -> None:
+		seen: set[str] = set()
+		dup: set[str] = set()
+		for n in names:
+			(dup if n in seen else seen).add(n)
+		if dup:
+			errs.append(f"baseline {label} has duplicate names: {sorted(dup)}")
+
+	_dups(inc, "included")
+	_dups(exc, "excluded")
+	_dups(ok, "compiled_ok")
+	_dups(failed, "failed")
+	inc_s, exc_s, ok_s, failed_s = set(inc), set(exc), set(ok), set(failed)
+	if inc_s & exc_s:
+		errs.append(f"baseline names in BOTH included and excluded: {sorted(inc_s & exc_s)}")
+	if ok_s & failed_s:
+		errs.append(f"baseline names in BOTH compiled_ok and failed: {sorted(ok_s & failed_s)}")
+	if (ok_s | failed_s) != inc_s:
+		missing = inc_s - (ok_s | failed_s)
+		extra = (ok_s | failed_s) - inc_s
+		if missing:
+			errs.append(f"baseline included fixtures absent from compiled_ok∪failed: {sorted(missing)}")
+		if extra:
+			errs.append(f"baseline compiled_ok∪failed names absent from included set: {sorted(extra)}")
+	return errs
+
+
+_PREFLIGHT_DRIFT_KEYS = (
+	"inclusion_rule_changed", "included_added", "included_removed",
+	"content_changed", "excluded_added", "excluded_removed",
+	"exclusion_reason_changed", "included_to_excluded", "excluded_to_included",
+)
+
+
+def _preflight_compare(base_u: dict, cur_u: dict) -> dict:
+	"""Static universe diff (pure): current tree vs reviewed baseline.  Covers
+	the inclusion RULE, included fixture add/remove/content-change, exclusion
+	add/remove/reason-change, and included<->excluded TRANSITIONS."""
+	base_inc = {f["name"]: f["sha256"] for f in base_u.get("fixtures", [])}
+	cur_inc = {f["name"]: f["sha256"] for f in cur_u.get("fixtures", [])}
+	base_exc = {e["name"]: e.get("reason") for e in base_u.get("excluded", [])}
+	cur_exc = {e["name"]: e.get("reason") for e in cur_u.get("excluded", [])}
+	rep: dict = {}
+	if base_u.get("inclusion_rule") != cur_u.get("inclusion_rule"):
+		rep["inclusion_rule_changed"] = {
+			"baseline": base_u.get("inclusion_rule"),
+			"current": cur_u.get("inclusion_rule"),
+		}
+	rep["included_added"] = sorted(set(cur_inc) - set(base_inc))
+	rep["included_removed"] = sorted(set(base_inc) - set(cur_inc))
+	rep["content_changed"] = sorted(
+		n for n in (set(base_inc) & set(cur_inc)) if base_inc[n] != cur_inc[n])
+	rep["excluded_added"] = sorted(set(cur_exc) - set(base_exc))
+	rep["excluded_removed"] = sorted(set(base_exc) - set(cur_exc))
+	rep["exclusion_reason_changed"] = sorted(
+		f"{n}: {base_exc[n]!r} -> {cur_exc[n]!r}"
+		for n in (set(base_exc) & set(cur_exc)) if base_exc[n] != cur_exc[n])
+	# Transitions — called out explicitly (derivable from the sets above, but
+	# an included fixture becoming excluded, or vice-versa, is the highest-signal
+	# drift: it silently changes what the corpus even attempts to compile).
+	rep["included_to_excluded"] = sorted(set(base_inc) & set(cur_exc))
+	rep["excluded_to_included"] = sorted(set(base_exc) & set(cur_inc))
+	return rep
+
+
+def _preflight_has_drift(rep: dict) -> bool:
+	return any(rep.get(k) for k in _PREFLIGHT_DRIFT_KEYS)
+
+
+def _run_preflight(baseline_dir: Path) -> int:
+	"""Exit 0 = current universe matches the reviewed baseline exactly AND the
+	baseline partition is intact; 1 = static drift (categorized report);
+	2 = malformed baseline or broken baseline partition."""
+	try:
+		bm = json.loads((baseline_dir / "manifest.json").read_text())
+		base_u = bm["universe"]
+		_validate_universe_schema("baseline", base_u)
+	except (OSError, ValueError, KeyError, TypeError) as e:
+		print(f"PREFLIGHT: unusable baseline ({type(e).__name__}: {e})", file=sys.stderr)
+		return 2
+	part_errs = _baseline_partition_errors(base_u)
+	if part_errs:
+		print("PREFLIGHT: baseline partition integrity FAILED:", file=sys.stderr)
+		for e in part_errs:
+			print(f"  - {e}", file=sys.stderr)
+		return 2
+	try:
+		cur_u = _static_universe(None)
+	except (OSError, ValueError) as e:
+		# The complete current-tree read/parse failure family: OSError (missing /
+		# unreadable file), and ValueError incl. UnicodeDecodeError (a non-UTF-8
+		# expected.json / source) — either exits 2 cleanly, never tracebacks.
+		print(f"PREFLIGHT: failed reading the current fixture tree ({type(e).__name__}: {e})", file=sys.stderr)
+		return 2
+	rep = _preflight_compare(base_u, cur_u)
+	print(f"PREFLIGHT: baseline {baseline_dir}")
+	print(f"  inclusion rule: {'CHANGED' if 'inclusion_rule_changed' in rep else 'unchanged'}")
+	print(f"  included: {len(cur_u['fixtures'])} (baseline {len(base_u.get('fixtures', []))})"
+	      f"  +{len(rep['included_added'])} -{len(rep['included_removed'])}"
+	      f"  ~{len(rep['content_changed'])} content-changed")
+	print(f"  excluded: {len(cur_u['excluded'])} (baseline {len(base_u.get('excluded', []))})"
+	      f"  +{len(rep['excluded_added'])} -{len(rep['excluded_removed'])}"
+	      f"  reason~{len(rep['exclusion_reason_changed'])}")
+	print(f"  transitions: included→excluded {len(rep['included_to_excluded'])},"
+	      f" excluded→included {len(rep['excluded_to_included'])}")
+	if _preflight_has_drift(rep):
+		for k in _PREFLIGHT_DRIFT_KEYS:
+			v = rep.get(k)
+			if not v:
+				continue
+			if isinstance(v, list) and len(v) > 20:
+				shown = v[:20] + [f"...(+{len(v) - 20} more)"]
+			else:
+				shown = v
+			print(f"  [{k}] {shown}")
+		print("PREFLIGHT: static universe DRIFT vs reviewed baseline (expected "
+		      "during development — review, then re-baseline via promotion). "
+		      "NOTE: cannot detect compiler-result flips — run the full corpus for that.")
+		return 1
+	print("PREFLIGHT: static universe matches the reviewed baseline exactly. "
+	      "(Cannot detect compiler-result flips — run the full corpus for that.)")
+	return 0
+
+
 def main(argv: list[str] | None = None) -> int:
 	ap = argparse.ArgumentParser(description=__doc__,
 	                             formatter_class=argparse.RawDescriptionHelpFormatter)
-	ap.add_argument("--out", required=True, help="run output directory")
+	ap.add_argument("--out", help="run output directory (required unless --preflight)")
 	ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
 	ap.add_argument("--only", help="comma-separated fixture-name subset")
 	ap.add_argument("--baseline", help="prior run dir to compare against")
+	ap.add_argument("--preflight", action="store_true",
+	                help="STATIC universe check vs --baseline: compare inclusion "
+	                     "rule, included-fixture names + content hashes, "
+	                     "exclusions + reasons, and included<->excluded "
+	                     "transitions WITHOUT compiling, and verify baseline "
+	                     "partition integrity.  Fast; cannot detect "
+	                     "compiler-result flips.  Exit 0=match, 1=drift, 2=error")
 	ap.add_argument("--require-zero-delta", action="store_true",
 	                help="certification mode: with --baseline, require the "
 	                     "IDENTICAL counter key set and every delta exactly 0 "
@@ -415,6 +591,26 @@ def main(argv: list[str] | None = None) -> int:
 	ap.add_argument("--driftc-args", default="",
 	                help="extra args passed to every driftc invocation")
 	args = ap.parse_args(argv)
+	if args.preflight:
+		# Static, compile-free path — never touches --out / the run directory.
+		if not args.baseline:
+			print("--preflight needs --baseline", file=sys.stderr)
+			return 2
+		if args.require_zero_delta:
+			print("--require-zero-delta is a full-run flag; not used with --preflight",
+			      file=sys.stderr)
+			return 2
+		if args.only:
+			# A subset would report every other baseline fixture as "removed" —
+			# meaningless.  The preflight compares the FULL current universe to the
+			# full baseline; refuse --only rather than emit a misleading diff.
+			print("--only is not supported with --preflight (it compares the FULL "
+			      "universe against the baseline)", file=sys.stderr)
+			return 2
+		return _run_preflight(Path(args.baseline))
+	if not args.out:
+		print("--out is required (unless --preflight)", file=sys.stderr)
+		return 2
 	if args.require_zero_delta and not args.baseline:
 		print("--require-zero-delta needs --baseline", file=sys.stderr)
 		return 2

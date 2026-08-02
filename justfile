@@ -244,6 +244,18 @@ ownership-corpus-run OUT="":
 # exactly once per certification — it is wired into `just certify`.
 # Results land in a fresh repo-local build/tmp dir, retained on failure
 # for diagnosis.
+# FAST static preflight: compares the current corpus universe to the
+# reviewed baseline WITHOUT compiling — surfaces known universe drift
+# (fixture add/remove/content-change, exclusion changes, inclusion-rule
+# change, included<->excluded transitions) and verifies baseline partition
+# integrity in seconds, so a full ~20-30 min corpus run is not spent merely
+# rediscovering it.  Exit 0=match, 1=drift, 2=error.  It CANNOT detect
+# compiler-result flips — the full `ownership-corpus-check` remains the
+# acceptance gate.  NOT wired into run-all-tests.sh.
+ownership-corpus-preflight:
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_audit.py \
+		--preflight --baseline lang/tests/ownership_corpus/reviewed-baseline
+
 ownership-corpus-check:
 	#!/usr/bin/env bash
 	set -euo pipefail

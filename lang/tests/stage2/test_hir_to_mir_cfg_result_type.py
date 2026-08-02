@@ -136,27 +136,41 @@ def test_ternary_uses_branch_types():
 
 
 def test_emit_cfg_result_extract_fails_loud_on_missing_type():
-	"""In typed mode, a control-flow result local with NO recorded type is a
-	join defect: `_emit_cfg_result_extract` would fail OPEN (shallow LoadLocal,
-	unregistered drop). It must raise instead."""
+	"""Strict mode, MISSING type: fail OPEN (shallow LoadLocal, unregistered
+	drop) — must raise regardless of allow_void (a missing type is never valid)."""
 	tt = TypeTable()
 	h2m = _h2m(tt)
 	h2m._typed_mode = "strict"
-	# result local absent from _local_types -> no type
 	with pytest.raises(AssertionError):
-		h2m._emit_cfg_result_extract("__match_result_missing")
+		h2m._emit_cfg_result_extract("__match_result_missing", allow_void=True)
 
 
-def test_emit_cfg_result_extract_fails_loud_on_void_type():
-	"""A Void-typed control-flow result local in typed mode is likewise a join
-	defect (a value-producing CFG expression must not be Void)."""
+def test_emit_cfg_result_extract_fails_loud_on_unknown_type():
+	"""Strict mode, UNKNOWN type: strict's contract is no Unknown, so this is a
+	real join defect — must raise even with allow_void (Unknown != Void)."""
+	tt = TypeTable()
+	h2m = _h2m(tt)
+	h2m._typed_mode = "strict"
+	h2m._local_types["__match_result_unknown"] = h2m._unknown_type
+	with pytest.raises(AssertionError):
+		h2m._emit_cfg_result_extract("__match_result_unknown", allow_void=True)
+
+
+def test_emit_cfg_result_extract_void_scoped_to_allow_void():
+	"""Void is legitimate ONLY at a proven-unreachable (all-diverging) join —
+	`allow_void=True`.  A Void result at a REACHABLE join (`allow_void=False`) is
+	a value-producing control-flow expr mis-typed Void and MUST raise.  This pins
+	the exemption to the all-diverging case, not arbitrary Void."""
 	tt = TypeTable()
 	void_ty = tt.ensure_void()
 	h2m = _h2m(tt)
 	h2m._typed_mode = "strict"
 	h2m._local_types["__match_result_void"] = void_ty
+	# all-diverging join: exempt.
+	assert h2m._emit_cfg_result_extract("__match_result_void", allow_void=True) is not None
+	# reachable join: NOT exempt — a value context with a Void result is a defect.
 	with pytest.raises(AssertionError):
-		h2m._emit_cfg_result_extract("__match_result_void")
+		h2m._emit_cfg_result_extract("__match_result_void", allow_void=False)
 
 
 def test_production_ternary_routes_through_cfg_result_type(tmp_path):
@@ -211,10 +225,10 @@ def test_emit_cfg_result_extract_recover_mode_missing_type_does_not_raise():
 	h2m = _h2m(tt)
 	h2m._typed_mode = "recover"
 	# Missing type: no raise, returns a dest.
-	dest_missing = h2m._emit_cfg_result_extract("__match_result_missing")
+	dest_missing = h2m._emit_cfg_result_extract("__match_result_missing", allow_void=False)
 	assert dest_missing is not None
 	# Unknown type: likewise no raise.
 	unknown_ty = h2m._unknown_type
 	h2m._local_types["__match_result_unknown"] = unknown_ty
-	dest_unknown = h2m._emit_cfg_result_extract("__match_result_unknown")
+	dest_unknown = h2m._emit_cfg_result_extract("__match_result_unknown", allow_void=False)
 	assert dest_unknown is not None
