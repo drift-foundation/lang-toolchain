@@ -1,19 +1,19 @@
 {
   "counters": {
-    "c1_agree": 979943,
-    "c1_path_dependent": 30200,
-    "c3_moveout_flag_guarded": 3768,
-    "c3_moveout_owned": 1979821,
-    "c3_moveout_unreachable_block": 1888,
-    "c3_moveout_zero_safe": 2916,
-    "events": 3002485,
-    "fns": 1202656,
-    "pre_post_verdict_drift": 49114,
-    "site_class:drop_before_overwrite_site4": 4724,
-    "site_class:materialized_lastuse_release": 662826,
-    "site_class:moveout_expansion": 1988393,
-    "site_class:overwrite_release": 267228,
-    "site_class:scope_exit_release": 79314
+    "c1_agree": 1007797,
+    "c1_path_dependent": 30096,
+    "c3_moveout_flag_guarded": 3876,
+    "c3_moveout_owned": 2048930,
+    "c3_moveout_unreachable_block": 1942,
+    "c3_moveout_zero_safe": 2998,
+    "events": 3099996,
+    "fns": 1237062,
+    "pre_post_verdict_drift": 50499,
+    "site_class:drop_before_overwrite_site4": 4859,
+    "site_class:materialized_lastuse_release": 681954,
+    "site_class:moveout_expansion": 2057746,
+    "site_class:overwrite_release": 274842,
+    "site_class:scope_exit_release": 80595
   },
-  "fixtures_compiled": 942
+  "fixtures_compiled": 969
 }

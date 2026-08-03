@@ -1,7 +1,7 @@
 {
   "environment": {
     "abi": "22",
-    "driftc_version": "0.33.94",
+    "driftc_version": "0.34.1",
     "tool_version": "1.7.1"
   },
   "universe": {
@@ -120,6 +120,30 @@
       "catch_binderless_handle",
       "catch_mixed_binder_and_catchall",
       "cell_counter_fn0",
+      "cfrv_bare_match_index",
+      "cfrv_bare_ternary_field",
+      "cfrv_bare_ternary_index",
+      "cfrv_bare_try_index",
+      "cfrv_bare_try_whole",
+      "cfrv_coerce_iface_borrow",
+      "cfrv_consume_array_push",
+      "cfrv_consume_reassign",
+      "cfrv_consume_struct_field",
+      "cfrv_exit_move_return",
+      "cfrv_exit_throwing_unwind",
+      "cfrv_iife_cfv_ref_arg",
+      "cfrv_match_bool_byvalue",
+      "cfrv_match_field_proj_arg",
+      "cfrv_match_generic_result",
+      "cfrv_match_index_receiver",
+      "cfrv_match_receiver_method",
+      "cfrv_match_string_builtin_byte_length",
+      "cfrv_match_variant_byvalue",
+      "cfrv_match_variant_whole_borrow",
+      "cfrv_match_whole_borrow",
+      "cfrv_ternary_whole_borrow",
+      "cfrv_try_expr_field_proj",
+      "cfrv_try_expr_receiver",
       "checker_chained_byte_equality_inference",
       "cleanup_err_with_jsonnode_local_min",
       "closures_explicit_captures_copy_mut",
@@ -537,6 +561,7 @@
       "ref_binder_direct_copy",
       "ref_field_string_arg_coercion",
       "ref_plus_string_param_return_struct_twice_min",
+      "ref_receiver_captured_cell_run",
       "ref_return_registry_match_ok",
       "ref_scalar_alias",
       "ref_variant_binder_return_owned",
@@ -887,6 +912,8 @@
       "struct_ref_field_result_ok_move_drop_once",
       "struct_ref_field_result_return_local_wrapper_ok",
       "struct_ref_field_result_return_ok",
+      "ternary_owned_result_bind_then_borrow",
+      "ternary_owned_result_bound_drops_once",
       "throw_catch_print",
       "throw_only_non_returning",
       "trait_qualified_ref_type_arg_impl_lookup",
@@ -1245,6 +1272,12 @@
       "catch_binder_scope_leak",
       "catch_cross_arm_leak",
       "catch_let_visible_within_arm",
+      "cfrv_bare_unsafe_index",
+      "cfrv_bare_unsafe_whole",
+      "cfrv_match_receiver_disagree_rejected",
+      "cfrv_match_receiver_or_throw_not_error_rejected",
+      "cfrv_try_arm_type_disagree_rejected",
+      "cfrv_unsafe_block_field_proj",
       "closures_explicit_captures_missing_root_rejected",
       "closures_explicit_captures_move_use_after_move_rejected",
       "closures_explicit_captures_shared_write_rejected",
@@ -1427,10 +1460,6 @@
       "rvalue_field_proj_mut_field_rejected",
       "rvalue_field_proj_mut_index_rejected",
       "rvalue_field_proj_string_from_utf8",
-      "rvalue_field_proj_ternary_bitcopy_field_rejected",
-      "rvalue_field_proj_ternary_explicit_rejected",
-      "rvalue_field_proj_ternary_field_rejected",
-      "rvalue_field_proj_ternary_whole_rejected",
       "scalar_match_byte_overflow_rejected",
       "scalar_match_const_default_before_arm_rejected",
       "scalar_match_const_duplicate_rejected",
@@ -2360,6 +2389,126 @@
       {
         "name": "cell_counter_fn0",
         "sha256": "bada4ab899279ceaed5cab10603e4f16e4476ab3a25dda815f7b8219fd2c0f9a"
+      },
+      {
+        "name": "cfrv_bare_match_index",
+        "sha256": "5eeb2ba8eff95484f52b4b54eed49f2c63dc474613cfc789e2c5c3305d57d99a"
+      },
+      {
+        "name": "cfrv_bare_ternary_field",
+        "sha256": "b1425f9d537128432d0685d6f0ed22cdc034dc6cf8a57eedf2562843e923ed32"
+      },
+      {
+        "name": "cfrv_bare_ternary_index",
+        "sha256": "fd7df2aeca9208fddf6ae58268219474cbe28a47ab16fb28ef1d7240f007d562"
+      },
+      {
+        "name": "cfrv_bare_try_index",
+        "sha256": "0b4f0f07fb52a10ee5b1cbd5d9d9824a23ebc4fa6f3ef6b452e51b95f01fce2e"
+      },
+      {
+        "name": "cfrv_bare_try_whole",
+        "sha256": "d836d7839a510b8516789b8684d47851d5382ee1840b79e0c9779d47d0f5dba5"
+      },
+      {
+        "name": "cfrv_bare_unsafe_index",
+        "sha256": "f4e23849ae9018abaa0befa4b8dbefe69ce88f42b5e90cb4cd75ed0b8c78ec8e"
+      },
+      {
+        "name": "cfrv_bare_unsafe_whole",
+        "sha256": "44402cca2eb7149ebc07e29764868d880371978def036b637ef71e8cd20f7b55"
+      },
+      {
+        "name": "cfrv_coerce_iface_borrow",
+        "sha256": "c929d8f33af7d381fece1d7b184effb12d6e5ab5cd579b8e532c77b43101ac1b"
+      },
+      {
+        "name": "cfrv_consume_array_push",
+        "sha256": "3ea748cb17848f489334ef58cf751d4e75b24a750519bc512ed67fd67daf0b9b"
+      },
+      {
+        "name": "cfrv_consume_reassign",
+        "sha256": "2564961da802ff47f6c8ab24ec59f0fc1a031cf9eafb5a1efe4567c8909dadf9"
+      },
+      {
+        "name": "cfrv_consume_struct_field",
+        "sha256": "342901e02cd9c108fb547789b4ada331e9ed6f7a8a717110e93a97c6252a905f"
+      },
+      {
+        "name": "cfrv_exit_move_return",
+        "sha256": "65a90a39f690e9b7b1aedcae574306ec386dd3e6b961256257ab7cc7c0ddaebb"
+      },
+      {
+        "name": "cfrv_exit_throwing_unwind",
+        "sha256": "500fbf2309acc3b4d0598d7d9cd4829ad8a2f1f9e0e2d78907bce1c5807d304c"
+      },
+      {
+        "name": "cfrv_iife_cfv_ref_arg",
+        "sha256": "dfcac777e200f6cc15b6e4ce01256f86a9ca605679f0e60721426ec8dcaefed4"
+      },
+      {
+        "name": "cfrv_match_bool_byvalue",
+        "sha256": "646efa39efb66e93fe23287250b45fc3bc02cab058d76ce9ef1840e288a86bae"
+      },
+      {
+        "name": "cfrv_match_field_proj_arg",
+        "sha256": "66322e19b6f6bda786505c70f18fb2f4f5641659c73b78232923e66eee7e74a2"
+      },
+      {
+        "name": "cfrv_match_generic_result",
+        "sha256": "9bec20d5e4da321d255341479740c8b5c05da4049ee8a9bf30a7383dffb0cea3"
+      },
+      {
+        "name": "cfrv_match_index_receiver",
+        "sha256": "02d111aa883daaac46fe5c588e2db97149bf7112e44f90cd3cf5cc407917a046"
+      },
+      {
+        "name": "cfrv_match_receiver_disagree_rejected",
+        "sha256": "82a51bed77a6288007bbb1cf3ce7bc9ad2490ccd63243dc91cd302f08d77703d"
+      },
+      {
+        "name": "cfrv_match_receiver_method",
+        "sha256": "afd73819726029ff5ae7f89f9683cda7a1b2d8ea34e916a4fb7db28b6e80d819"
+      },
+      {
+        "name": "cfrv_match_receiver_or_throw_not_error_rejected",
+        "sha256": "07962c24effcb0e12588a784a5f44a0554eb1bdac9304d60b35c967df19da85b"
+      },
+      {
+        "name": "cfrv_match_string_builtin_byte_length",
+        "sha256": "56da4da1232a5ffd6b819793895c606f0915847dc12d874512df85a2ca0abff9"
+      },
+      {
+        "name": "cfrv_match_variant_byvalue",
+        "sha256": "1a6420c56ccba1012b625d8bb004b46145b65bd8f13c6e0e3149054ebf91440c"
+      },
+      {
+        "name": "cfrv_match_variant_whole_borrow",
+        "sha256": "8d80a8820427f9cfc4293a3a97937212a355a2b307a5fb54f96f7c8b2997d719"
+      },
+      {
+        "name": "cfrv_match_whole_borrow",
+        "sha256": "4e1173e3e8dd6a0d0f570bdb2f93b9dc4c997490d7b71c02dc82a8e1517cc600"
+      },
+      {
+        "name": "cfrv_ternary_whole_borrow",
+        "sha256": "2b2a50813c748665bea480655f5927484aca774e274a5ced8960230def78f370"
+      },
+      {
+        "name": "cfrv_try_arm_type_disagree_rejected",
+        "sha256": "45c1f739c18ae9b077c5ef1d11f2790c88e6cde13d4909b4882a7f71884e7494"
+      },
+      {
+        "name": "cfrv_try_expr_field_proj",
+        "sha256": "fc5a5ae62e821ff3c1f544aa6d749505961bd1a63e739a62598f369773c5baf1"
+      },
+      {
+        "name": "cfrv_try_expr_receiver",
+        "sha256": "481803b3aab9496897d55eab30223d2f8cc5eb3e23370395187dc14634845eec"
+      },
+      {
+        "name": "cfrv_unsafe_block_field_proj",
+        "sha256": "635b15624c08cd8c10ec6604136ef72386b9ff9cadcf7de48d4df7a5e1d57d99"
       },
       {
         "name": "checker_chained_byte_equality_inference",
@@ -4167,7 +4316,7 @@
       },
       {
         "name": "mut_rvalue_arg_binding_required_rejected",
-        "sha256": "1fb9f72dc160558f8be84c50faf65e3c36d274581050d51b5f4ee0cf090d8c10"
+        "sha256": "2127e2e8624e1452c81f528b9a1f93bfd1e03710fd6736eda53d0ac1464941f6"
       },
       {
         "name": "mutex_guard_condvar_unlock_relock",
@@ -4706,6 +4855,10 @@
         "sha256": "3a99ba4bfa7db6add5fbb671d5818dc2b1aaa1e77ff734aee36702db99ae180d"
       },
       {
+        "name": "ref_receiver_captured_cell_run",
+        "sha256": "32880fa398479a25d34aa8cff6992c5d669969584497dbc41003457ba44791c6"
+      },
+      {
         "name": "ref_return_registry_match_ok",
         "sha256": "21b91024c7e8fbd4b56617fbe03b8b1304e1b0d8dd4d3a9f650702fb938ab4a4"
       },
@@ -4934,24 +5087,8 @@
         "sha256": "4fb6b75c4f8f66443758b0308e23178daa3650e966cae53d3bf060934ef1ba87"
       },
       {
-        "name": "rvalue_field_proj_ternary_bitcopy_field_rejected",
-        "sha256": "e41015ea5ed5a918b4cad1dd250b1b85800aa69446f15e8f9d9d6a92330fdc96"
-      },
-      {
         "name": "rvalue_field_proj_ternary_bitcopy_scalar_ok",
         "sha256": "71856dee7741da2f4936f621cd8b70e9f27715685064df63524225032e299564"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_explicit_rejected",
-        "sha256": "556bb8c93449a1111cb361e7f0d12a959e299c56509872b4d67cfcb3de55215c"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_field_rejected",
-        "sha256": "5ee65ee602dc4798108f71dd29600efe953e1f51ce1de0a9f2a870f53e9f684f"
-      },
-      {
-        "name": "rvalue_field_proj_ternary_whole_rejected",
-        "sha256": "008809da7b7abcc122dffca7ad979aeac3ca0567ffd695c8bc3a7aab8ae751f7"
       },
       {
         "name": "rvalue_field_proj_throwing_edge",
@@ -6424,6 +6561,14 @@
       {
         "name": "struct_ref_field_treemap_store_rejected",
         "sha256": "bc55e2c667569b73916826749116e345e6e598a684f274a19de9afb2bda29d4c"
+      },
+      {
+        "name": "ternary_owned_result_bind_then_borrow",
+        "sha256": "55b50db2c53c6c4b34286807415ec3114310a6e9565ce098d1605adefc76b22c"
+      },
+      {
+        "name": "ternary_owned_result_bound_drops_once",
+        "sha256": "6fe30a5163b764e92209336687d43eb03b2412b0328f5a86fd65ae668b4347db"
       },
       {
         "name": "throw_catch_print",

@@ -1,0 +1,87 @@
+{
+  "composite": "082fdd75c1609417c18ce20fe68bd5977e478625549cf6fd467ba054da3706bf",
+  "kind": "run_snapshot",
+  "schema_version": 3,
+  "static_universe_digest": "2db835f977d8c8c3e20cc9a651609be49cdbb9d0fb62f456dfd13ec7bd808054",
+  "toolchain": {
+    "components": {
+      "audit_tool": "76db1cfa55acccf26d2bb068f216cec40ee7573b8641cebae290591ec7562395",
+      "compile_source": "d34c08fd2db1224daa9d3431a91b6eefd13daa25c4be78fc9313307454dde7fc",
+      "contract_schema": 2,
+      "driftc_argv_template": [
+        "--dev",
+        "--stdlib-root",
+        "<STDLIB>",
+        "<FIXTURE>",
+        "--entry",
+        "<ENTRY>",
+        "-o",
+        "<OUT>"
+      ],
+      "env": {
+        "DRIFT_STRING_ARC_AUDIT": "1",
+        "DRIFT_TOOLCHAIN_ROOT": "/home/sl/opt/drift/certified/current/toolchain",
+        "HOME": "/home/sl",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/home/sl/.local/bin:/home/sl/.local/bin:/home/sl/.local/bin:/home/sl/.local/bin:/home/sl/.nvm/versions/node/v24.14.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONHASHSEED": "0",
+        "PYTHONPATH": ".",
+        "TMPDIR": "<controlled-per-run-scratch>"
+      },
+      "native_libs": {
+        "z": {
+          "bytes_sha256": "a83ec9e0fee275a2c2b1f2b3773fef6277d7d8fa57f6d50bf0806301b438e281",
+          "resolved": "/lib/x86_64-linux-gnu/libz.so",
+          "soname": "libz.so"
+        }
+      },
+      "runtime": {
+        "archive_relpath": "default/libdrift_rt_abi22.a",
+        "archive_sha256": "7f275a34249250b26df853fff6a0ddb5456ff2c1d13f568f2397dc873b359367",
+        "cache_root_settings": {
+          "DRIFT_RUNTIME_BUILD_ROOT": null,
+          "DRIFT_RUNTIME_LIB_CACHE_DIR": null
+        },
+        "variant": "default"
+      },
+      "stdlib": "4b483bc5ff64b343a0e7b52da8c34653b327317c4fa1d8af07f813ccca1213ad",
+      "tools": {
+        "ar": {
+          "bytes_sha256": "e448e111724ab2584d855ba00897bd860d272009fac201ea30ddc6d7d8f7c4a4",
+          "path": "/usr/bin/ar",
+          "version_sha256": "e5346edb4354ec49f5268dc8035e12b599fdfb4d64b2cdf97e8b7400c021d133"
+        },
+        "clang": {
+          "bytes_sha256": "065200b47e194f7d7e15d5bd9c0550331b1ac862c8840f21d4da75aae0242b77",
+          "path": "/usr/bin/clang",
+          "version_sha256": "9deb492f517b6503e34a1234fa9b6d3473789e9285bf6a56b4a0edca6cbed42b"
+        },
+        "linker": {
+          "bytes_sha256": "91d9dac033f941bc5ffd7af6f31fbe9a938eddeed67784589f9fb8d56d15ebb5",
+          "path": "/usr/bin/ld.gold",
+          "selection": "gold",
+          "version_sha256": "01647287032100bb509449c40769cb2a2b57377b9d9b5e0be95418715e5ab8ff"
+        },
+        "platform": {
+          "machine": "x86_64",
+          "platform": "Linux-6.17.0-41-generic-x86_64-with-glibc2.42",
+          "system": "Linux"
+        },
+        "python": {
+          "cache_tag": "cpython-313",
+          "executable": "/home/sl/src/drift-lang/.venv/bin/python3",
+          "executable_bytes_sha256": "efb29ce53d36ebaeee80e3aa44fd6c7f9d71bbded5fe1665240b2ed8ecaeee0e",
+          "implementation": "cpython",
+          "version": "3.13.7 (main, Mar  3 2026, 12:19:54) [GCC 15.2.0]"
+        }
+      }
+    },
+    "composite": "d5303418622f8de37fb30e48425277509c9d7ac2528ad32ad3a7bc03d72de1f3",
+    "diagnostic": {
+      "git_rev": null
+    },
+    "kind": "toolchain",
+    "schema_version": 3
+  }
+}
