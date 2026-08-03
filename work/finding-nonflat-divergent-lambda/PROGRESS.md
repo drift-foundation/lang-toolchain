@@ -1,15 +1,197 @@
 # PROGRESS: finding-nonflat-divergent-lambda
 
-STATUS: SIGNED OFF (terminal) — review-2026-08-03T17-29-27Z, independently
-verified by the reviewer (stage1 file 11/11, full stage1 89/89, both e2e
-cases green, diff clean).  The full-suite reopening is closed; no review
-work remains.  User-driven gates before merge: RESTART the full suite (the
-prior run stopped at the now-fixed stage1 failure) + ownership-corpus
-check/promote; folder deletion after merge+closure per the ephemeral rule.
+STATUS: REVISION 11 READY FOR REVIEW — responds to
+review-2026-08-03T22-53-57Z (single narrow blocker: broad exception
+suppression around the ordinary-owner registry probe).  The earlier terminal
+sign-off applied to revision 8; the finding was reopened twice by full-suite
+results and the current revision awaits review.
+
+## REVISION 11 — registry probe no longer masks failures (review-2026-08-03T22-53-57Z)
+
+1. (P1) Removed the `try/except Exception: _free_cands = []` guard around
+   the ordinary-owner probe's `callable_registry.get_free_candidates(...)`
+   call in checker/call_resolver.py.  The probe now calls the registry
+   directly — the same authority the real free-call resolver consults — so
+   a registry/visibility defect propagates through normal ICE containment
+   instead of being converted into a false user-facing
+   E-CTOR-EXPECTED-TYPE.  A comment pins the no-guard contract at the site.
+   No other change; no fallback value exists anymore.
+
+Verification: reviewer-required focused set rerun POST-patch — 31/31
+(test_unqualified_ctor_name_precedence.py: 3 collision positives + both
+no-context negatives; test_const_share_phase5_implicit_duplication.py:
+structural + runtime pair; test_lambda_return_inference_boundary.py: all
+Result-boundary pins).  The pre-patch full driver run was STOPPED per the
+review (not reported as evidence).
+
+Interim review review-2026-08-03T23-05-59Z: NO remaining static/code
+finding; terminal sign-off pending only the post-patch driver gate.  Per
+Slawomir's direction the standalone lang-driver-test rerun was STOPPED and
+the final gate is folded into a user-run `run-all-tests.sh` (superset:
+driver lane + all other suites); its result will be recorded here.
 
 Revision 8 (below) had reopened the finding via review-2026-08-03T17-18-59Z
 (full-suite failure: stale stage1 capture diagnostic pin) and completed the
 approved capture-kind contract migration through the remaining test surface.
+
+## REVISION 10 — fallback precedence + runtime ownership pin (review-2026-08-03T22-33-42Z)
+
+1. (P1) Constructor-context fallback now fires ONLY when no ordinary
+   candidate owns the call: it checks for a visible struct of that name and
+   for free-function candidates (callable_registry) BEFORE treating an
+   arm-name spelling as a constructor context.  All three reviewer collision
+   repros compile AND run (user `fn Some`, `struct Some`, `fn Ok`); both
+   no-context negatives keep the single clean E-CTOR-EXPECTED-TYPE.  New
+   pins: lang/tests/driver/test_unqualified_ctor_name_precedence.py (3
+   compile/run positives + the no-context negative).
+2. (P1) The Phase-5 runtime companion now DEREFERENCES both owners:
+   `use_arc` calls `a.get()` after `Ok(a)`, the `Ok(v)` arm calls `v.get()`,
+   and the exit code derives from both byte lengths (7 + 7 - 14 = 0); the
+   binary run has a timeout and captured stderr.
+3. (P2) Evidence hygiene: the `rg -n --glob '*.py' '\bHResultOk\b'
+   lang/driftc lang/tests` gate is now truthfully ZERO (the three prose
+   references reworded to point at the doc/history.md note); the superseding
+   doc/history.md entry is added (public-Ok contract + precedence rule, old
+   entries preserved); the EOF blank line and the over-indented comment are
+   fixed; `git diff --check` clean; this status header no longer claims a
+   terminal sign-off.
+
+Verification: focused battery 285/285 (precedence pins, Phase-5 file incl.
+the strengthened runtime pair, return-boundary file, parser-adapter file,
+type_checker + checker suites).  FULL lang-driver-test: IN FLIGHT at handoff
+(posted early per the parallel-review workflow; result will be appended —
+if this review finds issues first, the run is stopped and restarted after
+rework).
+
+## REVISION 9 — HResultOk source seam removed (review-2026-08-03T21-17-18Z ruling)
+
+STATUS: REVISION 9 READY FOR REVIEW.  Implements the approved direction and
+all four approved test migrations; the blocked state below is resolved (the
+APPROVAL-PENDING token was consumed on the ruling).
+
+### Implementation
+
+1. Deleted the unconditional unqualified `Ok(expr) -> HResultOk` rewrite in
+   stage1/ast_to_hir.py (and its alpha-renamer arm).  Unqualified `Ok(...)`
+   is an ordinary HCall through the contextual variant-constructor resolver
+   (spec §10.3; no spec edit).
+2. Deleted `HResultOk` exhaustively: class + exports, and every traversal /
+   typing / effect / borrow / place / Phase-5-slot / phase-2-inference /
+   HIR→MIR arm.  `rg -n --glob '*.py' '\bHResultOk\b' lang/driftc lang/tests`
+   returns NOTHING.  Can-throw success wrapping (MIR ConstructResultOk at
+   return) is independent and untouched.
+3. Fixed the constructor-context source diagnostic per the ruling: the
+   E-CTOR-EXPECTED-TYPE fallback now ALSO fires when the expected type is
+   non-variant (a `throws -> Int` return supplies Int, not an implicit
+   Result), and recognizes std.core variant arms (Ok/Err/Some/...) alongside
+   current-module ones — previously these fell through to an unhelpful
+   "no matching overload for function 'Ok'".
+
+### Probe evidence (all shapes)
+
+- `val r: core.Result<Int, Int> = Ok(1)` + match: compiles AND RUNS.
+- `return Ok(5)` in `throws -> core.Result<Int, String>` with caller
+  try+match: compiles AND RUNS — public inner variant + exactly one outer
+  throwing-ABI wrap; no double-wrap mismatch.
+- `return Ok(5)` in `throws -> Int`: ONE clean E-CTOR-EXPECTED-TYPE.
+- `val r = Ok(1)` (unannotated local — the child's ICE route): ONE clean
+  E-CTOR-EXPECTED-TYPE, no traceback.
+
+### Approved test migrations (as ruled)
+
+1. Phase-5: test_phase5_public_result_ctor_payload_duplicates (structural —
+   captured post-typecheck HIR asserts the Ok HCall payload is
+   HMethodCall(const_share, origin=implicit_const_share) on the
+   auto-borrowed place of `a`, and no bare HVar(a) ctor arg remains) +
+   test_phase5_public_result_ctor_payload_runs (full compile/run: annotated
+   Result built, `a` read afterwards, Ok payload matched, semantic exit).
+   Prose no longer claims an HResultOk.value slot.
+2. Return-boundary file: test_named_fn_return_ok_wrapped_rejected re-pinned
+   to ONE E-CTOR-EXPECTED-TYPE (single error line, no traceback);
+   NEW test_local_unannotated_ok_rejected_cleanly (child ICE route);
+   NEW test_return_ok_into_public_result_runs (contrasting positive).
+3. Deleted with the node: test_result_ok_without_signature_type_ids_does_
+   not_blow_up; test_result_ok_uses_fnresult_type.
+4. Parser adapter: NEW test_parse_unqualified_ok_lowers_to_plain_hcall;
+   neighboring ns.Ok comment updated.  Stale HResultOk prose fixed in
+   test_borrow_in_cast_no_double_free.py.
+
+### Verification (required set)
+
+- Phase-5 ConstShare driver file: green (in the 46/46 three-file run).
+- Parser-adapter file, return-boundary file: green (same run).
+- Affected checker/type-checker + stage1 + parser suites: 501/501.
+- FULL lang-driver-test: 2340 passed, 10 skipped, exit 0 (48m10s).
+- Child acceptance criteria met: no traceback on any Ok shape; public
+  construction end-to-end positive; upstream rejection for non-variant
+  contexts; single-wrap return contract proven by the running contrast
+  positive; ConstShare payload pinned structurally AND by compile/run.
+
+Child findings/finding-result-ok-source-boundary: RESOLVED (its PROGRESS.md
+records the outcome).  Trigger re-scan at child start: no matching entry
+(consistent with the reviewer's initial scan).  Repository-wide `just test`
+restart remains user-driven after review convergence (prior run stopped
+before ASAN).
+
+## REOPENED by review-2026-08-03T21-05-43Z — BLOCKED ON TEST-EDIT APPROVAL
+
+STATUS: investigation COMPLETE; implementation NOT STARTED — blocked on
+Slawomir's explicit approval of three test edits (repository rule).  The
+empty token APPROVAL-PENDING-<ts> in this folder signals the blocked
+handoff; this section is the content.
+
+### Investigation evidence (all probe-confirmed on the current tree)
+
+1. Phase 5 red: test_phase5_result_ok_payload_duplicates fails with
+   "return type 'FnResult' does not match declared type 'ConstArc'" (the
+   R4.4 return-authority rejection, as the reopening review predicted).
+2. Child finding findings/finding-result-ok-source-boundary VALIDATED:
+   local `val r = Ok(a)` passes checking and ICEs in LLVM
+   ("ok payload type mismatch for ConstructResultOk ... have ConstArc,
+   expected drift.int").
+3. NEW evidence beyond the child's notes: the SPEC-BLESSED contextual form
+   `val r: core.Result<Int, Int> = Ok(1)` ALSO fails today
+   ("initializer type 'FnResult' does not match declared type 'Result'") —
+   the unconditional ast_to_hir rewrite hijacks the public constructor the
+   spec §10.3 promises.
+4. Producer inventory: the rewrite (ast_to_hir.py:429) + its alpha-renamer
+   copy are HResultOk's ONLY producers besides two synthetic-HIR tests;
+   production code uses qualified core.Result::Ok(...).
+
+### Proposed direction (child hypothesis 1 — spec-aligned separation)
+
+Delete the unconditional `Ok(...)` -> HResultOk source rewrite; unqualified
+`Ok(...)` resolves through the ordinary contextual variant-constructor path
+(implementing what the spec already says — no spec edit).  HResultOk then
+has no producer: delete the node + its handling (checker typing, phase-2
+inference arm, MIR lowering arm, effect-walker entry) per the pre-1.0
+one-contract rule.  The internal success-wrapping of can-throw returns is a
+separate mechanism and stays.
+
+### The three test edits awaiting approval
+
+1. test_phase5_result_ok_payload_duplicates → migrate to the spec spelling
+   `val r: core.Result<core.ConstArc<String>, Int> = Ok(a);` + reuse of
+   `a` afterwards — preserves the REAL contract (implicit ConstShare
+   duplication in an owned ctor-arg slot; source binding usable after)
+   end-to-end; the HResultOk.value slot is REMOVED with the node (code
+   evidence, documented in the test), not left untested.
+2. test_named_fn_return_ok_wrapped_rejected (R4.4 negative pinning
+   "return type 'FnResult'...") → re-pin to the new contract's actual clean
+   outcome, determined empirically post-fix: either a clean
+   constructor-resolution diagnostic, or `return Ok(5)` compiling and
+   returning 5 (Result constructed, auto-try unwraps).  Either way no ICE,
+   one contract.
+3. The two synthetic HResultOk pins (test_checker_call_type_checks::
+   test_result_ok_without_signature_type_ids_does_not_blow_up;
+   test_type_checker_expressions.py:659) → deleted with the node.
+
+### On approval
+
+Implement; verify the child's acceptance criteria (annotated positive runs
+end-to-end, local form gets a clean upstream diagnostic, no double-wrap);
+run the whole Phase 5 ConstShare driver file, the return-boundary file, the
+stub checker file, and lang-driver-test; hand back via IMPL-PENDING token.
 
 ## Revision 8 (test migration, Slawomir-approved edits 2026-08-03)
 

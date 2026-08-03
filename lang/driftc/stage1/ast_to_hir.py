@@ -408,7 +408,6 @@ class AstToHIR:
 		"""
 		Lower calls:
 		  - method sugar: Call(func=Attr(receiver, name), args=...) → HMethodCall
-		  - Result.Ok(...) sugar -> HResultOk
 		  - otherwise: plain HCall(fn_expr, args)
 		DV-specific constructors are handled in _visit_expr_ExceptionCtor.
 		"""
@@ -422,12 +421,6 @@ class AstToHIR:
 			for kw in kw_pairs
 		]
 		type_args = getattr(expr, "type_args", None)
-		# Recognize Result.Ok constructor in source -> HResultOk for FnResult.
-		if isinstance(expr.func, ast.Name) and expr.func.ident == "Ok" and len(expr.args) == 1:
-			if h_kwargs:
-				raise NotImplementedError("Ok(...) does not support keyword arguments")
-			return H.HResultOk(value=self.lower_expr(expr.args[0]))
-
 		# Method call sugar: receiver.method(args)
 		if isinstance(expr.func, ast.Attr):
 			receiver = self.lower_expr(expr.func.value)
@@ -1217,8 +1210,6 @@ class AstToHIR:
 				)
 			if isinstance(e, H.HCast):
 				return H.HCast(target_type_expr=e.target_type_expr, value=_rename_expr(e.value, mapping), loc=e.loc)
-			if isinstance(e, H.HResultOk):
-				return H.HResultOk(value=_rename_expr(e.value, mapping))
 			if hasattr(H, "HQualifiedMember") and isinstance(e, getattr(H, "HQualifiedMember")):
 				return e
 			return e

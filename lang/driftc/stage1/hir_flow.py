@@ -277,7 +277,6 @@ _RECURSIVE_TYPES: tuple[type, ...] = (
 	H.HTypeApp,
 	H.HCast,
 	H.HTernary,
-	H.HResultOk,
 	H.HMatchExpr,
 	H.HMatchArm,
 	H.HField,

@@ -176,11 +176,13 @@ def test_stored_lambda_declared_mismatch_rejected(tmp_path: Path) -> None:
 
 
 def test_named_fn_return_ok_wrapped_rejected(tmp_path: Path) -> None:
-	# R4.4: explicit `return Ok(5)` in a can-throw `-> Int` fn is checker-
-	# rejected (FnResult vs Int).  The surface form NEVER worked — it
-	# double-wraps and died as a ConstructResultOk payload-mismatch ICE in
-	# codegen on certified 0.33.90 — so the clean rejection is the contract
-	# (reviewer-approved; no HResultOk exemption).
+	# `return Ok(5)` in a can-throw `-> Int` fn: the expected surface type is
+	# Int, not a variant — §10.3 does not let the compiler guess Result<Int,E>
+	# and auto-try it.  Unqualified `Ok(...)` is an ordinary contextual
+	# variant-constructor spelling (the legacy internal-result-node source
+	# seam was deleted, Slawomir-approved 2026-08-03; see doc/history.md),
+	# so this gets ONE clean constructor-context rejection — no duplicate,
+	# no traceback.
 	src = _PRELUDE + (
 		"fn f() -> Int {\n"
 		"\treturn Ok(5);\n}\n"
@@ -189,9 +191,51 @@ def test_named_fn_return_ok_wrapped_rejected(tmp_path: Path) -> None:
 		"\treturn 0;\n}\n"
 	)
 	r = _compile(tmp_path, src, out="okwrap")
-	assert r.returncode != 0, "explicit Ok(...) at return must be rejected"
-	assert "return type 'FnResult' does not match declared type 'Int'" in r.stderr, r.stderr
+	assert r.returncode != 0, "Ok(...) at a non-variant return expectation must be rejected"
+	assert r.stderr.count("E-CTOR-EXPECTED-TYPE") >= 1, r.stderr
+	assert r.stderr.count("error:") == 1, r.stderr
 	assert "Traceback" not in r.stderr, r.stderr
+
+
+def test_local_unannotated_ok_rejected_cleanly(tmp_path: Path) -> None:
+	# The child repro's local form: `val r = Ok(a)` with no expected variant
+	# type.  Previously this passed checking and ICEd in LLVM codegen
+	# ("ok payload type mismatch for ConstructResultOk"); now it is the same
+	# clean constructor-context rejection as the return form.
+	src = _PRELUDE + (
+		"pub fn main() nothrow -> Int {\n"
+		"\tval r = Ok(1);\n"
+		"\treturn 0;\n}\n"
+	)
+	r = _compile(tmp_path, src, out="oklocal")
+	assert r.returncode != 0, "unannotated local Ok(...) must be rejected"
+	assert "E-CTOR-EXPECTED-TYPE" in r.stderr, r.stderr
+	assert "Traceback" not in r.stderr, r.stderr
+	assert "NotImplementedError" not in r.stderr, r.stderr
+
+
+def test_return_ok_into_public_result_runs(tmp_path: Path) -> None:
+	# Contrasting positive: when the return expectation IS a public Result,
+	# `return Ok(5)` builds the public inner variant and receives exactly the
+	# normal outer throwing-ABI wrap — the two layers are distinct and no
+	# double-wrap payload mismatch remains.  The caller successfully tries
+	# the call and matches the public result.
+	src = (
+		"module repro;\n"
+		"import std.core as core;\n"
+		"fn g() -> core.Result<Int, String> {\n"
+		"\treturn Ok(5);\n}\n"
+		"pub fn main() nothrow -> Int {\n"
+		"\tval r = try g() catch { core.Result<Int, String>::Err(err = \"boom\") };\n"
+		"\tval x = match r {\n"
+		"\t\tOk(v) => { (v + 1) },\n"
+		"\t\tErr(e) => { 0 },\n"
+		"\t};\n"
+		"\treturn x - 6;\n}\n"
+	)
+	r = _compile(tmp_path, src, out="okresult")
+	assert r.returncode == 0, r.stderr
+	assert subprocess.run([str(tmp_path / "okresult")]).returncode == 0
 
 
 _IFACE_PRELUDE = _PRELUDE + (

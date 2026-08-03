@@ -112,6 +112,33 @@ fn callee() -> FnResult<Int, Error> {
 	assert any("internal-only type 'FnResult'" in d.message for d in diagnostics)
 
 
+def test_parse_unqualified_ok_lowers_to_plain_hcall(tmp_path: Path):
+	# Unqualified `Ok(1)` is an ORDINARY call in HIR — it flows through the
+	# contextual variant-constructor resolver like any other constructor
+	# spelling (spec §10.3).  The legacy internal-result-node source seam
+	# was deleted 2026-08-03 (Slawomir-approved; see doc/history.md): it
+	# hijacked the public Result constructor, breaking the annotated spec
+	# form and ICE-ing the unannotated local form.
+	src = tmp_path / "main.drift"
+	src.write_text(
+		"""
+fn main() -> Int {
+    return Ok(1);
+}
+"""
+	)
+	module, _type_table, _exc_catalog, diagnostics = parse_drift_to_hir(src)
+	func_hirs = module.func_hirs
+	fn_ids_by_name = module.fn_ids_by_name
+	assert diagnostics == []
+	fn_id = _main_fn_id(fn_ids_by_name)
+	main = func_hirs[fn_id]
+	assert isinstance(main.statements[0], H.HReturn)
+	value = main.statements[0].value
+	assert isinstance(value, H.HCall), f"unqualified Ok(...) must lower to a plain HCall, got {type(value).__name__}"
+	assert isinstance(value.fn, H.HVar) and value.fn.name == "Ok"
+
+
 def test_parse_ok_as_attr_stays_call(tmp_path: Path):
 	src = tmp_path / "main.drift"
 	src.write_text(
@@ -131,7 +158,7 @@ fn main() -> Int {
 	assert sigs[fn_id].return_type.name == "Int"
 	main = func_hirs[fn_id]
 	assert isinstance(main.statements[0], H.HReturn)
-	# ns.Ok should not be rewritten to HResultOk (attr call stays a normal call)
+	# ns.Ok stays an ordinary attribute/method call (no special-casing).
 	assert isinstance(main.statements[0].value, (H.HCall, H.HMethodCall))
 
 

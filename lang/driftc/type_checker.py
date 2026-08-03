@@ -1108,9 +1108,6 @@ class TypeChecker:
 				if expr.body_block is not None:
 					walk_block(expr.body_block)
 				return
-			if isinstance(expr, H.HResultOk):
-				walk_expr(expr.value)
-				return
 			if isinstance(expr, H.HTryExpr):
 				walk_expr(expr.attempt)
 				for arm in expr.arms:
@@ -9367,7 +9364,7 @@ class TypeChecker:
 						return _move_is_borrow_subject(node.then_expr) or _move_is_borrow_subject(node.else_expr)
 					# Block-expression RESULT SLOTS forward (see the
 					# stage1 predicate's twin comment): match/try/unsafe
-					# results and casts walk; HResultOk/calls/ctors stay
+					# results and casts walk; calls/ctors stay
 					# terminal fresh producers.
 					if hasattr(H, "HMatchExpr") and isinstance(node, getattr(H, "HMatchExpr")):
 						return any(
@@ -12006,11 +12003,6 @@ class TypeChecker:
 			# can produce an HDVInit node anymore.
 
 			# Result/try sugar.
-			if isinstance(expr, H.HResultOk):
-				ok_ty = type_expr(expr.value)
-				err_ty = self._unknown
-				return record_expr(expr, self.type_table.new_fnresult(ok_ty, err_ty))
-
 			# Fallback: unknown type.
 			return record_expr(expr, self._unknown)
 
@@ -13191,7 +13183,6 @@ class TypeChecker:
 		#     (receiver is borrow-position, skipped)
 		#   - HInvoke.args[i] / HInvoke.kwargs[i].value
 		#   - HMatchArm.result (value-form match arm result)
-		#   - HResultOk.value (Result::Ok payload)
 		#   - HTernary.then_expr / HTernary.else_expr
 		#     (cond is bool, not wrapped)
 		#
@@ -13214,7 +13205,7 @@ class TypeChecker:
 		#
 		#   1. `_require_copy_value` at typecheck time — for slots
 		#      typed with `used_as_value=True` (HLet.value,
-		#      HReturn.value, HAssign.value, HResultOk.value,
+		#      HReturn.value, HAssign.value,
 		#      HTernary.then_expr/else_expr, HMatchArm.result, the
 		#      regular HVar binding-read paths in `type_expr`).
 		#
@@ -13537,16 +13528,6 @@ class TypeChecker:
 					if arm.result is not None:
 						_wrap_owned_slot(arm, "result")
 						_walk_implicit_cs(arm.result)
-				return
-			if isinstance(node, H.HResultOk):
-				# Ok(value) — value position is owned (Result wraps its
-				# payload by-value).  type_expr(`expr.value`) at
-				# `type_checker.py:9400` runs with default
-				# `used_as_value=True`, so `_require_copy_value`
-				# suppression fires for ConstShare binding-reads;
-				# the wrap install must happen here.
-				_wrap_owned_slot(node, "value")
-				_walk_implicit_cs(node.value)
 				return
 			if isinstance(node, H.HTernary):
 				# `cond ? a : b` — both branches yield the ternary's

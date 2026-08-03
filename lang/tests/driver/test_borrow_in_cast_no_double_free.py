@@ -16,7 +16,7 @@ HIR→MIR rvalue-borrow fallback, and the named local was materialized into a
 plain `val` first (no cast around the borrow-bearing call) was the reporter's
 workaround and is unaffected.
 
-Fix: both walkers now recurse into `HCast` (and `HResultOk`) operands.
+Fix: both walkers now recurse into `HCast` operands.
 """
 from __future__ import annotations
 

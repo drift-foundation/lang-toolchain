@@ -1,0 +1,12 @@
+module repro;
+
+import std.core as core;
+
+pub struct Some {
+	pub value: Int
+}
+
+pub fn main() nothrow -> Int {
+	val x: Some = Some(value = 0);
+	return x.value;
+}

@@ -1,0 +1,21 @@
+module repro;
+
+import std.core as core;
+
+fn use_arc(a: core.ConstArc<String>) nothrow -> Int {
+	val s: &String = a.get();
+	return s.byte_length();
+}
+
+fn make_ok(a: core.ConstArc<String>) throws -> Int {
+	val r = Ok(a);
+	val n = use_arc(a);
+	return n - 2;
+}
+
+pub fn main() nothrow -> Int {
+	val a = core.const_arc<type String>("hi");
+	val n = try make_ok(a) catch { 90 };
+	val s: &String = a.get();
+	return n + s.byte_length() - 2;
+}

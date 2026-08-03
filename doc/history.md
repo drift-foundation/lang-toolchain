@@ -1,5 +1,39 @@
 # Drift development history
 
+## 2026-08-03 (0.34.2: unqualified `Ok(...)` is the public Result constructor — legacy internal-result-ok HIR seam DELETED)
+
+**Supersedes every earlier description of the `Ok(...) -> HResultOk` source
+rewrite and the `HResultOk` HIR expression.**  Historical entries mentioning
+that node describe machinery that no longer exists; they remain as history.
+
+**What changed.**  Stage-1 unconditionally rewrote every unqualified,
+one-argument source `Ok(expr)` into the internal `HResultOk` node (typed as
+the internal `FnResult` carrier).  That seam hijacked the public
+`core.Result::Ok` constructor promised by spec §10.3: the annotated form
+`val r: core.Result<T, E> = Ok(v)` failed with an initializer FnResult/Result
+mismatch, the unannotated local form passed checking and ICEd in LLVM codegen
+(`ConstructResultOk` ok-payload mismatch), and `return Ok(v)` double-wrapped.
+Per Slawomir's 2026-08-03 ruling the rewrite AND the `HResultOk` node were
+deleted outright (pre-1.0 one-contract rule; the node had no other producer):
+unqualified `Ok(...)` is an ordinary `HCall` resolved by the contextual
+variant-constructor path.  The can-throw success wrapping (MIR
+`ConstructResultOk` at return of a can-throw function) is an independent
+mechanism and is unchanged.
+
+**Frozen source contract.**
+- `val r: core.Result<T, E> = Ok(v)` (any variant expectation) → the public
+  constructor; compiles and runs.
+- `return Ok(v)` in a can-throw `-> core.Result<T, E>` function → the public
+  inner variant plus exactly one outer throwing-ABI wrap; runs.
+- `Ok(v)` with NO variant expectation (unannotated local; `throws -> Int`
+  return) → one clean `E-CTOR-EXPECTED-TYPE`; the compiler never guesses
+  `Result<T, E>` and never auto-tries a guessed construction.
+- Precedence: an arm-name spelling (`Ok`/`Err`/`Some`/...) never preempts an
+  ordinary symbol — a user `fn Some(...)` or `struct Some` resolves normally;
+  the constructor-context diagnostic fires only for calls no ordinary
+  candidate owns.
+
+
 ## 2026-08-02 (0.34.1: control-flow-rvalue ownership — sound value-control-flow borrows ACCEPTED; CFV rejection deleted; ABI 22 unchanged)
 
 **Supersedes the earlier 0.34.1 "value-control-flow rvalue borrows rejected

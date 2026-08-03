@@ -456,17 +456,6 @@ class HTernary(HExpr):
 	loc: Span = field(default_factory=Span)
 
 
-@dataclass
-class HResultOk(HExpr):
-	"""
-	Wrap a value into FnResult.Ok for explicit can-throw returns.
-
-	This is a lightweight node so tests/pipeline code can express returning
-	a FnResult without hand-coding MIR ops. Lowering turns this into
-	ConstructResultOk(dest, value).
-	"""
-
-	value: HExpr
 
 
 @dataclass
@@ -997,7 +986,7 @@ __all__ = [
 	"HLiteralInt", "HLiteralUint", "HLiteralUint64", "HLiteralString", "HLiteralBool", "HLiteralFloat",
 	"HFString", "HFStringHole",
 	"HParam", "HLambda",
-	"HCall", "HInvoke", "HFnPtrConst", "HMethodCall", "HTernary", "HResultOk",
+	"HCall", "HInvoke", "HFnPtrConst", "HMethodCall", "HTernary",
 	"HTypeApp", "HCast",
 	"HPlaceExpr", "HPlaceProj", "HPlaceField", "HPlaceIndex", "HPlaceDeref",
 	"HField", "HQualifiedMember", "HIndex", "HBorrow",

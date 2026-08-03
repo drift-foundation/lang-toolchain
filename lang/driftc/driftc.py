@@ -4508,9 +4508,6 @@ def compile_stubbed_funcs(
 					if expr.body_block is not None:
 						walk_block(expr.body_block)
 					return
-				if isinstance(expr, H.HResultOk):
-					walk_expr(expr.value)
-					return
 				if isinstance(expr, H.HExceptionInit):
 					for arg in expr.pos_args:
 						walk_expr(arg)

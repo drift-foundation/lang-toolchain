@@ -4712,7 +4712,7 @@ _DEFER_PROBE_SAFE_NODES = (
 	H.HLiteralUint, H.HLiteralUint64,
 	H.HPlaceExpr, H.HPlaceField, H.HPlaceIndex, H.HPlaceDeref, H.HPlaceProj,
 	H.HTypeApp, H.HTypeNameRef, H.HFString, H.HFStringHole,
-	H.HMapLiteral, H.HMapEntry, H.HArrayLiteral, H.HResultOk, H.HUnsafeExpr,
+	H.HMapLiteral, H.HMapEntry, H.HArrayLiteral, H.HUnsafeExpr,
 )
 
 # Probe frequency / outcome counters (perf + behavior measurement; read by
@@ -6837,14 +6837,52 @@ def resolve_call_expr(
 							target=CallTarget.constructor(ctor_res.inst_return, expr.fn.name, ctor_arg_field_indices=tuple(ctor_res.ctor_arg_field_indices)),
 						)
 						return record_expr(expr, ctor_res.inst_return)
-		if expected_type is None:
-			schema_map = getattr(ctx.type_table, "variant_schemas", {})
-			for _base_id, schema in getattr(schema_map, "items", lambda: [])():
-				if getattr(schema, "module_id", None) not in (current_module_name, "lang.core"):
-					continue
-				if any(getattr(arm, "name", None) == expr.fn.name for arm in getattr(schema, "arms", []) or []):
-					diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1", severity="error", span=getattr(expr, "loc", Span()), code="E-CTOR-EXPECTED-TYPE"))
-					return record_expr(expr, ctx.unknown_ty)
+		_exp_is_variant = False
+		if expected_type is not None:
+			_exp_is_variant = ctx.type_table.get(expected_type).kind is TypeKind.VARIANT
+		if not _exp_is_variant:
+			# An unqualified variant-constructor spelling (e.g. `Ok(v)` for
+			# std.core.Result) used without a variant expectation — no
+			# expected type at all, or a non-variant one (`throws -> Int`
+			# does NOT supply an implicit Result expectation).  The
+			# established ctor-context contract owns this rejection; falling
+			# through produced an unhelpful "no matching overload for
+			# function 'Ok'".  std.core arms (Result's Ok/Err, Optional's
+			# Some/None) are recognized alongside current-module ones.
+			#
+			# PRECEDENCE: an arm-name match is not proof this call denotes
+			# that constructor.  An ORDINARY candidate — a visible struct or
+			# free function with this name — owns the call first (a user
+			# `fn Some(...)` or `struct Some` resolves normally, and an
+			# argument mismatch there gets ITS diagnostic, not this one).
+			# Only a call no ordinary candidate claims falls through here.
+			_ordinary_owner = False
+			_fn_mod = getattr(expr.fn, "module_id", None)
+			_sb = ctx.type_table.get_struct_base(module_id=_fn_mod or current_module_name, name=expr.fn.name)
+			if _sb is None:
+				_sb = ctx.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=_fn_mod or current_module_name, name=expr.fn.name)
+			if _sb is not None:
+				_ordinary_owner = True
+			elif getattr(ctx, "callable_registry", None) is not None:
+				# Same registry authority the real free-call resolver consults
+				# below — NO exception guard: `get_free_candidates` is a pure
+				# lookup with no expected failure mode, and swallowing a
+				# registry/visibility defect here would surface it as a false
+				# user-facing E-CTOR-EXPECTED-TYPE (semantic masking).
+				if ctx.callable_registry.get_free_candidates(
+					name=expr.fn.name,
+					visible_modules=_visible_modules_for_free_call(_fn_mod),
+					include_private_in=ctx.current_module if _fn_mod is None else None,
+				):
+					_ordinary_owner = True
+			if not _ordinary_owner:
+				schema_map = getattr(ctx.type_table, "variant_schemas", {})
+				for _base_id, schema in getattr(schema_map, "items", lambda: [])():
+					if getattr(schema, "module_id", None) not in (current_module_name, "lang.core", "std.core", "core"):
+						continue
+					if any(getattr(arm, "name", None) == expr.fn.name for arm in getattr(schema, "arms", []) or []):
+						diagnostics.append(_tc_diag(message="E-CTOR-EXPECTED-TYPE: constructor calls require an expected variant type in v1", severity="error", span=getattr(expr, "loc", Span()), code="E-CTOR-EXPECTED-TYPE"))
+						return record_expr(expr, ctx.unknown_ty)
 		struct_base = ctx.type_table.get_struct_base(module_id=expr.fn.module_id or current_module_name, name=expr.fn.name)
 		if struct_base is None:
 			struct_base = ctx.type_table.get_nominal(kind=TypeKind.STRUCT, module_id=expr.fn.module_id or current_module_name, name=expr.fn.name)

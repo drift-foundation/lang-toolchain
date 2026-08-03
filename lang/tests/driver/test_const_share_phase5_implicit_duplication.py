@@ -316,44 +316,172 @@ pub fn main() nothrow -> Int {
 	_ok(rc, errs, "HTernary branches implicit duplication")
 
 
-def test_phase5_result_ok_payload_duplicates(tmp_path, capsys):
-	"""Pin: `Ok(a)` for a ConstShare binding `a` is a value-position
-	owned slot and must be wrapped — the source binding stays
-	usable after.
+def test_phase5_public_result_ctor_payload_duplicates(tmp_path, capsys):
+	"""Pin: `Ok(a)` resolved as the PUBLIC `core.Result` constructor (an
+	ordinary contextual variant-constructor call) treats its payload as a
+	value-position owned slot: a ConstShare binding `a` receives the real
+	implicit `const_share()` HIR wrapper and stays usable afterwards.
 
-	This regression closes a coverage gap from the original Phase 5
-	walker: `HResultOk.value` is typechecked with default
-	`used_as_value=True` (`type_checker.py:9400`), so
-	`_require_copy_value` suppressed the "use move" error for a
-	ConstShare HVar there, but the walker's slot-level wrappers did
-	not enumerate `HResultOk`.  Without the fix, `r = Ok(a)` would
-	move `a` (no implicit duplication), and `a.get()` afterwards
-	would error with "moved or uninitialized 'a'" — or worse,
-	produce unsound HIR if borrow-check happened to ignore it.
-
-	The post-walker mark-consumption discipline check catches any
-	such gap as an AssertionError so coverage holes are surfaced
-	at typecheck time, not as silently-unsound HIR.
+	History: this test previously targeted the payload slot of the legacy
+	internal result-ok HIR node.  That node and the unqualified `Ok(...)`
+	source seam feeding it were DELETED (Slawomir-approved 2026-08-03; see
+	the doc/history.md supersession note) because the seam hijacked the
+	public Result constructor.  The surviving contract is the ordinary
+	variant constructor's owned payload slot, pinned here at BOTH levels:
+	structural (the rewritten HIR carries the implicit const_share wrap; no
+	bare `HVar(a)` remains as the ctor argument) and full compile/run (the
+	annotated Result is constructed, `a` is read afterwards, and the Ok
+	payload is matched — semantic exit code).
 	"""
-	rc, errs = _compile(tmp_path, capsys, """
+	import contextlib
+	import io
+	from lang.driftc import type_checker as _tc_mod
+	from lang.driftc import stage1 as H
+
+	source = """
 module main;
 
 import std.core as core;
 
 fn use_arc(a: core.ConstArc<String>) nothrow -> Int {
-\treturn 0;
+	return 0;
 }
 
-fn make_ok(a: core.ConstArc<String>) throws -> core.ConstArc<String> {
-\tval n = use_arc(a);
-\treturn Ok(a);
+fn make_ok(a: core.ConstArc<String>) nothrow -> Int {
+	val r: core.Result<core.ConstArc<String>, Int> = Ok(a);
+	val n = use_arc(a);
+	val m = match r {
+		Ok(v) => { 1 },
+		Err(e) => { 0 },
+	};
+	return (n + m);
 }
 
 pub fn main() nothrow -> Int {
-\treturn 0;
+	return 0;
 }
-""")
-	_ok(rc, errs, "HResultOk.value implicit duplication")
+"""
+	# Structural half: capture make_ok's post-typecheck HIR (mutated in place
+	# by the checker, so it reflects the Phase-5 ConstShare rewrite) — same
+	# capture pattern as test_constshare_generic_field_frontend.py.
+	captured: dict[str, object] = {}
+	orig = _tc_mod.TypeChecker.check_function
+
+	def _patched(self, fn_id, hir, *a, **k):
+		res = orig(self, fn_id, hir, *a, **k)
+		captured[str(fn_id)] = hir
+		return res
+
+	_tc_mod.TypeChecker.check_function = _patched
+	try:
+		src = tmp_path / "main.drift"
+		src.write_text(source, encoding="utf-8")
+		buf = io.StringIO()
+		with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+			rc = driftc_main(["--stdlib-root", "stdlib", "--test-build-only", str(src), "--json"])
+		out = buf.getvalue()
+		payload = json.loads(out) if out.strip() else {}
+	finally:
+		_tc_mod.TypeChecker.check_function = orig
+	errs = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+	_ok(rc, errs, "public Result ctor payload implicit duplication")
+	hir = next((h for fid, h in captured.items() if "make_ok" in fid), None)
+	assert hir is not None, "failed to capture make_ok HIR"
+
+	wrap_receivers: list[str] = []
+	bare_ctor_args: list[str] = []
+
+	def _walk(node):
+		if isinstance(node, H.HCall) and isinstance(node.fn, H.HVar) and node.fn.name == "Ok":
+			for arg in node.args:
+				if (
+					isinstance(arg, H.HMethodCall)
+					and arg.method_name == "const_share"
+					and getattr(arg, "origin", None) == "implicit_const_share"
+				):
+					# `const_share` takes `&self`: the receiver is the
+					# auto-borrowed canonical place of the source binding.
+					recv = arg.receiver
+					if isinstance(recv, H.HVar):
+						wrap_receivers.append(recv.name)
+					elif isinstance(recv, H.HBorrow):
+						subj = recv.subject
+						base = getattr(subj, "base", None)
+						name = getattr(base, "name", None) or getattr(subj, "name", None)
+						if name is not None:
+							wrap_receivers.append(name)
+				elif isinstance(arg, H.HVar):
+					bare_ctor_args.append(arg.name)
+		fields = getattr(node, "__dataclass_fields__", None)
+		if fields is None:
+			return
+		for name in fields:
+			val = getattr(node, name, None)
+			if isinstance(val, (list, tuple)):
+				for item in val:
+					_walk(item)
+			elif val is not None and hasattr(val, "__dataclass_fields__"):
+				_walk(val)
+
+	for stmt in hir.statements:
+		_walk(stmt)
+	assert "a" in wrap_receivers, (
+		f"expected the Ok ctor payload to carry an implicit const_share() "
+		f"wrap of `a`; wrap receivers={wrap_receivers} (rc==0 alone could be "
+		f"satisfied by a wrong Copy classification)"
+	)
+	assert bare_ctor_args == [], f"bare HVar ctor arg(s) not rewritten: {bare_ctor_args}"
+
+
+def test_phase5_public_result_ctor_payload_runs(tmp_path):
+	"""Full compile/run half (mandatory under the checker/lowering contract:
+	constructor routing and ownership rewriting are lowering-visible): the
+	annotated Result is constructed from a ConstShare payload, the SOURCE
+	binding is dereferenced afterwards (`a.get()`), the Ok payload is
+	dereferenced in the match arm (`v.get()`), and the exit code derives from
+	BOTH strings' byte lengths (7 + 7 - 14 = 0) — proving both owners are
+	valid through lowering/runtime, not merely bound and dropped."""
+	import subprocess
+	import sys as _sys
+
+	source = """
+module repro;
+
+import std.core as core;
+
+fn use_arc(a: core.ConstArc<String>) nothrow -> Int {
+	val s: &String = a.get();
+	return s.byte_length();
+}
+
+fn make_ok(a: core.ConstArc<String>) nothrow -> Int {
+	val r: core.Result<core.ConstArc<String>, Int> = Ok(a);
+	val n = use_arc(a);
+	val m = match r {
+		Ok(v) => {
+			val sv: &String = v.get();
+			sv.byte_length()
+		},
+		Err(e) => { 0 },
+	};
+	return (n + m);
+}
+
+pub fn main() nothrow -> Int {
+	val a = core.const_arc("payload");
+	return (make_ok(a) - 14);
+}
+"""
+	src = tmp_path / "main.drift"
+	src.write_text(source, encoding="utf-8")
+	out = tmp_path / "okrun"
+	r = subprocess.run(
+		[_sys.executable, "-m", "lang.driftc.driftc", str(src), "--entry", "repro::main", "--target-word-bits", "64", "--stdlib-root", "stdlib", "-o", str(out)],
+		capture_output=True, text=True, timeout=600,
+	)
+	assert r.returncode == 0, r.stderr
+	rr = subprocess.run([str(out)], capture_output=True, timeout=60)
+	assert rr.returncode == 0, rr.stderr
 
 
 def test_phase5_borrow_does_not_synthesize(tmp_path, capsys):

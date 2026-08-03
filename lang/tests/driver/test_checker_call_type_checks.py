@@ -51,26 +51,6 @@ def test_call_type_match_has_no_diagnostic():
 	assert checked.diagnostics == []
 
 
-def test_result_ok_without_signature_type_ids_does_not_blow_up():
-	func_hirs = {
-		"can": H.HBlock(statements=[H.HReturn(value=H.HResultOk(value=H.HLiteralInt(value=1)))]),
-	}
-	# Signatures empty -> a default `-> Int` signature is synthesized from the
-	# fake decls, and HResultOk types as FnResult<Int, _>.  The point of this
-	# test is that the shape never CRASHES the pipeline.  Since 0.34.2 the
-	# return-value authority diagnoses the FnResult-vs-Int mismatch cleanly
-	# (real-source `return Ok(5)` never worked either — it double-wraps and
-	# died as a ConstructResultOk payload-mismatch ICE in codegen), so the
-	# contract is now: clean diagnostic, no exception, no MIR for the bad fn.
-	mir_funcs, checked = compile_stubbed_funcs(
-		func_hirs=func_hirs,
-		signatures={},
-		declared_can_throw={"can": True},
-		return_checked=True,
-	)
-	assert any("return type 'FnResult' does not match declared type" in d.message for d in checked.diagnostics)
-
-
 def test_lambda_explicit_return_type_mismatch_reports_diagnostic():
 	table, int_ty, _bool_ty = _int_table()
 	table.ensure_string()

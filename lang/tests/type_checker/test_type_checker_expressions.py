@@ -652,11 +652,3 @@ def test_method_resolution_uses_registry_and_types():
 	assert resolution.decl.callable_id == 1
 	assert resolution.decl.signature.result_type == str_ty
 	assert resolution.receiver_autoborrow == SelfMode.SELF_BY_REF
-
-
-def test_result_ok_uses_fnresult_type():
-	tc = _tc()
-	block = H.HBlock(statements=[H.HExprStmt(expr=H.HResultOk(value=H.HLiteralInt(1)))])
-	res = tc.check_function(_fn_id("res"), block)
-	assert res.diagnostics == []
-	assert any(tc.type_table.get(ty).kind is TypeKind.FNRESULT for ty in res.typed_fn.expr_types.values())

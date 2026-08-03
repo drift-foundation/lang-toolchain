@@ -1603,9 +1603,6 @@ class BorrowChecker:
 				_walk(node.then_expr)
 				_walk(node.else_expr)
 				return
-			if isinstance(node, H.HResultOk):
-				_walk(node.value)
-				return
 			if isinstance(node, H.HArrayLiteral):
 				for el in node.elements:
 					_walk(el)
@@ -1708,8 +1705,6 @@ class BorrowChecker:
 				_walk(node.expr); return
 			if isinstance(node, H.HTernary):
 				_walk(node.cond); _walk(node.then_expr); _walk(node.else_expr); return
-			if isinstance(node, H.HResultOk):
-				_walk(node.value); return
 			if isinstance(node, H.HArrayLiteral):
 				for el in node.elements:
 					_walk(el)
@@ -1840,8 +1835,6 @@ class BorrowChecker:
 				_walk(node.expr); return
 			if isinstance(node, H.HTernary):
 				_walk(node.cond); _walk(node.then_expr); _walk(node.else_expr); return
-			if isinstance(node, H.HResultOk):
-				_walk(node.value); return
 			if isinstance(node, H.HArrayLiteral):
 				for el in node.elements:
 					_walk(el)
@@ -1991,9 +1984,6 @@ class BorrowChecker:
 		if isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:
 				self._collect_binding_ids_for_name_in_expr(el, name, out)
-			return
-		if isinstance(expr, H.HResultOk):
-			self._collect_binding_ids_for_name_in_expr(expr.value, name, out)
 			return
 
 	def _collect_binding_ids_for_name_in_block(self, block: H.HBlock, name: str, out: Set[int]) -> None:
@@ -2199,9 +2189,6 @@ class BorrowChecker:
 		if isinstance(expr, H.HArrayLiteral):
 			for e in expr.elements:
 				self._collect_ref_uses_in_expr(e, bid, ref_uses, ref_use_spans)
-			return
-		if isinstance(expr, H.HResultOk):
-			self._collect_ref_uses_in_expr(expr.value, bid, ref_uses, ref_use_spans)
 			return
 
 	def _reachable_forward(self, start: int, succs: Dict[int, List[int]]) -> Set[int]:
@@ -2729,9 +2716,6 @@ class BorrowChecker:
 			# for shared, conservative-but-sound for mut.
 			if not any_escape:
 				state.loans -= new_loans
-			return
-		if isinstance(expr, H.HResultOk):
-			self._visit_expr(state, expr.value, consume=False, escapes=False)
 			return
 		if isinstance(expr, H.HArrayLiteral):
 			for el in expr.elements:

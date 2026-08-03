@@ -620,9 +620,7 @@ class Checker:
 					for kw in getattr(expr, "kwargs", []) or []:
 						walk_expr(kw.value)
 					return
-				if isinstance(expr, H.HResultOk):
-					walk_expr(expr.value)
-				elif isinstance(expr, H.HBinary):
+				if isinstance(expr, H.HBinary):
 					walk_expr(expr.left)
 					walk_expr(expr.right)
 				elif isinstance(expr, H.HUnary):
@@ -1504,8 +1502,6 @@ class Checker:
 			elif hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
 				walk_block(expr.body, caught_events, catch_all)
 				walk_expr(expr.result, caught_events, catch_all)
-			elif isinstance(expr, H.HResultOk):
-				walk_expr(expr.value, caught_events, catch_all)
 			elif isinstance(expr, H.HBinary):
 				walk_expr(expr.left, caught_events, catch_all)
 				walk_expr(expr.right, caught_events, catch_all)
@@ -2181,15 +2177,6 @@ class Checker:
 				except Exception:
 					return None
 
-			if isinstance(expr, H.HResultOk):
-				if (
-					self.current_fn
-					and self.current_fn.signature
-					and self.current_fn.signature.return_type_id is not None
-				):
-					return self.current_fn.signature.return_type_id
-				return self.table.new_fnresult(checker._unknown_type, checker._error_type)
-
 			if isinstance(expr, H.HBinary):
 				left_ty = self._infer_expr_type(expr.left)
 				right_ty = self._infer_expr_type(expr.right)
@@ -2616,8 +2603,6 @@ class Checker:
 								return False
 							if isinstance(node, H.HArrayLiteral):
 								return any(_has_call(el) for el in node.elements)
-							if isinstance(node, H.HResultOk):
-								return _has_call(node.value)
 							if hasattr(H, "HMatchExpr") and isinstance(node, getattr(H, "HMatchExpr")):
 								if _has_call(node.scrutinee):
 									return True
@@ -2929,8 +2914,6 @@ class Checker:
 					walk_expr(arg)
 				for kw in getattr(expr, "kwargs", []) or []:
 					walk_expr(kw.value)
-			elif isinstance(expr, H.HResultOk):
-				walk_expr(expr.value)
 			elif isinstance(expr, H.HBinary):
 				walk_expr(expr.left)
 				walk_expr(expr.right)
@@ -3372,8 +3355,6 @@ class Checker:
 			elif isinstance(expr, H.HBinary):
 				walk_expr(expr.left)
 				walk_expr(expr.right)
-			elif isinstance(expr, H.HResultOk):
-				walk_expr(expr.value)
 			elif isinstance(expr, H.HField):
 				# Suppress Copy check on array element when walking a field projection
 				# through an index — the element is borrowed, not copied.
@@ -4592,9 +4573,6 @@ class Checker:
 					visit_expr(a, in_discard=False)
 				for kw in expr.kw_args:
 					visit_expr(kw.value, in_discard=False)
-				return
-			if isinstance(expr, H.HResultOk):
-				visit_expr(expr.value, in_discard=False)
 				return
 			if isinstance(expr, H.HFString):
 				for hole in expr.holes:

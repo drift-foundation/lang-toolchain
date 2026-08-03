@@ -262,7 +262,7 @@ class BorrowMaterializeRewriter:
 		# borrow subject just as surely as direct `&(move x)` (review
 		# finding 2, 2026-07-10). Casts are treated as forwarding
 		# CONSERVATIVELY: rejecting `&(cast<T>(move x))` errs on the
-		# explicit-consume side. `HResultOk` (and calls/ctors/binaries)
+		# explicit-consume side. Calls/ctors/binaries
 		# stay terminal — they CONSTRUCT a fresh value from the move.
 		if hasattr(H, "HMatchExpr") and isinstance(expr, getattr(H, "HMatchExpr")):
 			return any(
@@ -528,9 +528,6 @@ class BorrowMaterializeRewriter:
 		if isinstance(expr, H.HCast):
 			# Recurse into the cast operand so an rvalue borrow nested inside a
 			# cast (`cast<T>(f(&rvalue))`) is still materialized.
-			pfx, val = self._rewrite_expr(expr.value)
-			return pfx, replace(expr, value=val)
-		if isinstance(expr, getattr(H, "HResultOk", ())):
 			pfx, val = self._rewrite_expr(expr.value)
 			return pfx, replace(expr, value=val)
 		# Leave other expressions unchanged (or handled by other normalizers).

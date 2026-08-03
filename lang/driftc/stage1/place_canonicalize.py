@@ -333,9 +333,6 @@ class PlaceCanonicalizeRewriter:
 			# scope exit (double-free).
 			_, val = self._rewrite_expr(expr.value)
 			return [], replace(expr, value=val)
-		if isinstance(expr, getattr(H, "HResultOk", ())):
-			_, val = self._rewrite_expr(expr.value)
-			return [], replace(expr, value=val)
 
 		# Default: leave unchanged.
 		return [], expr

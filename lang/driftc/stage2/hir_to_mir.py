@@ -8535,18 +8535,6 @@ class HIRToMIR:
 			return fn_id
 		return None
 
-	def _visit_expr_HResultOk(self, expr: H.HResultOk) -> M.ValueId:
-		"""
-		Lower FnResult.Ok(value) into ConstructResultOk(dest, value).
-
-		This gives tests/pipeline a clean way to return FnResult without
-		hand-writing MIR.
-		"""
-		val = self.lower_expr(expr.value)
-		dest = self.b.new_temp()
-		self.b.emit(M.ConstructResultOk(dest=dest, value=val))
-		return dest
-
 	def _visit_expr_HTernary(self, expr: H.HTernary) -> M.ValueId:
 		"""
 		Lower ternary expression by building a diamond CFG that stores into a
