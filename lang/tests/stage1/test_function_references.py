@@ -231,7 +231,41 @@ def test_capturing_lambda_rejected_for_fn_pointer() -> None:
 		fn_id_main,
 		block,
 	)
+	# The implicit read of outer `y` is a shared BORROW capture, so the
+	# borrowed-capture variant fires (capture-kind normalization, approved
+	# 2026-08-03) — and specifically NOT the generic value-capture message.
+	assert any("closures with borrowed captures are non-escaping in v0" in d.message for d in res.diagnostics)
+	assert not any("capturing lambdas cannot be coerced" in d.message for d in res.diagnostics)
+
+
+def test_value_capture_lambda_rejected_for_fn_pointer() -> None:
+	# Companion: an explicit `copy` (VALUE) capture at a declared fn-pointer
+	# binding gets the generic fn-pointer rejection — borrowed and value
+	# captures stay separately pinned at stage1.
+	table = TypeTable()
+	fn_id_main = FunctionId(module="main", name="main", ordinal=0)
+	lam = H.HLambda(
+		params=[H.HParam(name="x")],
+		body_expr=H.HVar(name="y"),
+		body_block=None,
+		explicit_captures=[H.HExplicitCapture(name="y", kind="copy")],
+	)
+	block = H.HBlock(
+		statements=[
+			H.HLet(name="y", value=H.HLiteralInt(1)),
+			H.HLet(
+				name="f",
+				value=lam,
+				declared_type_expr=_fn_type_expr(["Int"], "Int", nothrow=True),
+			),
+		]
+	)
+	res = TypeChecker(table).check_function(
+		fn_id_main,
+		block,
+	)
 	assert any("capturing lambdas cannot be coerced" in d.message for d in res.diagnostics)
+	assert not any("closures with borrowed captures are non-escaping" in d.message for d in res.diagnostics)
 
 
 def test_cast_function_reference_disambiguates_overload() -> None:

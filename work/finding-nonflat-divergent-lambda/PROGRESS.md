@@ -1,11 +1,42 @@
 # PROGRESS: finding-nonflat-divergent-lambda
 
-STATUS: SIGNED OFF — review-2026-08-03T16-55-27Z (no remaining findings).
-The spec-authority hold was resolved by Slawomir's explicit approval of the
-contextual-only v1 closure contract; the sign-off withdraws the crossed hold
-token, so no terminal REVIEW-PENDING remains.  Checklist complete except the
-user-driven gates: full suite + ownership-corpus check/promote before merge,
-and folder deletion after merge+closure per the ephemeral rule.
+STATUS: SIGNED OFF (terminal) — review-2026-08-03T17-29-27Z, independently
+verified by the reviewer (stage1 file 11/11, full stage1 89/89, both e2e
+cases green, diff clean).  The full-suite reopening is closed; no review
+work remains.  User-driven gates before merge: RESTART the full suite (the
+prior run stopped at the now-fixed stage1 failure) + ownership-corpus
+check/promote; folder deletion after merge+closure per the ephemeral rule.
+
+Revision 8 (below) had reopened the finding via review-2026-08-03T17-18-59Z
+(full-suite failure: stale stage1 capture diagnostic pin) and completed the
+approved capture-kind contract migration through the remaining test surface.
+
+## Revision 8 (test migration, Slawomir-approved edits 2026-08-03)
+
+Slawomir explicitly approved: update the two existing implicit-borrow
+expectations, add a stage1 explicit-copy companion, keep the compiler and
+both .drift sources unchanged, assert the implicit-borrow case does NOT emit
+the generic message.
+
+1. lang/tests/stage1/test_function_references.py::
+   test_capturing_lambda_rejected_for_fn_pointer — implicit read of outer
+   `y` is a shared BORROW: now asserts the borrowed-capture diagnostic AND
+   the absence of the generic value-capture message.  NEW companion
+   test_value_capture_lambda_rejected_for_fn_pointer pins the generic
+   message (and borrowed-message absence) for an explicit `copy` capture —
+   borrowed and value captures separately pinned at stage1.
+2. lang/tests/codegen/e2e/fnptr_lambda_capture_rejected/expected.json —
+   implicit-borrow source (`|x| => x + k`, unchanged) now expects the
+   borrowed-capture diagnostic.
+3. callable_capturing_lambda_not_fn_ptr (explicit `captures(copy y)` —
+   value capture) verified STILL VALID with the generic message: green.
+4. Stage1 conflation scan: no other stage1 assertions mix the two classes;
+   the driver-file mentions of the generic message are docstring prose or
+   value-capture pins.
+
+Verification: complete stage1 suite 89/89; both e2e cases ok
+(fnptr_lambda_capture_rejected, callable_capturing_lambda_not_fn_ptr).
+No compiler or .drift source changes in this revision.
 
 ## Revision 7 changes (contract migration)
 

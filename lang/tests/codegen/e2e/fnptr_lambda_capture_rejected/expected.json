@@ -2,7 +2,7 @@
   "description": "e2e: fnptr lambda capture rejected",
   "diagnostics": [
     {
-      "message_contains": "capturing lambdas cannot be coerced",
+      "message_contains": "closures with borrowed captures are non-escaping in v0",
       "phase": "typecheck"
     }
   ],
