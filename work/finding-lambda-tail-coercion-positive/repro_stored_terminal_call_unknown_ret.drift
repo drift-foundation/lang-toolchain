@@ -1,0 +1,10 @@
+module repro;
+pub error ExcA { kind: Int }
+fn fail(code: Int) throws {
+    throw ExcA(kind = code);
+}
+pub fn main() nothrow -> Int {
+    val t4 = |n: Int| -> Int => { fail(n); };
+    val d = try t4(7) catch { 40 };
+    return d - 40;
+}

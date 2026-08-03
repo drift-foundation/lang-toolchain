@@ -34,7 +34,7 @@
       then staged installation (a byte-preserving no-op when already equal — but
       a missing/stale baseline fingerprint forces a real install).  On
       disagreement it does NOT mutate the baseline and retains the fresh actual.
-      NEVER wired into CI / run-all-tests.sh / just test / just certify.
+      NEVER wired into CI / just test / just certify.
 """
 from __future__ import annotations
 

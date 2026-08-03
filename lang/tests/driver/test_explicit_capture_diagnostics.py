@@ -160,9 +160,14 @@ pub fn main() nothrow -> Int{
 	assert any("borrowed captures are non-escaping in v0" in m for m in msgs)
 
 
-def test_explicit_capture_value_escape_allowed(
+def test_explicit_capture_value_bare_storage_rejected(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+	# v1 ruling (2026-08-03): value captures may escape only through a
+	# SUPPORTED representation (core.callbackN / an accepted Fn-bounded
+	# conversion).  A bare stored capturing lambda has no closure-value type
+	# in v1 and is rejected AT THE BINDING, even when never invoked.  (This
+	# replaces the stale silent-acceptance contract previously pinned here.)
 	source = """
 module m_main;
 
@@ -173,13 +178,43 @@ pub fn main() nothrow -> Int{
 }
 """
 	rc, payload = _compile_single_module(tmp_path, capsys, source)
-	assert rc == 0
-	assert payload.get("diagnostics", []) == []
+	assert rc != 0
+	msgs = [d.get("message", "") for d in payload.get("diagnostics", [])]
+	assert any("bare capturing lambdas cannot be stored in v1" in m for m in msgs)
 
 
 def test_explicit_capture_copy_non_copyable_reports_driver_diag(
 	tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+	# v1 ruling (2026-08-03): the BARE stored form rejects at the binding
+	# (no closure-value type), so the Copy-capture validation is pinned
+	# through the SUPPORTED representation (core.callback0) where the
+	# capture actually constructs.
+	source = """
+module m_main;
+
+import std.core as core;
+
+struct Box { value: Array<Int> }
+
+pub fn main() nothrow -> Int{
+	val b = Box(value = [1]);
+	val cb: core.Callback0<Int> = core.callback0(| | captures(copy b) nothrow => { 0 });
+	return 0;
+}
+"""
+	rc, payload = _compile_single_module(tmp_path, capsys, source)
+	assert rc != 0
+	msgs = [d.get("message", "") for d in payload.get("diagnostics", [])]
+	assert any("cannot copy 'b': type is not Copy" in m for m in msgs)
+
+
+def test_explicit_capture_copy_non_copyable_bare_form_rejects_at_binding(
+	tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+	# The bare stored form of the same capture rejects at the binding with
+	# the storage diagnostic (the Copy question never arises — no closure
+	# value exists to construct).
 	source = """
 module m_main;
 
@@ -194,7 +229,7 @@ pub fn main() nothrow -> Int{
 	rc, payload = _compile_single_module(tmp_path, capsys, source)
 	assert rc != 0
 	msgs = [d.get("message", "") for d in payload.get("diagnostics", [])]
-	assert any("cannot copy 'b': type is not Copy" in m for m in msgs)
+	assert any("bare capturing lambdas cannot be stored in v1" in m for m in msgs)
 
 
 def test_explicit_empty_captures_allows_lambda_param_usage(

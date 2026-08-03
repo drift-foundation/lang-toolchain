@@ -6038,6 +6038,18 @@ def resolve_call_expr(
 				lambda_ret_type = None
 		if expected_type is not None:
 			lambda_ret_type = expected_type
+		if lambda_ret_type is None:
+			# Recover the body's inferred return by CONSUMING type_expr(lam)'s
+			# resulting function type (an unannotated value-block lambda infers it
+			# from its trailing tail).  This does NOT open a second body-inference
+			# path -- it reads the return slot of the one type_expr already builds.
+			_lam_fn_ty = type_expr(lam)
+			if _lam_fn_ty is not None:
+				_lam_def = ctx.type_table.get(_lam_fn_ty)
+				if _lam_def.kind is TypeKind.FUNCTION and _lam_def.param_types:
+					_inf_ret = _lam_def.param_types[-1]
+					if _inf_ret is not None and _inf_ret != ctx.unknown_ty:
+						lambda_ret_type = _inf_ret
 		call_ret = lambda_ret_type or ctx.unknown_ty
 		can_throw = _lambda_can_throw(lam, None)
 		lam.can_throw_effective = bool(can_throw)
@@ -6734,6 +6746,12 @@ def resolve_call_expr(
 						print(f"[debug] call target not function (binding call) fn={expr.fn} module={current_module_name} binding_id={binding_id}", file=_debug_stderr)
 					except Exception:
 						pass
+				if fn_val_ty == ctx.unknown_ty and any(getattr(d, "severity", None) == "error" for d in diagnostics):
+					# Cascade suppression: the callee binding is Unknown because an
+					# earlier error already poisoned it (e.g. a rejected capturing
+					# lambda) — repeating "call target is not a function value"
+					# over the poisoned slot is noise, not signal.
+					return record_expr(expr, ctx.unknown_ty)
 				diagnostics.append(_tc_diag(message="call target is not a function value", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)
 		if expected_type is not None:

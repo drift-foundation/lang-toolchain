@@ -1,0 +1,10 @@
+module repro;
+
+pub fn main() nothrow -> Int {
+	val f = | b: Bool | => {
+		if b { return "x"; }
+		1
+	};
+	val result: Int = f(false);
+	return result - 1;
+}

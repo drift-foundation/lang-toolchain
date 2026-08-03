@@ -72,7 +72,7 @@ def test_capturing_stored_lambda_in_arm_reports_clear_diagnostic(tmp_path: Path)
 	)
 	r = _compile(tmp_path, src, out="cap")
 	assert r.returncode != 0
-	assert "capturing lambdas cannot be coerced to function pointers" in r.stderr, r.stderr
+	assert "closures with borrowed captures are non-escaping in v0" in r.stderr, r.stderr
 
 
 def test_iife_lambda_in_arm_still_works(tmp_path: Path) -> None:

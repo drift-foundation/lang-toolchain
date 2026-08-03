@@ -145,6 +145,14 @@ Borrowed captures (`&x`, `&mut x`) are non-escaping:
 - In MVP, escaping closures must not have borrowed captures.
 - Closures with only `copy`/`move` captures may escape.
 
+> **Superseded (current v1 contract):** escape happens only through a
+> supported representation — a callback interface value
+> (`core.callbackN(...)`) or an accepted Fn-bounded conversion.  v1 has no
+> standalone anonymous closure-value type: a capturing lambda literal cannot
+> be stored as a bare binding, and "moving the closure" applies to the
+> supported representation, not a raw closure value.  See
+> `doc/design/drift-lang-spec.md` §22.0.1 / §22.2.3.
+
 ### 12) Borrow checker model: closure-owned loans
 
 When explicit captures include borrows:
@@ -164,9 +172,14 @@ When explicit captures include borrows:
 
 Closure creation:
 
+> **Superseded (current v1 contract):** this creation model applies where a
+> closure is materialized through a supported representation (immediate
+> invocation environment, callback construction, Fn-bounded conversion).  No
+> standalone bare closure value is produced in v1.
+
 1. Evaluate each capture item left-to-right.
 2. Store values into closure object fields.
-3. Produce the closure value.
+3. Produce the closure value (within the supported representation).
 
 Closure invocation:
 

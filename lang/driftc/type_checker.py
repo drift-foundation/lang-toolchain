@@ -26,8 +26,25 @@ from typing import Dict, List, Optional, Mapping, Sequence, Set, Tuple
 from lang.driftc import stage1 as H
 from lang.driftc import debug as drift_debug
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
+from lang.driftc.stage1 import hir_flow
 from lang.driftc.stage1.node_ids import assign_node_ids, assign_missing_callsite_ids, iter_hir_walk
 from lang.driftc.stage1.capture_discovery import discover_captures
+from lang.driftc.stage1.closures import HCaptureKind as _HCaptureKind
+
+
+def _capture_kind_is_borrow(kind: object) -> bool:
+	"""
+	True iff a capture kind is a shared/mutable BORROW, across both
+	representations: `HExplicitCapture.kind` is the parser's string form
+	("ref"/"ref_mut"), while `discover_captures()` returns
+	`closures.HCaptureKind` enum members.  Comparing enum kinds against the
+	strings silently classified every implicit borrow as non-borrow, so the
+	borrowed-capture diagnostic variant was unreachable for implicit
+	captures.
+	"""
+	if isinstance(kind, str):
+		return kind in ("ref", "ref_mut")
+	return kind in (_HCaptureKind.REF, _HCaptureKind.REF_MUT)
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang.driftc.checker import FnSignature, TypeParam, user_facing_binding_name
 from lang.driftc.checker.typed_validator import validate_typed_hir
@@ -3989,6 +4006,13 @@ class TypeChecker:
 			if td.kind is TypeKind.TYPEVAR:
 				# Defer Copy requirements for unresolved type parameters to instantiation.
 				return
+			if ty_id == self._unknown and any(getattr(d, "severity", None) == "error" for d in diagnostics):
+				# Cascade suppression: an Unknown-typed value whose failure is
+				# already diagnosed (rejected capturing lambda, unresolvable
+				# callee, ...) — "cannot copy: type 'Unknown'" over it is noise.
+				# Without a prior error the copy check stays as the last-line
+				# tripwire for an undiagnosed Unknown leak.
+				return
 			copy_status = self.type_table.copy_status(ty_id)
 			if copy_status is True:
 				return
@@ -4655,6 +4679,11 @@ class TypeChecker:
 			return _build_resolution(chosen_fn_id, chosen_sig, call_sig_tuple)
 
 		def _lambda_can_throw(lam: H.HLambda, call_info: Mapping[int, CallInfo] | None) -> bool:
+			# Shared throw-effect authority (stage1.hir_flow): one deliberate,
+			# boundary-aware HIR traversal instead of a local walker copy (the
+			# local copies drifted and shipped the match-arm/nested-block
+			# nothrow-misclassification SIGABRT).  Only the CALL decision is
+			# ours: CallInfo lookup + the direct-target nothrow refinement.
 			if call_info is None:
 				call_info = {}
 			def _treat_can_throw(info: CallInfo) -> bool:
@@ -4671,123 +4700,13 @@ class TypeChecker:
 							if inner is not None and not bool(getattr(inner, "declared_can_throw", False)):
 								return False
 				return True
-			def expr_can_throw(expr: H.HExpr) -> bool:
-				if isinstance(expr, H.HCall):
-					info = call_info.get(getattr(expr, "callsite_id", None))
-					if info is None:
-						return True
-					if _treat_can_throw(info):
-						return True
-					if isinstance(expr.fn, H.HLambda):
-						return _lambda_can_throw(expr.fn, call_info)
-					return any(expr_can_throw(a) for a in expr.args)
-				if isinstance(expr, H.HMethodCall):
-					info = call_info.get(getattr(expr, "callsite_id", None))
-					if info is None:
-						return True
-					if _treat_can_throw(info):
-						return True
-					if expr_can_throw(expr.receiver):
-						return True
-					return any(expr_can_throw(a) for a in expr.args)
-				if isinstance(expr, H.HInvoke):
-					info = call_info.get(getattr(expr, "callsite_id", None))
-					if info is None:
-						return True
-					if _treat_can_throw(info):
-						return True
-					if isinstance(expr.callee, H.HLambda):
-						return _lambda_can_throw(expr.callee, call_info)
-					if expr_can_throw(expr.callee):
-						return True
-					return any(expr_can_throw(a) for a in expr.args)
-				if isinstance(expr, H.HTryExpr):
-					catch_all = any(arm.event_fqn is None for arm in expr.arms)
-					if not catch_all and expr_can_throw(expr.attempt):
-						return True
-					for arm in expr.arms:
-						if block_can_throw(arm.block):
-							return True
-						if arm.result is not None and expr_can_throw(arm.result):
-							return True
-					return False
-				if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
-					return block_can_throw(expr.body) or expr_can_throw(expr.result)
-				if isinstance(expr, H.HLambda):
-					return _lambda_can_throw(expr, call_info)
-				if isinstance(expr, H.HResultOk):
-					return expr_can_throw(expr.value)
-				if isinstance(expr, H.HTernary):
-					return (
-						expr_can_throw(expr.cond)
-						or expr_can_throw(expr.then_expr)
-						or expr_can_throw(expr.else_expr)
-					)
-				if isinstance(expr, H.HUnary):
-					return expr_can_throw(expr.expr)
-				if isinstance(expr, H.HBinary):
-					return expr_can_throw(expr.left) or expr_can_throw(expr.right)
-				if isinstance(expr, H.HField):
-					return expr_can_throw(expr.subject)
-				if isinstance(expr, H.HIndex):
-					return expr_can_throw(expr.subject) or expr_can_throw(expr.index)
-				if isinstance(expr, H.HPlaceExpr):
-					for proj in expr.projections:
-						if isinstance(proj, H.HPlaceIndex) and expr_can_throw(proj.index):
-							return True
-					return False
-				if isinstance(expr, H.HArrayLiteral):
-					return any(expr_can_throw(el) for el in expr.elements)
-				return False
-
-			def stmt_can_throw(stmt: H.HStmt) -> bool:
-				if isinstance(stmt, (H.HThrow, H.HRethrow)):
+			def _call_can_throw(expr: H.HExpr) -> bool:
+				info = call_info.get(getattr(expr, "callsite_id", None))
+				if info is None:
+					# Unresolved callsite: conservative may-throw.
 					return True
-				if isinstance(stmt, H.HLocalConst):
-					return False  # literal initializer
-				if isinstance(stmt, H.HExprStmt):
-					return expr_can_throw(stmt.expr)
-				if isinstance(stmt, H.HLet):
-					return expr_can_throw(stmt.value)
-				if isinstance(stmt, H.HAssign):
-					return expr_can_throw(stmt.value)
-				if isinstance(stmt, H.HAugAssign):
-					return expr_can_throw(stmt.value) or expr_can_throw(stmt.target)
-				if isinstance(stmt, H.HReturn):
-					return expr_can_throw(stmt.value) if stmt.value is not None else False
-				if isinstance(stmt, H.HIf):
-					if expr_can_throw(stmt.cond):
-						return True
-					if block_can_throw(stmt.then_block):
-						return True
-					return block_can_throw(stmt.else_block) if stmt.else_block is not None else False
-				if isinstance(stmt, H.HLoop):
-					return block_can_throw(stmt.body)
-				if isinstance(stmt, H.HTry):
-					# A catch-all arm (`catch _`/`catch unexpected`/bare `catch`,
-					# i.e. event_fqn is None) swallows any throw from the try body,
-					# so the body's throws do NOT propagate.  Only the catch arms'
-					# own bodies can still throw.  Without this, statement-form
-					# `try { f() } catch unexpected { }` was treated as may-throw
-					# while the equivalent expression-form `try f() catch { 0 }`
-					# (HTryExpr, above) was correctly cleared — the inconsistency
-					# bug that surfaced inside nothrow lambdas.
-					catch_all = any(arm.event_fqn is None for arm in stmt.catches)
-					if not catch_all and block_can_throw(stmt.body):
-						return True
-					return any(block_can_throw(arm.block) for arm in stmt.catches)
-				return False
-
-			def block_can_throw(block: H.HBlock | None) -> bool:
-				if block is None:
-					return False
-				return any(stmt_can_throw(stmt) for stmt in block.statements)
-
-			if lam.body_expr is not None:
-				return expr_can_throw(lam.body_expr)
-			if lam.body_block is not None:
-				return block_can_throw(lam.body_block)
-			return False
+				return _treat_can_throw(info)
+			return hir_flow.lambda_body_can_throw(lam, call_can_throw=_call_can_throw)
 
 		def _loc_from_span(span: Span) -> parser_ast.Located:
 			return parser_ast.Located(line=span.line or 0, column=span.column or 0)
@@ -7742,53 +7661,179 @@ class TypeChecker:
 				# the lambda body wants try-semantics it must open its
 				# own.
 				try_block_depth = 0
+				# ONE-PASS lambda body typing authority (0.34.2).  The lambda body is
+				# typed in a SINGLE scope: prefix statements normally, and the final
+				# VALUE-producing expression exactly once in value context — no second
+				# pass over the tail (which previously typed it as a discarded statement
+				# AND again as a value, duplicating diagnostics / copy-move accounting /
+				# call resolution / expr_types).  Statement-form matches (parser-
+				# authoritative HMatchExpr.statement_form) are NOT value-typed; their
+				# result comes from the internal returns.  The authority also compares the
+				# tail type against a declared/expected return type.
+				def _find_return_expr(node: H.HNode) -> 'H.HExpr | None':
+					# A nested lambda is a function boundary: its `return`s exit the INNER
+					# lambda, never this one (spawn-lambda SSA-contract ICE family).
+					if isinstance(node, H.HLambda):
+						return None
+					if isinstance(node, H.HReturn) and node.value is not None:
+						return node.value
+					if isinstance(node, H.HBlock):
+						for st in node.statements:
+							found = _find_return_expr(st)
+							if found is not None:
+								return found
+						return None
+					for field in getattr(node, '__dataclass_fields__', {}) or {}:
+						val = getattr(node, field, None)
+						if isinstance(val, H.HNode):
+							found = _find_return_expr(val)
+							if found is not None:
+								return found
+						elif isinstance(val, list):
+							for it in val:
+								if isinstance(it, H.HNode):
+									found = _find_return_expr(it)
+									if found is not None:
+										return found
+					return None
+				def _terminal_throws_call(call_expr: 'H.HExpr') -> bool:
+					# Terminal-`throws` call resolution for the shared flow
+					# authority: same resolution ladder as the phase-2
+					# checker's `_is_terminal_throws_call_expr` (DIRECT via
+					# signatures; TRAIT/INDIRECT via the CallSig flag).
+					if not isinstance(call_expr, (H.HCall, H.HMethodCall)):
+						return False
+					_csid = getattr(call_expr, "callsite_id", None)
+					if _csid is None or call_info_by_callsite_id is None:
+						return False
+					_tinfo = call_info_by_callsite_id.get(_csid)
+					if _tinfo is None:
+						return False
+					if _tinfo.target.kind in (CallTargetKind.TRAIT, CallTargetKind.INDIRECT):
+						return bool(getattr(_tinfo.sig, "declared_terminal_throws", False))
+					if _tinfo.target.kind is not CallTargetKind.DIRECT or _tinfo.target.symbol is None:
+						return False
+					_tsig = signatures_by_id.get(_tinfo.target.symbol) if signatures_by_id is not None else None
+					return bool(getattr(_tsig, "declared_terminal_throws", False)) if _tsig is not None else False
+				def _guard_call_can_throw(call_expr: 'H.HExpr') -> bool:
+					# Effect decision for the flow authority's dead-catch-arm
+					# gating: CallInfo when recorded, conservative may-throw
+					# otherwise (unresolvable at guard time).
+					_ci = (call_info_by_callsite_id or {}).get(getattr(call_expr, "callsite_id", None))
+					return True if _ci is None else bool(_ci.sig.can_throw)
+				def _body_diverges(b: 'H.HBlock') -> bool:
+					# Shared terminal-flow authority (stage1.hir_flow — the same
+					# semantics the phase-2 checker uses: literal-`if` folding,
+					# try/catch with dead-arm gating, non-breaking loops,
+					# statement-form matches, terminal-`throws` calls).  The
+					# value-less-body guard may be skipped ONLY when every exit
+					# throws: a bare `return;` exit or any fallthrough path
+					# still rejects.
+					_exits = hir_flow.block_exits(b, is_terminal_call=_terminal_throws_call, call_can_throw=_guard_call_can_throw)
+					return _exits <= {hir_flow.Exit.THROWS}
+				def _lambda_body_result(block, expected_ret):
+					scope_env.append(dict())
+					scope_bindings.append(dict())
+					try:
+						_stmts = block.statements
+						if not _stmts:
+							# empty body: an unannotated lambda infers Void, never None (which
+							# would decay to Unknown at the call boundary).  A declared
+							# non-Void return over an empty body is the same undefined-value
+							# hole as the value-less case below — reject it identically.
+							if (
+								expected_ret is not None
+								and expected_ret != self._void
+								and expected_ret != self._unknown
+							):
+								diagnostics.append(
+									_tc_diag(
+										message="lambda with explicit return type must return a value",
+										severity="error",
+										span=getattr(expr, 'loc', Span()),
+									)
+								)
+							return self._void
+						for _s in _stmts[:-1]:
+							type_stmt(_s)
+						_last = _stmts[-1]
+						_result_ty = None
+						_stmt_form = (isinstance(_last, H.HExprStmt)
+							and isinstance(_last.expr, H.HMatchExpr)
+							and getattr(_last.expr, 'statement_form', False))
+						if isinstance(_last, H.HExprStmt) and not _stmt_form:
+							# value-producing tail: typed EXACTLY ONCE, in value context, via the
+							# shared return-value authority (auto-try + `&T->T` + interface/callback
+							# coercion + declared/expected mismatch diagnosis).
+							def _set_tail(_e):
+								_last.expr = _e
+							_result_ty = _type_return_value(
+								_last.expr, expected_ret,
+								used_as_value=True, set_value=_set_tail,
+								span=getattr(_last, 'loc', None) or getattr(expr, 'loc', Span()))
+							if _terminal_throws_call(_last.expr):
+								# Terminal-`throws` tail call: control never returns
+								# from it, so there is no tail VALUE.  Detectable only
+								# AFTER the one-pass typing above recorded the call's
+								# CallInfo; reclassify to the statement-form result
+								# handling (a valued `return` elsewhere in the body
+								# still provides the result; otherwise the divergence-
+								# aware value-less handling below applies).
+								_result_ty = None
+								_ret_expr = _find_return_expr(block)
+								if _ret_expr is not None:
+									_result_ty = expr_types.get(getattr(_ret_expr, 'node_id', None))
+						else:
+							# statement-form tail (statement-form match / explicit return / binding /
+							# diverging): type as a statement.  Each internal `return` value is
+							# already typed (and coerced) by type_stmt; read the recorded type of the
+							# first one -- do NOT re-type it (its arm-local scope may be popped).
+							type_stmt(_last)
+							_ret_expr = _find_return_expr(block)
+							if _ret_expr is not None:
+								_result_ty = expr_types.get(getattr(_ret_expr, 'node_id', None))
+						if _result_ty is None:
+							# value-less body (no trailing value, no valued return) infers Void.
+							_result_ty = self._void
+							if (
+								expected_ret is not None
+								and expected_ret != self._void
+								and expected_ret != self._unknown
+								and not _body_diverges(block)
+							):
+								# Declared non-Void return with a value-less body whose
+								# exits are NOT throw-only (it can fall through, or exit
+								# via bare `return;`): the call boundary would otherwise
+								# yield an undefined value (certified 0.33.90 silently
+								# compiled `|| -> Int => { val a = 5; }` to garbage).
+								# Bodies whose every exit throws are accepted — lowering
+								# marks their unreachable joins and they compile+run.
+								# This guard moved from the phase-2 checker's (now
+								# removed) CallInfo-less body re-inference — the
+								# authority is its one home.
+								diagnostics.append(
+									_tc_diag(
+										message="lambda with explicit return type must return a value",
+										severity="error",
+										span=getattr(expr, 'loc', Span()),
+									)
+								)
+						return _result_ty
+					finally:
+						scope_env.pop()
+						scope_bindings.pop()
+				body_result_ty: TypeId | None = None
 				if expr.body_expr is not None:
-					type_expr(expr.body_expr, expected_type=lambda_ret_type)
-				if expr.body_block is not None:
-					type_block(expr.body_block)
-				if lambda_ret_type is None:
-					inferred_ret: TypeId | None = None
-					if expr.body_expr is not None:
-						inferred_ret = type_expr(expr.body_expr)
-					elif expr.body_block is not None:
-						def _find_return_expr(node: H.HNode) -> H.HExpr | None:
-							# A nested lambda is a function boundary: its
-							# `return`s exit the INNER lambda, never this
-							# one.  Descending into it made an outer
-							# `|| => { val _ = g(|x| => { return e; }); return 0; }`
-							# infer the OUTER return type from `e` (the
-							# spawn-lambda SSA-contract ICE family).
-							if isinstance(node, H.HLambda):
-								return None
-							if isinstance(node, H.HReturn) and node.value is not None:
-								return node.value
-							if isinstance(node, H.HBlock):
-								for st in node.statements:
-									found = _find_return_expr(st)
-									if found is not None:
-										return found
-								return None
-							for field in getattr(node, "__dataclass_fields__", {}) or {}:
-								val = getattr(node, field, None)
-								if isinstance(val, H.HNode):
-									found = _find_return_expr(val)
-									if found is not None:
-										return found
-								elif isinstance(val, list):
-									for it in val:
-										if isinstance(it, H.HNode):
-											found = _find_return_expr(it)
-											if found is not None:
-												return found
-							return None
-
-						ret_expr = _find_return_expr(expr.body_block)
-						if ret_expr is not None:
-							inferred_ret = type_expr(ret_expr)
-						if inferred_ret is None:
-							inferred_ret = self._void
-					if inferred_ret is not None:
-						lambda_ret_type = inferred_ret
+					def _set_body_expr(_e):
+						expr.body_expr = _e
+					body_result_ty = _type_return_value(
+						expr.body_expr, lambda_ret_type,
+						used_as_value=True, set_value=_set_body_expr,
+						span=getattr(expr.body_expr, 'loc', None) or getattr(expr, 'loc', Span()))
+				elif expr.body_block is not None:
+					body_result_ty = _lambda_body_result(expr.body_block, lambda_ret_type)
+				if lambda_ret_type is None and body_result_ty is not None:
+					lambda_ret_type = body_result_ty
 				return_type = saved_return_type
 				# Restore auto-try lambda-boundary state (Bug A — 0.31.38).
 				fn_declared_throws = saved_fn_declared_throws
@@ -7832,7 +7877,7 @@ class TypeChecker:
 						return record_expr(expr, self._unknown)
 					captures = list(getattr(expr, "captures", []) or [])
 					if expr.explicit_captures:
-						if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in expr.explicit_captures):
+						if any(_capture_kind_is_borrow(getattr(c, "kind", None)) for c in expr.explicit_captures):
 							diagnostics.append(
 								_tc_diag(
 									message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
@@ -7847,6 +7892,7 @@ class TypeChecker:
 								message="capturing lambdas cannot be coerced to function pointers",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
+								notes=["store it as a callback (val cb: core.CallbackN<...> = core.callbackN(...)) or invoke it immediately: (|...| => ...)(...)"],
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -7856,7 +7902,7 @@ class TypeChecker:
 						captures = res.captures
 						expr.captures = res.captures
 					if captures:
-						if any(getattr(c, "kind", None) in ("ref", "ref_mut") for c in captures):
+						if any(_capture_kind_is_borrow(getattr(c, "kind", None)) for c in captures):
 							diagnostics.append(
 								_tc_diag(
 									message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
@@ -7871,6 +7917,7 @@ class TypeChecker:
 								message="capturing lambdas cannot be coerced to function pointers",
 								severity="error",
 								span=getattr(expr, "loc", Span()),
+								notes=["store it as a callback (val cb: core.CallbackN<...> = core.callbackN(...)) or invoke it immediately: (|...| => ...)(...)"],
 							)
 						)
 						return record_expr(expr, self._unknown)
@@ -12031,6 +12078,133 @@ class TypeChecker:
 			_assign_node_id(call)
 			return call
 
+		def _type_return_value(value_expr, expected_ret, *, used_as_value, set_value, span):
+			# Shared return-value contract for HReturn AND lambda-tail returns: type the
+			# value against the expected return, apply auto-try, `&T -> T` coercion, and
+			# interface/callback coercion (recording the lowering-visible mark).  Returns
+			# the resulting type (the expected interface when a concrete value coerced
+			# into it).  Any type still incompatible after the coercion ladder is
+			# diagnosed HERE — `type_expr(..., expected_type=...)` only shapes inference
+			# (ordinary variables and literals ignore the expectation), so without this
+			# authority a mismatched return reaches MIR/codegen (payload-mismatch ICE on
+			# named fns, silent miscompile through a stored lambda's declared CallInfo).
+			# The ladder and allowances mirror the HLet `val x: T = expr` initializer
+			# check, INCLUDING its implements-relation probe: a concrete -> interface
+			# return records the coercion only after the relation verifies (an
+			# unverified record surfaced as a codegen ICE), else it diagnoses
+			# "'X' does not implement interface 'Y'".
+			inferred = type_expr(value_expr, expected_type=expected_ret, used_as_value=used_as_value)
+			if _should_auto_try(inferred, expected_ret):
+				value_expr = _wrap_auto_try(value_expr)
+				set_value(value_expr)
+				inferred = type_expr(value_expr, expected_type=expected_ret, used_as_value=used_as_value)
+			if (
+				expected_ret is not None
+				and inferred is not None
+				and inferred != expected_ret
+				and _ref_to_value_coerce_applies(inferred, expected_ret)
+			):
+				_rewritten_ret = _rewrite_ref_to_value(value_expr, expected_ret)
+				if _rewritten_ret is not None:
+					value_expr = _rewritten_ret
+					set_value(value_expr)
+					inferred = expected_ret
+			if expected_ret is not None and inferred is not None and inferred != expected_ret:
+				def _same_type(lhs: TypeId, rhs: TypeId) -> bool:
+					if lhs == rhs:
+						return True
+					try:
+						return _normalize_type_key(type_key_from_typeid(self.type_table, lhs)) == _normalize_type_key(
+							type_key_from_typeid(self.type_table, rhs)
+						)
+					except Exception:
+						return False
+				if inferred == self._unknown or expected_ret == self._unknown:
+					# Poisoned-type suppression FIRST: an Unknown must never reach
+					# the interface branch (it would record a bogus coercion or
+					# probe callback wrapping over a poisoned slot) nor the final
+					# mismatch diagnosis (cascading noise).
+					pass
+				elif _same_type(inferred, expected_ret):
+					# Distinct TypeIds for the same nominal type (package
+					# FORWARD_NOMINAL placeholders, alias chains).
+					inferred = expected_ret
+				elif self.type_table.get(expected_ret).kind is TypeKind.INTERFACE:
+					if self.type_table.get(inferred).kind is TypeKind.INTERFACE:
+						if iface_assignable(inferred, expected_ret):
+							record_iface_coercion(value_expr, expected_ret)
+							inferred = expected_ret
+						else:
+							diagnostics.append(
+								_tc_diag(
+									message=f"return type '{self.type_table.get(inferred).name}' does not match declared type '{self.type_table.get(expected_ret).name}'",
+									severity="error",
+									span=span,
+								)
+							)
+					else:
+						# Patch B Site 6: prefer implicit Callback* wrap over a raw
+						# iface_coercion when the declared return type is a concrete
+						# callback iface and the returned expression is a bare lambda
+						# / fn-typed value.
+						_cb_res = _try_callback_wrap_for_iface_slot(value_expr, inferred, expected_ret)
+						if _cb_res.is_wrapped:
+							set_value(_cb_res.cb_call)
+							inferred = _cb_res.cb_ty
+						elif _cb_res.is_rejected:
+							pass  # see Patch B Site 5 comment
+						else:
+							# Verify the implements relation BEFORE recording,
+							# exactly as the HLet initializer path does (0.33.77):
+							# an unverified record surfaces as a codegen ICE
+							# ("interface impl not found").  Defer for generic-impl
+							# bases and typevar sources.
+							self._ensure_iface_impl_relation()
+							_decl_inst_r = self.type_table.get_interface_instance(expected_ret)
+							_decl_base_r = _decl_inst_r.base_id if _decl_inst_r is not None else expected_ret
+							_src_cmp_r = _dealias_zero_param_type(inferred)
+							_src_rel_key_r = self._iface_rel_key(_src_cmp_r)
+							if (
+								not (_decl_inst_r is not None and getattr(_decl_inst_r, "type_args", None))
+								and (self._iface_rel_key(expected_ret), _src_rel_key_r) not in self._iface_impl_pairs
+								and (self._iface_rel_key(_decl_base_r), _src_rel_key_r) not in self._iface_impl_pairs
+								and self._iface_rel_key(_decl_base_r) not in self._iface_generic_impl_bases
+								and not self.type_table.has_typevar(_src_cmp_r)
+								and self.type_table.get(_src_cmp_r).kind in (TypeKind.STRUCT, TypeKind.VARIANT, TypeKind.SCALAR)
+							):
+								diagnostics.append(
+									_tc_diag(
+										message=(
+											f"'{self._pretty_type_name(_src_cmp_r, current_module=current_module_name)}' does not implement "
+											f"interface '{self._pretty_type_name(expected_ret, current_module=current_module_name)}'"
+										),
+										severity="error",
+										span=span,
+									)
+								)
+							else:
+								record_iface_coercion(value_expr, expected_ret)
+								inferred = expected_ret
+				elif expected_ret == self._void:
+					# Void-return-with-value is owned by the phase-2 checker's
+					# return-shape validation; a second diagnostic here would duplicate.
+					pass
+				else:
+					is_int_lit = isinstance(value_expr, H.HLiteralInt)
+					is_uint_lit = hasattr(H, "HLiteralUint") and isinstance(value_expr, getattr(H, "HLiteralUint"))
+					is_uint64_lit = hasattr(H, "HLiteralUint64") and isinstance(value_expr, getattr(H, "HLiteralUint64"))
+					decl_name = self.type_table.get(expected_ret).name
+					inf_name = self.type_table.get(inferred).name
+					if not (is_int_lit and decl_name in ("Int", "Uint") and inf_name == "Int") and not (is_uint_lit and decl_name == "Uint" and inf_name == "Uint") and not (is_uint64_lit and decl_name == "Uint64" and inf_name == "Uint64"):
+						diagnostics.append(
+							_tc_diag(
+								message=f"return type '{inf_name}' does not match declared type '{decl_name}'",
+								severity="error",
+								span=span,
+							)
+						)
+			return inferred
+
 		def type_stmt(stmt: H.HStmt) -> None:
 			nonlocal catch_depth
 			nonlocal unsafe_context
@@ -12688,55 +12862,15 @@ class TypeChecker:
 							bound_def = self.type_table.get(bound_self)
 							if bound_def.kind is TypeKind.REF and bound_def.ref_mut:
 								used_as_value = False
-					inferred = type_expr(stmt.value, expected_type=return_type, used_as_value=used_as_value)
-					if _should_auto_try(inferred, return_type):
-						stmt.value = _wrap_auto_try(stmt.value)
-						inferred = type_expr(stmt.value, expected_type=return_type, used_as_value=used_as_value)
-					# Symmetric `&T → T` return coercion.  Without
-					# this, `return s_ref` from `fn -> String` slips
-					# past the type-checker (no diagnostic here for
-					# non-interface mismatch) and surfaces in HIR→MIR
-					# as an `internal: cannot return reference as
-					# owned 'String'; ... requires explicit 'copy'`
-					# from `stage2/hir_to_mir.py:7665` (and a sibling
-					# at 7716 for the throws-fn path).  Coerce here so
-					# stage 2 sees a consistent owned-value return.
-					if (
-						return_type is not None
-						and inferred is not None
-						and inferred != return_type
-						and _ref_to_value_coerce_applies(inferred, return_type)
-					):
-						_rewritten_ret = _rewrite_ref_to_value(stmt.value, return_type)
-						if _rewritten_ret is not None:
-							stmt.value = _rewritten_ret
-							inferred = return_type
-					if return_type is not None and inferred is not None and inferred != return_type:
-						if self.type_table.get(return_type).kind is TypeKind.INTERFACE:
-							if self.type_table.get(inferred).kind is TypeKind.INTERFACE:
-								if iface_assignable(inferred, return_type):
-									record_iface_coercion(stmt.value, return_type)
-								else:
-									diagnostics.append(
-										_tc_diag(
-											message=f"return type '{self.type_table.get(inferred).name}' does not match declared type '{self.type_table.get(return_type).name}'",
-											severity="error",
-											span=getattr(stmt, "loc", Span()),
-										)
-									)
-							else:
-								# Patch B Site 6: prefer implicit Callback* wrap over a raw
-								# iface_coercion when the declared return type is a concrete
-								# callback iface and the returned expression is a bare lambda
-								# / fn-typed value.
-								_cb_res = _try_callback_wrap_for_iface_slot(stmt.value, inferred, return_type)
-								if _cb_res.is_wrapped:
-									stmt.value = _cb_res.cb_call
-									inferred = _cb_res.cb_ty
-								elif _cb_res.is_rejected:
-									pass  # see Patch B Site 5 comment
-								else:
-									record_iface_coercion(stmt.value, return_type)
+					def _set_ret_value(_e):
+						stmt.value = _e
+					_type_return_value(
+						stmt.value,
+						return_type,
+						used_as_value=used_as_value,
+						set_value=_set_ret_value,
+						span=getattr(stmt, "loc", Span()),
+					)
 			elif isinstance(stmt, H.HIf):
 				if isinstance(stmt.cond, H.HTraitExpr):
 					parser_expr = _trait_expr_to_parser(stmt.cond)
@@ -13574,6 +13708,86 @@ class TypeChecker:
 						return
 				_walk_expr_ids(body)
 			_check_dup_expr_ids("pre_fnptr")
+		# Flush UNRESOLVED pending lambdas (`val t = <lambda>;` never invoked
+		# in this body).  Pending resolution normally fires at the first call;
+		# without it the binding stayed Unknown and the raw HLambda survived
+		# to MIR lowering ("No MIR lowering for expr HLambda" ICE).  The flush
+		# is TOTAL — every pending lambda either becomes a lowering-ready
+		# fnptr spec or gets a clean source diagnostic:
+		# 1. capturing -> the SAME rejection the invoked form gets (the
+		#    no-expectation type_expr route stays silent on captures because
+		#    callback-argument PROBES rely on that; the flush is a final
+		#    verdict, not a probe, so it diagnoses here);
+		# 2. unannotated params -> "cannot infer" (no call site will ever
+		#    constrain them; emitting a spec with Unknown ABI types is not
+		#    lowerable);
+		# 3. otherwise -> ordinary no-expectation typing (LambdaFnSpec +
+		#    fnptr const, rewritten below); an Unknown in the RESULT function
+		#    type is diagnosed for the same ABI reason.
+		for _pend_bid, _pend_lam in list(pending_lambda_by_binding.items()):
+			pending_lambda_by_binding.pop(_pend_bid, None)
+			_pend_caps = list(getattr(_pend_lam, "captures", []) or [])
+			if not _pend_caps and _pend_lam.explicit_captures is None:
+				_pend_res = discover_captures(_pend_lam)
+				diagnostics.extend(_pend_res.diagnostics)
+				_pend_caps = _pend_res.captures
+				_pend_lam.captures = _pend_res.captures
+			if _pend_caps or _pend_lam.explicit_captures:
+				_all_caps = list(_pend_caps) + list(_pend_lam.explicit_captures or [])
+				if any(_capture_kind_is_borrow(getattr(c, "kind", None)) for c in _all_caps):
+					# BORROW captures may not outlive the statement (v0 rule) —
+					# same rejection as the invoked form.
+					diagnostics.append(
+						_tc_diag(
+							message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+							severity="error",
+							span=getattr(_pend_lam, "loc", Span()),
+							notes=["wrap it like: (|...| => ...)(...)"],
+						)
+					)
+				else:
+					# v1 RULING (2026-08-03): a bare stored capturing lambda is
+					# invalid even when never invoked — v1 has no anonymous
+					# closure-value type or runtime representation.  "Value
+					# captures may escape" means copy/move/share captures are
+					# eligible to escape through a SUPPORTED representation
+					# (core.callbackN(...) / an accepted Fn-bounded
+					# conversion), not through an untyped bare closure value.
+					diagnostics.append(
+						_tc_diag(
+							message="bare capturing lambdas cannot be stored in v1; wrap with core.callbackN(...) or invoke immediately",
+							severity="error",
+							span=getattr(_pend_lam, "loc", Span()),
+						)
+					)
+				binding_types[_pend_bid] = self._unknown
+				continue
+			_unannotated = [p.name for p in _pend_lam.params if getattr(p, "type", None) is None]
+			if _unannotated:
+				diagnostics.append(
+					_tc_diag(
+						message=(
+							f"cannot infer type for lambda parameter(s) {', '.join(repr(n) for n in _unannotated)}: "
+							f"the lambda is never invoked, so no call site constrains them; add parameter annotations"
+						),
+						severity="error",
+						span=getattr(_pend_lam, "loc", Span()),
+					)
+				)
+				binding_types[_pend_bid] = self._unknown
+				continue
+			_pend_ty = type_expr(_pend_lam)
+			binding_types[_pend_bid] = _pend_ty if _pend_ty is not None else self._unknown
+			if _pend_ty is not None:
+				_pend_def = self.type_table.get(_pend_ty)
+				if _pend_def.kind is TypeKind.FUNCTION and any(t == self._unknown for t in (_pend_def.param_types or [])):
+					diagnostics.append(
+						_tc_diag(
+							message="cannot infer this lambda's function type (an unresolved parameter or return type remains); add annotations",
+							severity="error",
+							span=getattr(_pend_lam, "loc", Span()),
+						)
+					)
 		if fnptr_consts_by_node_id:
 			_apply_fnptr_consts(body)
 		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":

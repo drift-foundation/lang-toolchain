@@ -1,0 +1,21 @@
+module repro;
+
+pub error ExcA { kind: Int }
+
+fn might(k: Int) -> Int {
+    if k == 0 {
+        throw ExcA(kind = 1);
+    }
+    return k;
+}
+
+pub fn main() nothrow -> Int {
+    val f = |k: Int| -> Int => {
+        match k == 0 {
+            true => { might(0) },
+            false => { (k + 1) },
+        }
+    };
+    val b = try f(4) catch { 99 };
+    return b;
+}

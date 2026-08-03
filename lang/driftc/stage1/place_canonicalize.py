@@ -290,7 +290,7 @@ class PlaceCanonicalizeRewriter:
 						loc=arm.loc,
 					)
 				)
-			return [], H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc)
+			return [], H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc, statement_form=getattr(expr, "statement_form", False))
 		if isinstance(expr, H.HExceptionInit):
 			new_pos: List[H.HExpr] = []
 			for a in expr.pos_args:

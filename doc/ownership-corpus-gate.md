@@ -53,7 +53,7 @@ Fast, resumable, always full-universe (default work dir
 
 ## `just ownership-corpus-verify` — CI / cert gate (the only one)
 
-The single corpus command used by `run-all-tests.sh` and `just certify`.
+The single corpus command used by `just certify`.
 
 - Ignores the developer cache **and** the handoff completely — even a valid,
   malformed, stale, or delta-proposing handoff.
@@ -64,13 +64,13 @@ The single corpus command used by `run-all-tests.sh` and `just certify`.
 - On any drift, **fails loudly** and retains the fresh actual under
   `build/tmp/ownership-corpus-actual/` for diagnosis. It **never** calls
   installation code or modifies any tracked baseline file — committed data stays
-  byte-identical. A golden clean clone passes `run-all-tests.sh` with no `check`
+  byte-identical. A golden clean clone passes `just certify` with no `check`
   or `promote` first and with zero tracked diffs.
 
 ## `just ownership-corpus-promote` — manual re-baseline
 
-A deliberate maintainer action, **never** wired into CI / `run-all-tests.sh` /
-`just test` / `just certify`.
+A deliberate maintainer action, **never** wired into CI / `just test` /
+`just certify`.
 
 - Requires the canonical projection handoff (missing, malformed, or stale is an
   error — never a baseline fallback); its toolchain and run-snapshot composites

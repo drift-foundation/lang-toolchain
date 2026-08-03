@@ -368,6 +368,10 @@ class HLambda(HExpr):
 	declared_nothrow: bool = False
 	captures: list["HCapture"] = field(default_factory=list)
 	span: Span = field(default_factory=Span)
+	# Diagnostics read `.loc` uniformly across HExpr nodes; HLambda
+	# historically carried only `span`, so every lambda diagnostic
+	# rendered as "<unknown location>" and was dropped by renderers.
+	loc: Span = field(default_factory=Span)
 
 
 @dataclass
@@ -586,6 +590,13 @@ class HMatchExpr(HExpr):
 	scrutinee: HExpr
 	arms: list[HMatchArm]
 	loc: Span = field(default_factory=Span)
+	# The parser's authoritative form classification (carried from
+	# ast.MatchExpr.statement_form): a STATEMENT-form match (arms are plain
+	# blocks that typically exit via `return`, no trailing value) produces no
+	# value even in a value position.  Consumers must not infer this from arm
+	# terminators — nested terminal control flow (e.g. an arm ending in `HIf`
+	# with returns in both branches) would be misclassified.
+	statement_form: bool = False
 
 
 @dataclass

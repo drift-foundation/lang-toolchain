@@ -35,6 +35,7 @@ from typing import List, Set, Mapping, Optional
 from lang.driftc import stage1 as H
 from lang.driftc import debug as drift_debug
 from lang.driftc.stage1 import closures as C
+from lang.driftc.stage1 import hir_flow
 from lang.driftc.stage1.place_expr import place_expr_from_lvalue_expr
 from lang.driftc.stage1.call_info import (
 	CallInfo,
@@ -5403,131 +5404,29 @@ class HIRToMIR:
 
 	def _lambda_can_throw(self, lam: H.HLambda) -> bool:
 		"""
-		Conservatively detect whether a lambda body can throw.
-
-		This is intentionally conservative: any throw or can-throw call in the
-		lambda body marks the hidden lambda as can-throw so we never lower throws
-		to `unreachable` in the hidden function.
+		Throw-effect for a lambda: consume the checker-stamped
+		`can_throw_effective` mark (the authority) when present; otherwise
+		delegate to the shared stage1.hir_flow traversal (one deliberate,
+		boundary-aware walk — the previous local copy drifted out of parity
+		with the checker's and shipped nothrow misclassifications).  Only the
+		CALL decision is local: CallInfo when recorded, else the conservative
+		unknown-method heuristic this lowering has always used.
 		"""
 		if getattr(lam, "can_throw_effective", None) is not None:
 			return bool(getattr(lam, "can_throw_effective"))
 		if self._typed_mode == "strict":
 			raise AssertionError("lambda missing can_throw_effective (checker bug)")
-		def expr_can_throw(expr: H.HExpr) -> bool:
-			if isinstance(expr, H.HCall):
-				info = self._call_info_for_expr_optional(expr)
-				if info is not None and info.sig.can_throw:
-					return True
-				if isinstance(expr.fn, H.HLambda):
-					return self._lambda_can_throw(expr.fn)
-				return any(expr_can_throw(a) for a in expr.args)
+		def _call_can_throw(expr: H.HExpr) -> bool:
+			info = self._call_info_for_expr_optional(expr)
+			if info is not None:
+				return bool(info.sig.can_throw)
 			if isinstance(expr, H.HMethodCall):
-				info = self._call_info_for_expr_optional(expr)
-				if info is not None:
-					if info.sig.can_throw:
-						return True
-				else:
-					# Conservatively assume unknown method calls can throw, except for
-					# built-in, non-throwing intrinsics handled directly in lowering.
-					if expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}:
-						return True
-				if expr_can_throw(expr.receiver):
-					return True
-				return any(expr_can_throw(a) for a in expr.args)
-			if isinstance(expr, H.HInvoke):
-				info = self._call_info_for_expr_optional(expr)
-				if info is not None and info.sig.can_throw:
-					return True
-				if isinstance(expr.callee, H.HLambda):
-					return self._lambda_can_throw(expr.callee)
-				if expr_can_throw(expr.callee):
-					return True
-				return any(expr_can_throw(a) for a in expr.args)
-			if isinstance(expr, H.HTryExpr):
-				if expr_can_throw(expr.attempt):
-					return True
-				for arm in expr.arms:
-					if block_can_throw(arm.block):
-						return True
-					if arm.result is not None and expr_can_throw(arm.result):
-						return True
-				return False
-			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
-				return block_can_throw(expr.body) or expr_can_throw(expr.result)
-			if isinstance(expr, H.HLambda):
-				return self._lambda_can_throw(expr)
-			if isinstance(expr, H.HResultOk):
-				return expr_can_throw(expr.value)
-			if isinstance(expr, H.HTernary):
-				return (
-					expr_can_throw(expr.cond)
-					or expr_can_throw(expr.then_expr)
-					or expr_can_throw(expr.else_expr)
-				)
-			if isinstance(expr, H.HUnary):
-				return expr_can_throw(expr.expr)
-			if isinstance(expr, H.HBinary):
-				return expr_can_throw(expr.left) or expr_can_throw(expr.right)
-			if isinstance(expr, H.HField):
-				return expr_can_throw(expr.subject)
-			if isinstance(expr, H.HIndex):
-				return expr_can_throw(expr.subject) or expr_can_throw(expr.index)
-			if isinstance(expr, H.HPlaceExpr):
-				for proj in expr.projections:
-					if isinstance(proj, H.HPlaceIndex) and expr_can_throw(proj.index):
-						return True
-				return False
-			if isinstance(expr, H.HArrayLiteral):
-				return any(expr_can_throw(el) for el in expr.elements)
-			if hasattr(H, "HMapLiteral") and isinstance(expr, getattr(H, "HMapLiteral")):
-				return any(expr_can_throw(e.key) or expr_can_throw(e.value) for e in expr.entries)
+				# Conservatively assume unknown method calls can throw, except
+				# for built-in, non-throwing intrinsics handled directly in
+				# lowering.
+				return expr.method_name not in {"as_int", "as_bool", "as_float", "as_string", "as_object", "get", "index", "kind", "len", "entries", "dup", "iter", "next", "unwrap_ok", "unwrap_err"}
 			return False
-
-		def stmt_can_throw(stmt: H.HStmt) -> bool:
-			if isinstance(stmt, H.HThrow) or isinstance(stmt, H.HRethrow):
-				return True
-			if isinstance(stmt, H.HExprStmt):
-				return expr_can_throw(stmt.expr)
-			if isinstance(stmt, H.HLocalConst):
-				return False  # literal initializer, never throws
-			if isinstance(stmt, H.HLet):
-				return expr_can_throw(stmt.value)
-			if isinstance(stmt, H.HAssign):
-				return expr_can_throw(stmt.value)
-			if isinstance(stmt, H.HAugAssign):
-				return expr_can_throw(stmt.value) or expr_can_throw(stmt.target)
-			if isinstance(stmt, H.HReturn):
-				return expr_can_throw(stmt.value) if stmt.value is not None else False
-			if isinstance(stmt, H.HIf):
-				if expr_can_throw(stmt.cond):
-					return True
-				if block_can_throw(stmt.then_block):
-					return True
-				return block_can_throw(stmt.else_block) if stmt.else_block is not None else False
-			if isinstance(stmt, H.HLoop):
-				return block_can_throw(stmt.body)
-			if hasattr(H, "HUnsafeBlock") and isinstance(stmt, getattr(H, "HUnsafeBlock")):
-				return block_can_throw(stmt.block)
-			if isinstance(stmt, H.HTry):
-				# A catch-all arm (event_fqn is None) swallows the try body's
-				# throws; only the catch arms' own bodies still throw.  Mirrors
-				# the HTryExpr handling above and the checker's _lambda_can_throw.
-				catch_all = any(arm.event_fqn is None for arm in stmt.catches)
-				if not catch_all and block_can_throw(stmt.body):
-					return True
-				return any(block_can_throw(arm.block) for arm in stmt.catches)
-			return False
-
-		def block_can_throw(block: H.HBlock | None) -> bool:
-			if block is None:
-				return False
-			return any(stmt_can_throw(stmt) for stmt in block.statements)
-
-		if lam.body_expr is not None:
-			return expr_can_throw(lam.body_expr)
-		if lam.body_block is not None:
-			return block_can_throw(lam.body_block)
-		return False
+		return hir_flow.lambda_body_can_throw(lam, call_can_throw=_call_can_throw)
 
 	def _lower_lambda_immediate_call(self, lam: H.HLambda, args: list[H.HExpr]) -> M.ValueId:
 		"""Lower an immediate-call lambda via env + hidden function."""
@@ -5734,6 +5633,13 @@ class HIRToMIR:
 				elif isinstance(last_stmt, H.HReturn) and last_stmt.value is not None:
 					if ret_type is None:
 						ret_type = self._infer_expr_type(last_stmt.value)
+			if ret_type is None:
+				# Value-less / empty block body: the checker types these Void
+				# (0.34.2 `_lambda_body_result` fallback).  Defaulting to
+				# Unknown here desynced lowering from the checker and tripped
+				# the hidden-lambda "must end with a value or return"
+				# assertion for `(|| => {})();`.
+				ret_type = self._type_table.ensure_void()
 		else:
 			raise AssertionError("lambda missing body reached lowering (bug)")
 		if ret_type is None:
@@ -5774,6 +5680,12 @@ class HIRToMIR:
 				self.b.emit(M.Call(dest=dest, fn_id=hidden_fn_id, args=call_args, can_throw=True))
 				return dest
 			return self._lower_can_throw_call_value(emit_call=emit_call, ok_ty=ok_ty)
+		if self._type_table.is_void(ret_type):
+			# A Void hidden lambda must not capture a call result (LLVM
+			# codegen rejects dest on a void call) — same shape as
+			# `_lower_call`'s Void branch.
+			self.b.emit(M.Call(dest=None, fn_id=hidden_fn_id, args=call_args, can_throw=False))
+			return self._void_value()
 		dest = self.b.new_temp()
 		self.b.emit(M.Call(dest=dest, fn_id=hidden_fn_id, args=call_args, can_throw=False))
 		return dest
@@ -6043,7 +5955,17 @@ class HIRToMIR:
 				lower._pop_scope()
 				return None
 		lam_is_void = lower._ret_type is not None and lower._type_table.is_void(lower._ret_type)
-		if isinstance(last, H.HExprStmt) and not lam_is_void:
+		_tail_is_terminal_call = False
+		if isinstance(last, H.HExprStmt) and isinstance(last.expr, (H.HCall, H.HMethodCall)):
+			_t_info = lower._call_info_for_expr_optional(last.expr)
+			if _t_info is not None and lower._is_call_terminal_throws(_t_info):
+				# A terminal-`throws` tail call never returns — it is a
+				# statement, not the value producer.  Value-context lowering
+				# here produced an Unknown-layout MoveOut (MIR validation
+				# ICE); the statement route below emits the checked call +
+				# terminal dispatch, mirroring named-function bodies.
+				_tail_is_terminal_call = True
+		if isinstance(last, H.HExprStmt) and not lam_is_void and not _tail_is_terminal_call:
 			val = lower.lower_expr(last.expr)
 			if lower.b.block.terminator is None:
 				# Phase 4 site-1 patch 4b.1: lambda-block exit
@@ -9161,7 +9083,14 @@ class HIRToMIR:
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call_with_info(stmt.expr, info)
 					return
-		if isinstance(stmt.expr, H.HCall):
+		# Direct IIFE in statement position — `(|| => { ... })();` — must take
+		# the generic expression tail below: `lower_expr` routes HCall(fn=HLambda)
+		# through `_lower_lambda_immediate_call` (which checks/unwraps a can-throw
+		# body internally) and the tail drops an owned discarded result.  The
+		# `_lower_call`/`_lower_invoke` INDIRECT path cannot lower an HLambda
+		# callee (`lower_expr(HLambda)` has no lowering → ICE) and would ALSO
+		# double-wrap throw checking.
+		if isinstance(stmt.expr, H.HCall) and not isinstance(stmt.expr.fn, H.HLambda):
 			info = self._call_info_for_expr_optional(stmt.expr)
 			if info is not None:
 				if info.sig.can_throw:
@@ -9176,7 +9105,7 @@ class HIRToMIR:
 				if self._type_table.is_void(info.sig.user_ret_type):
 					self._lower_call(expr=stmt.expr)
 					return
-		if isinstance(stmt.expr, H.HInvoke):
+		if isinstance(stmt.expr, H.HInvoke) and not isinstance(stmt.expr.callee, H.HLambda):
 			info = self._call_info_for_expr_optional(stmt.expr)
 			if info is not None:
 				if info.sig.can_throw:
@@ -9383,6 +9312,16 @@ class HIRToMIR:
 				)
 			except Exception:
 				declared_ty = None
+		if isinstance(stmt.value, H.HLambda):
+			# v1 contract: bare stored capturing lambdas are checker-REJECTED
+			# (no anonymous closure-value type exists), and captureless stored
+			# lambdas were rewritten to HFnPtrConst by `_apply_fnptr_consts`.
+			# No raw HLambda may reach lowering.
+			raise AssertionError(
+				"raw HLambda reached HLet lowering (checker bug) — bare stored "
+				"capturing lambdas are rejected in v1 and captureless stored "
+				"lambdas lower via HFnPtrConst"
+			)
 		inferred_ty = self._infer_expr_type(stmt.value)
 		expected_ty = declared_ty if declared_ty is not None else inferred_ty
 		prev_span = self.b.current_span
@@ -10883,6 +10822,17 @@ class HIRToMIR:
 		callee_ty = self._infer_expr_type(callee_expr)
 		if callee_ty is not None and self._type_table.get(callee_ty).kind is TypeKind.INTERFACE:
 			raise AssertionError("interface calls must lower to CallIface, not CallIndirect")
+		if isinstance(callee_expr, H.HLambda):
+			# A lambda literal has no standalone MIR lowering; a direct IIFE must
+			# route through `_lower_lambda_immediate_call` at its call site
+			# (`_visit_expr_HCall` / the `_visit_stmt_HExprStmt` fall-through).
+			# Delegating from here instead would double-wrap throw checking —
+			# the immediate-call lowering already checks/unwraps internally
+			# while this path's callers wrap the returned raw FnResult.
+			raise AssertionError(
+				"HLambda callee reached _lower_indirect_call (compiler bug) — "
+				"IIFEs must route via _lower_lambda_immediate_call"
+			)
 		callee_val = self.lower_expr(callee_expr)
 		arg_vals: list[M.ValueId] = []
 		for idx, arg in enumerate(args):

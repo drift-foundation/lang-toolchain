@@ -55,11 +55,11 @@ Negative companions (compile-and-reject):
   7. `return` inside an expression-form lambda-tail match arm is
      rejected with EXACTLY E_EXPECTED_SEMICOLON (the parse diagnostic
      whose message spells out the match-as-value rules);
-  8. unannotated non-callback lambdas still infer Void for ANY
-     trailing expression (plain or match alike — pre-existing,
-     deliberately unchanged inference), surfacing as EXACTLY the
-     use-site arithmetic mismatch E-AUTO-5a90687a (Void vs Int),
-     NOT an ICE.
+  8. an unannotated lambda's value-block body infers its return type
+     from the TRAILING expression (0.34.2 fix): a trailing value `match`
+     makes the IIFE result Int, so the use site compiles AND runs.
+     (Before 0.34.2 the checker wrongly defaulted it to Void while MIR
+     read the trailing value — the disagreement E-TRY-ARM-TYPE exposed.)
 """
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ pub fn main() nothrow -> Int {
 }
 """
 
-NEG_VOID_INFERENCE = r"""module main;
+TRAILING_MATCH_VALUE_IIFE = r"""module main;
 
 pub fn main() nothrow -> Int {
 	val r = (|n: Int| => {
@@ -221,17 +221,17 @@ def test_return_in_expression_form_arm_still_rejected(tmp_path: Path) -> None:
 	assert "MIR lowering contract failure" not in err, "must never reach the MIR ICE"
 
 
-def test_unannotated_lambda_void_inference_unchanged(tmp_path: Path) -> None:
-	"""Pre-existing, deliberately unchanged: a lambda with no callback/
-	annotation context infers Void regardless of its trailing expression
-	(plain `n + 5` behaves identically) — for THIS source the exact
-	surface is the use-site arithmetic mismatch (`r - 10` with r: Void),
-	never an ICE."""
-	res, _ = _compile(tmp_path, NEG_VOID_INFERENCE, "neg_void")
-	assert res.returncode != 0
-	err = res.stdout + res.stderr
-	assert "MIR lowering contract failure" not in err, "must never ICE"
-	assert "E-AUTO-5a90687a" in err, (
-		f"expected the exact use-site diagnostic for this shape:\n{err[:1200]}"
-	)
-	assert "Void vs Int" in err, f"expected the Void operand mismatch:\n{err[:1200]}"
+def test_unannotated_lambda_infers_trailing_value(tmp_path: Path) -> None:
+	"""An unannotated lambda's value-block body infers its return type from the
+	TRAILING expression — here a value `match` producing Int — matching MIR
+	lowering and stage1's trailing-value marking (0.34.2 checker/lowering
+	agreement fix).  So `r: Int` and `r - 10` compiles and runs (match 5>2 -> 10;
+	10 - 10 = 0).  Previously the checker wrongly defaulted the block lambda to
+	Void, surfacing as the use-site `Void vs Int` mismatch — a checker/lowering
+	disagreement that the E-TRY-ARM-TYPE check exposed."""
+	res, out_bin = _compile(tmp_path, TRAILING_MATCH_VALUE_IIFE, "trailing_match")
+	assert res.returncode == 0, f"{res.stdout}\n---\n{res.stderr[:2000]}"
+	assert "MIR lowering contract failure" not in (res.stdout + res.stderr)
+	run = subprocess.run([str(out_bin)], capture_output=True, text=True,
+		timeout=sanitizer_timeout(60))
+	assert run.returncode == 0, f"exit={run.returncode}\n{run.stderr[:500]}"

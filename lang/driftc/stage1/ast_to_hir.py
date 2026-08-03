@@ -877,6 +877,10 @@ class AstToHIR:
 				explicit_captures=explicit_captures,
 				declared_nothrow=bool(getattr(expr, "declared_nothrow", False)),
 				span=Span.from_loc(getattr(expr, "loc", None)),
+				# `loc` too: diagnostics read `expr.loc` (a spanless lambda
+				# diagnostic renders as "<unknown location>" and is easy to
+				# miss entirely) — HLambda was the one HExpr not stamping it.
+				loc=Span.from_loc(getattr(expr, "loc", None)),
 			)
 		finally:
 			self._pop_scope()
@@ -1156,7 +1160,7 @@ class AstToHIR:
 							loc=arm.loc,
 						)
 					)
-				return H.HMatchExpr(scrutinee=_rename_expr(e.scrutinee, mapping), arms=renamed_arms, loc=e.loc)
+				return H.HMatchExpr(scrutinee=_rename_expr(e.scrutinee, mapping), arms=renamed_arms, loc=e.loc, statement_form=getattr(e, "statement_form", False))
 			if isinstance(e, H.HLambda):
 				# A lambda constructed inside a match arm must follow
 				# the arm-binder alpha-rename for cross-arm name
@@ -1209,6 +1213,7 @@ class AstToHIR:
 					declared_nothrow=e.declared_nothrow,
 					captures=e.captures,
 					span=getattr(e, "span", Span()),
+					loc=getattr(e, "loc", None) or Span(),
 				)
 			if isinstance(e, H.HCast):
 				return H.HCast(target_type_expr=e.target_type_expr, value=_rename_expr(e.value, mapping), loc=e.loc)
@@ -1388,6 +1393,7 @@ class AstToHIR:
 			scrutinee=self.lower_expr(expr.scrutinee),
 			arms=arms,
 			loc=Span.from_loc(getattr(expr, "loc", None)),
+			statement_form=bool(getattr(expr, "statement_form", False)),
 		)
 
 	def _visit_stmt_AssignStmt(self, stmt: ast.AssignStmt) -> H.HStmt:
@@ -1690,7 +1696,10 @@ class AstToHIR:
 			H.HMatchArm(ctor="Some", ctor_base=None, binders=[binder_name], binder_ids=binder_ids, binder_field_indices=[0], block=body_block, result=None, binder_is_mutable=binder_mut_flags),
 			H.HMatchArm(ctor=None, ctor_base=None, binders=[], block=H.HBlock(statements=[H.HBreak()]), result=None),
 		]
-		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms)
+		# for-loop desugaring: the synthetic match drives iteration by side effect —
+		# its arms bind/break, they never yield a value.  It is statement-form, so it
+		# must not be value-typed (would raise a spurious E-MATCH-NO-VALUE).
+		match_expr = H.HMatchExpr(scrutinee=next_call, arms=arms, statement_form=True)
 		loop_body = H.HBlock(statements=[H.HExprStmt(expr=match_expr)])
 		loop_stmt = H.HLoop(body=loop_body)
 

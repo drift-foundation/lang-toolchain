@@ -1,0 +1,22 @@
+module repro_iife;
+
+pub interface Speaker {
+    fn speak(self: &Self) nothrow -> Int;
+}
+
+pub struct Dog {
+    pub n: Int
+}
+
+implement Speaker for Dog {
+    pub fn speak(self: &Dog) nothrow -> Int {
+        return self.n;
+    }
+}
+
+pub fn main() nothrow -> Int {
+    val speaker = (|| -> Speaker => {
+        Dog(n = 7)
+    })();
+    return speaker.speak() - 7;
+}

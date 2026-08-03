@@ -484,7 +484,7 @@ class BorrowMaterializeRewriter:
 						loc=arm.loc,
 					)
 				)
-			return pfx_scrutinee, H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc)
+			return pfx_scrutinee, H.HMatchExpr(scrutinee=scrutinee, arms=new_arms, loc=expr.loc, statement_form=getattr(expr, "statement_form", False))
 		if isinstance(expr, H.HExceptionInit):
 			pfx: List[H.HStmt] = []
 			new_pos: List[H.HExpr] = []

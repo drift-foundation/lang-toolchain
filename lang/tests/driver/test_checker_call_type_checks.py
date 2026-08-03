@@ -55,16 +55,20 @@ def test_result_ok_without_signature_type_ids_does_not_blow_up():
 	func_hirs = {
 		"can": H.HBlock(statements=[H.HReturn(value=H.HResultOk(value=H.HLiteralInt(value=1)))]),
 	}
-	# Signatures empty -> FnInfo.signature is None, _infer_hir_expr_type will synthesize
-	# a FnResult<Unknown, Error> TypeId for HResultOk; ensure no crash/diagnostic.
+	# Signatures empty -> a default `-> Int` signature is synthesized from the
+	# fake decls, and HResultOk types as FnResult<Int, _>.  The point of this
+	# test is that the shape never CRASHES the pipeline.  Since 0.34.2 the
+	# return-value authority diagnoses the FnResult-vs-Int mismatch cleanly
+	# (real-source `return Ok(5)` never worked either — it double-wraps and
+	# died as a ConstructResultOk payload-mismatch ICE in codegen), so the
+	# contract is now: clean diagnostic, no exception, no MIR for the bad fn.
 	mir_funcs, checked = compile_stubbed_funcs(
 		func_hirs=func_hirs,
 		signatures={},
 		declared_can_throw={"can": True},
 		return_checked=True,
 	)
-	assert mir_funcs
-	assert checked.diagnostics == []
+	assert any("return type 'FnResult' does not match declared type" in d.message for d in checked.diagnostics)
 
 
 def test_lambda_explicit_return_type_mismatch_reports_diagnostic():
@@ -88,4 +92,8 @@ def test_lambda_explicit_return_type_mismatch_reports_diagnostic():
 		type_table=table,
 		return_checked=True,
 	)
-	assert any("lambda return type does not match body type" in d.message for d in checked.diagnostics)
+	# 0.34.2: the type-checker's shared return-value authority diagnoses the
+	# lambda-tail mismatch.  The checker's raw-equality body re-inference is
+	# DELETED entirely — a lambda call without CallInfo is a contract failure,
+	# never a re-typing fallback.
+	assert any("return type 'String' does not match declared type 'Int'" in d.message for d in checked.diagnostics)

@@ -1,7 +1,9 @@
 module main;
 
+import std.core as core;
+
 pub fn main() nothrow -> Int{
 	var x = 1;
-	val f = | | captures(move x) => { return x; };
+	val cb: core.Callback0<Int> = core.callback0(| | captures(move x) nothrow => { 0 });
 	return x;
 }

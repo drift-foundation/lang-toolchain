@@ -200,7 +200,9 @@ def test_baseline_md_does_not_name_deleted_promotion_tooling() -> None:
 		assert gone not in md, f"BASELINE.md still names removed tooling: {gone!r}"
 
 
-def test_justfile_wiring_verify_is_the_only_ci_gate() -> None:
+def test_justfile_public_recipe_contract() -> None:
+	"""Contract pins on the PUBLIC recipes only: `just certify` verifies (never
+	promotes), and `just test` does not invoke the corpus."""
 	justfile = (ROOT / "justfile").read_text()
 	# three public recipes; no gate/preflight recipe
 	assert "ownership-corpus-check *ARGS" in justfile
@@ -214,23 +216,11 @@ def test_justfile_wiring_verify_is_the_only_ci_gate() -> None:
 	assert deps.count("ownership-corpus-verify") == 1
 	assert "ownership-corpus-promote" not in deps
 	certify_recipe = justfile[justfile.index("certify:"):].split("\n\n")[0]
-	assert "promote" not in certify_recipe and "run-all" not in certify_recipe
+	assert "promote" not in certify_recipe
 	# the corpus is NOT a dependency of `just test`; the matrix stays in test
 	test_line = next(l for l in justfile.splitlines() if l.startswith("test:"))
 	assert "ownership-corpus" not in test_line
 	assert "ownership-matrix-check" in test_line
-
-
-def test_ci_runs_verify_never_promote() -> None:
-	import pytest
-	run_all = ROOT / "run-all-tests.sh"
-	if not run_all.is_file():
-		pytest.skip("run-all-tests.sh (private maintainer runner) not present")
-	text = run_all.read_text()
-	assert text.count("ownership-corpus-verify") == 1, "the corpus verifies exactly once"
-	assert "ownership-corpus-promote" not in text, "promotion is never wired into CI"
-	assert "--promote" not in text
-	assert text.count("just test") == 2, "the two-mode full suite"
 
 
 

@@ -6402,7 +6402,12 @@ def compile_stubbed_funcs(
 	if _timing_enabled:
 		import time as _timing_time
 		hidden_lambda_start = _timing_time.perf_counter()
-	with _events.timed("hidden_lambda_lowering"):
+	def _drain_hidden_lambda_specs():
+		# Re-enterable: the captureless-lambda drain's quiescence step calls
+		# this again for hidden specs harvested from ITS lowering (an IIFE
+		# inside a stored captureless lambda).  Early error-return values
+		# propagate: a non-None result aborts compile_stubbed_funcs.
+		nonlocal hidden_lambda_index
 		while hidden_lambda_index < len(hidden_lambda_specs):
 			spec = hidden_lambda_specs[hidden_lambda_index]
 			hidden_lambda_index += 1
@@ -7521,6 +7526,11 @@ def compile_stubbed_funcs(
 				else:
 					builder.set_terminator(M.Return(value=ret_val))
 			mir_funcs_by_id[spec.fn_id] = builder.func
+		return None
+	with _events.timed("hidden_lambda_lowering"):
+		_hidden_drain_result = _drain_hidden_lambda_specs()
+	if _hidden_drain_result is not None:
+		return _hidden_drain_result
 	if _timing_enabled and hidden_lambda_start is not None:
 		import time as _timing_time
 		import sys as _timing_sys
@@ -7532,63 +7542,138 @@ def compile_stubbed_funcs(
 	# processed by the earlier drain rounds.
 	_pre_lambda_drain_fids = set(mir_funcs_by_id.keys())
 	_drain_instantiations()
-	# Synthesize MIR bodies for newly-drained wrapper functions.
-	# These are __wrap_method wrappers whose generic instantiation was
-	# triggered by lambda bodies. Use direct MIR synthesis (same pattern
-	# as line ~7096) instead of HIR-to-MIR lowering.
-	for _ld_fn_id in list(normalized_hirs_by_id.keys()):
-		if _ld_fn_id in _pre_lambda_drain_fids:
-			continue
-		if _ld_fn_id in mir_funcs_by_id:
-			continue
-		_ld_sig = signatures_by_id.get(_ld_fn_id)
-		if _ld_sig is None or _ld_sig.param_type_ids is None:
-			continue
-		if not getattr(_ld_sig, "is_wrapper", False):
-			continue
-		_ld_target = getattr(_ld_sig, "wraps_target_fn_id", None)
-		if _ld_target is None:
-			continue
-		_ld_pnames = list(_ld_sig.param_names or [])
-		if len(_ld_pnames) != len(_ld_sig.param_type_ids):
-			_ld_pnames = [f"p{i}" for i in range(len(_ld_sig.param_type_ids))]
-		_ld_builder = make_builder(_ld_fn_id)
-		_ld_builder.func.params = list(_ld_pnames)
-		_ld_target_ret = _ld_sig.return_type_id
-		_ld_target_sig = signatures_by_id.get(_ld_target)
-		if _ld_target_sig is not None:
-			_ld_target_ret = _ld_target_sig.return_type_id
-		_ld_call_dest: M.ValueId | None
-		if shared_type_table is not None and shared_type_table.is_void(_ld_target_ret):
-			_ld_call_dest = None
-		else:
-			_ld_call_dest = _ld_builder.new_temp()
-		_ld_builder.emit(M.Call(dest=_ld_call_dest, fn_id=_ld_target, args=_ld_pnames, can_throw=False))
-		_ld_ok = _ld_builder.new_temp()
-		_ld_builder.emit(M.ConstructResultOk(dest=_ld_ok, value=_ld_call_dest))
-		_ld_builder.set_terminator(M.Return(value=_ld_ok))
-		for _ld_p in _ld_pnames:
-			_ld_builder.func.param_drop_status[_ld_p] = "forwarded_to_callee"
-		mir_funcs_by_id[_ld_fn_id] = _ld_builder.func
-		_register_synth_signature(_ld_fn_id, _ld_sig)
-		# Register in checked.fn_infos_by_id so MIR validation passes.
-		if _ld_fn_id not in checked.fn_infos_by_id:
-			checked.fn_infos_by_id[_ld_fn_id] = make_fn_info(
-				_ld_fn_id, _ld_sig,
-				declared_can_throw=True if _ld_sig.declared_can_throw is None else bool(_ld_sig.declared_can_throw),
+	def _synthesize_late_drained_fns() -> None:
+		# Callable because the captureless-lambda drain below re-runs it:
+		# specs type-checked during that drain queue instantiations whose
+		# wrappers/fn_infos need the same synthesis.  Idempotent — every
+		# loop skips ids already in mir_funcs_by_id / fn_infos_by_id.
+		# Synthesize MIR bodies for newly-drained wrapper functions.
+		# These are __wrap_method wrappers whose generic instantiation was
+		# triggered by lambda bodies. Use direct MIR synthesis (same pattern
+		# as line ~7096) instead of HIR-to-MIR lowering.
+		for _ld_fn_id in list(normalized_hirs_by_id.keys()):
+			if _ld_fn_id in _pre_lambda_drain_fids:
+				continue
+			if _ld_fn_id in mir_funcs_by_id:
+				continue
+			_ld_sig = signatures_by_id.get(_ld_fn_id)
+			if _ld_sig is None or _ld_sig.param_type_ids is None:
+				continue
+			if not getattr(_ld_sig, "is_wrapper", False):
+				continue
+			_ld_target = getattr(_ld_sig, "wraps_target_fn_id", None)
+			if _ld_target is None:
+				continue
+			_ld_pnames = list(_ld_sig.param_names or [])
+			if len(_ld_pnames) != len(_ld_sig.param_type_ids):
+				_ld_pnames = [f"p{i}" for i in range(len(_ld_sig.param_type_ids))]
+			_ld_builder = make_builder(_ld_fn_id)
+			_ld_builder.func.params = list(_ld_pnames)
+			_ld_target_ret = _ld_sig.return_type_id
+			_ld_target_sig = signatures_by_id.get(_ld_target)
+			if _ld_target_sig is not None:
+				_ld_target_ret = _ld_target_sig.return_type_id
+			_ld_call_dest: M.ValueId | None
+			if shared_type_table is not None and shared_type_table.is_void(_ld_target_ret):
+				_ld_call_dest = None
+			else:
+				_ld_call_dest = _ld_builder.new_temp()
+			_ld_builder.emit(M.Call(dest=_ld_call_dest, fn_id=_ld_target, args=_ld_pnames, can_throw=False))
+			_ld_ok = _ld_builder.new_temp()
+			_ld_builder.emit(M.ConstructResultOk(dest=_ld_ok, value=_ld_call_dest))
+			_ld_builder.set_terminator(M.Return(value=_ld_ok))
+			for _ld_p in _ld_pnames:
+				_ld_builder.func.param_drop_status[_ld_p] = "forwarded_to_callee"
+			mir_funcs_by_id[_ld_fn_id] = _ld_builder.func
+			_register_synth_signature(_ld_fn_id, _ld_sig)
+			# Register in checked.fn_infos_by_id so MIR validation passes.
+			if _ld_fn_id not in checked.fn_infos_by_id:
+				checked.fn_infos_by_id[_ld_fn_id] = make_fn_info(
+					_ld_fn_id, _ld_sig,
+					declared_can_throw=True if _ld_sig.declared_can_throw is None else bool(_ld_sig.declared_can_throw),
+				)
+		# LOWER late-drained NON-wrapper functions (e.g. a generic
+		# instantiation first queued while the captureless-lambda drain
+		# rechecked a spec).  `_drain_instantiations` fully type-checks them
+		# into normalized_hirs_by_id/typed_fns_by_id, but the main lowering
+		# loop has already finished — without this pass the emitted call
+		# referenced an instantiated symbol that was never defined.
+		for _lf_fn_id in list(normalized_hirs_by_id.keys()):
+			if _lf_fn_id in _pre_lambda_drain_fids or _lf_fn_id in mir_funcs_by_id:
+				continue
+			_lf_sig = signatures_by_id.get(_lf_fn_id)
+			if _lf_sig is None or getattr(_lf_sig, "is_wrapper", False):
+				continue
+			_lf_typed = typed_fns_by_id.get(_lf_fn_id)
+			if _lf_typed is None:
+				continue
+			_lf_hir = normalized_hirs_by_id[_lf_fn_id]
+			_lf_params = list(_lf_sig.param_names or [])
+			_lf_builder = make_builder(_lf_fn_id)
+			_lf_builder.func.params = list(_lf_params)
+			_lf_param_types = {n: t for n, t in zip(_lf_params, list(_lf_sig.param_type_ids or []))}
+			_lf_lower = HIRToMIR(
+				_lf_builder,
+				type_table=shared_type_table,
+				exc_env=exc_env,
+				param_types=_lf_param_types,
+				expr_types=getattr(_lf_typed, "expr_types", None),
+				iface_coercions=getattr(_lf_typed, "iface_coercions", None),
+				borrowed_iface_coercions=getattr(_lf_typed, "borrowed_iface_coercions", None),
+				ptr_to_ref_coercions=getattr(_lf_typed, "ptr_to_ref_coercions", None),
+				signatures_by_id=signatures_by_id,
+				current_fn_id=_lf_fn_id,
+				type_param_subst=getattr(_lf_typed, "preseed_type_params", None),
+				call_info_by_callsite_id=getattr(_lf_typed, "call_info_by_callsite_id", {}),
+				call_resolutions=getattr(_lf_typed, "call_resolutions", {}),
+				can_throw_by_id=declared_by_id,
+				return_type=_lf_sig.return_type_id,
+				binding_names=getattr(_lf_typed, "binding_names", None),
+				binding_types=getattr(_lf_typed, "binding_types", None),
+				typed_mode=typed_mode,
 			)
-	# Also register fn_infos for non-wrapper functions from the late drain.
-	for _ld2_fn_id in list(normalized_hirs_by_id.keys()):
-		if _ld2_fn_id in _pre_lambda_drain_fids:
-			continue
-		if _ld2_fn_id in checked.fn_infos_by_id:
-			continue
-		_ld2_sig = signatures_by_id.get(_ld2_fn_id)
-		if _ld2_sig is not None:
-			checked.fn_infos_by_id[_ld2_fn_id] = make_fn_info(
-				_ld2_fn_id, _ld2_sig,
-				declared_can_throw=True if _ld2_sig.declared_can_throw is None else bool(_ld2_sig.declared_can_throw),
-			)
+			try:
+				_lf_lower.lower_function_body(_lf_hir)
+			except (MirLoweringError, AssertionError) as _lf_err:
+				_append_boundary_contract_diag(
+					checked,
+					phase="mir_lower",
+					prefix=str(_lf_err),
+					err=_lf_err,
+					fn_id=_lf_fn_id,
+					signatures_by_id=signatures_by_id,
+					hir_block=_lf_hir,
+					origin_by_fn_id=origin_by_fn_id,
+				)
+				continue
+			_lf_builder.func.local_types = dict(_lf_lower._local_types)
+			for _lf_local in _lf_builder.func.locals:
+				if _lf_local not in _lf_builder.func.local_types:
+					_lf_builder.func.local_types[_lf_local] = shared_type_table.ensure_unknown()
+			for _lf_spec in _lf_lower.synth_sig_specs():
+				if _lf_spec.kind == "hidden_lambda":
+					continue
+				_register_synth_signature(_lf_spec.fn_id, _lf_spec.sig)
+			hidden_lambda_specs.extend(_lf_lower.hidden_lambda_specs())
+			mir_funcs_by_id[_lf_fn_id] = _lf_builder.func
+		# Also register fn_infos for non-wrapper functions from the late drain.
+		for _ld2_fn_id in list(normalized_hirs_by_id.keys()):
+			if _ld2_fn_id in _pre_lambda_drain_fids:
+				continue
+			if _ld2_fn_id in checked.fn_infos_by_id:
+				continue
+			_ld2_sig = signatures_by_id.get(_ld2_fn_id)
+			if _ld2_sig is not None:
+				_ld2_info = make_fn_info(
+					_ld2_fn_id, _ld2_sig,
+					declared_can_throw=True if _ld2_sig.declared_can_throw is None else bool(_ld2_sig.declared_can_throw),
+				)
+				checked.fn_infos_by_id[_ld2_fn_id] = _ld2_info
+				# Throw checks and MIR lowering consult declared_by_id; a late
+				# fn registered only in fn_infos tripped "missing can-throw
+				# classification".
+				declared_by_id[_ld2_fn_id] = _ld2_info.declared_can_throw
+	_synthesize_late_drained_fns()
 
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
@@ -7600,36 +7685,42 @@ def compile_stubbed_funcs(
 			return {}
 
 	type_diag_len = len(type_diags)
-	for spec in type_checker.thunk_specs():
-		if spec.thunk_fn_id in mir_funcs_by_id:
-			continue
-		param_names = [f"p{i}" for i in range(len(spec.param_types))]
-		sig = FnSignature(
-			name=function_symbol(spec.thunk_fn_id),
-			param_type_ids=list(spec.param_types),
-			param_names=param_names,
-			return_type_id=spec.return_type,
-			declared_can_throw=True,
-			module=spec.thunk_fn_id.module,
-		)
-		_register_synth_signature(spec.thunk_fn_id, sig)
-		builder = make_builder(spec.thunk_fn_id)
-		builder.func.params = list(param_names)
-		if spec.kind is ThunkKind.OK_WRAP:
-			call_dest: M.ValueId | None
-			if shared_type_table is not None and shared_type_table.is_void(spec.return_type):
-				call_dest = None
+	def _synthesize_thunk_specs() -> None:
+		# Callable because the captureless-lambda drain re-runs it: a
+		# function-reference coercion typed while rechecking a spec in that
+		# drain can register a NEW thunk after this first pass.  Idempotent
+		# via the mir_funcs_by_id guard.
+		for spec in type_checker.thunk_specs():
+			if spec.thunk_fn_id in mir_funcs_by_id:
+				continue
+			param_names = [f"p{i}" for i in range(len(spec.param_types))]
+			sig = FnSignature(
+				name=function_symbol(spec.thunk_fn_id),
+				param_type_ids=list(spec.param_types),
+				param_names=param_names,
+				return_type_id=spec.return_type,
+				declared_can_throw=True,
+				module=spec.thunk_fn_id.module,
+			)
+			_register_synth_signature(spec.thunk_fn_id, sig)
+			builder = make_builder(spec.thunk_fn_id)
+			builder.func.params = list(param_names)
+			if spec.kind is ThunkKind.OK_WRAP:
+				call_dest: M.ValueId | None
+				if shared_type_table is not None and shared_type_table.is_void(spec.return_type):
+					call_dest = None
+				else:
+					call_dest = builder.new_temp()
+				builder.emit(M.Call(dest=call_dest, fn_id=spec.target_fn_id, args=param_names, can_throw=False))
+				ok_dest = builder.new_temp()
+				builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
+				builder.set_terminator(M.Return(value=ok_dest))
 			else:
 				call_dest = builder.new_temp()
-			builder.emit(M.Call(dest=call_dest, fn_id=spec.target_fn_id, args=param_names, can_throw=False))
-			ok_dest = builder.new_temp()
-			builder.emit(M.ConstructResultOk(dest=ok_dest, value=call_dest))
-			builder.set_terminator(M.Return(value=ok_dest))
-		else:
-			call_dest = builder.new_temp()
-			builder.emit(M.Call(dest=call_dest, fn_id=spec.target_fn_id, args=param_names, can_throw=True))
-			builder.set_terminator(M.Return(value=call_dest))
-		mir_funcs_by_id[spec.thunk_fn_id] = builder.func
+				builder.emit(M.Call(dest=call_dest, fn_id=spec.target_fn_id, args=param_names, can_throw=True))
+				builder.set_terminator(M.Return(value=call_dest))
+			mir_funcs_by_id[spec.thunk_fn_id] = builder.func
+	_synthesize_thunk_specs()
 
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
@@ -7641,167 +7732,222 @@ def compile_stubbed_funcs(
 			return {}
 
 	type_diag_len = len(type_diags)
-	_all_lambda_specs = list(type_checker.lambda_fn_specs())
-	for spec in _all_lambda_specs:
-		if spec.fn_id in mir_funcs_by_id:
-			continue
-		lam = copy.deepcopy(spec.lambda_expr)
-		param_names = [p.name for p in lam.params]
-		param_types = {name: ty for name, ty in zip(param_names, spec.param_types)}
-		lambda_body: H.HBlock
-		if lam.body_expr is not None:
-			lambda_body = H.HBlock(statements=[H.HReturn(value=lam.body_expr)])
-		elif lam.body_block is not None:
-			lambda_body = lam.body_block
-		else:
-			raise AssertionError("captureless lambda missing body (checker bug)")
-		lambda_body = normalize_hir(lambda_body)
-		current_mod = _module_id_with_visibility(spec.fn_id.module or "main")
-		visible_mods = None
-		if module_deps is not None:
-			visible = visible_module_names_by_name.get(spec.fn_id.module or "main", {spec.fn_id.module or "main"})
-			visible_mods = tuple(sorted(_module_id_with_visibility(m) for m in visible))
-		_sync_visibility_provenance()
-		current_file = None
-		if origin_by_fn_id is not None and spec.origin_fn_id is not None:
-			current_file = str(origin_by_fn_id.get(spec.origin_fn_id))
-		if current_file is None:
-			origin_sig = signatures_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
-			current_file = Span.from_loc(getattr(origin_sig, "loc", None)).file if origin_sig is not None else None
-		if current_file is None:
-			current_file = Span.from_loc(getattr(spec.lambda_expr, "loc", None)).file
-		param_mutable = None
-		if spec.lambda_expr is not None:
-			param_mutable = {p.name: bool(getattr(p, "is_mutable", False)) for p in spec.lambda_expr.params}
-		# Forward the origin function's type-param bindings, mirroring the
-		# hidden-lambda loop above: a captureless lambda inside a generic
-		# instantiation may name the template's type params in its body.
-		_cl_origin_typed = (
-			typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
-		)
-		_cl_origin_preseed = dict(
-			getattr(_cl_origin_typed, "preseed_type_params", None) or {}
-		) if _cl_origin_typed is not None else {}
-		lambda_result = type_checker.check_function(
-			fn_id=spec.fn_id,
-			body=lambda_body,
-			param_types=param_types,
-			param_mutable=param_mutable,
-			return_type=spec.return_type,
-			preseed_type_params=_cl_origin_preseed or None,
-			signatures_by_id=signatures_by_id,
-			function_keys_by_fn_id=function_keys_by_fn_id,
-			callable_registry=callable_registry,
-			impl_index=impl_index,
-			trait_index=trait_index,
-			trait_impl_index=trait_impl_index,
-			trait_scope_by_module=trait_scope_by_module,
-			linked_world=linked_world,
-			require_env=require_env,
-			visible_modules=visible_mods,
-			current_module=current_mod,
-			visibility_provenance=visibility_provenance_by_id,
-			visibility_imports=None,
-		)
-		if lambda_result.diagnostics:
-			type_diags.extend(lambda_result.diagnostics)
-			continue
-		lambda_typed_fn = lambda_result.typed_fn
-		_rewrite_call_targets(lambda_typed_fn, lambda_body)
-		type_diags.extend(_typevar_callinfo_diags(lambda_typed_fn, shared_type_table))
-		call_info_map = getattr(lambda_typed_fn, "call_info_by_callsite_id", None)
-		lambda_call_info: dict[int, CallInfo] | None = dict(call_info_map) if isinstance(call_info_map, dict) else None
-		lambda_ret_type = _hidden_lambda_ret_type(lambda_body, lambda_typed_fn, shared_type_table)
-		sig = FnSignature(
-			name=function_symbol(spec.fn_id),
-			param_type_ids=list(spec.param_types),
-			param_names=list(param_names),
-			return_type_id=lambda_ret_type,
-			declared_can_throw=bool(spec.can_throw),
-			module=spec.fn_id.module,
-		)
-		_register_synth_signature(spec.fn_id, sig)
-		builder = make_builder(spec.fn_id)
-		builder.func.params = list(param_names)
-		lower = HIRToMIR(
-			builder,
-			type_table=shared_type_table,
-			exc_env=exc_env,
-			param_types=param_types,
-			expr_types=getattr(lambda_typed_fn, "expr_types", None),
-			iface_coercions=getattr(lambda_typed_fn, "iface_coercions", None),
-			borrowed_iface_coercions=getattr(lambda_typed_fn, "borrowed_iface_coercions", None),
-			ptr_to_ref_coercions=getattr(lambda_typed_fn, "ptr_to_ref_coercions", None),
-			signatures_by_id=signatures_by_id,
-			current_fn_id=spec.fn_id,
-			type_param_subst=getattr(lambda_typed_fn, "preseed_type_params", None),
-			call_info_by_callsite_id=lambda_call_info or lambda_typed_fn.call_info_by_callsite_id,
-			can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
-			return_type=lambda_ret_type,
-			# Mirror the hidden-lambda worklist: nested-lambda env
-			# construction needs the typed fn's binding names (see the
-			# comment on the hidden-lambda HIRToMIR construction above).
-			binding_names=getattr(lambda_typed_fn, "binding_names", None),
-			typed_mode=_typed_mode_for(lambda_typed_fn, shared_type_table, not _has_error(lambda_result.diagnostics)),
-		)
-		for param in lam.params:
-			if getattr(param, "binding_id", None) is not None:
-				lower._binding_names[int(param.binding_id)] = param.name
-		lower._seed_lambda_locals_for_inference(lower, lambda_body)
-		try:
-			ret_val = lower._lower_lambda_block(lower, lambda_body)
-		except AssertionError as err:
-			_append_boundary_contract_diag(
-				checked,
-				phase="mir_validate",
-				prefix="MIR lowering contract failure",
-				err=err,
-				fn_id=spec.fn_id,
-				signatures_by_id=signatures_by_id,
-				hir_block=lambda_body,
-				origin_by_fn_id=origin_by_fn_id,
-			)
-			_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
-			if return_checked:
-				if return_ssa:
-					return {}, checked, None
-				return {}, checked
-			return {}
-		builder.func.local_types = dict(lower._local_types)
-		unknown_ty = shared_type_table.ensure_unknown()
-		for local_name in builder.func.locals:
-			if local_name not in builder.func.local_types:
-				builder.func.local_types[local_name] = unknown_ty
-		if builder.block.terminator is None:
-			_ret_def = shared_type_table.get(lambda_ret_type) if shared_type_table is not None else None
-			_is_void_return = _ret_def is not None and _ret_def.kind is TypeKind.VOID
-			# `_lower_lambda_block` intentionally returns `ret_val is None`
-			# for a Void-returning lambda whose tail is lowered in statement
-			# context (the closure Void-tail fix).  Mirror the hidden
-			# callback-lambda finalize above (near line 7029): only a
-			# non-Void lambda with no value/return is a genuine bug.
-			if ret_val is None and not _is_void_return:
-				raise AssertionError("captureless lambda block must end with a value or return")
-			if spec.can_throw:
-				# Can-throw lambdas (including Void-returning ones) need an
-				# `Ok` carrier.  For Void can-throw, synthesize the Void
-				# value to wrap, matching the `Result<Void, E>` ABI.
-				if ret_val is None and _is_void_return:
-					ret_val = lower._void_value()
-				ok_dest = builder.new_temp()
-				builder.emit(M.ConstructResultOk(dest=ok_dest, value=ret_val))
-				ret_val = ok_dest
-				builder.set_terminator(M.Return(value=ret_val))
-			elif _is_void_return:
-				# Nothrow Void-returning captureless lambda: emit
-				# `Return(value=None)` — same shape as a regular Void fn
-				# falling off the end.  Synthesizing a `_void_value()` here
-				# would make MIR carry a Void terminator value (violates the
-				# LLVM "Void function must not return a value" contract).
-				builder.set_terminator(M.Return(value=None))
+	# DRAIN the captureless-lambda worklist instead of snapshotting it once:
+	# type-checking a spec's standalone body below can REGISTER NEW specs (a
+	# lambda stored inside a lambda body).  A single snapshot left those nested
+	# specs unlowered — the emitted fat-fn-ptr referenced a hidden symbol that
+	# was never defined (clang: undefined reference).  Mirrors the hidden-
+	# lambda worklist's index-drain above.
+	_lambda_specs_seen: set = set()
+	while True:
+		_all_lambda_specs = [s for s in type_checker.lambda_fn_specs() if s.fn_id not in _lambda_specs_seen]
+		if not _all_lambda_specs:
+			# Quiescence step (joint fixed point over EVERY function producer
+			# reachable from this drain): hidden-lambda specs harvested from the
+			# specs lowered above, thunks registered by function-reference
+			# coercions typed during the rechecks, generic instantiations, and
+			# late wrappers/fn_infos.  Then loop back in case any of those
+			# registered further lambda specs.
+			while True:
+				_hidden_q = _drain_hidden_lambda_specs()
+				if _hidden_q is not None:
+					return _hidden_q
+				_synthesize_thunk_specs()
+				_drain_instantiations()
+				_synthesize_late_drained_fns()
+				# Stable only when EVERY producer is drained: hidden specs,
+				# instantiations, AND thunks (a thunk registered during the
+				# instantiation drain above would otherwise be left un-emitted —
+				# thunk synthesis precedes the drain inside this iteration).
+				if (
+					hidden_lambda_index >= len(hidden_lambda_specs)
+					and not inst_queue
+					and all(_qts.thunk_fn_id in mir_funcs_by_id for _qts in type_checker.thunk_specs())
+				):
+					break
+			_all_lambda_specs = [s for s in type_checker.lambda_fn_specs() if s.fn_id not in _lambda_specs_seen]
+			if not _all_lambda_specs:
+				break
+		for spec in _all_lambda_specs:
+			_lambda_specs_seen.add(spec.fn_id)
+			if spec.fn_id in mir_funcs_by_id:
+				continue
+			lam = copy.deepcopy(spec.lambda_expr)
+			param_names = [p.name for p in lam.params]
+			param_types = {name: ty for name, ty in zip(param_names, spec.param_types)}
+			lambda_body: H.HBlock
+			if lam.body_expr is not None:
+				lambda_body = H.HBlock(statements=[H.HReturn(value=lam.body_expr)])
+			elif lam.body_block is not None:
+				lambda_body = lam.body_block
 			else:
-				builder.set_terminator(M.Return(value=ret_val))
-		mir_funcs_by_id[spec.fn_id] = builder.func
+				raise AssertionError("captureless lambda missing body (checker bug)")
+			lambda_body = normalize_hir(lambda_body)
+			current_mod = _module_id_with_visibility(spec.fn_id.module or "main")
+			visible_mods = None
+			if module_deps is not None:
+				visible = visible_module_names_by_name.get(spec.fn_id.module or "main", {spec.fn_id.module or "main"})
+				visible_mods = tuple(sorted(_module_id_with_visibility(m) for m in visible))
+			_sync_visibility_provenance()
+			current_file = None
+			if origin_by_fn_id is not None and spec.origin_fn_id is not None:
+				current_file = str(origin_by_fn_id.get(spec.origin_fn_id))
+			if current_file is None:
+				origin_sig = signatures_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
+				current_file = Span.from_loc(getattr(origin_sig, "loc", None)).file if origin_sig is not None else None
+			if current_file is None:
+				current_file = Span.from_loc(getattr(spec.lambda_expr, "loc", None)).file
+			param_mutable = None
+			if spec.lambda_expr is not None:
+				param_mutable = {p.name: bool(getattr(p, "is_mutable", False)) for p in spec.lambda_expr.params}
+			# Forward the origin function's type-param bindings, mirroring the
+			# hidden-lambda loop above: a captureless lambda inside a generic
+			# instantiation may name the template's type params in its body.
+			_cl_origin_typed = (
+				typed_fns_by_id.get(spec.origin_fn_id) if spec.origin_fn_id is not None else None
+			)
+			_cl_origin_preseed = dict(
+				getattr(_cl_origin_typed, "preseed_type_params", None) or {}
+			) if _cl_origin_typed is not None else {}
+			lambda_result = type_checker.check_function(
+				fn_id=spec.fn_id,
+				body=lambda_body,
+				param_types=param_types,
+				param_mutable=param_mutable,
+				return_type=spec.return_type,
+				preseed_type_params=_cl_origin_preseed or None,
+				signatures_by_id=signatures_by_id,
+				function_keys_by_fn_id=function_keys_by_fn_id,
+				callable_registry=callable_registry,
+				impl_index=impl_index,
+				trait_index=trait_index,
+				trait_impl_index=trait_impl_index,
+				trait_scope_by_module=trait_scope_by_module,
+				linked_world=linked_world,
+				require_env=require_env,
+				visible_modules=visible_mods,
+				current_module=current_mod,
+				visibility_provenance=visibility_provenance_by_id,
+				visibility_imports=None,
+			)
+			if lambda_result.diagnostics:
+				type_diags.extend(lambda_result.diagnostics)
+				continue
+			lambda_typed_fn = lambda_result.typed_fn
+			# Close the drain over dependent state (mirror of the hidden-
+			# lambda worklist): register the typed fn so a still-deeper
+			# nested spec can forward this parent's type-param bindings via
+			# `typed_fns_by_id.get(spec.origin_fn_id)`, and queue any generic
+			# instantiations its body recorded — without this, a spec first
+			# discovered DURING the drain left its generic targets unemitted
+			# (the last `_drain_instantiations()` ran before this worklist).
+			typed_fns_by_id[spec.fn_id] = lambda_typed_fn
+			_queue_instantiations(spec.fn_id, lambda_typed_fn)
+			_rewrite_call_targets(lambda_typed_fn, lambda_body)
+			type_diags.extend(_typevar_callinfo_diags(lambda_typed_fn, shared_type_table))
+			call_info_map = getattr(lambda_typed_fn, "call_info_by_callsite_id", None)
+			lambda_call_info: dict[int, CallInfo] | None = dict(call_info_map) if isinstance(call_info_map, dict) else None
+			lambda_ret_type = _hidden_lambda_ret_type(lambda_body, lambda_typed_fn, shared_type_table)
+			sig = FnSignature(
+				name=function_symbol(spec.fn_id),
+				param_type_ids=list(spec.param_types),
+				param_names=list(param_names),
+				return_type_id=lambda_ret_type,
+				declared_can_throw=bool(spec.can_throw),
+				module=spec.fn_id.module,
+			)
+			_register_synth_signature(spec.fn_id, sig)
+			builder = make_builder(spec.fn_id)
+			builder.func.params = list(param_names)
+			lower = HIRToMIR(
+				builder,
+				type_table=shared_type_table,
+				exc_env=exc_env,
+				param_types=param_types,
+				expr_types=getattr(lambda_typed_fn, "expr_types", None),
+				iface_coercions=getattr(lambda_typed_fn, "iface_coercions", None),
+				borrowed_iface_coercions=getattr(lambda_typed_fn, "borrowed_iface_coercions", None),
+				ptr_to_ref_coercions=getattr(lambda_typed_fn, "ptr_to_ref_coercions", None),
+				signatures_by_id=signatures_by_id,
+				current_fn_id=spec.fn_id,
+				type_param_subst=getattr(lambda_typed_fn, "preseed_type_params", None),
+				call_info_by_callsite_id=lambda_call_info or lambda_typed_fn.call_info_by_callsite_id,
+				can_throw_by_id={**declared_by_id, spec.fn_id: bool(spec.can_throw)},
+				return_type=lambda_ret_type,
+				# Mirror the hidden-lambda worklist: nested-lambda env
+				# construction needs the typed fn's binding names (see the
+				# comment on the hidden-lambda HIRToMIR construction above).
+				binding_names=getattr(lambda_typed_fn, "binding_names", None),
+				typed_mode=_typed_mode_for(lambda_typed_fn, shared_type_table, not _has_error(lambda_result.diagnostics)),
+			)
+			for param in lam.params:
+				if getattr(param, "binding_id", None) is not None:
+					lower._binding_names[int(param.binding_id)] = param.name
+			lower._seed_lambda_locals_for_inference(lower, lambda_body)
+			try:
+				ret_val = lower._lower_lambda_block(lower, lambda_body)
+			except AssertionError as err:
+				_append_boundary_contract_diag(
+					checked,
+					phase="mir_validate",
+					prefix="MIR lowering contract failure",
+					err=err,
+					fn_id=spec.fn_id,
+					signatures_by_id=signatures_by_id,
+					hir_block=lambda_body,
+					origin_by_fn_id=origin_by_fn_id,
+				)
+				_assert_all_phased(checked.diagnostics, context="compile_stubbed_funcs")
+				if return_checked:
+					if return_ssa:
+						return {}, checked, None
+					return {}, checked
+				return {}
+			builder.func.local_types = dict(lower._local_types)
+			unknown_ty = shared_type_table.ensure_unknown()
+			for local_name in builder.func.locals:
+				if local_name not in builder.func.local_types:
+					builder.func.local_types[local_name] = unknown_ty
+			if builder.block.terminator is None:
+				_ret_def = shared_type_table.get(lambda_ret_type) if shared_type_table is not None else None
+				_is_void_return = _ret_def is not None and _ret_def.kind is TypeKind.VOID
+				# `_lower_lambda_block` intentionally returns `ret_val is None`
+				# for a Void-returning lambda whose tail is lowered in statement
+				# context (the closure Void-tail fix).  Mirror the hidden
+				# callback-lambda finalize above (near line 7029): only a
+				# non-Void lambda with no value/return is a genuine bug.
+				if ret_val is None and not _is_void_return:
+					raise AssertionError("captureless lambda block must end with a value or return")
+				if spec.can_throw:
+					# Can-throw lambdas (including Void-returning ones) need an
+					# `Ok` carrier.  For Void can-throw, synthesize the Void
+					# value to wrap, matching the `Result<Void, E>` ABI.
+					if ret_val is None and _is_void_return:
+						ret_val = lower._void_value()
+					ok_dest = builder.new_temp()
+					builder.emit(M.ConstructResultOk(dest=ok_dest, value=ret_val))
+					ret_val = ok_dest
+					builder.set_terminator(M.Return(value=ret_val))
+				elif _is_void_return:
+					# Nothrow Void-returning captureless lambda: emit
+					# `Return(value=None)` — same shape as a regular Void fn
+					# falling off the end.  Synthesizing a `_void_value()` here
+					# would make MIR carry a Void terminator value (violates the
+					# LLVM "Void function must not return a value" contract).
+					builder.set_terminator(M.Return(value=None))
+				else:
+					builder.set_terminator(M.Return(value=ret_val))
+			mir_funcs_by_id[spec.fn_id] = builder.func
+			# Harvest stage-2 producers from THIS spec's lowering: an IIFE in
+			# a stored captureless lambda registers a hidden-lambda spec (and
+			# its synth signature) on the local `lower`; without harvesting,
+			# the emitted M.Call referenced a hidden fn that was never built.
+			for _cl_synth in lower.synth_sig_specs():
+				if _cl_synth.kind == "hidden_lambda":
+					continue
+				_register_synth_signature(_cl_synth.fn_id, _cl_synth.sig)
+			if getattr(lower, "hidden_lambda_specs", None):
+				hidden_lambda_specs.extend(lower.hidden_lambda_specs())
 	if len(type_diags) != type_diag_len:
 		checked.diagnostics.extend(type_diags[type_diag_len:])
 		if any(d.severity == "error" for d in checked.diagnostics):

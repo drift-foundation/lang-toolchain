@@ -66,6 +66,21 @@ def test_immediate_lambda_value_block_body_runs(tmp_path: Path) -> None:
 	assert subprocess.run([str(tmp_path / "vb")]).returncode == 0
 
 
+def test_immediate_lambda_plain_value_block_no_try(tmp_path: Path) -> None:
+	# 0.34.2: an unannotated value-block IIFE (no try, no callback) infers its
+	# return type from the trailing expression — `a + 1` (Int) — matching MIR
+	# lowering; the arithmetic use `r - 6` only type-checks if the boundary is
+	# Int (a Void boundary would fail E-AUTO), so this pins the CallInfo boundary.
+	src = _PRELUDE + (
+		"pub fn main() nothrow -> Int {\n"
+		"\tval r = (|| => { val a = 5; a + 1 })();\n"   # a+1 = 6
+		"\treturn r - 6;\n}\n"                            # 6 - 6 = 0
+	)
+	r = _compile(tmp_path, src, out="plain")
+	assert r.returncode == 0, r.stderr
+	assert subprocess.run([str(tmp_path / "plain")]).returncode == 0
+
+
 def test_immediate_lambda_return_body_with_capture_runs(tmp_path: Path) -> None:
 	# Explicit-return body capturing an outer local; caught failure path.
 	src = _PRELUDE + (

@@ -76,6 +76,7 @@ from lang.driftc.core.type_resolve_common import resolve_opaque_type
 from lang.driftc.core.types_core import TypeTable, TypeId, TypeKind, TypeParamId
 from lang.driftc.stage1.hir_utils import collect_catch_arms_from_block
 from lang.driftc.stage1.call_info import CallInfo, CallSig, CallTarget, CallTargetKind, IntrinsicKind
+from lang.driftc.stage1 import hir_flow
 from lang.driftc.call_contract import call_arg_exprs_for_param_layout, call_contract_issues, repair_named_hcall_callinfo
 from lang.driftc.stage1.normalize import normalize_hir
 
@@ -2059,82 +2060,37 @@ class Checker:
 					return expr.force_inferred_type
 				return info.sig.user_ret_type
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HLambda):
-				lam = expr.fn
-				prev_locals = dict(self.locals)
-				prev_report_unknown = self.report_unknown_names
-				try:
-					self.report_unknown_names = False
-					mod = None
-					if self.current_fn is not None and self.current_fn.signature is not None:
-						mod = getattr(self.current_fn.signature, "module", None)
-					for p in lam.params:
-						ptype = None
-						if getattr(p, "type", None) is not None:
-							ptype = checker._resolve_typeexpr(p.type, module_id=mod, type_params=self.type_param_map())
-						self.locals[p.name] = ptype
-					expected_ret: TypeId | None = None
-					if getattr(lam, "ret_type", None) is not None:
-						expected_ret = checker._resolve_typeexpr(lam.ret_type, module_id=mod, type_params=self.type_param_map())
-					if lam.body_expr is not None:
-						body_ty = self._infer_expr_type(lam.body_expr)
-						if expected_ret is not None and body_ty is not None and body_ty != expected_ret:
-							self._append_diag(
-								_chk_diag(
-									message="lambda return type does not match body type",
-									severity="error",
-									span=getattr(lam, "span", Span()),
-								)
-							)
-						return expected_ret if expected_ret is not None else body_ty
-					if lam.body_block is not None and lam.body_block.statements:
-						last = lam.body_block.statements[-1]
-						if isinstance(last, H.HExprStmt):
-							body_ty = self._infer_expr_type(last.expr)
-							if expected_ret is not None and body_ty is not None and body_ty != expected_ret:
-								self._append_diag(
-									_chk_diag(
-										message="lambda return type does not match body type",
-										severity="error",
-										span=getattr(lam, "span", Span()),
-									)
-								)
-							return expected_ret if expected_ret is not None else body_ty
-						if isinstance(last, H.HReturn) and last.value is not None:
-							body_ty = self._infer_expr_type(last.value)
-							if expected_ret is not None and body_ty is not None and body_ty != expected_ret:
-								self._append_diag(
-									_chk_diag(
-										message="lambda return type does not match body type",
-										severity="error",
-										span=getattr(lam, "span", Span()),
-									)
-								)
-							return expected_ret if expected_ret is not None else body_ty
-					if expected_ret is not None:
-						# NOTE: a throw-only lambda body (`|| -> T => { throw e; }`)
-						# cannot fall through and ought to satisfy the explicit return
-						# type, the same way a named `fn f() -> T { throw e; }` does.
-						# The checker side is a ~4-line reuse of `Checker._is_terminal_block`
-						# here, BUT codegen does not lower divergent lambda bodies
-						# uniformly: only a flat direct-trailing-throw lowers correctly;
-						# an `if` in the body produces a malformed value type and a
-						# nested-block throw mislowers to a runtime abort.  Closing this
-						# requires lambda-lowering work, so it is tracked as a follow-up
-						# rather than admitting bodies codegen would miscompile (a
-						# checker-only change here turns a clean rejection into a compile
-						# error or a runtime abort for the non-flat shapes).
-						self._append_diag(
-							_chk_diag(
-								message="lambda with explicit return type must return a value",
-								severity="error",
-								span=getattr(lam, "span", Span()),
-							)
+				# Direct lambda invocation: consume the resolver's CallInfo — the
+				# type-checker's one-pass body authority already typed the lambda
+				# (tail coercions + mismatch diagnosis included).  A production
+				# lambda call MUST have CallInfo; absence is a contract failure,
+				# not permission to re-infer the body under different (raw-
+				# equality) typing semantics — synthetic pipelines must arrange
+				# proper CallInfo.  Same contract as the HVar/HInvoke branches.
+				if self.call_info_by_callsite_id is None:
+					self._append_diag(
+						_chk_diag(
+							message="typecheck contract failure: missing CallInfo map for call typing",
+							severity="error",
+							span=getattr(expr, "loc", None),
 						)
-						return expected_ret
+					)
 					return None
-				finally:
-					self.report_unknown_names = prev_report_unknown
-					self.locals = prev_locals
+				info = self.call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
+				if info is None:
+					fn_name = function_symbol(self.current_fn.fn_id) if self.current_fn is not None else "<unknown>"
+					csid = getattr(expr, "callsite_id", None)
+					self._append_diag(
+						_chk_diag(
+							message=f"typecheck contract failure: missing CallInfo for call typing in {fn_name} (callsite_id={csid})",
+							severity="error",
+							span=getattr(expr, "loc", None),
+						)
+					)
+					return None
+				if info.sig.user_ret_type == checker._unknown_type and getattr(expr, "force_inferred_type", None) is not None:
+					return expr.force_inferred_type
+				return info.sig.user_ret_type
 			if isinstance(expr, H.HCall) and isinstance(expr.fn, H.HQualifiedMember):
 				if self.call_info_by_callsite_id is not None:
 					info = self.call_info_by_callsite_id.get(getattr(expr, "callsite_id", None))
@@ -4223,27 +4179,28 @@ class Checker:
 
 	def _is_terminal_block(self, block: "H.HBlock") -> bool:
 		"""
-		Terminal-flow analysis: True iff every CFG path through this block ends in
-		a function-exiting statement (`return`, `throw`, `rethrow`, or — Phase 2 —
-		a call to a terminal-`throws` function) or recursively in a fully-terminal
+		Terminal-flow analysis: True iff every CFG path through this block ends
+		in a function-exiting statement (`return`, `throw`, `rethrow`, or a call
+		to a terminal-`throws` function) or recursively in a fully-terminal
 		control-flow construct.
 
-		A block is terminal as soon as one of its statements is a terminator —
-		statements after that point are unreachable and don't affect the answer.
-
-		Phase 2 extension: a statement-position call to a function declared with
-		the bare terminal `throws` form (`declared_terminal_throws=True`) is
-		itself terminal — control never returns from it. The per-function context
-		needed for call resolution is stored on `self._term_call_info` and
-		`self._term_fn_infos` by `_run_terminal_flow_passes` before each function
-		is walked.
+		Delegates to the shared authority in `stage1.hir_flow` (one walker for
+		this checker AND the lambda value-less-body guard — the semantics:
+		literal-`if` folding, try = body+arms, loop terminal iff no reachable
+		loop-local break, statement-position match by arm blocks).  The
+		terminal-`throws` call resolution stays here: it needs the per-function
+		`self._term_call_info` / `self._term_fn_infos` context installed by
+		`_run_terminal_flow_passes`.
 		"""
-		from lang.driftc import stage1 as H
-
-		for stmt in block.statements:
-			if self._is_terminal_stmt(stmt):
+		def _term_call_can_throw(call_expr: "H.HExpr") -> bool:
+			# Effect decision for dead-catch-arm gating: CallInfo when the
+			# per-function context is installed, conservative otherwise.
+			call_info_map = getattr(self, "_term_call_info", None)
+			if call_info_map is None:
 				return True
-		return False
+			info = call_info_map.get(getattr(call_expr, "callsite_id", None))
+			return True if info is None else bool(info.sig.can_throw)
+		return hir_flow.is_terminal_block(block, is_terminal_call=self._is_terminal_throws_call_expr, call_can_throw=_term_call_can_throw)
 
 	def _is_terminal_throws_call_expr(self, expr: "H.HExpr") -> bool:
 		"""
@@ -4289,179 +4246,6 @@ class Checker:
 			return False
 		return bool(getattr(callee_info.signature, "declared_terminal_throws", False))
 
-	def _is_terminal_stmt(self, stmt: "H.HStmt") -> bool:
-		"""See `_is_terminal_block` for the contract."""
-		from lang.driftc import stage1 as H
-
-		if isinstance(stmt, H.HReturn):
-			# Both `return;` and `return v;` exit the function. The void/non-void
-			# value mismatch is a separate diagnostic in `_void_rules_on_stmt`.
-			return True
-		if isinstance(stmt, H.HThrow):
-			return True
-		if isinstance(stmt, H.HRethrow):
-			return True
-		if isinstance(stmt, H.HBlock):
-			return self._is_terminal_block(stmt)
-		if isinstance(stmt, H.HUnsafeBlock):
-			return self._is_terminal_block(stmt.block)
-		if isinstance(stmt, H.HIf):
-			# Constant-fold a literal-bool condition: only the taken branch
-			# matters. This is load-bearing for the `while true` desugaring,
-			# which produces `if true { user_body } else { break }`. Without
-			# the fold, the synthesized else-break would force the if to be
-			# treated as non-terminal.
-			if isinstance(stmt.cond, H.HLiteralBool):
-				if stmt.cond.value:
-					return self._is_terminal_block(stmt.then_block)
-				if stmt.else_block is None:
-					return False
-				return self._is_terminal_block(stmt.else_block)
-			# An `if` is terminal only when both branches are present and both
-			# are terminal. An `if` without an `else` always permits fallthrough.
-			if stmt.else_block is None:
-				return False
-			return self._is_terminal_block(stmt.then_block) and self._is_terminal_block(stmt.else_block)
-		if isinstance(stmt, H.HTry):
-			# A try is terminal iff the body is terminal AND every catch arm is
-			# terminal. A non-terminal body or non-terminal catch arm permits
-			# fallthrough past the try construct.
-			body_terminal = self._is_terminal_block(stmt.body)
-			catches_terminal = all(self._is_terminal_block(arm.block) for arm in stmt.catches)
-			return body_terminal and catches_terminal
-		if isinstance(stmt, H.HLoop):
-			# A loop terminates the function iff its body has no `break`
-			# reachable from the loop entry. If there is no reachable break,
-			# the only ways to exit one iteration are `return`/`throw`/`rethrow`
-			# (function exits) or fallthrough-to-next-iteration (no exit at
-			# all). Either way the loop never falls through to the post-loop
-			# point, so post-loop code is unreachable and the loop itself is
-			# function-level terminal.
-			#
-			# Drift's `while cond { body }` desugars to
-			# `loop { if cond { body } else { break } }`. For a literal-true
-			# cond, the constant-folding in HIf above makes the synthesized
-			# else-break dead, and the user body's actual breaks (if any) are
-			# what `_block_contains_reachable_break` will see.
-			#
-			# Nested loops are handled correctly: a `break` inside a nested
-			# `HLoop` binds to the inner loop, not the outer one, so
-			# `_block_contains_reachable_break` does not recurse into nested
-			# loop bodies.
-			return not self._block_contains_reachable_break(stmt.body)
-		if isinstance(stmt, H.HExprStmt):
-			# Phase 2: a statement-position call to a terminal-`throws` function
-			# is itself terminal — control never returns from it. This is the
-			# load-bearing case for the user's example
-			# `Err(err) => { (move err).throw_self(); }` arm.
-			if self._is_terminal_throws_call_expr(stmt.expr):
-				return True
-			# Match-as-statement: an HMatchExpr at statement position is
-			# terminal iff every arm's block is terminal.
-			return self._is_terminal_expr(stmt.expr)
-		# HLet, HLocalConst, HAssign, HAugAssign, HBreak, HContinue, HAssert,
-		# and any other statement form do not terminate the function in Phase 0.
-		return False
-
-	def _is_terminal_expr(self, expr: "H.HExpr") -> bool:
-		"""
-		Phase 2 recognizes `match` as a terminal-by-arms expression at
-		statement position. Each arm is terminal iff its block is terminal —
-		the arm's `result` expression is NOT considered for the terminal
-		decision because if a terminal-throws call appeared there, it would
-		be in value position (the match's result type would inherit it),
-		which is rejected by `_check_terminal_throws_value_position`. Users
-		who want a tail-call-throws arm must use the block form
-		`B => { fail(); }` rather than `B => fail()`.
-
-		The terminal-throws-call extension to `_is_terminal_stmt`
-		(via `_is_terminal_throws_call_expr`) handles statement-position
-		calls separately, including the load-bearing
-		`Err(err) => { (move err).throw_self(); }` shape.
-		"""
-		from lang.driftc import stage1 as H
-
-		if isinstance(expr, H.HMatchExpr):
-			for arm in expr.arms:
-				if not self._is_terminal_block(arm.block):
-					return False
-			return True
-		return False
-
-	def _block_contains_reachable_break(self, block: "H.HBlock") -> bool:
-		"""
-		True iff `block` contains an `HBreak` reachable from the block entry,
-		where reachability is computed with the same constant-folding rules as
-		`_is_terminal_block` (literal-bool `if` conditions fold to a single
-		branch). Statements after a function-level terminator are dead and not
-		walked.
-
-		Used by `_is_terminal_stmt` to decide whether a loop is function-level
-		terminal: a loop is terminal iff its body has no reachable break.
-
-		Critically, this does NOT recurse into nested `HLoop` bodies — a break
-		inside a nested loop binds to the inner loop, not the enclosing one.
-		"""
-		from lang.driftc import stage1 as H
-
-		for stmt in block.statements:
-			if self._stmt_contains_reachable_break(stmt):
-				return True
-			if self._is_terminal_stmt(stmt):
-				# Code after a function-level terminator is unreachable and
-				# cannot contribute a reachable break.
-				return False
-		return False
-
-	def _stmt_contains_reachable_break(self, stmt: "H.HStmt") -> bool:
-		"""See `_block_contains_reachable_break` for the contract."""
-		from lang.driftc import stage1 as H
-
-		if isinstance(stmt, H.HBreak):
-			return True
-		if isinstance(stmt, (H.HReturn, H.HThrow, H.HRethrow, H.HContinue)):
-			return False
-		if isinstance(stmt, H.HBlock):
-			return self._block_contains_reachable_break(stmt)
-		if isinstance(stmt, H.HUnsafeBlock):
-			return self._block_contains_reachable_break(stmt.block)
-		if isinstance(stmt, H.HIf):
-			# Same constant-fold rule as `_is_terminal_stmt`: dead else of an
-			# `if true` cannot contribute a reachable break.
-			if isinstance(stmt.cond, H.HLiteralBool):
-				if stmt.cond.value:
-					return self._block_contains_reachable_break(stmt.then_block)
-				if stmt.else_block is None:
-					return False
-				return self._block_contains_reachable_break(stmt.else_block)
-			then_has = self._block_contains_reachable_break(stmt.then_block)
-			else_has = (
-				self._block_contains_reachable_break(stmt.else_block)
-				if stmt.else_block is not None
-				else False
-			)
-			return then_has or else_has
-		if isinstance(stmt, H.HTry):
-			if self._block_contains_reachable_break(stmt.body):
-				return True
-			for arm in stmt.catches:
-				if self._block_contains_reachable_break(arm.block):
-					return True
-			return False
-		if isinstance(stmt, H.HExprStmt) and isinstance(stmt.expr, H.HMatchExpr):
-			for arm in stmt.expr.arms:
-				if self._block_contains_reachable_break(arm.block):
-					return True
-			return False
-		if isinstance(stmt, H.HLoop):
-			# Breaks inside a nested loop bind to that inner loop, not to the
-			# enclosing one. They cannot contribute a reachable break for the
-			# outer loop's terminal-flow analysis.
-			return False
-		# HLet/HLocalConst/HAssign/HAugAssign/HExprStmt(non-match)/HAssert:
-		# expression evaluation cannot syntactically contain a `break` in
-		# Drift v1 (no break-from-expression form).
-		return False
 
 	def _check_terminal_returns(
 		self,

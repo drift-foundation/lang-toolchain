@@ -4504,7 +4504,7 @@ Drift treats callables as **traits first**, with an optional dynamic wrapper whe
 Drift distinguishes two callable worlds:
 
 - **Non-capturing callables**: function pointers (`Fn(P1, ... , Pn) -> R`) and callback interfaces (dynamic dispatch). These do not capture environment and may be stored/returned freely.
-- **Capturing closures**: lambda literals produce compiler-synthesized closure values (code + environment). Closures may capture by `copy`/`move` (escaping) or by borrow (non-escaping).
+- **Capturing closures**: a capturing lambda literal may be invoked immediately (IIFE) or converted through a supported representation — a callback interface value (`core.callbackN(...)`) or an accepted Fn-bounded conversion. There is no standalone anonymous closure-value type in v1: a capturing literal cannot be stored as a bare binding. Within a supported representation, `copy`/`move`/`share` captures may escape; borrow captures are non-escaping.
 
 Parameter choice follows this split:
 
@@ -4617,7 +4617,15 @@ Current limitations:
 - The Fn-bounded SCOPED inference applies only to `Fn`/`FnMut`/`FnOnce` trait
   bounds; non-Fn trait bounds (e.g., marker traits) do not trigger the relaxation.
 
-Closures with only `copy`/`move`/`share` captures may escape.
+Closures with only `copy`/`move`/`share` captures may escape **through a
+supported representation**: a callback interface value (`core.callbackN(...)`)
+or an accepted Fn-bounded conversion. There is no anonymous closure-value type
+in v1 — a capturing lambda cannot be stored as a bare binding
+(`val f = || captures(copy x) => { ... };` is rejected at the binding, even if
+`f` is never used; wrap with `core.callbackN(...)` or invoke immediately).
+Capture effects (`move` consuming its source, `share` creating the second
+owner) occur when the supported representation is constructed, whether or not
+it is later invoked.
 
 #### 22.2.4. `share x` capture (`std.core.shareable.Share`)
 

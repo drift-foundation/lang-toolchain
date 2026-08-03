@@ -172,7 +172,7 @@ perf-protocols:
 #       reviewed candidate, then installs via staged writes (byte-preserving
 #       no-op when already equal).  On disagreement it does NOT mutate the
 #       baseline and retains the fresh actual for diagnosis.  NEVER wired into
-#       CI / run-all-tests.sh / just test / just certify.
+#       CI / just test / just certify.
 # Args pass straight through to the tool (argparse sorts the optional <dir>
 # positional from flags like --fresh / --select).  Examples:
 #   just ownership-corpus-check                    # default work dir
@@ -193,8 +193,7 @@ ownership-corpus-promote *ARGS:
 # ── Certification entrypoint ─────────────────────────────────────────
 # The ownership corpus EXACTLY ONCE, read-only: a fresh full compile VERIFIED
 # against the checked-in reviewed baseline (clean tree -> zero tracked diffs).
-# Never promotes/installs.  Independent of run-all-tests.sh (the maintainer's
-# private runner, which calls the same verify gate).
+# Never promotes/installs. 
 certify: ownership-corpus-verify
 	@echo "lang certify: Success."
 

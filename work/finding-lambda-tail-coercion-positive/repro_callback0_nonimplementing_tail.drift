@@ -1,0 +1,19 @@
+module repro_negative;
+
+import std.core as core;
+
+pub interface Speaker {
+    fn speak(self: &Self) nothrow -> Int;
+}
+
+pub struct Cat {
+    pub n: Int
+}
+
+pub fn main() nothrow -> Int {
+    val cb: core.Callback0<Speaker> = core.callback0(|| => {
+        Cat(n = 7)
+    });
+    val speaker = cb.call();
+    return speaker.speak() - 7;
+}
