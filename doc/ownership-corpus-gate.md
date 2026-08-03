@@ -2,102 +2,104 @@
 
 The ownership corpus compiles a large fixture universe and audits the
 ownership-authoring decisions the compiler makes on each one, summed into a
-small set of counters. A checked-in **reviewed baseline** records the accepted
-universe and counters; promotion/certification fails if a fresh compile diverges
-from the reviewed expectation.
+small set of counters. A checked-in **reviewed (golden) baseline** records the
+accepted universe and counters. The lifecycle is:
 
-The design deliberately separates **fast projections during development** from
-**exhaustive fresh evidence at promotion**. There are two public recipes, both
-driven by `tools/drift_corpus_check.py`.
+```
+committed golden baseline
+  → local projected candidate   (ownership-corpus-check)
+  → fresh validated candidate   (ownership-corpus-promote)
+  → committed golden baseline
+```
+
+CI reads the committed golden state only — it never creates, approves, or
+installs a candidate. There are three public recipes, all driven by
+`tools/drift_corpus_check.py`. Every one compiles into a fresh temporary
+directory per invocation and requires the toolchain+universe fingerprint
+captured at the start to equal the one re-captured at the finish.
 
 ## The one authority for what a compile is
 
 `tools/corpus_compile_contract.py` is the single source of truth for how the
-corpus invokes `driftc`: the argv, the minimal child environment (constructed
-from an explicit inherit-allowlist plus pinned hash/locale and a **controlled
-per-run TMPDIR** — no ambient compile-affecting variable leaks in
-unfingerprinted, and no child writes under a shared /tmp), the runtime archive
-variant (honoring `--sanitize`), and tool/linker/native-library selection.
-Native-library, linker, and sanitizer selection come from
-`lang/driftc/link_selection.py`, which **driftc itself also imports** — so what
-the corpus models can never drift from what the compiler links.
-
-`tools/drift_corpus_fingerprint.py` hashes every compile-result-relevant input
-(compiler source, stdlib, the corpus tools + their schema versions, the prebuilt
-runtime archive, native libraries, tool identities including executable bytes,
-the argv template, and the exact child environment) into a **toolchain
-fingerprint**; combined with the static universe digest it forms a **run
-snapshot**.
+corpus invokes `driftc`: argv, a minimal constructed child environment (explicit
+inherit-allowlist + pinned hash/locale + a controlled per-run TMPDIR — nothing
+ambient leaks in unfingerprinted, nothing writes under a shared /tmp),
+`--sanitize`-aware runtime variant, and tool/linker/native-library selection.
+Native-lib/linker/sanitizer selection come from `lang/driftc/link_selection.py`,
+which **driftc itself also imports**, so what the corpus models can never drift
+from what the compiler links. `tools/drift_corpus_fingerprint.py` hashes every
+compile-result-relevant input into a **toolchain fingerprint**; with the static
+universe digest it forms a **run snapshot**.
 
 ## `just ownership-corpus-check [<dir>]` — developer lane
 
-Fast, resumable, always full-universe. Default work dir
-`build/tmp/ownership-corpus-work`, or an optional override.
+Fast, resumable, always full-universe (default work dir
+`build/tmp/ownership-corpus-work`).
 
-Each fixture's **projection** (its ownership counters) is cached in a record
-keyed on the fixture **content hash**. On each run:
+- An empty cache seeds each fixture from the committed baseline's
+  `projections.json` and failed bucket — **no compile for unchanged fixtures**.
+- Only new, source-edited (hash changed), and `--select`ed fixtures recompile
+  and become **current** observations; a compiler-fingerprint move keeps old
+  observations as **projected** (stale) rather than forcing a full rebuild.
+  Projected values are visibly marked and never described as freshly verified.
+- Reused successes *and* failures are accounted (the `observed` / `projected`
+  partitions cover both). It reports exact projected deltas against the golden
+  baseline.
+- After stable start/end tree identity, it atomically exports the local
+  candidate to `build/tmp/ownership-corpus-projection.json`. **The handoff is not
+  authority and never changes the committed baseline.**
 
-- new fixtures, source-edited fixtures (hash changed), and `--select`ed fixtures
-  are freshly compiled and become **current** observations;
-- everything else is reused. A reused record observed under the *current*
-  toolchain is a current observation; one observed under an *older* toolchain is
-  carried forward as a **projected** (stale/inherited) value — a compiler-source
-  change therefore does **not** trigger a full rebuild. Projected values are
-  clearly distinguished and never described as freshly verified;
-- when the cache is empty, per-fixture projections are seeded from the reviewed
-  baseline's `projections.json` (fast clean clone); a one-time full run is only
-  needed on the initial transition, before the baseline carries projections.
+`--fresh` forces a full recompile (ignore cache + seeds) for a broad change.
 
-Reused successes *and* failures are accounted (the report's `observed` /
-`projected` partitions both cover successes and failures). The completed
-expectation — universe, buckets, per-fixture projections, aggregate, and the
-observed/projected marks — is exported **atomically** to the cache-independent
-handoff `build/tmp/ownership-corpus-projection.json`.
+## `just ownership-corpus-verify` — CI / cert gate (the only one)
 
-## `just ownership-corpus-promote` — fresh verification + install
+The single corpus command used by `run-all-tests.sh` and `just certify`.
 
-Takes no directory and **never reads developer cache records**. It:
+- Ignores the developer cache **and** the handoff completely — even a valid,
+  malformed, stale, or delta-proposing handoff.
+- One fresh full-universe compile; stable start/end fingerprint.
+- Compares **exactly** to the committed reviewed baseline: inclusion rule,
+  fixture names + source hashes, exclusions + reasons, compiled/failed buckets,
+  every per-fixture projection, aggregate counters, and zero hard gates.
+- On any drift, **fails loudly** and retains the fresh actual under
+  `build/tmp/ownership-corpus-actual/` for diagnosis. It **never** calls
+  installation code or modifies any tracked baseline file — committed data stays
+  byte-identical. A golden clean clone passes `run-all-tests.sh` with no `check`
+  or `promote` first and with zero tracked diffs.
 
-1. selects the **expectation** — the handoff if it exists (validated for basic
-   internal consistency and that it describes the *current* tree/universe; a
-   malformed or stale handoff is an **error**, never a silent baseline
-   fallback), otherwise the checked-in reviewed baseline (clean clone / CI);
-2. performs **one** fresh full-universe compile in isolated scratch;
-3. requires a stable start==end fingerprint, **exact** agreement with the
-   expectation (universe + source hashes, compiled/failed buckets, per-fixture
-   projections, aggregate counters, exclusions + reasons), and zero hard gates;
-4. on agreement, installs the reviewed baseline via staged writes (build +
-   validate a sibling staging bundle, swap it in, then reload + validate) — a
-   **byte-preserving no-op** when the fresh result already equals the baseline;
-5. on disagreement, does **not** mutate the baseline: it retains the fresh
-   *actual* report at `build/tmp/ownership-corpus-actual/` for diagnosis and
-   reports the unexpected differences.
+## `just ownership-corpus-promote` — manual re-baseline
 
-Invoking promote is approval of the *projected expectation*, verified
-exhaustively — not approval of whatever the fresh compiler happens to produce.
-Paying for the developer projection and then one independent fresh promotion
-rebuild after a language change is intentional.
+A deliberate maintainer action, **never** wired into CI / `run-all-tests.sh` /
+`just test` / `just certify`.
 
-`just certify` and the maintainer's `run-all-tests.sh` both invoke
-`just ownership-corpus-promote`. On a clean tree with no proposed changes the
-fresh run compares directly against the checked-in baseline and performs no
-source mutation.
-
-## Worked example
-
-- Baseline: fixture `x` fails compilation.
-- A language fix intentionally makes `x` compile.
-- `ownership-corpus-check` projects `x: failed → compiled_ok`; all untested
-  fixtures are projected unchanged, and it exports the handoff.
-- You review that result and run `ownership-corpus-promote`.
-- The fresh full run must reproduce that exact flip. If an unrelated fixture `y`
-  also flips, promotion stops and reports the unexpected difference; the baseline
-  is untouched and the fresh actual is retained for diagnosis.
+- Requires the canonical projection handoff (missing, malformed, or stale is an
+  error — never a baseline fallback); its toolchain and run-snapshot composites
+  must match the current tree. Never reads developer cache files.
+- One fresh full-universe compile in isolated scratch; stable start/end
+  fingerprint; must **exactly reproduce** the reviewed candidate (universe +
+  hashes, exclusions, buckets, per-fixture projections, aggregate, zero hard
+  gates).
+- Unexpected fresh results fail and are retained separately; they never
+  overwrite the handoff or become implicitly approved. Only exact agreement
+  reaches staged baseline installation (a byte-preserving no-op when already
+  identical), and the installed bundle is reloaded and proven equal to the fresh
+  result. Invoking promote is the explicit authorization to install after fresh
+  reproduction; the resulting Git diff is reviewed and committed, and that
+  becomes the new golden baseline.
 
 ## Re-baselining
 
 ```
-just ownership-corpus-check         # iterate (default work dir); review report.json
-just ownership-corpus-promote       # fresh full compile reproduces the handoff, installs
+just ownership-corpus-check         # iterate; review report.json + projected deltas
+just ownership-corpus-promote       # fresh full compile reproduces the candidate, installs
 git add lang/tests/ownership_corpus/reviewed-baseline && git commit
 ```
+
+## Bootstrap / migration
+
+`projections.json` was landed once, mechanically, from the last approved
+candidate's per-fixture counters (`tools/corpus_migrate_projections.py`) — a
+format migration of already-approved evidence, proven against the live
+`manifest.json`/`aggregate.json`, with no recompile. `fingerprint.json` is not
+fabricated; the first genuine `ownership-corpus-promote` generates it. Runtime
+tooling never depends on Git history.

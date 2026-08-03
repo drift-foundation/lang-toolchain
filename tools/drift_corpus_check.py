@@ -1,36 +1,40 @@
 #!/usr/bin/env python3
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""Ownership-corpus check + promote — the one public corpus process.
+"""Ownership-corpus lifecycle: check, verify, promote.
 
-Two deliberately separate lanes: FAST PROJECTIONS during development, EXHAUSTIVE
-FRESH EVIDENCE at promotion / certification.
+  committed golden baseline -> local projected candidate (check)
+                            -> fresh validated candidate (promote) -> committed golden baseline
+  CI reads the committed golden state only, via verify.
 
   developer   `just ownership-corpus-check [<dir>]`  (default work dir
               build/tmp/ownership-corpus-work)
-      A resumable, full-universe expectation.  Each fixture's PROJECTION (its
-      ownership-authoring counters) is cached in a record keyed on the fixture
-      CONTENT HASH.  Only new / source-edited / --select'ed fixtures recompile
-      and become CURRENT observations; a compiler-fingerprint move does NOT
-      force a full rebuild — old observations carry forward as PROJECTED (stale)
-      values, visibly marked and never described as freshly verified.  Reused
-      successes AND failures are accounted truthfully.  When the cache is empty,
-      per-fixture projections are seeded from the checked-in reviewed baseline
-      (fast clean clone).  The completed expectation is exported atomically to
-      the cache-independent handoff build/tmp/ownership-corpus-projection.json.
+      Fast, full-universe.  Seeds an empty cache from the committed baseline's
+      per-fixture projections (no compile for unchanged fixtures); records key on
+      fixture CONTENT HASH, so only new / source-edited / --select'ed fixtures
+      recompile and become CURRENT, while a compiler-fingerprint move keeps old
+      observations PROJECTED (stale, visibly marked — never a full rebuild).
+      Reused successes AND failures are accounted.  Exports the local candidate
+      to the cache-independent handoff build/tmp/ownership-corpus-projection.json.
+      The handoff is not authority and never changes the committed baseline.
 
-  promote     `just ownership-corpus-promote`   (no directory)
-      Never reads developer cache records.  The EXPECTATION is the handoff if it
-      exists (validated to describe the current tree/universe first — a
-      malformed or stale handoff is an error, never a silent baseline fallback),
-      otherwise the checked-in reviewed baseline (clean clone / CI).  Performs
-      ONE fresh full-universe compile in isolated scratch and requires a stable
-      start==end fingerprint, EXACT agreement with the expectation (universe +
-      source hashes, compiled/failed buckets, per-fixture projections, aggregate
-      counters, exclusions + reasons), and zero hard gates.  On agreement it
-      installs the reviewed baseline (a byte-preserving no-op when already
-      equal); on disagreement it does NOT promote — it retains the fresh ACTUAL
-      report separately and reports the unexpected differences.  Invoking
-      promote is approval of the projected expectation, verified exhaustively.
+  verify      `just ownership-corpus-verify`   (CI / cert — the ONLY corpus gate)
+      Read-only.  IGNORES the developer cache AND the handoff entirely.  One
+      fresh full-universe compile compared EXACTLY to the committed reviewed
+      baseline (inclusion rule, source hashes, exclusions + reasons, buckets,
+      every per-fixture projection, aggregate, zero hard gates).  Fails loudly on
+      any drift; NEVER installs or writes a baseline file (cannot reach
+      _staged_install).  A golden clean clone passes with zero tracked diffs.
+
+  promote     `just ownership-corpus-promote`   (manual maintainer re-baseline)
+      Never reads developer records.  REQUIRES the projection handoff — a
+      missing, malformed, or stale handoff is an error; it never falls back to
+      the baseline.  The handoff's toolchain/run-snapshot composites must match
+      the current tree.  One fresh full-universe compile in isolated scratch, a
+      stable start==end fingerprint, and EXACT reproduction of the candidate,
+      then staged installation (a byte-preserving no-op when already equal — but
+      a missing/stale baseline fingerprint forces a real install).  On
+      disagreement it does NOT mutate the baseline and retains the fresh actual.
+      NEVER wired into CI / run-all-tests.sh / just test / just certify.
 """
 from __future__ import annotations
 
@@ -356,14 +360,18 @@ def _baseline_seed(baseline: Path) -> dict:
 	empty cache reuses baseline projections (as PROJECTED values) instead of
 	recompiling.  {name: {hash, ok, proj, toolchain}}.
 
-	Only a NEW-FORMAT baseline (carrying both per-fixture projections and a run
-	fingerprint) seeds; a legacy baseline that lacks that per-fixture data seeds
-	NOTHING, so the initial transition is a clean one-time full run rather than
-	carrying forward stale, possibly-outdated pass/fail outcomes."""
+	Seeds from any baseline that carries per-fixture PROJECTIONS (manifest +
+	projections.json), including a freshly MIGRATED baseline that has no
+	fingerprint.json yet — those seeds are marked projected (unknown/old
+	toolchain).  A legacy baseline without projections seeds NOTHING, so the
+	initial transition there is a clean full run rather than carrying forward
+	stale pass/fail outcomes."""
 	b = _read_baseline(baseline)
-	if b is None or b["projections"] is None or not _fp._is_hex64(b["toolchain"] or ""):
+	if b is None or b["projections"] is None:
 		return {}
-	tc = b["toolchain"]
+	# a baseline without a fingerprint (just migrated) has an unknown toolchain;
+	# its seeds are classified projected via a sentinel that never matches.
+	tc = b["toolchain"] if _fp._is_hex64(b["toolchain"] or "") else "0" * 64
 	base_hash = {e["name"]: e["sha256"] for e in b["base_universe"]["fixtures"]}
 	seed: dict[str, dict] = {}
 	for name in b["failed"]:
@@ -427,6 +435,74 @@ def _atomic_json(path: Path, obj) -> None:
 	tmp = path.parent / f".{path.name}.tmp"
 	tmp.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n")
 	os.replace(tmp, path)
+
+
+# ══ verify mode (read-only CI/cert gate) ════════════════════════════
+
+def run_verify(baseline: Path, *, jobs: int, extra, out=sys.stderr) -> int:
+	"""CI/cert gate.  Ignores the developer cache AND the projection handoff
+	ENTIRELY.  One fresh full-universe compile compared EXACTLY to the committed
+	reviewed baseline; fail loud on any drift; NEVER installs or writes any
+	baseline file (it cannot reach _staged_install).  Diagnostic output under
+	build/tmp is fine; committed data stays byte-identical."""
+	fixtures, excluded = _audit._discover_fixtures(None)
+	if not fixtures:
+		print("no fixtures matched", file=out)
+		return 2
+	try:
+		tc = _toolchain(extra)
+	except InfraError as e:
+		print(str(e), file=out)
+		return 2
+	universe = _audit._universe_dict(fixtures, excluded)
+	snap_start = _snapshot(tc, universe)
+	exp = _expectation_from_baseline(baseline, universe, out)
+	if exp is None:
+		return 2
+	if exp["projections"] is None:
+		print(f"reviewed baseline {baseline} lacks per-fixture projections "
+		      f"(projections.json); migrate/promote it before verify can check "
+		      f"per-fixture exactness.", file=out)
+		return 2
+
+	print(f"verify: fresh full compile of {len(fixtures)} fixtures vs the reviewed "
+	      f"baseline ({jobs} jobs)", file=out, flush=True)
+	compile_dir = _mkscratch("corpus-verify-")
+	(compile_dir / "audit").mkdir(parents=True, exist_ok=True)
+	fx_hash = {f.name: _audit._fixture_hash(f) for f in fixtures}
+	started = time.time()
+	try:
+		fresh_proj, fresh_failed = _compile_set(fixtures, compile_dir, extra, jobs, out, started)
+		if not _hashes_stable(fixtures, fx_hash, out):
+			return 2
+		if not _finish_snapshot_ok(snap_start, extra, out):
+			return 2
+	except _audit.CorpusProjectionError as e:
+		print(f"ABORT (infrastructure): {e}", file=out)
+		return 2
+	except InfraError as e:
+		print(str(e), file=out)
+		return 2
+	finally:
+		shutil.rmtree(compile_dir, ignore_errors=True)
+
+	counters = _audit._merge_counters(fresh_proj.values())
+	problems = _fresh_vs_expectation(universe, fresh_proj, fresh_failed, exp)
+	gate_failures = _audit._hard_gate_failures(counters)
+	if problems or gate_failures:
+		for p in problems:
+			print(f"VERIFY DRIFT: {p}", file=out)
+		for g in gate_failures:
+			print(f"HARD GATE: {g}", file=out)
+		_retain_actual(universe, fresh_proj, fresh_failed, counters, snap_start, started, jobs)
+		print(f"the fresh full run drifted from the committed reviewed baseline; "
+		      f"FAILING with the baseline untouched.  Fresh actual retained at "
+		      f"{ACTUAL_DIR} for diagnosis.  Re-baseline deliberately with "
+		      f"`ownership-corpus-promote`.", file=out)
+		return 1
+	print("verify: fresh full compile EXACTLY matches the committed reviewed "
+	      "baseline; zero hard gates.  Baseline untouched.", file=out)
+	return 0
 
 
 # ══ promote mode ═════════════════════════════════════════════════════
@@ -598,11 +674,15 @@ def run_promote(baseline: Path, *, jobs: int, extra, out=sys.stderr) -> int:
 	universe = _audit._universe_dict(fixtures, excluded)
 	snap_start = _snapshot(tc, universe)
 
-	# EXPECTATION: handoff if present (error on malformed/stale), else baseline.
-	if HANDOFF_PATH.is_file():
-		exp = _expectation_from_handoff(universe, snap_start, out)
-	else:
-		exp = _expectation_from_baseline(baseline, universe, out)
+	# EXPECTATION: the canonical projection handoff is REQUIRED — promotion is a
+	# deliberate re-baseline of a REVIEWED developer candidate.  A missing,
+	# malformed, or stale handoff is an error; promotion never falls back to the
+	# baseline (that is `verify`'s job).
+	if not HANDOFF_PATH.is_file():
+		print(f"promote requires the projection handoff {HANDOFF_PATH}; run "
+		      f"`ownership-corpus-check` to produce a reviewed candidate first.", file=out)
+		return 2
+	exp = _expectation_from_handoff(universe, snap_start, out)
 	if exp is None:
 		return 2
 	print(f"promote: expectation = {exp['source']}; fresh full compile of "
@@ -642,7 +722,7 @@ def run_promote(baseline: Path, *, jobs: int, extra, out=sys.stderr) -> int:
 		return 1
 
 	# Agreement + gates zero -> install (byte-preserving no-op if already equal).
-	if _equals_current_baseline(baseline, universe, fresh_proj, fresh_failed, counters):
+	if _equals_current_baseline(baseline, universe, fresh_proj, fresh_failed, counters, snap_start):
 		print(f"promote: fresh full run already equals the reviewed baseline at "
 		      f"{baseline}; no-op (baseline unchanged).", file=out)
 		return 0
@@ -690,7 +770,13 @@ def _retain_actual(universe, fresh_proj, fresh_failed, counters, snapshot, start
 	_fp.write_atomic(ACTUAL_DIR / "fingerprint.json", snapshot)
 
 
-def _equals_current_baseline(baseline, universe, fresh_proj, fresh_failed, counters) -> bool:
+def _equals_current_baseline(baseline, universe, fresh_proj, fresh_failed,
+                             counters, snap_start) -> bool:
+	"""True only if the installed baseline is ALREADY byte-equivalent to the fresh
+	result — universe, buckets, per-fixture projections, aggregate, AND a stored
+	fingerprint whose composite equals this run's snapshot.  A missing / malformed
+	/ stale fingerprint is NOT equal, so promotion installs (and creates/refreshes
+	fingerprint.json) rather than silently no-op'ing past it."""
 	b = _read_baseline(baseline)
 	if b is None:
 		return False
@@ -703,7 +789,15 @@ def _equals_current_baseline(baseline, universe, fresh_proj, fresh_failed, count
 	if b["projections"] is None:
 		return False
 	fresh_sorted = {k: dict(sorted(v.items())) for k, v in fresh_proj.items()}
-	return dict(sorted(fresh_sorted.items())) == b["projections"]
+	if dict(sorted(fresh_sorted.items())) != b["projections"]:
+		return False
+	# the stored fingerprint must exist AND match this run's snapshot exactly;
+	# missing/malformed/stale forces installation (creates a real fingerprint).
+	try:
+		stored = _fp.read_fingerprint(baseline / "fingerprint.json")
+	except (OSError, ValueError, KeyError, TypeError):
+		return False
+	return stored["composite"] == snap_start["composite"]
 
 
 def _staged_install(baseline, universe, fresh_proj, fresh_failed, counters,
@@ -764,17 +858,18 @@ def _baseline_md(snapshot, counters, universe) -> str:
 		drv, abi = "unknown", "unknown"
 	return (
 		"# Reviewed ownership-corpus baseline\n\n"
-		"The checked-in expectation for `just ownership-corpus-promote` (and the seed\n"
-		"for a clean clone's `just ownership-corpus-check`).  The exact universe and\n"
-		"counters live in the machine files beside this note; `projections.json` holds\n"
-		"the per-fixture ownership projections used for fast clean-clone seeding.\n\n"
+		"The authoritative golden state `just ownership-corpus-verify` (CI/cert)\n"
+		"checks against, and the seed for a clean clone's `just ownership-corpus-check`.\n"
+		"The exact universe and counters live in the machine files beside this note;\n"
+		"`projections.json` holds the per-fixture ownership projections used for fast\n"
+		"clean-clone seeding and exact per-fixture verification.\n\n"
 		"## Provenance\n\n"
-		"Produced ONLY by `drift_corpus_check.py` promotion: a fresh full compile that\n"
-		"exactly matched the reviewed expectation (the developer projection handoff, or\n"
-		"this baseline itself on a clean tree), under a stable start==end toolchain\n"
-		"fingerprint with every hard gate at zero, then installed via staged writes.\n"
-		"The Git commit that lands these files IS the approval; reviewer identity and\n"
-		"date come from Git history.\n\n"
+		"Produced ONLY by `just ownership-corpus-promote`: a fresh full compile that\n"
+		"EXACTLY reproduced a reviewed developer candidate (the projection handoff),\n"
+		"under a stable start==end toolchain fingerprint with every hard gate at zero,\n"
+		"then installed via staged writes.  CI/cert (`ownership-corpus-verify`) NEVER\n"
+		"writes this baseline.  The Git commit that lands these files IS the approval;\n"
+		"reviewer identity and date come from Git history.\n\n"
 		f"| field | value |\n|---|---|\n"
 		f"| driftc / ABI | **{drv}** / **ABI {abi}** |\n"
 		f"| run snapshot composite | `{snapshot['composite']}` |\n"
@@ -793,10 +888,15 @@ def main(argv: "list[str] | None" = None) -> int:
 	ap = argparse.ArgumentParser(description=__doc__,
 	                             formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument("work", nargs="?", help="developer work dir "
-	                f"(default {DEFAULT_WORK_DIR}); ignored by --promote")
-	ap.add_argument("--promote", action="store_true",
-	                help="fresh full-universe compile vs the handoff (or baseline) "
-	                     "expectation; installs the reviewed baseline on exact agreement")
+	                f"(default {DEFAULT_WORK_DIR}); ignored by --verify/--promote")
+	mode = ap.add_mutually_exclusive_group()
+	mode.add_argument("--verify", action="store_true",
+	                  help="read-only CI/cert gate: fresh full compile vs the committed "
+	                       "reviewed baseline; fail on any drift; never writes a baseline")
+	mode.add_argument("--promote", action="store_true",
+	                  help="deliberate re-baseline: fresh full compile vs the REQUIRED "
+	                       "projection handoff; installs the reviewed baseline on exact "
+	                       "agreement")
 	ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
 	ap.add_argument("--select", help="comma-separated fixtures to force-recompile "
 	                                 "(developer lane; the run stays full-universe)")
@@ -823,14 +923,17 @@ def main(argv: "list[str] | None" = None) -> int:
 	# retention, staged writes) into a controlled exit 2 with a stderr
 	# diagnostic — never a traceback.
 	try:
-		if args.promote:
+		if args.verify or args.promote:
 			if args.select or args.fresh:
-				print("--select/--fresh are developer-lane options; not used with --promote", file=sys.stderr)
+				print("--select/--fresh are developer-lane options; not used with "
+				      "--verify/--promote", file=sys.stderr)
 				return 2
 			if args.work:
-				print("--promote takes no work directory (it reads only the canonical "
-				      "handoff or the reviewed baseline)", file=sys.stderr)
+				print("--verify/--promote take no work directory (they never read the "
+				      "developer cache)", file=sys.stderr)
 				return 2
+			if args.verify:
+				return run_verify(baseline, jobs=args.jobs, extra=extra)
 			return run_promote(baseline, jobs=args.jobs, extra=extra)
 
 		work = Path(args.work) if args.work else DEFAULT_WORK_DIR
@@ -840,7 +943,9 @@ def main(argv: "list[str] | None" = None) -> int:
 	except InfraError as e:
 		print(str(e), file=sys.stderr)
 		return 2
-	except (OSError, subprocess.SubprocessError) as e:
+	except (OSError, subprocess.SubprocessError, ValueError) as e:
+		# ValueError covers UnicodeDecodeError (e.g. non-UTF-8 expected.json escaping
+		# _discover_fixtures) — every known current-tree read boundary fails closed.
 		print(f"infrastructure error ({type(e).__name__}: {e})", file=sys.stderr)
 		return 2
 

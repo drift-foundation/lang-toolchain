@@ -292,15 +292,28 @@ def test_promote_rejects_handoff_from_different_toolchain(tmp_path, monkeypatch)
 	assert h.compiles == []                                       # rejected before compiling
 
 
-def test_promote_missing_handoff_uses_baseline_noop(tmp_path, monkeypatch):
+def test_promote_requires_handoff_no_baseline_fallback(tmp_path, monkeypatch):
+	names = ["a", "b"]
+	dirs = _mk_fixtures(tmp_path, names)
+	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
+	before = (base / "aggregate.json").read_bytes()
+	assert not _check.HANDOFF_PATH.exists()
+	assert _check.run_promote(base, jobs=2, extra=[]) == 2        # no handoff -> error
+	assert h.compiles == []                                       # failed before compiling
+	assert (base / "aggregate.json").read_bytes() == before       # baseline untouched
+
+
+def test_promote_byte_preserving_noop_when_handoff_equals_baseline(tmp_path, monkeypatch):
 	names = ["a", "b"]
 	dirs = _mk_fixtures(tmp_path, names)
 	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
-	before = (base / "aggregate.json").read_bytes()
-	assert not _check.HANDOFF_PATH.exists()
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0        # fresh == baseline -> no-op
-	assert (base / "aggregate.json").read_bytes() == before       # byte-preserving
+	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
+	before = {f.name: (base / f.name).read_bytes() for f in base.iterdir() if f.is_file()}
+	assert _check.run_promote(base, jobs=2, extra=[]) == 0        # fresh == handoff == baseline
+	after = {f.name: (base / f.name).read_bytes() for f in base.iterdir() if f.is_file()}
+	assert before == after                                        # byte-preserving no-op
 
 
 def test_promote_handoff_expectation_installs(tmp_path, monkeypatch):
@@ -513,15 +526,16 @@ def test_absent_new_format_files_are_legacy(tmp_path):
 
 
 def test_promote_upgrades_legacy_baseline(tmp_path, monkeypatch):
-	"""A legacy baseline (no projections) is never 'equal' — promotion installs to
-	give it per-fixture projections for fast clean-clone seeding."""
+	"""Promoting (from a handoff) against a legacy target baseline installs the
+	per-fixture projections + fingerprint the legacy baseline lacked."""
 	dirs = _mk_fixtures(tmp_path, ["a"])
 	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})
 	base = tmp_path / "legacy"
 	(base / "audit").mkdir(parents=True)
 	_audit._emit_run(base, _audit._universe_dict(dirs, []), ["a"], [], {"cnt": 1}, 0.0, 1)
 	assert not (base / "projections.json").exists()
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0     # no handoff -> baseline expectation
+	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
+	assert _check.run_promote(base, jobs=2, extra=[]) == 0
 	assert (base / "projections.json").is_file()               # upgraded
 	assert (base / "fingerprint.json").is_file()
 
@@ -545,3 +559,126 @@ def test_main_infra_oserror_is_exit_2(monkeypatch):
 def test_bad_driftc_args_is_exit_2_not_traceback():
 	# an unmatched quote must be a controlled exit 2, not a shlex traceback
 	assert _check.main(["--promote", "--driftc-args", "'unterminated"]) == 2
+
+
+# ══ verify (read-only CI/cert gate) ═══════════════════════════════════
+
+def _baseline_files(base):
+	return {str(p.relative_to(base)): p.read_bytes() for p in base.rglob("*") if p.is_file()}
+
+
+def test_verify_matches_baseline_no_handoff(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a", "b"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
+	assert not _check.HANDOFF_PATH.exists()
+	before = _baseline_files(base)
+	assert _check.run_verify(base, jobs=2, extra=[]) == 0
+	assert _baseline_files(base) == before               # byte-identical
+
+
+@pytest.mark.parametrize("handoff", ["valid-different", "malformed", "stale"])
+def test_verify_ignores_handoff(tmp_path, monkeypatch, handoff):
+	dirs = _mk_fixtures(tmp_path, ["a", "b"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
+	if handoff == "valid-different":
+		_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 99}, "b": {"cnt": 2}}, [])
+	elif handoff == "malformed":
+		_check.HANDOFF_PATH.write_text("{ not json")
+	else:  # stale (old toolchain)
+		_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [], seed="tc-OLD")
+	# verify checks against the BASELINE and ignores the handoff entirely
+	assert _check.run_verify(base, jobs=2, extra=[]) == 0
+
+
+def test_verify_drift_fails_zero_mutation(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 5})})     # fresh cnt=5
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])        # baseline cnt=1
+	before = _baseline_files(base)
+	assert _check.run_verify(base, jobs=2, extra=[]) == 1
+	assert _baseline_files(base) == before                             # baseline untouched
+	assert (_check.ACTUAL_DIR / "aggregate.json").is_file()            # actual retained
+
+
+def test_verify_never_reaches_staged_install(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})    # matches baseline
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])
+	def _boom(*a, **k):
+		raise AssertionError("verify must never reach _staged_install")
+	monkeypatch.setattr(_check, "_staged_install", _boom)
+	assert _check.run_verify(base, jobs=2, extra=[]) == 0             # no install, no boom
+
+
+def test_verify_start_finish_mismatch_aborts(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})
+	h.finish_seed = "tc-SHIFTED"
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])
+	assert _check.run_verify(base, jobs=2, extra=[]) == 2
+
+
+def test_verify_baseline_without_projections_fails(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})
+	base = tmp_path / "legacy"
+	(base / "audit").mkdir(parents=True)
+	_audit._emit_run(base, _audit._universe_dict(dirs, []), ["a"], [], {"cnt": 1}, 0.0, 1)
+	assert _check.run_verify(base, jobs=2, extra=[]) == 2             # no per-fixture projections
+
+
+def test_verify_rejects_work_dir_arg():
+	assert _check.main(["somedir", "--verify"]) == 2
+
+
+# ══ promotion always writes a matching fingerprint ═══════════════════
+
+def test_promote_missing_fingerprint_forces_install(tmp_path, monkeypatch):
+	"""A migrated baseline has projections but NO fingerprint.json; even when the
+	fresh result matches, promotion must INSTALL (create the fingerprint), not
+	no-op past it."""
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})
+	base = tmp_path / "baseline"
+	(base / "audit").mkdir(parents=True)
+	_audit._emit_run(base, _audit._universe_dict(dirs, []), ["a"], [], {"cnt": 1}, 0.0, 1)
+	_check._atomic_json(base / "projections.json", {"a": {"cnt": 1}})
+	assert not (base / "fingerprint.json").exists()
+	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
+	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert (base / "fingerprint.json").is_file()          # install created it
+
+
+def test_promote_stale_fingerprint_forces_install(tmp_path, monkeypatch):
+	"""A baseline whose stored fingerprint is stale (old toolchain) is NOT 'equal';
+	promotion installs and refreshes fingerprint.json to the current run."""
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})   # current tc0
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [], seed="tc-OLD")
+	old_fp = json.loads((base / "fingerprint.json").read_text())["composite"]
+	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
+	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	new_fp = json.loads((base / "fingerprint.json").read_text())["composite"]
+	assert new_fp != old_fp                               # refreshed to current toolchain
+
+
+def test_promote_current_fingerprint_is_true_noop(tmp_path, monkeypatch):
+	dirs = _mk_fixtures(tmp_path, ["a"])
+	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1})})
+	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])       # fingerprint == current
+	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
+	before = _baseline_files(base)
+	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _baseline_files(base) == before               # true byte-preserving no-op
+
+
+# ══ non-UTF-8 current-tree read fails closed on every lane ═══════════
+
+@pytest.mark.parametrize("args", [[], ["--verify"], ["--promote"]])
+def test_unicode_error_in_discovery_is_exit_2(monkeypatch, args):
+	def _boom(only=None):
+		raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+	monkeypatch.setattr(_audit, "_discover_fixtures", _boom)
+	assert _check.main(args) == 2

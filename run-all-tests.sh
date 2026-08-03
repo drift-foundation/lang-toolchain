@@ -25,5 +25,5 @@ echo "ASAN suite OK"
 sleep 5
 # Long pole LAST: the full ownership corpus (~20-30 min fresh compile), so a
 # fast-suite bug fails the run in minutes instead of after the corpus.
-just ownership-corpus-promote
+just ownership-corpus-verify
 echo "OWNERSHIP CORPUS OK"

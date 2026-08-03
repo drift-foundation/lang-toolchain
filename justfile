@@ -139,33 +139,40 @@ perf-protocols:
 		lang/tests/driver/test_std_json_parse_perf_gate.py
 	echo "perf-protocols: outputs in $out"
 
-# ── Ownership CORPUS: two public recipes ─────────────────────────────
+# ── Ownership CORPUS: three public recipes ───────────────────────────
 # DISTINCT from `ownership-matrix-check` above (the 51 curated generated
 # ownership-transfer fixtures, inside `just test`): this is the full-corpus
 # compile-audit against the checked-in reviewed baseline
 # (lang/tests/ownership_corpus/reviewed-baseline/, provenance in BASELINE.md).
 # Deliberately NOT part of `just test`.  Fast PROJECTIONS during development;
-# EXHAUSTIVE FRESH EVIDENCE at promotion.
+# read-only FRESH VERIFICATION in CI; explicit MANUAL re-baseline.
 #
 #   just ownership-corpus-check [<dir>]
-#       Fast developer lane (default work dir build/tmp/ownership-corpus-work,
-#       or an optional override).  Full-universe expectation; records keyed on
-#       fixture CONTENT HASH so a compiler-fingerprint move keeps old
-#       observations as PROJECTED (never a full rebuild); only new / source-
-#       edited / `--select`ed fixtures recompile.  Reused successes AND failures
-#       are accounted (observed vs projected).  Exports the expectation to the
+#       Fast developer lane (default work dir build/tmp/ownership-corpus-work).
+#       Seeds an empty cache from the committed baseline's per-fixture
+#       projections; recompiles only new / source-edited / `--select`ed
+#       fixtures; a compiler-fingerprint move keeps old observations PROJECTED
+#       (never a full rebuild).  Reused successes AND failures are accounted
+#       (observed vs projected).  Exports the local candidate to the
 #       cache-independent handoff build/tmp/ownership-corpus-projection.json.
+#       The handoff is not authority and never changes the committed baseline.
 #
-#   just ownership-corpus-promote
-#       Fresh FULL compile every time (independent verification — never
-#       optimized away, never reads developer records).  The EXPECTATION is that
-#       handoff if present (a malformed/stale handoff is an error, not a silent
-#       baseline fallback), otherwise the checked-in reviewed baseline (clean
-#       clone / CI).  Requires a stable start==end fingerprint, zero hard gates,
-#       and EXACT agreement (universe + hashes, buckets, per-fixture
-#       projections, aggregate, exclusions); installs the reviewed baseline only
-#       then — a byte-preserving no-op when already equal.  On disagreement it
-#       does NOT mutate the baseline and retains the fresh actual for diagnosis.
+#   just ownership-corpus-verify            (CI / certify — the ONLY corpus gate)
+#       Read-only.  IGNORES the developer cache AND the handoff entirely.  One
+#       fresh full-universe compile compared EXACTLY to the committed reviewed
+#       baseline (inclusion rule, hashes, exclusions, buckets, every per-fixture
+#       projection, aggregate, zero hard gates).  Fails loudly on any drift and
+#       NEVER writes a baseline file — a golden clean clone passes with zero
+#       tracked diffs.
+#
+#   just ownership-corpus-promote           (manual maintainer re-baseline)
+#       Deliberate.  REQUIRES the projection handoff (missing/malformed/stale is
+#       an error — never falls back to the baseline); never reads developer
+#       records.  One fresh full compile that must EXACTLY reproduce the
+#       reviewed candidate, then installs via staged writes (byte-preserving
+#       no-op when already equal).  On disagreement it does NOT mutate the
+#       baseline and retains the fresh actual for diagnosis.  NEVER wired into
+#       CI / run-all-tests.sh / just test / just certify.
 # Args pass straight through to the tool (argparse sorts the optional <dir>
 # positional from flags like --fresh / --select).  Examples:
 #   just ownership-corpus-check                    # default work dir
@@ -175,15 +182,20 @@ ownership-corpus-check *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
 		-j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
 
+ownership-corpus-verify *ARGS:
+	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
+		--verify -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
+
 ownership-corpus-promote *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
 		--promote -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
 
 # ── Certification entrypoint ─────────────────────────────────────────
-# The ownership corpus EXACTLY ONCE: a fresh full compile against the checked-in
-# reviewed baseline (clean tree -> no-op).  Independent of run-all-tests.sh (the
-# maintainer's private runner, which calls the same recipe).
-certify: ownership-corpus-promote
+# The ownership corpus EXACTLY ONCE, read-only: a fresh full compile VERIFIED
+# against the checked-in reviewed baseline (clean tree -> zero tracked diffs).
+# Never promotes/installs.  Independent of run-all-tests.sh (the maintainer's
+# private runner, which calls the same verify gate).
+certify: ownership-corpus-verify
 	@echo "lang certify: Success."
 
 # Shard 1: everything test runs except codegen.

@@ -1,39 +1,46 @@
 # Reviewed ownership-corpus baseline
 
-The checked-in expectation for `just ownership-corpus-promote`, and the seed for
-a clean clone's `just ownership-corpus-check`.
+The authoritative golden state that `just ownership-corpus-verify` (CI /
+`just certify`) checks against, and the seed for a clean clone's
+`just ownership-corpus-check`.
 
 The exact universe and counters live in the machine files beside this note —
-`manifest.json` (the fixture universe: inclusion rule, per-fixture content
-hashes, and the compiled / failed partition), `aggregate.json` (the summed
-ownership-authoring counters), `metadata.json`, `fingerprint.json` (the run
-snapshot this baseline was produced under), and — once first promoted under the
-current tool — `projections.json` (the per-fixture ownership projections used to
-seed a clean clone's developer cache without recompiling). Current shape:
-**942 compiled / 367 compile-failed / 49 rule-excluded**, 14 counter keys.
+`manifest.json` (inclusion rule, per-fixture source hashes, exclusions, and the
+compiled / failed partition), `aggregate.json` (the summed ownership counters),
+`projections.json` (the per-fixture ownership projections — for fast clean-clone
+seeding and exact per-fixture verification), `metadata.json`, and — after the
+first genuine promotion under this workflow — `fingerprint.json` (the run
+snapshot). Current shape: **942 compiled / 367 compile-failed / 49
+rule-excluded**, 14 counter keys.
 
-## How this baseline is produced
+## Lifecycle
 
-Only by `drift_corpus_check.py` promotion (`just ownership-corpus-promote`): a
-fresh FULL compile that **exactly** reproduced the reviewed expectation — the
-developer projection handoff (`build/tmp/ownership-corpus-projection.json`) when
-present, otherwise this baseline itself on a clean tree — under a stable
-start==end toolchain fingerprint, with every hard gate at zero, then installed
-via staged writes with post-install validation. Exact agreement with the
-existing baseline is a byte-preserving no-op.
+```
+committed golden baseline
+  → local projected candidate   (just ownership-corpus-check)
+  → fresh validated candidate   (just ownership-corpus-promote)
+  → committed golden baseline
+```
+
+- **`just ownership-corpus-verify`** — the only corpus command in CI / `certify`.
+  Read-only: a fresh full compile compared exactly to this baseline; fails on any
+  drift; never writes a baseline file. A golden clean clone passes with zero
+  tracked diffs.
+- **`just ownership-corpus-check`** — fast developer lane. Seeds an empty cache
+  from `projections.json` (no compile for unchanged fixtures), recompiles only
+  new / edited / `--select`ed fixtures, and exports a candidate handoff. Never
+  changes this baseline.
+- **`just ownership-corpus-promote`** — manual maintainer re-baseline. Requires
+  the candidate handoff, recompiles the full universe from scratch, must
+  reproduce the candidate exactly, then installs. Never wired into CI.
+
+`projections.json` was mechanically migrated from the last approved candidate's
+per-fixture counters (a format migration of already-approved evidence, proven
+against `manifest.json`/`aggregate.json` — not a recompile).
+`fingerprint.json` is not fabricated; the first real promotion generates it.
 
 The Git commit that lands these files **is** the approval; reviewer identity and
 date come from Git history.
-
-## Two recipes
-
-- `just ownership-corpus-check [<dir>]` — fast developer lane. Records key on
-  fixture content hash, so a compiler-fingerprint move keeps old observations as
-  *projected* rather than forcing a full rebuild; only new / edited / `--select`ed
-  fixtures recompile. It exports the reviewed expectation to the handoff.
-- `just ownership-corpus-promote` — fresh exhaustive verification + install.
-  Never reads developer records. Invoking it approves the projected expectation,
-  verified by a full independent compile.
 
 ## Distinct from the ownership matrix
 
