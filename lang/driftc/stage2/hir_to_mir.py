@@ -8940,6 +8940,14 @@ class HIRToMIR:
 		# `_register_drop_local` registration at try-expression
 		# lowering time.  Dead-code site removed.
 		if not fn_is_void:
+			if self._body_is_divergent(block):
+				# The checker's reachability-refined terminal-flow pass
+				# accepted this non-Void body BECAUSE it diverges — every
+				# real path returns or throws; the open block only exists
+				# for structurally-emitted dead edges (e.g. a `break` in a
+				# dead catch arm).  Seal it.
+				self.b.set_terminator(M.Unreachable())
+				return
 			# Defensive invariant: the checker's terminal-flow pass
 			# (`Checker._check_terminal_returns`) is responsible for rejecting
 			# any non-Void function whose body falls off the end. If we reach
@@ -11713,6 +11721,32 @@ class HIRToMIR:
 			self.b.emit(M.MoveOut(dest=dest, local=ok_local, ty=ok_ty))
 		self._local_types[dest] = ok_ty
 		return dest
+
+	def _body_is_divergent(self, block: H.HBlock) -> bool:
+		"""True iff control cannot fall off the end of `block` (flow authority).
+
+		Mirror of the checker's `_is_terminal_block` predicates: terminal
+		calls resolve through recorded CallInfo/signature authority, and the
+		dead-catch effect decision uses CallInfo when recorded, conservative
+		can-throw otherwise.  Used by the finalize paths: when the checker's
+		reachability-refined terminal-flow pass accepted a non-Void body
+		BECAUSE it diverges (e.g. a loop whose only `break` sits in dead
+		code), the builder's open block after lowering is unreachable — it
+		must be sealed with `Unreachable`, not treated as a missing return.
+		"""
+		def _is_terminal_call(expr: H.HExpr) -> bool:
+			if not isinstance(expr, (H.HCall, H.HMethodCall, H.HInvoke)):
+				return False
+			info = self._call_info_for_expr_optional(expr)
+			return info is not None and self._is_call_terminal_throws(info)
+
+		def _call_can_throw(expr: H.HExpr) -> bool:
+			info = self._call_info_for_expr_optional(expr)
+			return True if info is None else bool(info.sig.can_throw)
+
+		return hir_flow.Exit.FALLTHROUGH not in hir_flow.block_exits(
+			block, is_terminal_call=_is_terminal_call, call_can_throw=_call_can_throw
+		)
 
 	def _is_call_terminal_throws(self, info: "CallInfo") -> bool:
 		"""True if the callee is a terminal-throws function (never returns)."""

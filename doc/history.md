@@ -1,5 +1,79 @@
 # Drift development history
 
+## 2026-08-04 (0.35.0: hidden-lambda block value tails reach the return authority; spec return types are never overwritten; ABI 22 unchanged)
+
+**LANGUAGE_BUG (three shapes; coupled hidden-return authority leaks).**
+A lambda body is re-checked as its own hidden function, but
+reconstruction converted only EXPRESSION bodies to `HReturn`.  A BLOCK
+body's trailing value stayed an `HExprStmt`, so the standalone
+`check_function(return_type=...)` typed it as a discarded statement and
+never routed it through the shared return authority — the leak behind
+shapes 1 and 2 below.  Shape 3 additionally required fixing an
+independent leak in the same authority: the captureless worklist's
+unconditional overwrite of the concrete declared return with the raw
+tail type.  Three user-visible failures on valid programs:
+
+1. **Interface tail returns failed to compile.**  A `core.Callback0<Speaker>`
+   lambda (or an annotated `|| -> Speaker => { ... }` IIFE) whose block
+   trailing value was a fresh `Dog(...)` (or a moved local) never recorded
+   its interface coercion, so hidden MIR lacked `ConstructIfaceValue` and
+   full compilation failed with an internal SSA `Dog` vs `Speaker`
+   signature contract error.
+2. **Silent wrong result.**  A stored `|k: Int| -> Int` lambda ending in a
+   throwing value-match returned 0 instead of the selected arm value: the
+   match tail was typed as a discarded Void statement.
+3. **Internal traceback.**  A stored `|n: Int| -> Int` lambda ending in a
+   terminal-`throws` call reached LLVM with `FnResult<Unknown>` and raised
+   `NotImplementedError` — the captureless worklist unconditionally
+   overwrote the declared `Int` return with the raw tail type.
+
+**Fix.**  One module-level normalizer (`_hidden_lambda_body`) now serves
+BOTH hidden worklists (`HiddenLambdaSpec` and captureless `LambdaFnSpec`):
+expression bodies become a single `HReturn`; when the spec's declared
+return type is concrete and non-Void, a block body's genuine value tail
+has ONLY its last statement replaced with `HReturn(value=...)` (original
+span preserved) so the primary return authority types and coerces it.
+Preserved as-is: existing `HReturn`s, non-expression statements, empty
+bodies, Void/Unknown returns, statement-form matches (the parser's
+authoritative `HMatchExpr.statement_form` flag, never arm-terminator
+inference), and terminal-`throws` tail calls — classified via a
+CallInfo/signature predicate through the shared `hir_flow` walker (never
+name spelling).  The captureless worklist now keeps the checked spec
+return authoritative (parity with the hidden worklist), falling back to
+body inference only for genuinely absent/Unknown returns; that fallback
+now prefers the hidden `TypedFn`'s own lowering-visible interface
+coercion mark over the raw tail expression type.  No call-resolver
+body-inference path, no side-table copying across the deep-copy boundary,
+and no interface special case in MIR lowering was added.
+
+**Adjacent fix (exposed by the authoritative spec return): divergent
+non-Void bodies with structurally-dead edges.**  A body the
+reachability-refined checker accepts as divergent — e.g. `while true`
+whose only `break` sits in a DEAD catch arm — leaves lowering's after-loop
+block open.  Named functions failed with an internal "missing return
+reached MIR lowering" contract error (certified 0.33.90 rejected the
+shape outright with its coarser checker); the lambda forms only "worked"
+because the old inference mislabeled them Void.  All three finalize
+paths (`lower_function_body`, hidden, captureless) now consult
+`HIRToMIR._body_is_divergent` — the shared `hir_flow.block_exits`
+authority with the checker's own CallInfo predicates — and seal the
+unreachable open block with `M.Unreachable` instead of asserting; a
+genuinely missing return still asserts.
+
+**Tests.**  `lang/tests/driver/test_hidden_lambda_return_boundary.py`:
+the interface-return matrix (callback block tail via MIR inspection +
+run, explicit-return / expression-body / moved-local controls, annotated
+IIFE, non-implementing `Cat` single clean diagnostic), the spec-return
+flow matrix (value-match exit 5; terminal-tail clean compile/run with
+traceback text forbidden), a structural normalizer pin (converts /
+preserves matrix, including the predicate-not-spelling terminal check),
+and the named-fn divergent dead-break twin (compile/run exit 0).
+
+**Versioning:** `DRIFTC_VERSION` **0.35.0** (user-visible fix: valid
+programs move from compiler failure/traceback or silent wrong result to
+correct execution).  Internal checker/lowering only — **no ABI change,
+`DRIFT_RT_ABI_VERSION` stays 22**.
+
 ## 2026-08-03 (0.34.2: unqualified `Ok(...)` is the public Result constructor — legacy internal-result-ok HIR seam DELETED)
 
 **Supersedes every earlier description of the `Ok(...) -> HResultOk` source

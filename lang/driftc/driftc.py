@@ -3249,6 +3249,91 @@ def _build_test_visible_module_names_by_name(*, prelude_enabled, signatures_by_i
 	return visible_module_names_by_name
 
 
+def _hidden_lambda_terminal_call_predicate(
+	call_info_by_callsite_id: "Mapping[int, CallInfo] | None",
+	signatures_by_id: "Mapping[FunctionId, FnSignature] | None",
+) -> "Callable[[H.HExpr], bool]":
+	"""Terminal-`throws` classifier for hidden-lambda body normalization.
+
+	Built from recorded CallInfo/signature authority — never callee-name
+	spelling — mirroring `HIRToMIR._is_call_terminal_throws`.  The two
+	hidden worklists carry their CallInfo in different containers
+	(`LambdaFnSpec.call_info_by_callsite_id` vs the origin function's
+	typed state), so this factory takes the map and returns the predicate
+	`hir_flow` expects.  Keys are the callsite ids stamped on the ORIGINAL
+	lambda body; the deep copy preserves them, and the helper below runs
+	before `normalize_hir` renumbers anything.
+	"""
+	info_map = call_info_by_callsite_id or {}
+
+	def _is_terminal_call(expr: "H.HExpr") -> bool:
+		if not isinstance(expr, (H.HCall, H.HMethodCall, H.HInvoke)):
+			return False
+		info = info_map.get(getattr(expr, "callsite_id", None))
+		if info is None:
+			return False
+		if bool(getattr(info.sig, "declared_terminal_throws", False)):
+			return True
+		if info.target.kind is CallTargetKind.DIRECT and info.target.symbol is not None and signatures_by_id:
+			sig = signatures_by_id.get(info.target.symbol)
+			if sig is not None and bool(getattr(sig, "declared_terminal_throws", False)):
+				return True
+		return False
+
+	return _is_terminal_call
+
+
+def _hidden_lambda_body(
+	lam: "H.HLambda",
+	*,
+	wrap_value_tail: bool,
+	is_terminal_call: "Callable[[H.HExpr], bool]",
+) -> "H.HBlock":
+	"""Standalone hidden-function body for a deep-copied lambda.
+
+	Runs BEFORE `normalize_hir` and never mutates the input.  An
+	expression body becomes a single `HReturn`.  When `wrap_value_tail`
+	(the spec's declared return type is concrete and non-Void), a block
+	body whose LAST statement is a genuine value-producing `HExprStmt`
+	gets ONLY that statement replaced with `HReturn(value=...)` carrying
+	the tail's span — so the standalone `check_function(return_type=...)`
+	types the tail through the shared return authority and records its
+	coercions (interface returns), instead of typing it as a discarded
+	statement.
+
+	Preserved as-is: existing `HReturn`s, non-expression statements,
+	empty bodies, Void/Unknown-return specs (their tails are statements;
+	Unknown keeps the post-check inference fallback), and TERMINAL tails —
+	a terminal-`throws` call or a statement-form match whose arms all
+	exit.  Terminal tails are semantic exits, never values: wrapping one
+	in `HReturn` would invent a Void/`T` mismatch.  Terminal status comes
+	from `is_terminal_call` (CallInfo/signature authority) through the
+	shared `hir_flow` walker, not from any local reimplementation.
+	"""
+	from lang.driftc.stage1 import hir_flow
+
+	if lam.body_expr is not None:
+		return H.HBlock(statements=[H.HReturn(value=lam.body_expr, loc=getattr(lam.body_expr, "loc", None) or Span())])
+	body = lam.body_block
+	if body is None:
+		raise AssertionError("hidden lambda missing body (checker bug)")
+	if not wrap_value_tail or not body.statements:
+		return body
+	last = body.statements[-1]
+	if not isinstance(last, H.HExprStmt):
+		return body
+	if isinstance(last.expr, H.HMatchExpr) and getattr(last.expr, "statement_form", False):
+		# The parser's authoritative classification: a statement-form
+		# match produces no value even in value position — its arms'
+		# explicit returns are the exits.  Never infer this from arm
+		# terminators (HMatchExpr.statement_form contract).
+		return body
+	if hir_flow.is_terminal_stmt(last, is_terminal_call=is_terminal_call):
+		return body
+	ret = H.HReturn(value=last.expr, loc=getattr(last.expr, "loc", None) or Span())
+	return H.HBlock(statements=[*body.statements[:-1], ret])
+
+
 @_with_compile_recursion_headroom
 def compile_stubbed_funcs(
 	func_hirs: Mapping[FunctionId | str, H.HBlock],
@@ -6383,14 +6468,27 @@ def compile_stubbed_funcs(
 	def _hidden_lambda_ret_type(
 		body: H.HBlock, typed_fn: "TypedFn", type_table: "TypeTable"
 	) -> "TypeId":
+		# Unknown-spec-return fallback ONLY (concrete spec returns are
+		# authoritative at both call sites).  The effective tail type
+		# prefers the hidden TypedFn's own lowering-visible interface
+		# coercion mark over the raw expression type — the raw type of a
+		# coerced `Dog` tail is `Dog`, but the function returns `Speaker`.
+		def _effective(value_node_id: int) -> "TypeId":
+			coerced = getattr(typed_fn, "iface_coercions", None)
+			if coerced is not None:
+				hit = coerced.get(value_node_id)
+				if hit is not None:
+					return hit
+			return typed_fn.expr_types.get(value_node_id, type_table.ensure_unknown())
+
 		if body.statements:
 			last = body.statements[-1]
 			if isinstance(last, H.HReturn):
 				if last.value is None:
 					return type_table.ensure_void()
-				return typed_fn.expr_types.get(last.value.node_id, type_table.ensure_unknown())
+				return _effective(last.value.node_id)
 			if isinstance(last, H.HExprStmt):
-				return typed_fn.expr_types.get(last.expr.node_id, type_table.ensure_unknown())
+				return _effective(last.expr.node_id)
 		return type_table.ensure_void()
 
 	type_diag_len = len(type_diags)
@@ -6755,12 +6853,18 @@ def compile_stubbed_funcs(
 						_apply_capture_names(lam.body_block)
 			for param in lam.params:
 				param.binding_id = None
-			if lam.body_expr is not None:
-				lambda_body = H.HBlock(statements=[H.HReturn(value=lam.body_expr)])
-			elif lam.body_block is not None:
-				lambda_body = lam.body_block
-			else:
-				raise AssertionError("hidden lambda missing body (checker bug)")
+			_wrap_tail = False
+			if shared_type_table is not None and spec.return_type_id is not None:
+				_ret_kind = shared_type_table.get(spec.return_type_id).kind
+				_wrap_tail = _ret_kind not in (TypeKind.UNKNOWN, TypeKind.VOID)
+			lambda_body = _hidden_lambda_body(
+				lam,
+				wrap_value_tail=_wrap_tail,
+				is_terminal_call=_hidden_lambda_terminal_call_predicate(
+					getattr(origin_typed, "call_info_by_callsite_id", None) if origin_typed is not None else None,
+					signatures_by_id,
+				),
+			)
 			lambda_body = normalize_hir(lambda_body)
 			def _apply_capture_names_post(obj: object, name_map: dict[str, int]) -> None:
 				if obj is None:
@@ -7495,8 +7599,13 @@ def compile_stubbed_funcs(
 				_ret_def = shared_type_table.get(spec.return_type_id) if shared_type_table is not None else None
 				_is_void_return = _ret_def is not None and _ret_def.kind is TypeKind.VOID
 				if ret_val is None and not _is_void_return:
-					raise AssertionError("hidden lambda block must end with a value or return")
-				if spec.can_throw:
+					if not lower._body_is_divergent(lambda_body):
+						raise AssertionError("hidden lambda block must end with a value or return")
+					# Checker-accepted divergent body: the open block only
+					# carries structurally-dead edges — seal it (mirror of
+					# `lower_function_body`'s divergent finalize).
+					builder.set_terminator(M.Unreachable())
+				elif spec.can_throw:
 					# Can-throw lambdas (even Void-returning ones) need an
 					# `Ok` carrier wrapping their return value.  For
 					# Void-returning can-throw, synthesize an explicit Void
@@ -7773,12 +7882,18 @@ def compile_stubbed_funcs(
 			param_names = [p.name for p in lam.params]
 			param_types = {name: ty for name, ty in zip(param_names, spec.param_types)}
 			lambda_body: H.HBlock
-			if lam.body_expr is not None:
-				lambda_body = H.HBlock(statements=[H.HReturn(value=lam.body_expr)])
-			elif lam.body_block is not None:
-				lambda_body = lam.body_block
-			else:
-				raise AssertionError("captureless lambda missing body (checker bug)")
+			_cl_wrap_tail = False
+			if shared_type_table is not None and spec.return_type is not None:
+				_cl_ret_kind = shared_type_table.get(spec.return_type).kind
+				_cl_wrap_tail = _cl_ret_kind not in (TypeKind.UNKNOWN, TypeKind.VOID)
+			lambda_body = _hidden_lambda_body(
+				lam,
+				wrap_value_tail=_cl_wrap_tail,
+				is_terminal_call=_hidden_lambda_terminal_call_predicate(
+					getattr(spec, "call_info_by_callsite_id", None),
+					signatures_by_id,
+				),
+			)
 			lambda_body = normalize_hir(lambda_body)
 			current_mod = _module_id_with_visibility(spec.fn_id.module or "main")
 			visible_mods = None
@@ -7844,7 +7959,15 @@ def compile_stubbed_funcs(
 			type_diags.extend(_typevar_callinfo_diags(lambda_typed_fn, shared_type_table))
 			call_info_map = getattr(lambda_typed_fn, "call_info_by_callsite_id", None)
 			lambda_call_info: dict[int, CallInfo] | None = dict(call_info_map) if isinstance(call_info_map, dict) else None
-			lambda_ret_type = _hidden_lambda_ret_type(lambda_body, lambda_typed_fn, shared_type_table)
+			# The checked spec return type is authoritative (parity with the
+			# HiddenLambdaSpec worklist): the raw/Unknown tail type must not
+			# overwrite a concrete declared return — that overwrite emitted
+			# FnResult<Unknown> for terminal-`throws` tails and Void for
+			# statement-typed value tails.  Fall back to body inference only
+			# when the spec return is genuinely absent/Unknown.
+			lambda_ret_type = spec.return_type
+			if lambda_ret_type is None or shared_type_table.get(lambda_ret_type).kind is TypeKind.UNKNOWN:
+				lambda_ret_type = _hidden_lambda_ret_type(lambda_body, lambda_typed_fn, shared_type_table)
 			sig = FnSignature(
 				name=function_symbol(spec.fn_id),
 				param_type_ids=list(spec.param_types),
@@ -7914,8 +8037,13 @@ def compile_stubbed_funcs(
 				# callback-lambda finalize above (near line 7029): only a
 				# non-Void lambda with no value/return is a genuine bug.
 				if ret_val is None and not _is_void_return:
-					raise AssertionError("captureless lambda block must end with a value or return")
-				if spec.can_throw:
+					if not lower._body_is_divergent(lambda_body):
+						raise AssertionError("captureless lambda block must end with a value or return")
+					# Checker-accepted divergent body: the open block only
+					# carries structurally-dead edges — seal it (mirror of
+					# `lower_function_body`'s divergent finalize).
+					builder.set_terminator(M.Unreachable())
+				elif spec.can_throw:
 					# Can-throw lambdas (including Void-returning ones) need an
 					# `Ok` carrier.  For Void can-throw, synthesize the Void
 					# value to wrap, matching the `Result<Void, E>` ABI.
