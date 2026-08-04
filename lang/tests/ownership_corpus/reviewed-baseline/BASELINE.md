@@ -17,9 +17,9 @@ reviewer identity and date come from Git history.
 
 | field | value |
 |---|---|
-| driftc / ABI | **0.34.1** / **ABI 22** |
-| run snapshot composite | `082fdd75c1609417c18ce20fe68bd5977e478625549cf6fd467ba054da3706bf` |
-| toolchain composite | `d5303418622f8de37fb30e48425277509c9d7ac2528ad32ad3a7bc03d72de1f3` |
+| driftc / ABI | **0.34.2** / **ABI 22** |
+| run snapshot composite | `8b100d170f4f34ef12217e38472d112da027ee178946f7f37a8f300c57a3bb95` |
+| toolchain composite | `59a61c8e6333ddbe61b365e4631666cfa1d257ed46b05c3e8b5c64fc338a5e33` |
 | discovered fixtures | 1338 included / 49 rule-excluded |
 | counter keys | 14 |
 

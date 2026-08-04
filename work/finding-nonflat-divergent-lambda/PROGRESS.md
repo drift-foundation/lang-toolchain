@@ -1,5 +1,100 @@
 # PROGRESS: finding-nonflat-divergent-lambda
 
+Protocol echo: work-mailbox-v1 2026-08-04T13-32-37Z
+
+## Corpus-verify drift — independent implementer confirmation (review-2026-08-04T14-09-36Z)
+
+All four reviewer claims INDEPENDENTLY CONFIRMED against the committed
+baseline (lang/tests/ownership_corpus/reviewed-baseline/) and the retained
+fresh actual (build/tmp/ownership-corpus-actual/), by direct JSON
+comparison — not by re-reading the reviewer's evidence:
+
+1. Universe identity: 1338/1338 fixtures, name sets equal, inclusion rule
+   equal, ordered compiled_ok 969/969 equal, ordered failed 369/369 equal,
+   exclusions 49/49 equal.  aggregate.json byte-identical
+   (63c42910…) and projections.json byte-identical (1ad6cb45…) — my
+   independently computed sha256 digests match the reviewer's exactly.
+   Zero projection/aggregate/bucket/hard-gate drift.
+2. Exactly three fixture sha256 diffs: bitwise_uint_ops,
+   closures_explicit_captures_move_use_after_move_rejected,
+   fnptr_lambda_capture_rejected — all six hash values match the
+   reviewer's evidence byte-for-byte.  Attribution: `git diff
+   e211863c..HEAD -- lang/tests/codegen/e2e` touches EXACTLY those three
+   files; contents are the Slawomir-approved cast<Int> entrypoint edit,
+   the approved callback0 migration, and the split capture diagnostic
+   (`closures with borrowed captures are non-escaping in v0`).
+3. Environments: baseline {abi 22, driftc 0.34.1, tool 1.7.1} → actual
+   {abi 22, driftc 0.34.2, tool 1.7.1}.  ABI unchanged as expected.
+4. build/tmp/ownership-corpus-projection.json mtime 2026-08-02
+   23:31:53 -0600 — STALE (predates the fresh verification); must not be
+   used for promotion.
+
+CHECK-LANE RESULT: `just ownership-corpus-check` completed (exit 0,
+2026-08-04 08:12 local) — reused 1335 projections, recompiled the 3
+changed fixtures, exported a CURRENT candidate to
+build/tmp/ownership-corpus-projection.json (stale 2026-08-02 handoff
+overwritten).  Its UNIVERSE MISMATCH warning names exactly the 3 expected
+fixtures.  Candidate vs retained full-run actual, compared directly:
+- universe name→sha256 maps IDENTICAL (1338/1338); compiled_ok, failed,
+  excluded, inclusion rule all equal;
+- all 969 per-fixture projections EQUAL;
+- all 14 aggregate counters EQUAL;
+- candidate `observed` set = exactly the 3 drifted fixtures.
+
+CONCLUSION (implementer, concurring with reviewer): identity/fingerprint
+refresh only — zero ownership-semantic drift.  The corpus is ready for
+re-baselining, gated on Slawomir's authorization.
+ownership-corpus-promote NOT run; reviewed baseline NOT edited.
+
+TERMINAL SIGN-OFF (review-2026-08-04T15-16-39Z): promotion accepted, no
+findings; reviewer independently corroborated the diff scope, byte-identity
+of aggregate/projections, composites (8b100d17… / 59a61c8e…), and the
+exhaustive disjoint observed(3)/projected(1335) partition.  IMPL token
+consumed; no review token per terminal rule.  REMAINING (user): commit the
+4-file baseline diff.
+
+PROMOTION EXECUTED (review-2026-08-04T14-20-55Z request): `just
+ownership-corpus-promote` run by K in the SAME unchanged shell that
+produced the accepted candidate (PATH normal, candidate composite
+59a61c8e… confirmed present before running).  First attempt was killed at
+10 min by a runner timeout (SIGTERM) — verified fail-closed: `git status`
+on the corpus tree was clean, no partial mutation.  Rerun without
+timeout: exit 0; fresh full compile of 1338/1338 fixtures (2430 s)
+matched the handoff expectation exactly and replaced the reviewed
+baseline.  No PATH override, no manual baseline edit, projection not
+regenerated.
+
+Tracked diff independently inspected (exact scope):
+- aggregate.json and projections.json: ZERO diff lines — byte-identical,
+  as required;
+- manifest.json: driftc 0.34.1→0.34.2 plus EXACTLY the three accepted
+  fixture sha256 updates (values match the accepted evidence);
+- fingerprint.json: run-snapshot composite 082fdd75…→8b100d17…,
+  static_universe_digest, audit_tool, compile_source, toolchain composite
+  d5303418…→59a61c8e… (the accepted check-lane composite);
+- metadata.json: duration 1913.7→2429.9 s + start timestamp;
+- BASELINE.md: provenance table (0.34.2 / ABI 22 / new composites).
+Commit is Slawomir's (git writes reserved); diff left in working tree.
+
+ACCEPTED (review-2026-08-04T14-15-40Z): reviewer independently verified
+the candidate comparison and consumed IMPL-PENDING-2026-08-04T14-13-19Z.
+Both roles conclude identity/fingerprint refresh, zero ownership-semantic
+drift; Slawomir's promotion condition satisfied.  Promotion execution and
+the post-promotion tracked-baseline diff are handled OUTSIDE the
+implementer role and will be verified separately.
+
+CHECKPOINT (review-2026-08-04T13-23-04Z, informational, recorded
+2026-08-04): full gates through ASAN are GREEN — `just perf-protocols` ok;
+complete `DRIFT_MEMCHECK=1 just test` ok (lang tests Success; ownership
+package-boundary gate 4/4 incl. pkgb_result_ok_string_heap and
+pkgb_throws_auto_try_result); standalone `DRIFT_ASAN=1 just test` clean
+per Slawomir.  The first run-all-tests.sh abort was runner-process
+interference (reviewer edited the executing script; bash resumed at a
+stale offset), NOT a test failure.  REMAINING: `just
+ownership-corpus-verify` in flight — if it reports drift, preserve output
+and route back through this finding; NO promote/rewrite of the baseline.
+No implementation action requested; token consumed on recording.
+
 STATUS: REVISION 12 SIGNED OFF (review-2026-08-04T03-50-42Z, terminal:
 IMPL token consumed, no new REVIEW-PENDING).  Both children closed.
 Post-sign-off hygiene: the ephemeral work/-path reference the review noted

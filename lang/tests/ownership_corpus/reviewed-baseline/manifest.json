@@ -1,7 +1,7 @@
 {
   "environment": {
     "abi": "22",
-    "driftc_version": "0.34.1",
+    "driftc_version": "0.34.2",
     "tool_version": "1.7.1"
   },
   "universe": {
@@ -1920,7 +1920,7 @@
       },
       {
         "name": "bitwise_uint_ops",
-        "sha256": "2e0316760b4f1879e6aa4624dc083bfdbdfebf903f63e991a537dc1d632b1ea0"
+        "sha256": "d61e0d85497e973b470b3c640482f403090dca6998fa0589e95f080d3d3e7f34"
       },
       {
         "name": "bool_match_binder_rejected",
@@ -2528,7 +2528,7 @@
       },
       {
         "name": "closures_explicit_captures_move_use_after_move_rejected",
-        "sha256": "5a6e8a3cf1188572e8b8d8d20f85fea20ccc50539cbf22d62a6e703539c89b70"
+        "sha256": "14e538bc050f260714053d5b0d90ec398fa2a49ed352f532610d0c6536fb327c"
       },
       {
         "name": "closures_explicit_captures_shared_write_rejected",
@@ -3320,7 +3320,7 @@
       },
       {
         "name": "fnptr_lambda_capture_rejected",
-        "sha256": "3722fd0feb9bfef443db1010b29f98ec8fed1ce536e349924a6abc670e6ce51b"
+        "sha256": "7ae6a6314e31b5cb018e892c328178baefcd0c9cddd5a0066176115a2de61865"
       },
       {
         "name": "fnptr_lambda_coercion_nothrow",
