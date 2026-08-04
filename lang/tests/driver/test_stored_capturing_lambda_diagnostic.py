@@ -210,8 +210,8 @@ def test_terminal_throws_tail_call_lambda_runs(tmp_path: Path) -> None:
 	# form pins the lambda route end-to-end (a trailing terminal call is a
 	# STATEMENT, not the value tail — value-context lowering ICEd with an
 	# Unknown-layout MoveOut); the named-fn wrapper pins route parity.
-	# The STORED form of the same body is blocked by the hidden-lambda
-	# return-authority leak tracked in the lambda-tail-coercion finding.
+	# The STORED form of the same body is pinned green in
+	# test_hidden_lambda_return_boundary.py (0.35.0 hidden-return fix).
 	src = _PRELUDE + (
 		"pub error ExcA { kind: Int }\n"
 		"fn fail(code: Int) throws {\n"
@@ -385,8 +385,8 @@ def test_value_match_throwing_arm_result_both_paths_run(tmp_path: Path) -> None:
 	# arms exercised — the throwing arm must reach the catch (the old walker
 	# had no HMatchExpr case: the lambda was classified nothrow and the call
 	# aborted), and the value arm must produce the real value (not a zeroed
-	# discard).  IIFE form: the stored form is blocked by the hidden-lambda
-	# return-authority leak (lambda-tail-coercion finding).
+	# discard).  IIFE form; the stored form is pinned green in
+	# test_hidden_lambda_return_boundary.py (0.35.0 hidden-return fix).
 	src = _PRELUDE + (
 		"pub error ExcA { kind: Int }\n"
 		"fn might(k: Int) -> Int {\n"
