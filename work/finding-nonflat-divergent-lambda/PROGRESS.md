@@ -1,10 +1,51 @@
 # PROGRESS: finding-nonflat-divergent-lambda
 
-STATUS: REVISION 11 READY FOR REVIEW — responds to
-review-2026-08-03T22-53-57Z (single narrow blocker: broad exception
-suppression around the ordinary-owner registry probe).  The earlier terminal
-sign-off applied to revision 8; the finding was reopened twice by full-suite
-results and the current revision awaits review.
+STATUS: REVISION 12 SIGNED OFF (review-2026-08-04T03-50-42Z, terminal:
+IMPL token consumed, no new REVIEW-PENDING).  Both children closed.
+Post-sign-off hygiene: the ephemeral work/-path reference the review noted
+in test_out_of_scope_name_resolution.py was removed (standing repo rule —
+work/ is wiped at branch-close); file re-verified 4/4, and a
+`work/finding` sweep over lang/, tools/, stdlib/ is clean.  The remaining
+gap-observations were explicitly skipped per Slawomir's direction.
+REMAINING GATE: user-driven full run-all-tests.sh.
+
+Previous status: REVISION 12 READY FOR REVIEW (FULL SCOPE) — responds to
+review-2026-08-04T03-04-52Z (two P1 children) AND the approval relay
+review-2026-08-04T03-38-51Z.  BOTH children are resolved: child A
+(finding-return-poisoned-catch-binder) fixed in tree; child B
+(finding-return-uint-main-compatibility) closed with the
+Slawomir-approved one-line fixture edit.  Combined focused gates green:
+bitwise_uint_ops ok + catch_binder_scope_leak ok (e2e), 19/19
+return-boundary + out-of-scope-resolution driver pins, plus the child-A
+batteries recorded below.  The interim partial-scope IMPL token
+(03-41-08Z) was retracted unconsumed when the approval relay landed;
+this handoff covers both children.
+
+## REVISION 12 — full-suite reopen: two return-authority children (review-2026-08-04T03-04-52Z)
+
+Child summaries (details in each child's PROGRESS.md):
+
+1. findings/finding-return-poisoned-catch-binder — FIX IN TREE.  Deleted
+   the function-wide `binding_names` fallback in phase-1 HVar resolution
+   (unauthored belt-and-braces from mixed commit 6fda4df3); names resolve
+   only via binding identity or active lexical scope.  Phase-1's
+   unknown-name diagnostic now carries the stable `E-UNKNOWN-NAME` code
+   (same meaning/code as the phase-2 checker's).  e2e
+   catch_binder_scope_leak ok; new 4-pin driver file
+   test_out_of_scope_name_resolution.py; sibling-name-reuse suite green;
+   34-file binder/scope/lambda battery 265+7 passed; compiler suites
+   re-run in flight after the code stamp.
+2. findings/finding-return-uint-main-compatibility — BLOCKED ON APPROVAL.
+   Agreed with reviewer: stale fixture, not a coercion gap; NO compiler
+   change.  Proposed one-line edit `return cast<Int>(x);` probed out of
+   tree: compiles, exit 254.  APPROVAL-PENDING-2026-08-04T03-35-21Z
+   raised; edit will be applied only after explicit approval.
+
+Protocol cleanup per this review: stale REVIEW-PENDING-2026-08-03T23-05-59Z
+consumed by K; REVIEW-PENDING-2026-08-04T03-04-52Z consumed on pickup after
+this status update.  (Earlier context: revision 11's interim review found
+no static issues; the run-all-tests.sh gate that reopened this finding is
+the one that surfaced these two e2e failures.)
 
 ## REVISION 11 — registry probe no longer masks failures (review-2026-08-03T22-53-57Z)
 

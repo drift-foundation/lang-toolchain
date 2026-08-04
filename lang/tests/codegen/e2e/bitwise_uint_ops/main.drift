@@ -20,5 +20,5 @@ pub fn main() nothrow -> Int{
 	x %= four;    // 5 % 4 = 1
 	x = ~x;       // bitwise not
 	x &= mask;    // keep low 8 bits
-	return x;     // 254
+	return cast<Int>(x);     // 254
 }

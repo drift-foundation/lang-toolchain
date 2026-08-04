@@ -7331,13 +7331,12 @@ class TypeChecker:
 							binding_for_var[expr.node_id] = expr.binding_id
 							bid_ty = binding_types.get(expr.binding_id, self._unknown)
 							return record_expr(expr, bid_ty)
-				if expr.binding_id is None and binding_names:
-					for bid, name in binding_names.items():
-						if name == expr.name:
-							expr.binding_id = bid
-							binding_for_var[expr.node_id] = expr.binding_id
-							bid_ty = binding_types.get(expr.binding_id, self._unknown)
-							return record_expr(expr, bid_ty)
+				# NO function-wide binding_names fallback here: names resolve
+				# only through binding identity or the ACTIVE lexical scopes
+				# above.  A function-wide name table is history, not a scope —
+				# resolving through it rebound out-of-scope names (e.g. a
+				# popped catch binder) to stale bindings and their stale
+				# types, masking the required unknown-name diagnostic.
 				if expr.binding_id is not None:
 					bid_ty = binding_types.get(expr.binding_id)
 					if bid_ty is not None:
@@ -7348,6 +7347,10 @@ class TypeChecker:
 						message=f"unknown name '{user_facing_binding_name(expr.name)}'",
 						severity="error",
 						span=getattr(expr, "loc", Span()),
+						# Same stable code as the phase-2 checker's unknown-name
+						# diagnostic — one meaning, one code, whichever phase
+						# reaches the unresolved use first.
+						code="E-UNKNOWN-NAME",
 					)
 				)
 				return record_expr(expr, self._unknown)
