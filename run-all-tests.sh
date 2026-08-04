@@ -5,6 +5,10 @@
 # certify` is a SEPARATE, independent certification workflow and never invokes
 # this script.
 set -euo pipefail
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+log_file="$script_dir/run_all_tests.log"
+: > "$log_file"
+exec > >(tee -a "$log_file") 2>&1
 start=$(date +%s)
 report_total() {
 	local end elapsed
@@ -22,3 +26,5 @@ echo "MEMCHECK suite OK"
 sleep 5
 DRIFT_ASAN=1 just test
 echo "ASAN suite OK"
+
+echo "Recommended next step: just ownership-corpus-verify"
