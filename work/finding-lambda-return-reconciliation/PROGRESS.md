@@ -1,71 +1,116 @@
-# Progress: inferred lambda return reconciliation
+# Progress: inferred-lambda return reconciliation
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04 (K, from review-2026-08-04T20-27-32Z; the P1.3
+sibling was folded in per review-2026-08-04T20-32-09Z).  Supersedes the
+2026-08-03 research checklist: its five open items are all completed
+below; its research evidence remains valid history.
 
-## Status
+STATUS: SIGNED OFF FOR BROADER GATES (review-2026-08-04T21-10-15Z: all
+revision-1 findings closed; no further implementation change; child
+finding separately signed off; validator strict; version 0.35.0 pending,
+ABI 22).  Combined focused/smoke gates landed green below.  REMAINING:
+the repository's broader gate sequence (user-run), then the 0.35.0
+release announcement.
 
-- [x] Classified as `LANGUAGE_BUG`.
-- [x] Scanned `doc/refactor_triggers.md`; no trigger fires.
-- [x] Checked cross-team announcements; `/tmp/drift-announce` absent.
-- [x] Reduced surface repro saved.
-- [x] Traced first-pass and later hidden-lambda checks.
-- [x] Confirmed the primary first pass accepts the conflict and records `Int`.
-- [x] Confirmed the current full driver rejects only in the later re-check.
-- [x] Added executable red boundary tests under this work folder.
-- [x] Proposed nested-safe, no-retyping collector patch and test matrix.
-- [ ] Move the red tests into the in-tree type-checker suite.
-- [ ] Confirm those tests fail before the fix.
-- [ ] Implement collector/reconciliation after K's #1 diff settles.
-- [ ] Add driver negatives and compile/run positives.
-- [ ] Run focused gates, then broader gates after #1 and #2 converge.
+Previously: REVISION 2 READY FOR REVIEW — responds to
+review-2026-08-04T20-55-56Z (required child fix + two P2s).
 
-## Evidence
+## REVISION 2 (review-2026-08-04T20-55-56Z)
 
-First-pass manual HIR probe on the current tree:
+1. (P1) Child findings/finding-nested-lambda-intrinsic-callinfo: FIX IN
+   TREE — see the child's PROGRESS.md.  Summary: TypedFn construction now
+   partitions callsite-indexed tables (`call_info_by_callsite_id`,
+   `instantiations_by_callsite_id`) by finalized-body ownership via a
+   full post-rewrite walk that descends into still-present lambdas;
+   extracted stored-lambda entries no longer leak to the parent;
+   validator untouched (strict); live maps unpruned for the LambdaFnSpec
+   snapshot.  Red-first module
+   lang/tests/driver/test_nested_lambda_callinfo_ownership.py (3 red →
+   4/4 green incl. parent+extracted coexistence, immediate-IIFE
+   counter-boundary, structural ownership pin with an extraction guard).
+2. (P2) Stable-contract pin added:
+   test_mismatch_diagnostic_code_and_span_are_stable — exact code
+   E-LAMBDA-INFERRED-RETURN-MISMATCH, exact message, and the diagnostic
+   span pinned to the offending HReturn's own non-default Span.
+3. (P2) Contextual/downstream claim corrected in BOTH the module
+   docstring and doc/history.md: contextual annotated results were
+   already rejected by the declared-return authority; only the
+   uncontextual shape depended on the hidden re-check.
 
-```text
-diagnostics: []
-direct call expr type: Int
-```
+Gates LANDED, all green: combined battery (both new type_checker files +
+the ownership module + child PLAN §5 list + parent battery, 14 files) —
+154 passed; 5-suite compiler smoke — 1115 passed; `git diff --check`
+clean.
 
-Full driver compile:
+## Implementation (all PLAN invariants held)
 
-```text
-work/finding-lambda-return-reconciliation/repro_mixed_prefix_return_tail.drift:5:10:
-error: return type 'String' does not match declared type 'Int'
-exit 1
-```
+1. RED FIRST: work probes rerun on the pre-fix tree (2 failed — the
+   primary diagnostic absent), then adapted into
+   lang/tests/type_checker/test_inferred_lambda_return_reconciliation.py
+   BEFORE the compiler change.
+2. Collector: `lambda_return_observation_stack` (per-function ephemeral
+   state) of `(has_value, effective_type, span)` tuples; pushed/popped
+   around EACH lambda's body typing (both body_expr and body_block,
+   try/finally with identity assert).  Nested lambdas push their own
+   list; named functions and the hidden re-check see an empty stack.
+3. `type_stmt(HReturn)` now PRESERVES `_type_return_value`'s returned
+   effective type and records it on the innermost collector (bare
+   `return;` records Void).  No re-typing anywhere; the stored type
+   survives arm-scope pops and reflects expected-return coercions.
+4. `_find_return_expr` DELETED.  Statement-body/terminal-tail candidate
+   selection reads `_first_valued_observation(observations)` (the list is
+   passed into `_lambda_body_result` explicitly).  Deterministic rule
+   unchanged: value tail, else first valued return, else Void.
+5. Reconciliation runs ONLY when `infer_return_from_body` (no annotation,
+   no concrete contextual return) and the candidate is concrete:
+   each observation compared via the extracted `_same_normalized_type`
+   helper (now shared with `_type_return_value`'s mismatch ladder —
+   the ~12309 HLet copy left alone per plan); Unknown on either side
+   suppressed; candidate stays installed after diagnosing.  Stable
+   diagnostic: E-LAMBDA-INFERRED-RETURN-MISMATCH
+   "return type 'X' does not match inferred lambda return type 'Y'"
+   at the offending return's span.  No late coercion/LUB; no
+   call-resolver inference route; no side-table copying.
 
-The apparent contradiction is expected: the first result is the defective
-authority; the second is K's newly strengthened hidden-lambda re-check catching
-the bad signature later.
+## Evidence findings recorded (plan told me to verify; both confirmed)
 
-Run the boundary probe with:
+- The minimal-repro driver source with `val result: Int = f(false)` is
+  CONTEXTUAL, not inferred: the pending-lambda call path builds
+  `fn_ret=expected_type` from the annotated binding, so the primary
+  authority correctly diagnoses "does not match declared type 'Int'" at
+  the return's original visit — the driver diagnostic did NOT come only
+  from the hidden re-check once inspected on the fixed tree.  The driver
+  negative matrix therefore has BOTH: an UNANNOTATED variant pinning
+  exactly one E-LAMBDA-INFERRED-RETURN-MISMATCH (primary
+  reconciliation authority), and the annotated variant pinning exactly
+  one declared-type diagnostic with NO inferred-mismatch duplicate.
+- callback0 INSIDE a stored lambda fails with
+  E_INTRINSIC_CALLINFO_MISSING_NODE — PRE-EXISTING (identical failure on
+  the pre-fix `git archive HEAD` scratch tree); not this slice's
+  regression.  The nested-isolation positive uses an unannotated inner
+  IIFE instead.  Candidate follow-up finding if worth tracking.
 
-```bash
-./.venv/bin/python3 -m pytest -q work/finding-lambda-return-reconciliation/red_first_pass_reconciliation.py
-```
+## Test matrix (lang/tests/type_checker/test_inferred_lambda_return_reconciliation.py — 13 tests, all green)
 
-Verified before the fix: `2 failed in 0.50s`; both calls were typed as `Int`,
-and both expected mismatch lists were empty.  Expected after the fix: two
-passes, each with exactly one primary diagnostic.
+Direct primary-boundary: prefix-return-vs-tail (call stays Int + exactly
+one stable mismatch), statement-only branches, bare-return-vs-valued-tail
+(Void message), upstream-Unknown suppression (unknown-name preserved, no
+cascade), nested-lambda isolation (inner String never enters outer
+collector).  Driver: inferred single-primary-diagnostic negative,
+contextual single-declared-diagnostic companion, statement-form match
+mismatch through an ARM-LOCAL binding (captured before its arm scope
+popped), and compile/run positives (prefix agrees, statement-only agrees,
+statement match agrees, nested isolation, all-bare Void).
 
-The probe filename deliberately does not match pytest's default `test_*.py`
-discovery pattern, so an accidental repository-root pytest invocation will not
-turn this handoff artifact into an unrelated gate failure.  Pass the path
-explicitly when running it.
+## Version/docs
 
-## Resume notes for K
+DRIFTC_VERSION stays at pending 0.35.0 (no second bump); ABI 22.  History
+folded into the pending 0.35.0 entry (reconciliation + P1.3 paragraphs).
 
-1. Refresh `git diff -- lang/driftc/type_checker.py` first; this plan was written
-   while #1 was actively changing the same function.
-2. Keep the final shared `_type_return_value` implementation from #1.
-3. Add the observation stack beside per-function checker state, record from
-   `type_stmt(HReturn)`, and delete `_find_return_expr`.
-4. Reconcile only when the lambda entered with no known return type.
-5. Verify the driver diagnostic now originates during the enclosing function's
-   first check; do not accept green that comes only from `driftc.py`'s standalone
-   hidden-lambda check.
+## Gates
 
-Only files under `work/finding-lambda-return-reconciliation/` were created by
-this research.  No compiler, runtime, stdlib, or in-tree test file was edited.
+LANDED, all green: focused battery (both new files +
+boundary/inference/trailing-match/try-IIFE/hidden-boundary/slice12/
+stored-diagnostic + stage1 callinfo) — 91 passed; 5-suite compiler smoke
+(type_checker/checker/stage1/stage2/parser, incl. the call_resolver
+deletion surface) — 1114 passed; `git diff --check` clean.

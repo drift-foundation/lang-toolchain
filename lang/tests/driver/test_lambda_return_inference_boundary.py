@@ -20,7 +20,12 @@ These pins fix the observable boundary in the two directions that matter:
   * an empty / value-less body infers `Void` (never `None`, which would decay to
     `Unknown`), so a stored empty lambda compiles and invokes cleanly.
 
-Both direct `HCall(fn=HLambda)` and the stored/`HInvoke` route are covered.
+Both direct `HCall(fn=HLambda)` and the stored route are covered.  Stored
+source (`val f = ...; f()`) parses to `HCall(fn=HVar)` with an INDIRECT
+CallInfo target — never `HInvoke`.  The annotated-binding cases here are
+CONTEXTUAL typing (the declared type reaches the lambda's expected return);
+the true no-context inference boundary is pinned by
+lang/tests/type_checker/test_lambda_callinfo_inference_boundary.py.
 
 R4 (0.34.2): the return authority also VERIFIES the implements relation before
 recording a concrete->interface return coercion (mirror of the HLet 0.33.77
@@ -62,9 +67,12 @@ def _compile(tmp_path: Path, src: str, *, out: str) -> subprocess.CompletedProce
 
 
 def test_direct_iife_annotated_boundary_is_int(tmp_path: Path) -> None:
-	# Direct HCall(fn=HLambda): the unannotated value-block IIFE's inferred return
-	# is bound to `val r: Int`.  A Void/Unknown boundary would fail this binding
-	# in the checker, so the annotation IS the boundary assertion.
+	# Direct HCall(fn=HLambda): CONTEXTUAL result propagation for an IIFE —
+	# the `val r: Int` annotation supplies the expected return before the
+	# body is typed.  A Void/Unknown boundary would fail this binding in the
+	# checker, so the annotation IS the boundary assertion (for the
+	# no-context INFERENCE boundary see
+	# test_lambda_callinfo_inference_boundary.py).
 	src = _PRELUDE + (
 		"pub fn main() nothrow -> Int {\n"
 		"\tval r: Int = (|| => { val a = 5; a + 1 })();\n"  # boundary must be Int
@@ -76,8 +84,10 @@ def test_direct_iife_annotated_boundary_is_int(tmp_path: Path) -> None:
 
 
 def test_stored_lambda_annotated_boundary_is_int(tmp_path: Path) -> None:
-	# Stored-then-invoked route (pending-lambda / HInvoke): the same inference must
-	# reach the CallInfo boundary so `val r: Int = f()` type-checks.
+	# Stored-then-invoked route — CONTEXTUAL result propagation through a
+	# pending stored lambda: the call parses as HCall(fn=HVar) with an
+	# INDIRECT CallInfo target (not HInvoke), and `val r: Int` supplies the
+	# expected return at the invoking site.
 	src = _PRELUDE + (
 		"pub fn main() nothrow -> Int {\n"
 		"\tval f = || => { val a = 5; a + 1 };\n"
@@ -160,8 +170,8 @@ def test_named_fn_return_variable_mismatch_rejected(tmp_path: Path) -> None:
 
 def test_stored_lambda_declared_mismatch_rejected(tmp_path: Path) -> None:
 	# R3.P1 (the reviewer's bypass): a STORED annotated lambda with a mismatched
-	# value tail.  The stored/HInvoke route consumes the declared CallInfo return
-	# (Int), so no downstream pass ever re-checks the body — before the authority
+	# value tail.  The stored HCall(fn=HVar) route consumes the declared CallInfo
+	# return (Int), so no downstream pass ever re-checks the body — before the authority
 	# diagnosed lambda tails, this compiled AND linked silently (miscompile,
 	# reproduced on certified 0.33.90).
 	src = _PRELUDE + (

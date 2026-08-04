@@ -1,0 +1,15 @@
+module repro;
+
+import std.core as core;
+
+pub fn main() nothrow -> Int {
+	val outer = | b: Bool | => {
+		val inner: core.Callback0<String> = core.callback0(|| => {
+			return "s";
+		});
+		val s = inner.call();
+		(s.byte_length() - 1)
+	};
+	return outer(true);
+}
+

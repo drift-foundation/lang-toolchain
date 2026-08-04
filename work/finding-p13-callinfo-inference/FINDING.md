@@ -1,6 +1,6 @@
 # Finding: P1.3 tests contextual typing, while its source change is unreachable
 
-Date: 2026-08-03
+Date: 2026-08-03; refreshed against 0.35.0 on 2026-08-04
 
 Classification: patch defect / dead code / boundary-test gap.  This is **not a
 confirmed LANGUAGE_BUG** on the current tree: the live paths already infer and
@@ -113,6 +113,13 @@ the `if` condition was evaluated for a non-lambda stored `HCall(fn=HVar)`; every
 line in the branch body, including the new inference block, was marked
 unexecuted.
 
+The inventory and probes were rerun after 0.35.0 landed.  The two duplicate
+`HCall(fn=HLambda)` branches remain at approximately lines 5100 and 6019, and
+the four no-context probes remain green (`4 passed in 0.52s`).  This finding is
+therefore being folded into the active inferred-return reconciliation slice:
+the collector changes what the live branch consumes, while this sibling pins
+that consumption and removes the dead alternative.
+
 ## Trigger and announcement checks
 
 `doc/refactor_triggers.md` was scanned.  No registered trigger concerns duplicate
@@ -122,4 +129,3 @@ mandated.  Removing the directly implicated dead branch is sufficient.
 `/tmp/drift-announce` did not exist at investigation time, so there were no
 cross-team announcements to consume.  This research makes no release change and
 publishes none.
-

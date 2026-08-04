@@ -3588,6 +3588,30 @@ class TypeChecker:
 		# Value is the binding_id of the originating ref param, or None when the
 		# reference points at local/temporary storage.
 		ref_origin_param: Dict[int, Optional[int]] = {}
+		# Inferred-lambda return reconciliation state.  While a lambda BODY is
+		# being typed, the innermost lambda's collector sits on top of this
+		# stack and `type_stmt(HReturn)` records each return's ONE-PASS
+		# effective type into it as `(has_value, effective_type, span)`.
+		# A nested HLambda pushes its own list (function boundary — its
+		# returns never enter the outer lambda's observations); named
+		# functions and the standalone hidden-function re-check see an EMPTY
+		# stack and record nothing.  The collector is ephemeral inference
+		# state only: reconciliation reads these captured results and never
+		# re-types a return expression.
+		lambda_return_observation_stack: list[list[tuple[bool, TypeId, Span]]] = []
+		def _same_normalized_type(lhs: TypeId, rhs: TypeId) -> bool:
+			# One equality for the return contract: TypeId identity, else
+			# normalized type-key equality (package FORWARD_NOMINAL
+			# placeholders, alias chains).  Shared by `_type_return_value`'s
+			# mismatch ladder and inferred-lambda return reconciliation.
+			if lhs == rhs:
+				return True
+			try:
+				return _normalize_type_key(type_key_from_typeid(self.type_table, lhs)) == _normalize_type_key(
+					type_key_from_typeid(self.type_table, rhs)
+				)
+			except Exception:
+				return False
 		explicit_capture_stack: list[dict[int, str]] = []
 		def _explicit_capture_kind(binding_id: int | None) -> str | None:
 			if binding_id is None:
@@ -7670,31 +7694,17 @@ class TypeChecker:
 				# authoritative HMatchExpr.statement_form) are NOT value-typed; their
 				# result comes from the internal returns.  The authority also compares the
 				# tail type against a declared/expected return type.
-				def _find_return_expr(node: H.HNode) -> 'H.HExpr | None':
-					# A nested lambda is a function boundary: its `return`s exit the INNER
-					# lambda, never this one (spawn-lambda SSA-contract ICE family).
-					if isinstance(node, H.HLambda):
-						return None
-					if isinstance(node, H.HReturn) and node.value is not None:
-						return node.value
-					if isinstance(node, H.HBlock):
-						for st in node.statements:
-							found = _find_return_expr(st)
-							if found is not None:
-								return found
-						return None
-					for field in getattr(node, '__dataclass_fields__', {}) or {}:
-						val = getattr(node, field, None)
-						if isinstance(val, H.HNode):
-							found = _find_return_expr(val)
-							if found is not None:
-								return found
-						elif isinstance(val, list):
-							for it in val:
-								if isinstance(it, H.HNode):
-									found = _find_return_expr(it)
-									if found is not None:
-										return found
+				def _first_valued_observation(observations: 'list[tuple[bool, TypeId, Span]]') -> 'TypeId | None':
+					# Deterministic statement-body candidate: the first valued
+					# `return`'s ONE-PASS effective type, read from the
+					# collector filled during this lambda's body typing.
+					# (Replaces the post-scope `_find_return_expr` AST walk —
+					# a syntax traversal after typing could not represent all
+					# exits, and nested-lambda isolation is now structural:
+					# an inner lambda records to its OWN collector.)
+					for _has_val, _obs_ty, _obs_span in observations:
+						if _has_val:
+							return _obs_ty
 					return None
 				def _terminal_throws_call(call_expr: 'H.HExpr') -> bool:
 					# Terminal-`throws` call resolution for the shared flow
@@ -7731,7 +7741,7 @@ class TypeChecker:
 					# still rejects.
 					_exits = hir_flow.block_exits(b, is_terminal_call=_terminal_throws_call, call_can_throw=_guard_call_can_throw)
 					return _exits <= {hir_flow.Exit.THROWS}
-				def _lambda_body_result(block, expected_ret):
+				def _lambda_body_result(block, expected_ret, observations):
 					scope_env.append(dict())
 					scope_bindings.append(dict())
 					try:
@@ -7779,19 +7789,15 @@ class TypeChecker:
 								# handling (a valued `return` elsewhere in the body
 								# still provides the result; otherwise the divergence-
 								# aware value-less handling below applies).
-								_result_ty = None
-								_ret_expr = _find_return_expr(block)
-								if _ret_expr is not None:
-									_result_ty = expr_types.get(getattr(_ret_expr, 'node_id', None))
+								_result_ty = _first_valued_observation(observations)
 						else:
 							# statement-form tail (statement-form match / explicit return / binding /
-							# diverging): type as a statement.  Each internal `return` value is
-							# already typed (and coerced) by type_stmt; read the recorded type of the
-							# first one -- do NOT re-type it (its arm-local scope may be popped).
+							# diverging): type as a statement.  Each internal `return` value's
+							# effective type was captured at its single type_stmt visit; read the
+							# first valued observation -- do NOT re-type it (its arm-local scope
+							# may be popped).
 							type_stmt(_last)
-							_ret_expr = _find_return_expr(block)
-							if _ret_expr is not None:
-								_result_ty = expr_types.get(getattr(_ret_expr, 'node_id', None))
+							_result_ty = _first_valued_observation(observations)
 						if _result_ty is None:
 							# value-less body (no trailing value, no valued return) infers Void.
 							_result_ty = self._void
@@ -7822,18 +7828,57 @@ class TypeChecker:
 					finally:
 						scope_env.pop()
 						scope_bindings.pop()
+				# Genuinely inferred iff no annotation AND no concrete
+				# contextual return supplied one above.  Only such lambdas run
+				# the post-body reconciliation; annotated/contextual lambdas'
+				# valued returns already used `_type_return_value` with that
+				# expectation (full lowering-visible coercion) at their visit.
+				infer_return_from_body = lambda_ret_type is None
+				_lambda_observations: list[tuple[bool, TypeId, Span]] = []
+				lambda_return_observation_stack.append(_lambda_observations)
 				body_result_ty: TypeId | None = None
-				if expr.body_expr is not None:
-					def _set_body_expr(_e):
-						expr.body_expr = _e
-					body_result_ty = _type_return_value(
-						expr.body_expr, lambda_ret_type,
-						used_as_value=True, set_value=_set_body_expr,
-						span=getattr(expr.body_expr, 'loc', None) or getattr(expr, 'loc', Span()))
-				elif expr.body_block is not None:
-					body_result_ty = _lambda_body_result(expr.body_block, lambda_ret_type)
+				try:
+					if expr.body_expr is not None:
+						def _set_body_expr(_e):
+							expr.body_expr = _e
+						body_result_ty = _type_return_value(
+							expr.body_expr, lambda_ret_type,
+							used_as_value=True, set_value=_set_body_expr,
+							span=getattr(expr.body_expr, 'loc', None) or getattr(expr, 'loc', Span()))
+					elif expr.body_block is not None:
+						body_result_ty = _lambda_body_result(expr.body_block, lambda_ret_type, _lambda_observations)
+				finally:
+					_popped = lambda_return_observation_stack.pop()
+					assert _popped is _lambda_observations
 				if lambda_ret_type is None and body_result_ty is not None:
 					lambda_ret_type = body_result_ty
+				if infer_return_from_body and lambda_ret_type is not None and lambda_ret_type != self._unknown:
+					# Reconcile EVERY observed return against the deterministic
+					# inferred candidate (value tail, else first valued return,
+					# else Void).  Validation only: no re-typing, no late
+					# coercion/LUB — with no declared or contextual target
+					# there is no principled coercion destination, so differing
+					# fully-inferred types are rejected.  Unknown on either
+					# side is poison: suppressed to avoid cascades over an
+					# already-diagnosed upstream failure.  The candidate stays
+					# installed after diagnosing (poisoning it would create
+					# unrelated cascades; compilation already fails).
+					for _obs_has_val, _obs_ty, _obs_span in _lambda_observations:
+						_obs_eff = _obs_ty if _obs_has_val else self._void
+						if _obs_eff == self._unknown:
+							continue
+						if not _same_normalized_type(_obs_eff, lambda_ret_type):
+							diagnostics.append(
+								_tc_diag(
+									message=(
+										f"return type '{self.type_table.get(_obs_eff).name}' does not match "
+										f"inferred lambda return type '{self.type_table.get(lambda_ret_type).name}'"
+									),
+									severity="error",
+									span=_obs_span,
+									code="E-LAMBDA-INFERRED-RETURN-MISMATCH",
+								)
+							)
 				return_type = saved_return_type
 				# Restore auto-try lambda-boundary state (Bug A — 0.31.38).
 				fn_declared_throws = saved_fn_declared_throws
@@ -12105,15 +12150,7 @@ class TypeChecker:
 					set_value(value_expr)
 					inferred = expected_ret
 			if expected_ret is not None and inferred is not None and inferred != expected_ret:
-				def _same_type(lhs: TypeId, rhs: TypeId) -> bool:
-					if lhs == rhs:
-						return True
-					try:
-						return _normalize_type_key(type_key_from_typeid(self.type_table, lhs)) == _normalize_type_key(
-							type_key_from_typeid(self.type_table, rhs)
-						)
-					except Exception:
-						return False
+				_same_type = _same_normalized_type
 				if inferred == self._unknown or expected_ret == self._unknown:
 					# Poisoned-type suppression FIRST: an Unknown must never reach
 					# the interface branch (it would record a bogus coercion or
@@ -12844,6 +12881,7 @@ class TypeChecker:
 							)
 						)
 			elif isinstance(stmt, H.HReturn):
+				_ret_effective: TypeId = self._void
 				if stmt.value is not None:
 					used_as_value = True
 					if (
@@ -12859,12 +12897,23 @@ class TypeChecker:
 								used_as_value = False
 					def _set_ret_value(_e):
 						stmt.value = _e
-					_type_return_value(
+					_ret_effective = _type_return_value(
 						stmt.value,
 						return_type,
 						used_as_value=used_as_value,
 						set_value=_set_ret_value,
 						span=getattr(stmt, "loc", Span()),
+					)
+				if lambda_return_observation_stack:
+					# Record the ONE-PASS effective type on the innermost
+					# active lambda's collector.  Read `stmt.value` again:
+					# auto-try / callback wrapping may have replaced the slot,
+					# but only presence matters here (bare `return;` observes
+					# Void).  The stored type already reflects any
+					# expected-return coercion and stays valid after arm-local
+					# scopes pop — never rediscovered from expr_types later.
+					lambda_return_observation_stack[-1].append(
+						(stmt.value is not None, _ret_effective if _ret_effective is not None else self._unknown, getattr(stmt, "loc", Span()))
 					)
 			elif isinstance(stmt, H.HIf):
 				if isinstance(stmt.cond, H.HTraitExpr):
@@ -13777,6 +13826,30 @@ class TypeChecker:
 		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":
 			_check_dup_expr_ids("post_fnptr")
 
+		def _owned_callsite_ids(finalized_body: H.HBlock) -> set[int]:
+			# Finalized-body OWNERSHIP for callsite-indexed side tables: a
+			# FULL post-rewrite walk that DOES descend into lambdas still
+			# present in the HIR.  Immediate IIFEs / callback-argument
+			# lambdas keep their entries on this function (the hidden-lambda
+			# worklists read terminal-call CallInfo from the ORIGIN
+			# function's map); a stored lambda EXTRACTED by
+			# `_apply_fnptr_consts` is gone from this body, so its
+			# callsites are not owned here — the extracted body is
+			# independently re-checked as its own function and re-records
+			# its own tables.  (This is deliberately NOT the lambda-skipping
+			# completeness walker below: different question — ownership of
+			# recorded entries, not coverage of source calls.)
+			from lang.driftc.stage1.node_ids import default_should_descend, iter_hir_walk
+			owned: set[int] = set()
+			for _obj in iter_hir_walk(finalized_body, should_descend=default_should_descend):
+				if isinstance(_obj, (H.HCall, H.HMethodCall)) or (hasattr(H, "HInvoke") and isinstance(_obj, H.HInvoke)):
+					_csid = getattr(_obj, "callsite_id", None)
+					if isinstance(_csid, int):
+						owned.add(_csid)
+			return owned
+
+		_owned_csids = _owned_callsite_ids(body)
+
 		typed = TypedFn(
 			fn_id=fn_id,
 			name=fn_id.name,
@@ -13796,8 +13869,16 @@ class TypeChecker:
 			binding_mutable=binding_mutable,
 			binding_place_kind=binding_place_kind,
 			call_resolutions=dict(call_resolutions),
-			call_info_by_callsite_id=dict(call_info_by_callsite_id),
-			instantiations_by_callsite_id=dict(instantiations_by_callsite_id),
+			# Callsite-indexed tables are detached PARTITIONED by finalized-
+			# body ownership (`_owned_callsite_ids` above): entries recorded
+			# while a since-extracted stored lambda's body was typed in this
+			# function's state must not travel on this TypedFn — the strict
+			# reverse intrinsic validator correctly reported such orphans as
+			# E_INTRINSIC_CALLINFO_MISSING_NODE on valid programs.  The LIVE
+			# maps stay unpruned: LambdaFnSpec snapshots alias them for the
+			# pre-recheck terminal-call classification.
+			call_info_by_callsite_id={csid: info for csid, info in call_info_by_callsite_id.items() if csid in _owned_csids},
+			instantiations_by_callsite_id={csid: inst for csid, inst in instantiations_by_callsite_id.items() if csid in _owned_csids},
 			instantiations_by_node_id=dict(instantiations_by_node_id),
 			iface_coercions=dict(iface_coercions),
 			borrowed_iface_coercions=dict(borrowed_iface_coercions),

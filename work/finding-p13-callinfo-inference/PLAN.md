@@ -1,8 +1,13 @@
 # Plan: make P1.3 reachable, honest, and boundary-pinned
 
-This is a handoff proposal only.  K is concurrently changing the same compiler
-area for #1, and #2 may further revise lambda-body inference.  Refresh the diff
-and line numbers before applying it.
+Refreshed: 2026-08-04 against 0.35.0.  This sibling is folded into the active
+`finding-lambda-return-reconciliation` implementation slice.  Complete its
+bounded cleanup after the return-observation collector is stable, then hand
+both findings back for one combined review.
+
+The current tree still has the live branch near line 5100 and the unreachable
+duplicate near line 6019.  The work probes were rerun after 0.35.0 and remain
+green: `4 passed in 0.52s`.
 
 ## 1. Add true no-context CallInfo tests first
 
@@ -97,6 +102,12 @@ Because the repository forbids stale boundary comments, update the misleading
 module prose and comments in the same patch.  Keep the test behavior; this is a
 truthfulness correction, not weakening coverage.
 
+Slawomir explicitly approved these comment-only edits on 2026-08-04.  This
+approval covers only the stale prose that mislabels contextual typing as
+inference and an `HCall(fn=HVar)` source route as `HInvoke`.  It does not approve
+changes to existing test source, assertions, expected diagnostics, or behavior;
+use a fresh approval handoff if any of those become necessary.
+
 ## 4. Retain a full compile/run companion
 
 Add or adapt the included no-context source as a driver test:
@@ -124,7 +135,8 @@ lang/tests/driver/test_try_expr_immediate_lambda.py
 lang/tests/driver/test_lambda_trailing_match_value.py
 ```
 
-Then run the combined #1/#2/#3 lambda-focused gate.  The important audit is:
+Then run the combined reconciliation/P1.3 lambda-focused gate.  The important
+audit is:
 
 - one live `HCall(fn=HLambda)` resolver;
 - no second body-inference path;
@@ -137,6 +149,5 @@ Then run the combined #1/#2/#3 lambda-focused gate.  The important audit is:
 Deleting unreachable code and strengthening tests is proven user-neutral on the
 current tree.  It changes no accepted source, diagnostic, serialized format,
 runtime signature, layout, calling convention, or ABI boundary.  No compiler or
-ABI version bump is indicated.  Per the user's earlier instruction, do not add a
-version change for this handoff.
-
+ABI version bump is indicated.  This work is folded into the same pending,
+unreleased 0.35.0 train; do not add a version change for this handoff.

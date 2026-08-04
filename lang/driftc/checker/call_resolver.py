@@ -6016,48 +6016,12 @@ def resolve_call_expr(
 		record_call_info(expr, param_types=[arg_ty], return_type=cb_ty, can_throw=False, target=CallTarget.intrinsic(intrinsic_kind))
 		return record_expr(expr, cb_ty)
 
-	if isinstance(expr.fn, H.HLambda):
-		lam = expr.fn
-		if call_kwargs_issues("lambda calls", getattr(expr, "kwargs", None)):
-			diagnostics.append(_tc_diag(message="keyword arguments are only supported for struct constructors in v1", severity="error", span=getattr(expr, "loc", Span())))
-			return record_expr(expr, ctx.unknown_ty)
-		# Real user-value arguments defer ownership-use accounting to autoborrow
-		# (`_type_user_arg`); HLambda args stay plain type_expr (callback probes).
-		arg_types = [
-			type_expr(a) if isinstance(a, H.HLambda) else _type_user_arg(type_expr, a)
-			for a in expr.args
-		]
-		if len(arg_types) != len(lam.params):
-			diagnostics.append(_tc_diag(message=f"lambda expects {len(lam.params)} arguments, got {len(arg_types)}", severity="error", span=getattr(expr, "loc", Span())))
-			return record_expr(expr, ctx.unknown_ty)
-		lambda_ret_type: TypeId | None = None
-		if getattr(lam, "ret_type", None) is not None:
-			try:
-				lambda_ret_type = resolve_opaque_type(lam.ret_type, ctx.type_table, module_id=current_module_name)
-			except Exception:
-				lambda_ret_type = None
-		if expected_type is not None:
-			lambda_ret_type = expected_type
-		if lambda_ret_type is None:
-			# Recover the body's inferred return by CONSUMING type_expr(lam)'s
-			# resulting function type (an unannotated value-block lambda infers it
-			# from its trailing tail).  This does NOT open a second body-inference
-			# path -- it reads the return slot of the one type_expr already builds.
-			_lam_fn_ty = type_expr(lam)
-			if _lam_fn_ty is not None:
-				_lam_def = ctx.type_table.get(_lam_fn_ty)
-				if _lam_def.kind is TypeKind.FUNCTION and _lam_def.param_types:
-					_inf_ret = _lam_def.param_types[-1]
-					if _inf_ret is not None and _inf_ret != ctx.unknown_ty:
-						lambda_ret_type = _inf_ret
-		call_ret = lambda_ret_type or ctx.unknown_ty
-		can_throw = _lambda_can_throw(lam, None)
-		lam.can_throw_effective = bool(can_throw)
-		fn_ty = ctx.type_table.ensure_function(arg_types, call_ret, can_throw=bool(can_throw))
-		record_call_info(expr, param_types=arg_types, return_type=call_ret, can_throw=can_throw, target=CallTarget.indirect(lam.node_id))
-		intent.arg_expected_types = _expected_arg_types_for_call(list(arg_types), len(expr.args))
-		_propagate_arg_expected_types(intent, arg_types)
-		return record_expr(expr, call_ret)
+	# NOTE: no `HCall(fn=HLambda)` handling here — the ONE live authority for
+	# direct lambda calls is the branch earlier in this function (it types the
+	# lambda with the call's expectation, extracts the function return, and
+	# records CallInfo, returning on every path).  A historical duplicate
+	# branch at this position was UNREACHABLE and was deleted (P1.3); pinned
+	# by lang/tests/type_checker/test_lambda_callinfo_inference_boundary.py.
 
 	if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 		qm = expr.fn

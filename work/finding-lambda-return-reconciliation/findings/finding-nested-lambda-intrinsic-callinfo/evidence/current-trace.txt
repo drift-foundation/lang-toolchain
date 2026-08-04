@@ -1,0 +1,25 @@
+Command (2026-08-04 current worktree):
+
+  ./.venv/bin/python3 -m lang.driftc.driftc \
+    work/finding-lambda-return-reconciliation/findings/finding-nested-lambda-intrinsic-callinfo/repro_nested_callback.drift \
+    --entry repro::main --target-word-bits 64 --stdlib-root stdlib \
+    -o /tmp/drift-nested-callback-repro
+
+Observed exit: 1
+
+Observed diagnostic:
+
+  <unknown location>:?:?: error: intrinsic CallInfo is missing source call node [E_INTRINSIC_CALLINFO_MISSING_NODE]
+
+Read-only instrumentation immediately before
+driftc.py::_validate_intrinsic_callinfo for repro::main:
+
+  TRACE_FN repro::main
+  TRACE_INFO [(0, INTRINSIC, callback0),
+              (1, INDIRECT, None),
+              (2, DIRECT, None),
+              (3, INDIRECT, None)]
+  TRACE_NODES [(22, HCall, 3, outer)]
+
+Interpretation: the finalized parent body owns only callsite 3, but its
+CallInfo map retains callsites 0-2 from the extracted stored-lambda body.

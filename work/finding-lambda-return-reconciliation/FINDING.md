@@ -1,6 +1,6 @@
 # Finding: inferred lambda returns are not reconciled
 
-Date: 2026-08-03
+Date: 2026-08-03; refreshed against 0.35.0 on 2026-08-04
 
 Classification: `LANGUAGE_BUG`
 
@@ -24,19 +24,22 @@ against that selection.
 
 ## What the current tree does
 
-There are two materially different observations because K's in-flight #1 patch
-has strengthened the later hidden-lambda check:
+There are two materially different observations because the now-landed 0.35.0
+patch strengthened the later hidden-lambda check:
 
 1. The first-pass `TypeChecker` still accepts the mixed body.  The executable
    boundary tests in `red_first_pass_reconciliation.py` construct the HIR
    directly.  On the current tree both tests fail because the diagnostic list is
    empty; the direct call is recorded as `Int`.
-2. A full driver compile of `repro_mixed_prefix_return_tail.drift` now exits 1
+2. A full driver compile of `repro_mixed_prefix_return_tail.drift` exits 1
    with one `String`-versus-`Int` return diagnostic.  That is a downstream safety
    net, not closure of this finding: `driftc.py` re-checks the synthesized lambda
    as a standalone function using the already inferred `LambdaFnSpec.return_type
    == Int`, at which point K's shared `_type_return_value` authority catches the
    earlier return.
+
+The direct probes were rerun on 0.35.0 and remain red: `2 failed in 0.51s`, each
+because the expected primary mismatch diagnostic is absent.
 
 Consequently, a driver-only negative is not a regression-first test for this
 bug: it is already green for the wrong architectural reason.  The mandatory red
@@ -82,11 +85,11 @@ point each `HReturn` is originally typed.
 
 ## Refactor-trigger and announcement checks
 
-`doc/refactor_triggers.md` was scanned before designing the fix.  No registered
+`doc/refactor_triggers.md` was scanned before designing the fix and rescanned
+after 0.35.0 landed.  No registered
 trigger covers inferred lambda result reconciliation; this remains a focused
 compiler fix.  In particular, the registered ownership/borrow traversal
 triggers do not fire for a type-result collector local to lambda typing.
 
-`/tmp/drift-announce` did not exist at investigation time, so there were no
-cross-team announcements to consume.  This research creates no release-worthy
-change and publishes none.
+No cross-team announcement was present at investigation or refresh time.  This
+research creates no release-worthy change and publishes none.

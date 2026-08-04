@@ -69,9 +69,64 @@ traceback text forbidden), a structural normalizer pin (converts /
 preserves matrix, including the predicate-not-spelling terminal check),
 and the named-fn divergent dead-break twin (compile/run exit 0).
 
+**Also in this release: inferred-lambda return RECONCILIATION at the
+primary authority.**  The first-pass `TypeChecker` inferred an
+unannotated/uncontextual lambda's return from one exit (value tail, else
+the first valued return found by a post-scope AST walk) and silently
+ignored incompatible earlier or later explicit returns.  (A CONTEXTUAL
+annotated call result — `val r: Int = f(...)` — was already rejected by
+the declared-return authority at the original visit; only the genuinely
+uncontextual shape was accepted by the primary pass and caught downstream
+by the hidden re-check above, against the already-wrong inferred
+CallInfo.)  Now every `HReturn`'s ONE-PASS effective
+type is captured at its single `_type_return_value` visit (per-lambda
+collector; nested lambdas are function boundaries with their own
+collectors; named functions record nothing) and reconciled against the
+unchanged deterministic candidate with the stable diagnostic
+`E-LAMBDA-INFERRED-RETURN-MISMATCH` ("return type 'String' does not match
+inferred lambda return type 'Int'", at the offending return's span).
+Validation only: no re-typing, no late coercion or LUB; Unknown is poison
+(suppressed); annotated/contextual lambdas keep their complete
+`_type_return_value` coercion path at the original visit.  The
+`_find_return_expr` post-scope syntax walk is DELETED — statement-body
+candidates now come from the first valued observation.  Bare `return;`
+observes `Void` and conflicts with a non-Void candidate; all-bare bodies
+still infer `Void`.
+
+**Also folded in (P1.3): no-context lambda-call CallInfo pins + dead
+resolver branch deleted.**  The two annotated-binding driver cases are
+contextual typing, not inference; the true no-context boundary (direct
+IIFE `HCall(fn=HLambda)`, actual stored-source `HCall(fn=HVar)` with an
+INDIRECT target, and the synthetic `HInvoke(callee=HLambda)` contract)
+is now pinned in
+`lang/tests/type_checker/test_lambda_callinfo_inference_boundary.py`
+together with a producer-shape pin (stored source is never `HInvoke`) and
+an unannotated compile/run companion.  `resolve_call_expr`'s second,
+UNREACHABLE `HCall(fn=HLambda)` branch was deleted outright — one live
+authority remains.
+
+**Also fixed (LANGUAGE_BUG): extracted stored lambdas leaked callsite side
+tables to their parent.**  A stored lambda's body is typed in the
+enclosing function's checker state; after `_apply_fnptr_consts` replaced
+the stored `HLambda` with an `HFnPtrConst`, the parent `TypedFn` still
+detached the WHOLE callsite-indexed maps, and the strict reverse intrinsic
+validator correctly reported the orphaned `callback0` entry as
+`E_INTRINSIC_CALLINFO_MISSING_NODE` on a valid program (a stored lambda
+containing `core.callback0`).  `TypedFn` construction now partitions
+`call_info_by_callsite_id` and `instantiations_by_callsite_id` by
+finalized-body OWNERSHIP (a full post-rewrite walk descending into lambdas
+still present in the HIR — immediate IIFE/callback-argument lambdas keep
+their entries; extracted bodies re-record their own at the independent
+re-check).  The validator stays strict; the live maps stay unpruned for
+`LambdaFnSpec`'s pre-recheck terminal-call snapshot.  Pinned in
+`lang/tests/driver/test_nested_lambda_callinfo_ownership.py` (red-first
+compile/run, parent+extracted coexistence, immediate-IIFE
+counter-boundary, structural ownership pin).
+
 **Versioning:** `DRIFTC_VERSION` **0.35.0** (user-visible fix: valid
 programs move from compiler failure/traceback or silent wrong result to
-correct execution).  Internal checker/lowering only — **no ABI change,
+correct execution; inconsistent inferred lambdas are now rejected at the
+authoritative visit).  Internal checker/lowering only — **no ABI change,
 `DRIFT_RT_ABI_VERSION` stays 22**.
 
 ## 2026-08-03 (0.34.2: unqualified `Ok(...)` is the public Result constructor — legacy internal-result-ok HIR seam DELETED)
