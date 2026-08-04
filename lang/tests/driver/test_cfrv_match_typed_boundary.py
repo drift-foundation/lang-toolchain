@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Checker-BOUNDARY pin for control-flow-value typing
-(work/control-flow-rvalue-ownership, P3 final-audit).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 `record_expr()` overwrites `expr_types[node_id]` on EVERY visit, and several
 later passes (post-resolution/autoborrow receiver typing, generic-require

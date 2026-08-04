@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""P5.2 W0-tail — a SURVIVING control-flow-rvalue coercion borrow
-(work/control-flow-rvalue-ownership).
+"""W0-tail — a SURVIVING control-flow-rvalue coercion borrow
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 Restoring E_REDUNDANT_ARG_BORROW for CFV shared borrows must NOT over-broaden
 the classifier: a source-written `&` whose DELETION CHANGES TYPING is a genuine

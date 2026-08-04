@@ -1,8 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
-"""P5.2 — exact-code diagnostic table for control-flow-rvalue borrows
-(work/control-flow-rvalue-ownership).
+"""Exact-code diagnostic table for control-flow-rvalue borrows
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
-Pins the FROZEN P5.1 contract by DIAGNOSTIC CODE (the e2e runner matches message
+Pins the frozen 0.34.1 control-flow-rvalue source contract by DIAGNOSTIC CODE (the e2e runner matches message
 text only; codes need a driver pin). Full 36-cell rejection matrix:
 **4 producers** (match / ternary / try / unsafe-block) × **3 subject shapes**
 (whole / field / index) × **3 reject modes**:
@@ -19,7 +19,9 @@ cells need `--allow-unsafe`, so they go through a subprocess.
 
 The accepted SHARED-BARE forms are NOT all covered yet — the cfrv_* e2e set does
 not span all twelve producer/shape cells; the missing accepted cells are filled
-by the P5.3 runtime matrix (base+ASan+memcheck). This file pins only REJECTIONS.
+by the accepted-form control-flow-rvalue runtime matrix (the cfrv_bare_* /
+cfrv_consume_* / cfrv_exit_* e2e fixture families; base+ASan+memcheck).
+This file pins only REJECTIONS.
 """
 from __future__ import annotations
 

@@ -1,8 +1,8 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Regression: a reference-typed method receiver must NOT be double-borrowed
-(work/control-flow-rvalue-ownership).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
-P3 routed method receivers through `_type_user_arg` (used_as_value=True) so a
+The fix routed method receivers through `_type_user_arg` (used_as_value=True) so a
 value-control-flow receiver (`(match …).m()`) types to its result instead of
 Void.  Applied BLANKET, that autoborrowed an ALREADY-`&`-typed receiver a second
 time — `count.get()` on a captured `&Cell<Int>` resolved against

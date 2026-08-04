@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Unit pins for `HIRToMIR._cfg_result_type`
-(work/control-flow-rvalue-ownership).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 The result type of a value-producing control-flow expression (match /
 ternary) must NOT be decided by the first arm alone:

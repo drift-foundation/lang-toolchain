@@ -3369,7 +3369,7 @@ class HIRToMIR:
 			# BOTH index-bearing AND pure-field shared chains: it is
 			# materialized into ONE drop-registered temp and the leaf
 			# is address-projected into it (the field-projection UAF
-			# fix, 0.34.0 — work/bare-temp-field-projection-uaf;
+			# fix, accepted 0.34.1 — doc/history.md 2026-07-31 entry;
 			# before it, pure-field owned chains fell to the
 			# whole-expression materialization below and double-freed).
 			# Owned rvalue bases that are NOT calls (ternary / match /
@@ -3519,8 +3519,8 @@ class HIRToMIR:
 			# (`val __tmp = mk(); &__tmp[i]` / `&__tmp.f`) — and project
 			# from its address, so the leaf backing is dropped exactly
 			# once via that single owner.  Admitting pure-FIELD owned
-			# chains here is the field-projection UAF fix (0.34.0 —
-			# work/bare-temp-field-projection-uaf); before it they fell
+			# chains here is the field-projection UAF fix (accepted
+			# 0.34.1 — doc/history.md 2026-07-31 entry); before it they fell
 			# to the whole-expression materialization that shallow-aliased
 			# the leaf into a SECOND droppable temp and double-freed.
 			base_ty = self._infer_expr_type(base_call_expr)
@@ -3597,7 +3597,8 @@ class HIRToMIR:
 		call's `&T` result directly).  Owned rvalue bases are accepted
 		for shared borrows with EITHER a pure-field or an index-bearing
 		chain — both materialize one owner and address-project the leaf
-		(pure-field admission is the 0.34.0 field-projection UAF fix).
+		(pure-field admission is the field-projection UAF fix, accepted
+		0.34.1 — doc/history.md 2026-07-31).
 		The owned base may be ANY safe owned-rvalue producer, not only a
 		call: a struct constructor, and equally a value-control-flow
 		result (ternary / match / try / unsafe-block), whose join MoveOuts
@@ -3674,8 +3675,8 @@ class HIRToMIR:
 			# covers pure-FIELD chains, which previously fell to the
 			# whole-expression materialization that shallow-aliased the
 			# leaf into a SECOND droppable temp (LANGUAGE_BUG: teardown
-			# double-free / UAF on `peek(mk().root)`, 0.33.91-0.33.93 —
-			# work/bare-temp-field-projection-uaf).  `&mut` owned-rvalue
+			# double-free / UAF on `peek(mk().root)`, 0.33.91-0.33.93;
+			# accepted fix 0.34.1, doc/history.md 2026-07-31).  `&mut` owned-rvalue
 			# projections stay refused (bind-first: a mutable borrow of
 			# temp-derived storage has no argument spelling).
 			# OWNED-rvalue base: ANY value producer (call/ctor, ternary/

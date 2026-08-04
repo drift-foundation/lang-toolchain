@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """Structural pin for the whole-borrow of a control-flow-value result
-(work/control-flow-rvalue-ownership).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 `inspect(match b { … })` materializes the match result into a borrow
 temp.  The bug: in argument position the expected type of the match

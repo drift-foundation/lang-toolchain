@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """try/catch result-type contract — exact-CODE pin
-(work/control-flow-rvalue-ownership, P5 finding 2).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 A try-expression whose attempt and catch arm produce DIFFERENT result types
 used to reach lowering and crash as an LLVM `phi with mixed incoming types`

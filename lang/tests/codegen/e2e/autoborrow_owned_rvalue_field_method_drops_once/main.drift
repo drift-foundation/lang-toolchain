@@ -3,7 +3,7 @@ module m;
 // Successor to autoborrow_owned_rvalue_field_method_unchanged. That
 // fixture pinned an IMPLEMENTATION contract ("owned-rvalue field base
 // must NOT lift") that the field-projection UAF fix
-// (work/bare-temp-field-projection-uaf) intentionally invalidates: the
+// (accepted 0.34.1; doc/history.md 2026-07-31) intentionally invalidates: the
 // lift now DOES fire for owned-rvalue field method receivers. This is
 // a SEMANTIC pin instead — Handle carries a real owned String (not the
 // old raw:Int), so a mishandled owned-rvalue field receiver would

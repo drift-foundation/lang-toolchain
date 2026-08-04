@@ -1,7 +1,7 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """A/B lowering-route ownership parity for reject-redundant-call-borrows
 (D5 §D) and the bare-temp field/index-projection UAF fix
-(work/bare-temp-field-projection-uaf).
+(accepted 0.34.1; doc/history.md 2026-07-31).
 
 Two lowering routes, one contract
 ---------------------------------

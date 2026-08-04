@@ -1,6 +1,6 @@
 # vim: set noexpandtab: -*- indent-tabs-mode: t -*-
 """or_throw match-receiver diagnostic-CODE pin
-(work/control-flow-rvalue-ownership, P3 final-audit item 1).
+(control-flow-rvalue ownership; doc/history.md 2026-08-02).
 
 The e2e fixture `cfrv_match_receiver_or_throw_not_error_rejected` can only match
 diagnostic MESSAGE text (the e2e runner does not compare codes).  This driver
