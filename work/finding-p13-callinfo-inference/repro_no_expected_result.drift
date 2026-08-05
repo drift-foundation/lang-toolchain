@@ -1,8 +1,0 @@
-module repro;
-
-pub fn main() nothrow -> Int {
-	val direct = (|| => { 6 })();
-	val f = || => { 7 };
-	val stored = f();
-	return direct + stored - 13;
-}
