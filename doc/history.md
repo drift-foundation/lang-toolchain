@@ -1,6 +1,6 @@
 # Drift development history
 
-## 2026-08-04 (0.35.0: hidden-lambda block value tails reach the return authority; spec return types are never overwritten; ABI 22 unchanged)
+## 2026-08-04 (0.35.0: hidden-lambda block value tails reach the return authority; exact causal Unknown provenance; total pending-lambda finalization; ABI 22 unchanged)
 
 **LANGUAGE_BUG (three shapes; coupled hidden-return authority leaks).**
 A lambda body is re-checked as its own hidden function, but
@@ -144,6 +144,89 @@ preserved through the expected-context retry.  Pinned red-first in
 `lang/tests/checker/test_pending_lambda_probe_barrier.py` (full
 state-identity audit incl. the `_lambda_fn_specs` live-map alias, B5
 control, owner unit contract, nested-gating pin).
+
+**Also in this release: exact causal Unknown provenance replaces the
+global cascade suppressor.**  The checker silenced Unknown-cascade
+diagnostics (`E-COPY-UNKNOWN`, "call target is not a function value")
+with a GLOBAL `any(error)` scan: any earlier, unrelated diagnostic
+suppressed the tripwires for EVERY Unknown in the function, so an
+independent un-diagnosed Unknown could pass silently.  Cause provenance
+is now owned by `FnCheckState` (`unknown_cause_by_binding` /
+`unknown_cause_by_node`, probe-transaction covered): producers record
+the exact primary that explains a poisoned binding/expression
+(unknown-name reads, pending-lambda rejections, callback-wrap
+rejections, caused initializers), consumers (copy check, call/invoke
+callee resolution, method dispatch on a caused receiver) suppress ONLY
+on a recorded cause, and propagation is explicit — caused-binding reads,
+`move` of a caused subject through the canonical projection-less place,
+reachability-aware ternary joins (ALL reachable Unknown arms must be
+caused; a compound join's decision is never overridden by the HLet
+diagnostic watermark, which applies to direct producer shapes only), and
+causally-suppressed call results.  Everything else fails toward the
+tripwire.  Pinned in
+`lang/tests/type_checker/test_causal_unknown_provenance.py` (the two
+original red tripwire probes now green, single-primary chains through
+alias/move/ternary/HInvoke, the mixed-arm non-literal ternary tripwire,
+concrete recovery).
+
+**Also fixed (LANGUAGE_BUG): pending-lambda VALUE uses cascaded — aliasing
+a valid stored lambda was impossible.**  Every value read of a pending
+binding (alias, return, argument, move/borrow subject) cascaded
+`E-COPY-UNKNOWN`; only a direct call resolved the entry, and the two
+direct-call consumers carried their OWN typing paths with divergent
+primaries and an Unknown-ABI publication hole.  Finalization is now ONE
+total classifier (`_classify_and_type_pending`) shared by all four
+consumers (HVar value use, direct `HCall`/`HInvoke` callee, drain):
+capturing → the one approved v1 primary, never typed; unconstrained
+without context → one clean cannot-infer primary, never typed; inferable
+→ typed exactly once (annotations are the authority when complete; an
+Unknown context slot for an unannotated param poisons WITHOUT typing);
+residual Unknown component → POISONED Unknown binding with the
+`LambdaFnSpec`/fnptr publication RETRACTED — no Unknown-ABI contract
+stays lowering-consumable.  Callback slots (typed-let and return
+position) construct and splice the canonical `core.callbackN(...)`
+wrapper BEFORE typing the lambda (a re-check pass previously
+short-circuited to an interface label and MIR received a raw HLambda —
+ICE); fn-typed wrap args splice the recorded static fnptr const, with
+provenance propagated across transparent immutable alias hops (MIR's
+callback construction stays static-only).  Pinned in
+`lang/tests/driver/test_pending_lambda_value_finalization.py` and
+`lang/tests/driver/test_callback_slot_materialization.py` (compile/run
+positives incl. alias chains with the `__lambda_fn_` static witness;
+one-primary rejection matrices through both call families).
+
+**Also fixed (LANGUAGE_BUG, pre-existing): associated calls
+(`Type::fn(...)`) silently bypassed the canonical Callback wrapper.**
+A bare lambda or named-fn argument at a concrete `Callback*` param of an
+associated/static call passed `coerce_args_for_params`' silent INTERFACE
+retyping with NO `core.callbackN(...)` wrapper — checker-clean, but
+lowering received a raw non-interface value under an interface-typed
+slot: bare lambdas emitted invalid LLVM IR ("global variable reference
+must have pointer type" at clang), named-fn args crashed with an internal
+`interface impl not found for interface value`, and an arity-mismatched
+lambda was accepted silently.  (The free-function path already wrapped
+correctly — the gap was the associated-call family only; reproduced
+identically on the pre-slice tree.)  The assoc-call success path now
+routes Callback params through the SAME wrapper authority as ctor
+fields / typed-let / return position; a silently-coerced named-fn arg is
+recognized by its registered static fnptr const (thin fn type
+synthesized from the const's call_sig, with an interface-type-args
+fallback derivation), and an arity mismatch is a real checker
+diagnostic instead of invalid IR.  Pinned red-first in
+`lang/tests/driver/test_assoc_call_callback_wrap.py` (lambda + named-fn
+compile/run, explicit-wrap no-double-wrap, arity-negative boundary,
+free-fn control).
+
+**Also fixed (ICE): borrowing a named function crashed lowering.**
+`val r = &seven;` — the checker's fnptr rewrite replaces the name INSIDE
+the canonical borrow place (`HPlaceExpr(base=HFnPtrConst)`), and
+`_lower_addr_of_place` read `expr.base.name` unconditionally
+(`AttributeError`).  The constant is now materialized through the
+canonical `_materialize_owned_temp_for_borrow` helper and the temp's
+address is the borrow result — the same semantics as `val f = seven; &f`;
+`&mut seven` keeps its checker rejection and lowering fails closed.
+Pinned in `lang/tests/driver/test_fnptr_borrow_materialization.py`
+(structural transition trace + compile/run + mut rejection).
 
 **Versioning:** `DRIFTC_VERSION` **0.35.0** (user-visible fix: valid
 programs move from compiler failure/traceback or silent wrong result to

@@ -18,7 +18,7 @@ from lang.driftc.module_lowered import flatten_modules
 from lang.driftc.parser import parse_drift_workspace_to_hir, stdlib_root
 
 
-def _compile(tmp_path: Path, source: str, *, entry: str = "m::main"):
+def _compile(tmp_path: Path, source: str, *, entry: str = "m::main", return_ir: bool = False):
 	src = tmp_path / "main.drift"
 	src.write_text(source)
 	modules, type_table, exception_catalog, module_exports, module_deps, parse_diags = parse_drift_workspace_to_hir(
@@ -39,40 +39,39 @@ def _compile(tmp_path: Path, source: str, *, entry: str = "m::main"):
 		enforce_entrypoint=True,
 		entry=entry,
 	)
+	if return_ir:
+		return checked, _ir
 	return checked
 
 
-# ── Site 1: associated / static call (Type::method) — NOT WRAPPED ────
+# ── Site 1: associated / static call (Type::method) — MIGRATED ───────
 #
-# IMPORTANT: these tests document the *current* behavior of `Type::method`
-# dispatch with `Callback*`-typed params. The two tests below pass on
-# Patch A (no wrap helper), and they continue to pass on Patch B because
-# Patch B did NOT touch this path.
-#
-# The reason `S::take_cb(|x| => …)` compiles clean today is NOT that an
-# implicit wrap fires — `_implicit_callback_wrap` is never called for
-# this shape. The lambda flows through `_args_match_params` /
-# `_coerce_args_for_params` in `type_checker.py` (~line 2144), which
-# silently retypes a non-INTERFACE arg to the INTERFACE param without
-# inserting a wrap node. Downstream codegen handles the lambda through
-# whatever path it does for direct fn-typed values into iface slots.
-#
-# Pre-existing leniency surfaced by these tests: arity-1 lambda fed to
-# a `Callback2`-typed associated-function param ALSO compiles without
-# diagnostic on this same path (verified empirically — the same is true
-# for free-fn calls). That is a separate issue from implicit-wrap, and
-# was explicitly out of Patch B scope.
-#
-# Bottom line: keeping these tests as a behavior pin for the silent
-# coercion path; they do not exercise the new wrap helper.
+# The canonical Callback contract: every consumer constructs and splices
+# the `core.callbackN(...)` wrapper BEFORE typing the lambda through the
+# Callback context — interface-label-only acceptance is not a supported
+# outcome (raw lambdas/fn values under interface-typed slots are exactly
+# what broke MIR at the other sites).  Historically `Type::method`
+# dispatch was NOT on that contract: the arg flowed through
+# `_coerce_args_for_params`' silent INTERFACE retyping with no wrap node
+# — checker-clean but broken end-to-end (invalid LLVM IR for bare
+# lambdas, an internal vtable error for named-fn args, arity mismatches
+# silently accepted; confirmed pre-existing on clean HEAD, 2026-08-04).
+# The assoc-call success path now routes Callback params through the same
+# wrapper authority as the other sites, and an arity-mismatched function
+# value is a real checker diagnostic.  The tests below pin the corrected
+# contract structurally (the static `__lambda_fn_` wrap witness in the
+# emitted IR / the no-crash named-fn emission) and the arity-negative
+# boundary; full compile-and-RUN pins live in
+# test_assoc_call_callback_wrap.py.  (Assertion conversion approved by
+# Slawomir, approval-decision-2026-08-05T04-28-32Z.)
 
 
 def test_site1_static_assoc_fn_bare_lambda_to_callback1(tmp_path: Path) -> None:
-	"""`S::take_cb(|x| => x + 1)` compiles clean today via the silent
-	INTERFACE-coercion path in `_args_match_params`, NOT via the wrap
-	helper. This test pins that path's behavior; it does not assert
-	anything about Patch B's wrap insertion."""
-	checked = _compile(
+	"""`S::take_cb(|x| => x + 1)` wraps canonically: clean diagnostics AND
+	the static `__lambda_fn_` witness in the emitted IR (pre-fix the
+	silent coercion emitted interface-construction IR over the raw lambda
+	— clean here, invalid at clang)."""
+	checked, ir = _compile(
 		tmp_path,
 		"""
 module m;
@@ -91,17 +90,72 @@ pub fn main() nothrow -> Int {
 	return S::take_cb(|x: Int| nothrow => x + 1);
 }
 """,
+		return_ir=True,
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors == [], errors
+	assert "__lambda_fn_" in ir
+
+
+def test_site1_static_assoc_fn_named_fn_to_callback1(tmp_path: Path) -> None:
+	"""`S::take_cb(add1)` — named-fn arg wraps via its registered static
+	fnptr const.  Pre-fix this CRASHED during IR emission
+	(`NotImplementedError: interface impl not found for interface value`
+	in the vtable lookup); clean emission is the red/green boundary at
+	this level."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+fn add1(x: Int) nothrow -> Int { return x + 1; }
+
+struct S {}
+
+implement S {
+	pub fn take_cb(cb: core.Callback1<Int, Int>) nothrow -> Int {
+		return cb.call(41);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	return S::take_cb(add1);
+}
+""",
 	)
 	errors = [d for d in checked.diagnostics if d.severity == "error"]
 	assert errors == [], errors
 
 
-# NOTE: arity-mismatch through Type::method does NOT error today. The
-# same is true through a free function (Site E path), so this is a
-# pre-existing leniency in `_args_match_params` /
-# `_coerce_args_for_params` (type_checker.py:2144-2147 replaces the arg
-# type with the param type when param is INTERFACE and arg is not).
-# Out of Patch B scope; tracked as separate.
+def test_site1_static_assoc_fn_arity_mismatch_rejected(tmp_path: Path) -> None:
+	"""Arity-1 lambda at a `Callback2` param — historically checker-silent
+	via the `_coerce_args_for_params` INTERFACE retyping (failing only as
+	invalid IR at clang); now a real diagnostic at the wrap boundary."""
+	checked = _compile(
+		tmp_path,
+		"""
+module m;
+
+import std.core as core;
+
+struct S {}
+
+implement S {
+	pub fn take_cb(cb: core.Callback2<Int, Int, Int>) nothrow -> Int {
+		return cb.call(1, 2);
+	}
+}
+
+pub fn main() nothrow -> Int {
+	return S::take_cb(|x: Int| nothrow => x + 1);
+}
+""",
+	)
+	errors = [d for d in checked.diagnostics if d.severity == "error"]
+	assert errors, "arity mismatch must be rejected"
+	assert any("arity does not match callback parameter" in d.message for d in errors), [d.message for d in errors]
 
 
 # ── Site 2: struct ctor field init ────────────────────────────────────
@@ -109,8 +163,10 @@ pub fn main() nothrow -> Int {
 
 def test_site2_struct_ctor_named_bare_lambda_to_callback1(tmp_path: Path) -> None:
 	"""`Holder(cb = |x| => ...)` where field `cb: Callback1<Int, Int>`.
-	Today this lands in `resolve_struct_ctor` iface_coercion fallback
-	which lowers via `M.ConstructIfaceValue` — broken for lambdas."""
+	Historical regression: this landed in the `resolve_struct_ctor`
+	iface_coercion fallback and lowered via `M.ConstructIfaceValue` over
+	the raw lambda (broken); now the ctor field slot splices the
+	canonical `core.callback1(...)` wrap."""
 	checked = _compile(
 		tmp_path,
 		"""
@@ -209,9 +265,12 @@ pub fn main() nothrow -> Int {
 
 
 def test_site5_typed_let_bare_lambda_to_callback1(tmp_path: Path) -> None:
-	"""`val cb: core.Callback1<Int, Int> = |x| => x + 1`. Today the let-init
-	type-checker records iface_coercion which lowers via ConstructIfaceValue
-	over the lambda — broken without the wrap."""
+	"""`val cb: core.Callback1<Int, Int> = |x| => x + 1`.  Historical
+	regression: the let-init recorded an iface_coercion lowering via
+	ConstructIfaceValue over the raw lambda (broken; later an ICE when a
+	re-check pass bypassed the post-typing wrap).  Now the typed-let slot
+	PRE-wraps: the lambda is only ever typed inside the spliced canonical
+	`core.callback1(...)` construction."""
 	checked = _compile(
 		tmp_path,
 		"""
@@ -255,7 +314,8 @@ pub fn main() nothrow -> Int {
 
 def test_site6_return_bare_lambda_to_callback1(tmp_path: Path) -> None:
 	"""`fn make_cb() -> Callback1<Int, Int> { return |x| => x + 1; }`
-	— same iface_coercion fallback issue as let-init."""
+	— same historical iface_coercion regression as the let-init; return
+	position now PRE-wraps identically."""
 	checked = _compile(
 		tmp_path,
 		"""

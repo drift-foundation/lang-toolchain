@@ -12635,6 +12635,23 @@ class HIRToMIR:
 				addr = self.b.new_temp()
 				self.b.emit(M.AddrOfLocal(dest=addr, local=local, is_mut=False))
 				return addr, const_ty
+		# Named-function value as a place base: the checker's fnptr rewrite
+		# replaced the name (`&seven`) with its HFnPtrConst INSIDE the place
+		# base, so no local storage exists to address (pre-fix this crashed
+		# on `expr.base.name`).  Materialize the constant into a temporary
+		# and borrow that — the same semantics as `val f = seven; &f`, and
+		# the same shape as the const branches above.
+		if isinstance(expr.base, H.HFnPtrConst):
+			if is_mut:
+				raise AssertionError("mutable borrow of a function constant (checker bug)")
+			fn_ty = self._infer_expr_type(expr.base)
+			if fn_ty is None:
+				fn_ty = self._type_table.ensure_unknown()
+			addr = self._materialize_owned_temp_for_borrow(
+				ty=fn_ty,
+				value=lambda: self.lower_expr(expr.base),
+			)
+			return addr, fn_ty
 		# Canonical place expression (stage1→stage2 boundary).  Skipped when the
 		# capture block above already seeded addr/cur_ty from the env.
 		if not _cap_seeded:

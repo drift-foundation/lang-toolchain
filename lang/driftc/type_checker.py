@@ -471,6 +471,8 @@ class FnCheckState:
 		"instantiations_by_node_id",
 		"fnptr_consts_by_node_id",
 		"diagnostics",
+		"unknown_cause_by_binding",
+		"unknown_cause_by_node",
 	)
 
 	def __init__(self, checker) -> None:
@@ -492,6 +494,13 @@ class FnCheckState:
 		self.instantiations_by_node_id = _TxnDict(self)
 		self.fnptr_consts_by_node_id = _TxnDict(self)
 		self.diagnostics = _TxnList(self)
+		# Causal Unknown provenance (exact binding + expression node):
+		# an entry means "this Unknown is causally explained by a specific
+		# already-diagnosed primary failure".  Values are immutable
+		# (category, producer_node_id) tuples.  Owned/_TxnDict so probe
+		# rollback and the fingerprint cover cause state exactly.
+		self.unknown_cause_by_binding = _TxnDict(self)
+		self.unknown_cause_by_node = _TxnDict(self)
 
 	def begin_txn(self, probe_expr: object) -> "CheckerStateTxn":
 		return CheckerStateTxn(self, probe_expr)
@@ -765,6 +774,14 @@ class ThunkSpec:
 	param_types: tuple[TypeId, ...]
 	return_type: TypeId
 	kind: ThunkKind
+
+
+# Compound control-flow VALUE shapes whose typing performs an explicit
+# cause JOIN over their arms (see the reachability-aware HTernary join):
+# the HLet producer-local diagnostic watermark must never override the
+# join's decision — a primary from one arm does not explain a sibling
+# reachable arm's independent Unknown (fails toward the tripwire).
+_COMPOUND_JOIN_SHAPES = (H.HTernary, H.HMatchExpr, H.HTryExpr)
 
 
 @dataclass(frozen=True)
@@ -2785,6 +2802,199 @@ class TypeChecker:
 		# through it; see PendingLambdaOwner.  The predicate reads the live
 		# FnCheckState probe-transaction depth.
 		pending_lambdas = PendingLambdaOwner(txn_active=lambda: fn_state._txn_depth > 0)
+		# binding id -> (fn_ref, call_sig) for finalized captureless pending
+		# lambdas; consumed by Callback wrap splicing (see
+		# `_record_finalized_fnptr`).
+		finalized_fnptr_by_binding: dict[int, tuple] = {}
+
+		def _classify_and_type_pending(bid: int, lam: "H.HLambda", contextual_fn: "tuple[list[TypeId], TypeId, bool] | None", *, context_caused: bool = False) -> TypeId:
+			"""The ONE total pending-lambda outcome — shared by ALL four
+			consumers (HVar value-use finalizer, direct HCall callee, direct
+			HInvoke callee, end-of-function drain):
+
+			- capturing (borrow OR value captures): ONE approved primary —
+			  the v1 non-escaping/bare-storage rejection — and the binding is
+			  diagnosed Unknown; the lambda is NEVER typed through callback
+			  construction, so no capture effects begin (v1: effects happen
+			  only at construction of a SUPPORTED wrapper).
+			- unconstrained params with NO contextual function shape: the
+			  clean cannot-infer primary; diagnosed Unknown; crucially the
+			  lambda is NOT typed, so no `LambdaFnSpec` with Unknown ABI
+			  types can be published.
+			- otherwise: typed exactly once (with the contextual function
+			  expectation when supplied).  A CONCRETE function type is
+			  installed.  A residual Unknown component (parameter or return)
+			  installs a POISONED Unknown binding instead — never the
+			  Unknown-component function type — and RETRACTS the
+			  publication `type_expr` made (the `LambdaFnSpec` and the
+			  node-keyed fnptr const), so no Unknown-ABI contract is
+			  lowering-consumable.  The residual primary is emitted only
+			  when the Unknown is not already causally explained (the
+			  typing itself emitted a primary, or `context_caused` says the
+			  caller's Unknown context slots are all caused).
+
+			Writes `binding_types[bid]` and returns the installed type.
+			"""
+			caps = list(getattr(lam, "captures", []) or [])
+			if not caps and lam.explicit_captures is None:
+				res = discover_captures(lam)
+				diagnostics.extend(res.diagnostics)
+				caps = res.captures
+				lam.captures = res.captures
+			if caps or lam.explicit_captures:
+				all_caps = list(caps) + list(lam.explicit_captures or [])
+				if any(_capture_kind_is_borrow(getattr(c, "kind", None)) for c in all_caps):
+					# BORROW captures may not outlive the statement (v0 rule) —
+					# same rejection as the invoked form.
+					diagnostics.append(
+						_tc_diag(
+							message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
+							severity="error",
+							span=getattr(lam, "loc", Span()),
+							notes=["wrap it like: (|...| => ...)(...)"],
+						)
+					)
+				else:
+					# v1 RULING (2026-08-03): a bare stored capturing lambda is
+					# invalid even when never invoked — v1 has no anonymous
+					# closure-value type or runtime representation.  "Value
+					# captures may escape" means copy/move/share captures are
+					# eligible to escape through a SUPPORTED representation
+					# (core.callbackN(...) / an accepted Fn-bounded
+					# conversion), not through an untyped bare closure value.
+					diagnostics.append(
+						_tc_diag(
+							message="bare capturing lambdas cannot be stored in v1; wrap with core.callbackN(...) or invoke immediately",
+							severity="error",
+							span=getattr(lam, "loc", Span()),
+						)
+					)
+				binding_types[bid] = self._unknown
+				_mark_binding_unknown_cause(bid, "capturing-lambda-rejected", getattr(lam, "node_id", None))
+				return self._unknown
+			unannotated = [p.name for p in lam.params if getattr(p, "type", None) is None]
+			if unannotated and contextual_fn is None:
+				diagnostics.append(
+					_tc_diag(
+						message=(
+							f"cannot infer type for lambda parameter(s) {', '.join(repr(n) for n in unannotated)}: "
+							f"the lambda is never invoked, so no call site constrains them; add parameter annotations"
+						),
+						severity="error",
+						span=getattr(lam, "loc", Span()),
+					)
+				)
+				binding_types[bid] = self._unknown
+				_mark_binding_unknown_cause(bid, "unconstrained-lambda-rejected", getattr(lam, "node_id", None))
+				return self._unknown
+			_typing_watermark = len(diagnostics)
+			_param_annotated = [getattr(p, "type", None) is not None for p in lam.params]
+			if contextual_fn is not None:
+				ctx_params, ctx_ret, ctx_throw = contextual_fn
+				if any(
+					(i >= len(ctx_params) or ctx_params[i] == self._unknown)
+					for i, _ann in enumerate(_param_annotated)
+					if not _ann
+				):
+					# An UNANNOTATED param's context slot is Unknown (or
+					# missing): the lambda's type can never resolve.  Poison
+					# WITHOUT typing — no Unknown-ABI spec is ever published
+					# and the body is never checked against Unknown params
+					# (which would cascade).  The residual primary is
+					# emitted only when the caller's Unknown context is not
+					# itself causally explained.
+					if not context_caused:
+						diagnostics.append(
+							_tc_diag(
+								message="cannot infer this lambda's function type (an unresolved parameter or return type remains); add annotations",
+								severity="error",
+								span=getattr(lam, "loc", Span()),
+							)
+						)
+					binding_types[bid] = self._unknown
+					_mark_binding_unknown_cause(bid, "pending-finalization-failed", getattr(lam, "node_id", None))
+					return self._unknown
+				setattr(lam, "expected_fn_inferred", True)
+				exp_fn_ty = self.type_table.ensure_function(list(ctx_params), ctx_ret, can_throw=bool(ctx_throw))
+				new_ty = type_expr(lam, expected_type=exp_fn_ty)
+			else:
+				new_ty = type_expr(lam)
+			residual_unknown = False
+			if new_ty is not None:
+				new_def = self.type_table.get(new_ty)
+				if new_def.kind is TypeKind.FUNCTION and getattr(lam, "can_throw_effective", None) is False and new_def.can_throw():
+					params = list(new_def.param_types[:-1]) if new_def.param_types else []
+					ret = new_def.param_types[-1] if new_def.param_types else self._unknown
+					new_ty = self.type_table.ensure_function(params, ret, can_throw=False)
+					new_def = self.type_table.get(new_ty)
+				# `param_types` on FUNCTION includes the return as its last
+				# element, so this covers both components.
+				if new_def.kind is TypeKind.FUNCTION and any(t == self._unknown for t in (new_def.param_types or [])):
+					residual_unknown = True
+			if new_ty is None or new_ty == self._unknown or residual_unknown:
+				if residual_unknown:
+					_typing_errored = any(
+						getattr(d, "severity", None) == "error" for d in list(diagnostics)[_typing_watermark:]
+					)
+					if not _typing_errored and not context_caused:
+						diagnostics.append(
+							_tc_diag(
+								message="cannot infer this lambda's function type (an unresolved parameter or return type remains); add annotations",
+								severity="error",
+								span=getattr(lam, "loc", Span()),
+							)
+						)
+				# Retract the invalid-ABI publication `type_expr` made: an
+				# Unknown-component LambdaFnSpec / fnptr const must never
+				# stay lowering-consumable behind the poisoned binding.
+				_enclosing = function_symbol(fn_id).replace("::", "_").replace("#", "_")
+				_lam_fn_id = FunctionId(module=current_module_name, name=f"__lambda_fn_{_enclosing}_{getattr(lam, 'node_id', None)}", ordinal=0)
+				self._lambda_fn_specs.pop(_lam_fn_id, None)
+				fnptr_consts_by_node_id.pop(getattr(lam, "node_id", None), None)
+				binding_types[bid] = self._unknown
+				_mark_binding_unknown_cause(bid, "pending-finalization-failed", getattr(lam, "node_id", None))
+				return self._unknown
+			binding_types[bid] = new_ty
+			_clear_binding_unknown_cause(bid)
+			return new_ty
+
+		def _finalize_pending_value_use(binding_id: int | None, expected_type: TypeId | None) -> TypeId | None:
+			"""Pending finalization at a semantic VALUE USE of the binding
+			(ordinary HVar reads — covering alias, return, argument, move and
+			borrow subjects, and discarded reads).  Direct HCall/HInvoke
+			callee pre-resolution and the end-of-function drain route
+			through the SAME `_classify_and_type_pending` outcome — the
+			classifier is total across all four consumers.  Enters the pending
+			owner's `begin_resolution` barrier BEFORE any mutation, so a
+			speculative probe defers instead of leaking (probe-rollback
+			contract).  Returns the newly installed binding type, or None
+			when the binding was not pending.
+			"""
+			pending = pending_lambdas.begin_resolution(binding_id)
+			if pending is None:
+				return None
+			new_ty = _classify_and_type_pending(binding_id, pending, _expected_function_shape(expected_type))
+			pending_lambdas.retire(binding_id)
+			_record_finalized_fnptr(binding_id, pending)
+			return new_ty
+
+		def _record_finalized_fnptr(binding_id: int | None, lam: "H.HLambda") -> None:
+			# Successful captureless finalization registered the lambda's
+			# static fnptr const (keyed by its node id); remember it by
+			# BINDING so a later Callback wrap of an fn-typed HVar (alias
+			# into a Callback slot / bare-pending call argument) can splice
+			# the STATIC HFnPtrConst — MIR's callback construction is
+			# static-only in v1 (no runtime-fn-pointer callback ABI).
+			if binding_id is None:
+				return
+			fp = fnptr_consts_by_node_id.get(getattr(lam, "node_id", None))
+			if fp is not None:
+				finalized_fnptr_by_binding[binding_id] = fp
+
+		def _fnptr_const_for_binding(binding_id: int | None):
+			if binding_id is None:
+				return None
+			return finalized_fnptr_by_binding.get(binding_id)
 		# Block-scope const binding ids: these re-materialize at each use site,
 		# so the Copy check is skipped (non-Copy types like String are allowed).
 		local_const_binding_ids: Set[int] = set()
@@ -3725,6 +3935,50 @@ class TypeChecker:
 		fnptr_consts_by_node_id = fn_state.fnptr_consts_by_node_id
 		instantiations_by_callsite_id = fn_state.instantiations_by_callsite_id
 		instantiations_by_node_id = fn_state.instantiations_by_node_id
+		unknown_cause_by_binding = fn_state.unknown_cause_by_binding
+		unknown_cause_by_node = fn_state.unknown_cause_by_node
+
+		def _mark_binding_unknown_cause(binding_id: int | None, category: str, producer_node_id: int | None = None) -> None:
+			# A binding is marked ONLY when its current Unknown is causally
+			# explained by a specific primary failure — never inferred from
+			# "some earlier diagnostic exists".  Preseeded Unknown bindings
+			# are never seeded automatically.
+			if binding_id is not None:
+				unknown_cause_by_binding[int(binding_id)] = (category, producer_node_id)
+
+		def _clear_binding_unknown_cause(binding_id: int | None) -> None:
+			if binding_id is not None:
+				unknown_cause_by_binding.pop(int(binding_id), None)
+
+		def _binding_has_unknown_cause(binding_id: int | None) -> bool:
+			return binding_id is not None and int(binding_id) in unknown_cause_by_binding
+
+		def _mark_node_unknown_cause(node_id: int | None, category: str) -> None:
+			if node_id is not None:
+				unknown_cause_by_node[int(node_id)] = (category, node_id)
+
+		def _node_has_unknown_cause(node_id: int | None) -> bool:
+			return node_id is not None and int(node_id) in unknown_cause_by_node
+
+		def _expr_unknown_is_caused(expr: object) -> bool:
+			# EXACT causal predicate for an Unknown-typed value: the
+			# expression node carries a propagated cause, or it is a direct
+			# HVar read of a caused binding.  Anything else stays a
+			# tripwire (fail toward diagnosing).
+			if _node_has_unknown_cause(getattr(expr, "node_id", None)):
+				return True
+			if isinstance(expr, H.HVar) and _binding_has_unknown_cause(getattr(expr, "binding_id", None)):
+				return True
+			if (
+				isinstance(expr, getattr(H, "HPlaceExpr", ()))
+				and not getattr(expr, "projections", None)
+			):
+				# A projection-less canonical place (normalized move/borrow
+				# operand) is a pure read wrapper over its base — exactly as
+				# transparent as the bare HVar.  Projected places stay
+				# tripwire (a field of a caused Unknown is NOT explained).
+				return _expr_unknown_is_caused(expr.base)
+			return False
 		trait_worlds = getattr(self.type_table, "trait_worlds", {}) or {}
 		def _world_has_trait_data(world: TraitWorld) -> bool:
 			return bool(
@@ -4121,12 +4375,14 @@ class TypeChecker:
 			if td.kind is TypeKind.TYPEVAR:
 				# Defer Copy requirements for unresolved type parameters to instantiation.
 				return
-			if ty_id == self._unknown and any(getattr(d, "severity", None) == "error" for d in diagnostics):
-				# Cascade suppression: an Unknown-typed value whose failure is
-				# already diagnosed (rejected capturing lambda, unresolvable
-				# callee, ...) — "cannot copy: type 'Unknown'" over it is noise.
-				# Without a prior error the copy check stays as the last-line
-				# tripwire for an undiagnosed Unknown leak.
+			if ty_id == self._unknown and _expr_unknown_is_caused(expr):
+				# Cascade suppression by EXACT causal provenance: this
+				# specific Unknown is explained by an already-diagnosed
+				# primary on THIS binding/expression (rejected capturing
+				# lambda, unknown name, propagated poison) — "cannot copy:
+				# type 'Unknown'" over it is noise.  An Unknown WITHOUT a
+				# recorded cause stays the last-line tripwire, regardless of
+				# unrelated earlier diagnostics.
 				return
 			copy_status = self.type_table.copy_status(ty_id)
 			if copy_status is True:
@@ -6674,6 +6930,7 @@ class TypeChecker:
 			# record a raw iface_coercion over it.
 			c.diagnostics = diagnostics
 			c.tc_diag = _tc_diag
+			c.fnptr_const_for_binding = _fnptr_const_for_binding
 			return _try_wrap_arg_for_callback_field(c, arg=arg, have_ty=have_ty, want_ty=want_ty)
 
 		def iface_assignable(src: TypeId, dst: TypeId) -> bool:
@@ -7366,6 +7623,23 @@ class TypeChecker:
 					scoped_id = _scope_lookup_binding_id(expr.name)
 					if scoped_id is not None and expr.binding_id != scoped_id:
 						expr.binding_id = scoped_id
+					# Pending-lambda VALUE-USE finalization: the first semantic
+					# value reference (alias initializer, return value, call
+					# argument, move/borrow subject, discarded read) resolves
+					# the deferred stored lambda through the shared total
+					# outcome — captureless inferable installs the concrete
+					# thin function type; capturing/unconstrained emits its ONE
+					# approved primary and diagnoses the binding.  Runs through
+					# the owner's transaction barrier, so speculative probes
+					# defer instead of leaking.  Direct HCall/HInvoke callees
+					# were already pre-resolved by their own consumers (the
+					# binding is no longer pending here — no double handling).
+					_pend_new_ty = _finalize_pending_value_use(getattr(expr, "binding_id", None), expected_type)
+					if _pend_new_ty is not None:
+						for _senv, _sbind in zip(reversed(scope_env), reversed(scope_bindings)):
+							if _sbind.get(expr.name) == expr.binding_id:
+								_senv[expr.name] = _pend_new_ty
+								break
 				if expr.binding_id is not None:
 					bound = binding_types.get(expr.binding_id)
 					if bound is None or self.type_table.get(bound).kind is TypeKind.UNKNOWN:
@@ -7377,6 +7651,11 @@ class TypeChecker:
 									expr.binding_id = candidate
 									bound = cand_ty
 					if bound is not None:
+						if self.type_table.get(bound).kind is TypeKind.UNKNOWN and _binding_has_unknown_cause(expr.binding_id):
+							# Transparent value flow: a read of a causally diagnosed
+							# Unknown binding carries the cause to the expression
+							# node (HMove/ternary/HLet propagation reads it there).
+							_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-binding-read")
 						cap_kind = _explicit_capture_kind(expr.binding_id)
 						if cap_kind in ("ref", "ref_mut"):
 							if used_as_value:
@@ -7471,6 +7750,10 @@ class TypeChecker:
 						code="E-UNKNOWN-NAME",
 					)
 				)
+				# This Unknown IS causally explained (by the primary just
+				# emitted): mark the node so downstream consumers suppress
+				# exactly this poison, not any unrelated Unknown.
+				_mark_node_unknown_cause(getattr(expr, "node_id", None), "unknown-name")
 				return record_expr(expr, self._unknown)
 
 			if isinstance(expr, H.HLambda):
@@ -8609,7 +8892,7 @@ class TypeChecker:
 					return record_expr(expr, self._unknown)
 				if hasattr(H, "HQualifiedMember") and isinstance(expr.fn, getattr(H, "HQualifiedMember")):
 					preseed = preseed_type_params or {}
-					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
+					call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn, fnptr_const_for_binding=_fnptr_const_for_binding, binding_unknown_cause=_binding_has_unknown_cause, mark_node_unknown_cause=_mark_node_unknown_cause, expr_unknown_is_caused=_expr_unknown_is_caused)
 					ctor_res = resolve_qualified_member_call(
 						make_resolver_ctx(call_ctx),
 						expr.fn,
@@ -8706,6 +8989,9 @@ class TypeChecker:
 				seen_ctors: set[str] = set()
 				seen_scalar_values: set[int] = set()
 				result_ty: TypeId | None = None
+				# Unknown-producing arm VALUE exprs, collected for the caused
+				# join at the value return (see there).
+				_match_unknown_results: list = []
 
 				for idx, arm in enumerate(expr.arms):
 					# A value-producing match arm must not ALSO reroute control flow
@@ -9344,6 +9630,8 @@ class TypeChecker:
 							)
 							if arm.result is not None and isinstance(arm.result, H.HUnary):
 								arm_value_ty = type_expr(arm.result, expected_type=expected_type)
+							if arm_value_ty is None or arm_value_ty == self._unknown:
+								_match_unknown_results.append(arm.result)
 						elif used_as_value:
 							# For value-block arms, allow a trailing expression statement to
 							# supply the arm's result type.
@@ -9358,6 +9646,8 @@ class TypeChecker:
 								)
 								if isinstance(last.expr, H.HUnary):
 									arm_value_ty = type_expr(last.expr, expected_type=expected_type)
+								if arm_value_ty is None or arm_value_ty == self._unknown:
+									_match_unknown_results.append(last.expr)
 							else:
 								# Allow diverging arms to omit a value in v1. We treat a block as
 								# diverging when it ends with a terminator statement.
@@ -9463,7 +9753,20 @@ class TypeChecker:
 							span=getattr(expr, "loc", Span()),
 						)
 					)
+					# The no-value primary is ON this match node — record it
+					# as the node's cause (the HLet watermark deliberately no
+					# longer covers compound joins).
+					_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-match-novalue")
 					return record_expr(expr, self._unknown)
+				if result_ty == self._unknown and _match_unknown_results and all(
+					_expr_unknown_is_caused(e) for e in _match_unknown_results
+				):
+					# Caused join over ALL value-producing arms.  No scrutinee
+					# folding: treating every arm as reachable can only
+					# WITHHOLD suppression (any uncaused Unknown arm keeps the
+					# downstream tripwire), so the conservative join fails
+					# toward diagnosing — mirrors the HTernary join contract.
+					_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-match")
 				return record_expr(expr, result_ty)
 
 			# Borrow.
@@ -9857,6 +10160,10 @@ class TypeChecker:
 								)
 							)
 							return record_expr(expr, self._unknown)
+				if inner_ty == self._unknown and _expr_unknown_is_caused(expr.subject):
+					# Transparent wrapper: `move <caused Unknown>` carries the
+					# cause (proven propagation shape; probe evidence).
+					_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-move")
 				return record_expr(expr, inner_ty)
 
 			# Explicit copy.
@@ -10079,22 +10386,20 @@ class TypeChecker:
 				if isinstance(expr.fn, H.HVar) and expr.fn.binding_id is not None:
 					pending = pending_lambdas.begin_resolution(expr.fn.binding_id)
 					if pending is not None:
-						setattr(pending, "expected_fn_inferred", True)
+						# Direct-call callee resolution routes through the ONE
+						# total classifier (same primaries, cause policy, and
+						# residual-Unknown poisoning as value use / drain);
+						# the callsite supplies the contextual function shape.
 						arg_types = [type_expr(a) for a in expr.args]
 						fn_params = [t if t is not None else self._unknown for t in arg_types]
 						fn_ret = expected_type if expected_type is not None else self._unknown
-						fn_ty = self.type_table.ensure_function(fn_params, fn_ret, can_throw=True)
-						typed = type_expr(pending, expected_type=fn_ty)
-						if typed is not None:
-							td = self.type_table.get(typed)
-							if td.kind is TypeKind.FUNCTION and getattr(pending, "can_throw_effective", None) is False and td.can_throw():
-								params = list(td.param_types[:-1]) if td.param_types else []
-								ret = td.param_types[-1] if td.param_types else self._unknown
-								typed = self.type_table.ensure_function(params, ret, can_throw=False)
-						binding_types[expr.fn.binding_id] = typed if typed is not None else self._unknown
+						_unk_args = [a for a, t in zip(expr.args, arg_types) if t is None or t == self._unknown]
+						_ctx_caused = bool(_unk_args) and all(_expr_unknown_is_caused(a) for a in _unk_args)
+						_classify_and_type_pending(expr.fn.binding_id, pending, (fn_params, fn_ret, True), context_caused=_ctx_caused)
 						pending_lambdas.retire(expr.fn.binding_id)
+						_record_finalized_fnptr(expr.fn.binding_id, pending)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn, fnptr_const_for_binding=_fnptr_const_for_binding, binding_unknown_cause=_binding_has_unknown_cause, mark_node_unknown_cause=_mark_node_unknown_cause, expr_unknown_is_caused=_expr_unknown_is_caused)
 				return resolve_call_expr(call_ctx, expr, expected_type, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
 			if isinstance(expr, getattr(H, "HInvoke", ())):
 				# D8(b): fn-value invocation is exempt from the redundant-
@@ -10112,19 +10417,15 @@ class TypeChecker:
 				if isinstance(expr.callee, H.HVar) and expr.callee.binding_id is not None:
 					pending = pending_lambdas.begin_resolution(expr.callee.binding_id)
 					if pending is not None:
-						setattr(pending, "expected_fn_inferred", True)
+						# Same ONE total classifier as the HCall callee path
+						# (see there); `arg_types` was computed above.
 						fn_params = [t if t is not None else self._unknown for t in arg_types]
 						fn_ret = expected_type if expected_type is not None else self._unknown
-						fn_ty = self.type_table.ensure_function(fn_params, fn_ret, can_throw=True)
-						typed = type_expr(pending, expected_type=fn_ty)
-						if typed is not None:
-							td = self.type_table.get(typed)
-							if td.kind is TypeKind.FUNCTION and getattr(pending, "can_throw_effective", None) is False and td.can_throw():
-								params = list(td.param_types[:-1]) if td.param_types else []
-								ret = td.param_types[-1] if td.param_types else self._unknown
-								typed = self.type_table.ensure_function(params, ret, can_throw=False)
-						binding_types[expr.callee.binding_id] = typed if typed is not None else self._unknown
+						_unk_args = [a for a, t in zip(expr.args, arg_types) if t is None or t == self._unknown]
+						_ctx_caused = bool(_unk_args) and all(_expr_unknown_is_caused(a) for a in _unk_args)
+						_classify_and_type_pending(expr.callee.binding_id, pending, (fn_params, fn_ret, True), context_caused=_ctx_caused)
 						pending_lambdas.retire(expr.callee.binding_id)
+						_record_finalized_fnptr(expr.callee.binding_id, pending)
 				kw_pairs = list(getattr(expr, "kwargs", []) or [])
 				if getattr(expr, "type_args", None):
 					diagnostics.append(
@@ -10199,6 +10500,13 @@ class TypeChecker:
 						)
 					)
 					return record_expr(expr, self._unknown)
+				if isinstance(expr.callee, H.HVar) and _binding_has_unknown_cause(getattr(expr.callee, "binding_id", None)):
+					# Causal-parity with the HCall consumer: the callee's
+					# Unknown is explained by ITS OWN diagnosed primary —
+					# repeating the call-target message is noise.  Mark the
+					# call node so the result binding can inherit the cause.
+					_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-callee-invoke")
+					return record_expr(expr, self._unknown)
 				diagnostics.append(
 					_tc_diag(
 						message="call target is not a function value",
@@ -10220,6 +10528,11 @@ class TypeChecker:
 					td_attempt = self.type_table.get(attempt_ty)
 					if td_attempt.kind is TypeKind.FNRESULT and td_attempt.param_types:
 						result_ty = td_attempt.param_types[0]
+				# Unknown-producing value contributors (attempt + value arms),
+				# collected for the caused join at the record step.
+				_try_unknown_contribs: list = []
+				if result_ty is None or result_ty == self._unknown:
+					_try_unknown_contribs.append(expr.attempt)
 				for arm in expr.arms:
 					catch_depth += 1
 					scope_env.append(dict())
@@ -10296,6 +10609,8 @@ class TypeChecker:
 						type_block_in_scope(arm.block)
 						if arm.result is not None:
 							arm_result_ty = type_expr(arm.result, expected_type=result_ty)
+							if arm_result_ty is None or arm_result_ty == self._unknown:
+								_try_unknown_contribs.append(arm.result)
 							# Explicit authoritative result-type contract: a value-
 							# producing catch arm MUST produce the try's result type
 							# (the attempt's success type).  Without this the mismatch
@@ -10330,6 +10645,15 @@ class TypeChecker:
 						scope_env.pop()
 						scope_bindings.pop()
 						catch_depth -= 1
+				if (result_ty is None or result_ty == self._unknown) and _try_unknown_contribs and all(
+					_expr_unknown_is_caused(e) for e in _try_unknown_contribs
+				):
+					# Caused join over the attempt AND every value-producing
+					# catch arm: all are potential result contributors, so
+					# every Unknown-producing one must itself be caused —
+					# any uncaused contributor keeps the downstream tripwire
+					# (mirrors the HTernary/HMatchExpr join contract).
+					_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-try")
 				return record_expr(expr, result_ty or self._unknown)
 
 			if hasattr(H, "HUnsafeExpr") and isinstance(expr, getattr(H, "HUnsafeExpr")):
@@ -10401,7 +10725,7 @@ class TypeChecker:
 										)
 										return record_expr(expr, self._unknown)
 				preseed = preseed_type_params or {}
-				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
+				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn, fnptr_const_for_binding=_fnptr_const_for_binding, binding_unknown_cause=_binding_has_unknown_cause, mark_node_unknown_cause=_mark_node_unknown_cause, expr_unknown_is_caused=_expr_unknown_is_caused)
 				method_ctx = make_method_ctx(call_ctx, diagnostics=diagnostics, traits_in_scope=_traits_in_scope, trait_key=None)
 				method_res = resolve_method_call(method_ctx, expr, expected_type=expected_type)
 				if method_res.call_info is None and method_res.resolution is not None and getattr(method_res.resolution, "decl", None) is not None:
@@ -12013,7 +12337,21 @@ class TypeChecker:
 						type_expr(expr.cond)
 				then_ty = type_expr(expr.then_expr)
 				else_ty = type_expr(expr.else_expr)
-				return record_expr(expr, then_ty if then_ty == else_ty else self._unknown)
+				_tern_ty = then_ty if then_ty == else_ty else self._unknown
+				if _tern_ty == self._unknown:
+					# Reachability-aware caused join (fails toward the
+					# tripwire): with a literal condition only the selected
+					# arm is reachable (same folding rule as the shared
+					# hir_flow authority); otherwise EVERY reachable
+					# Unknown-producing arm must itself be caused.
+					if isinstance(expr.cond, H.HLiteralBool):
+						_reachable = [(expr.then_expr, then_ty)] if expr.cond.value else [(expr.else_expr, else_ty)]
+					else:
+						_reachable = [(expr.then_expr, then_ty), (expr.else_expr, else_ty)]
+					_unknown_arms = [(e, t) for e, t in _reachable if t == self._unknown or t is None]
+					if _unknown_arms and all(_expr_unknown_is_caused(e) for e, _t in _unknown_arms):
+						_mark_node_unknown_cause(getattr(expr, "node_id", None), "caused-ternary")
+				return record_expr(expr, _tern_ty)
 
 			if isinstance(expr, H.HExceptionInit):
 				from lang.driftc.core.exception_ctor_args import KwArg as _KwArg, resolve_exception_ctor_args
@@ -12227,6 +12565,23 @@ class TypeChecker:
 			# return records the coercion only after the relation verifies (an
 			# unverified record surfaced as a codegen ICE), else it diagnoses
 			# "'X' does not implement interface 'Y'".
+			# Callback-slot PRE-WRAP (return Site 6) — same wrap-BEFORE-typing
+			# contract as the typed-let site: a bare lambda returned into a
+			# declared Callback type is wrapped in the canonical
+			# `core.callbackN(...)` first; the lambda is only typed inside
+			# that construction (see the typed-let comment for the
+			# re-check/label-leak failure this prevents).
+			if (
+				expected_ret is not None
+				and isinstance(value_expr, H.HLambda)
+				and self.type_table.get(expected_ret).kind is TypeKind.INTERFACE
+			):
+				_ret_pre_wrap = _try_callback_wrap_for_iface_slot(value_expr, None, expected_ret)
+				if _ret_pre_wrap.is_wrapped:
+					value_expr = _ret_pre_wrap.cb_call
+					set_value(value_expr)
+				elif _ret_pre_wrap.is_rejected:
+					return self._unknown
 			inferred = type_expr(value_expr, expected_type=expected_ret, used_as_value=used_as_value)
 			if _should_auto_try(inferred, expected_ret):
 				value_expr = _wrap_auto_try(value_expr)
@@ -12383,6 +12738,9 @@ class TypeChecker:
 							local_const_values[int(stmt.binding_id)] = (declared_ty, _vval)
 				return
 			if isinstance(stmt, H.HLet):
+				# Producer-local diagnostic watermark for causal attachment
+				# (read at the binding write; every HLet path passes here).
+				_let_diag_watermark = len(diagnostics)
 				if stmt.binding_id is None:
 					stmt.binding_id = self._alloc_local_id()
 				elif stmt.binding_id in binding_names and binding_names.get(stmt.binding_id) != stmt.name:
@@ -12423,6 +12781,41 @@ class TypeChecker:
 					binding_mutable[stmt.binding_id] = bool(getattr(stmt, "is_mutable", False))
 					binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
 					return
+				# Callback-slot PRE-WRAP (typed-let Site 5, wrap-BEFORE-typing
+				# contract): a bare lambda literal in a declared Callback slot
+				# is wrapped in the canonical `core.callbackN(...)` call FIRST,
+				# and the lambda is only ever typed INSIDE that construction.
+				# Typing the bare lambda against the interface expectation
+				# first was unsound across re-check passes: the callback
+				# context stamped `allow_capture_invoke` on the shared node,
+				# a later pass short-circuited to an interface LABEL with no
+				# wrapper, the label made `inferred == declared` skip the
+				# post-typing wrap branch below, and MIR received a raw
+				# HLambda under an interface-typed binding (ICE).  Pre-wrap
+				# makes every pass deterministic regardless of node-attribute
+				# or splice persistence.  Fn-typed values (named fns,
+				# fn-typed vars) still take the post-typing wrap below.
+				if (
+					declared_ty is not None
+					and isinstance(stmt.value, H.HLambda)
+					and self.type_table.get(declared_ty).kind is TypeKind.INTERFACE
+				):
+					_pre_wrap = _try_callback_wrap_for_iface_slot(stmt.value, None, declared_ty)
+					if _pre_wrap.is_wrapped:
+						stmt.value = _pre_wrap.cb_call
+					elif _pre_wrap.is_rejected:
+						# Diagnostic already emitted; bind as Unknown without
+						# typing the poisoned bare lambda against the iface.
+						# The rejection primary is this binding's cause — a
+						# later read/call must not cascade past it.
+						_mark_binding_unknown_cause(stmt.binding_id, "callback-wrap-rejected", getattr(stmt.value, "node_id", None))
+						scope_env[-1][stmt.name] = self._unknown
+						scope_bindings[-1][stmt.name] = stmt.binding_id
+						binding_types[stmt.binding_id] = self._unknown
+						binding_names[stmt.binding_id] = stmt.name
+						binding_mutable[stmt.binding_id] = bool(getattr(stmt, "is_mutable", False))
+						binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
+						return
 				# If the user provides a type annotation, treat it as the expected type
 				# for the initializer. This enables constructor calls like:
 				#   val x: Optional<Int> = Some(1)
@@ -12555,9 +12948,53 @@ class TypeChecker:
 				scope_env[-1][stmt.name] = val_ty
 				scope_bindings[-1][stmt.name] = stmt.binding_id
 				binding_types[stmt.binding_id] = val_ty
+				# Causal attachment: an Unknown binding is marked ONLY when
+				# its initializer's Unknown is causally explained — either by
+				# propagation (the initializer node/HVar carries a cause) or
+				# by the producer-LOCAL watermark (THIS initializer's typing
+				# emitted a new primary).  A concrete type clears any stale
+				# cause (recovery).  Never inferred from unrelated earlier
+				# diagnostics.  The watermark applies to DIRECT producer
+				# shapes only: a compound control-flow initializer (ternary /
+				# match / try / block value) has its own explicit cause JOIN
+				# during typing, and a primary from ONE arm must not mark the
+				# whole result caused when another reachable arm's Unknown is
+				# uncaused — the join's decision stands, failing toward the
+				# tripwire.
+				if val_ty == self._unknown:
+					_init_caused = _expr_unknown_is_caused(stmt.value)
+					_compound_join = isinstance(stmt.value, _COMPOUND_JOIN_SHAPES)
+					_init_new_primary = any(
+						getattr(d, "severity", None) == "error" for d in list(diagnostics)[_let_diag_watermark:]
+					)
+					if _init_caused or (_init_new_primary and not _compound_join):
+						_mark_binding_unknown_cause(stmt.binding_id, "caused-initializer", getattr(stmt.value, "node_id", None))
+				else:
+					_clear_binding_unknown_cause(stmt.binding_id)
 				binding_names[stmt.binding_id] = stmt.name
 				binding_mutable[stmt.binding_id] = bool(getattr(stmt, "is_mutable", False))
 				binding_place_kind[stmt.binding_id] = PlaceKind.LOCAL
+				# Static fnptr provenance survives transparent alias hops
+				# (`val g = f`) AND is seeded by a stored named-function
+				# initializer (`val f = add1`, whose HVar node registered
+				# its fnptr const at the name-as-value visit): MIR's
+				# callback construction is static-only in v1, so a later
+				# Callback consumer of the binding must reach
+				# `_implicit_callback_wrap` with the static
+				# (fn_ref, call_sig).  Immutable hops only — a `var` on
+				# either side can be re-assigned away from the constant.
+				if (
+					isinstance(stmt.value, H.HVar)
+					and val_ty is not None
+					and val_ty != self._unknown
+					and not bool(getattr(stmt, "is_mutable", False))
+					and not binding_mutable.get(getattr(stmt.value, "binding_id", None), False)
+				):
+					_src_fp = _fnptr_const_for_binding(getattr(stmt.value, "binding_id", None))
+					if _src_fp is None:
+						_src_fp = fnptr_consts_by_node_id.get(getattr(stmt.value, "node_id", None))
+					if _src_fp is not None:
+						finalized_fnptr_by_binding[stmt.binding_id] = _src_fp
 				if drift_debug.enabled("typecheck"):
 					import sys
 					try:
@@ -13852,68 +14289,9 @@ class TypeChecker:
 		#    fnptr const, rewritten below); an Unknown in the RESULT function
 		#    type is diagnosed for the same ABI reason.
 		for _pend_bid, _pend_lam in pending_lambdas.drain():
-			_pend_caps = list(getattr(_pend_lam, "captures", []) or [])
-			if not _pend_caps and _pend_lam.explicit_captures is None:
-				_pend_res = discover_captures(_pend_lam)
-				diagnostics.extend(_pend_res.diagnostics)
-				_pend_caps = _pend_res.captures
-				_pend_lam.captures = _pend_res.captures
-			if _pend_caps or _pend_lam.explicit_captures:
-				_all_caps = list(_pend_caps) + list(_pend_lam.explicit_captures or [])
-				if any(_capture_kind_is_borrow(getattr(c, "kind", None)) for c in _all_caps):
-					# BORROW captures may not outlive the statement (v0 rule) —
-					# same rejection as the invoked form.
-					diagnostics.append(
-						_tc_diag(
-							message="closures with borrowed captures are non-escaping in v0; only immediate invocation or proven non-retaining params are supported",
-							severity="error",
-							span=getattr(_pend_lam, "loc", Span()),
-							notes=["wrap it like: (|...| => ...)(...)"],
-						)
-					)
-				else:
-					# v1 RULING (2026-08-03): a bare stored capturing lambda is
-					# invalid even when never invoked — v1 has no anonymous
-					# closure-value type or runtime representation.  "Value
-					# captures may escape" means copy/move/share captures are
-					# eligible to escape through a SUPPORTED representation
-					# (core.callbackN(...) / an accepted Fn-bounded
-					# conversion), not through an untyped bare closure value.
-					diagnostics.append(
-						_tc_diag(
-							message="bare capturing lambdas cannot be stored in v1; wrap with core.callbackN(...) or invoke immediately",
-							severity="error",
-							span=getattr(_pend_lam, "loc", Span()),
-						)
-					)
-				binding_types[_pend_bid] = self._unknown
-				continue
-			_unannotated = [p.name for p in _pend_lam.params if getattr(p, "type", None) is None]
-			if _unannotated:
-				diagnostics.append(
-					_tc_diag(
-						message=(
-							f"cannot infer type for lambda parameter(s) {', '.join(repr(n) for n in _unannotated)}: "
-							f"the lambda is never invoked, so no call site constrains them; add parameter annotations"
-						),
-						severity="error",
-						span=getattr(_pend_lam, "loc", Span()),
-					)
-				)
-				binding_types[_pend_bid] = self._unknown
-				continue
-			_pend_ty = type_expr(_pend_lam)
-			binding_types[_pend_bid] = _pend_ty if _pend_ty is not None else self._unknown
-			if _pend_ty is not None:
-				_pend_def = self.type_table.get(_pend_ty)
-				if _pend_def.kind is TypeKind.FUNCTION and any(t == self._unknown for t in (_pend_def.param_types or [])):
-					diagnostics.append(
-						_tc_diag(
-							message="cannot infer this lambda's function type (an unresolved parameter or return type remains); add annotations",
-							severity="error",
-							span=getattr(_pend_lam, "loc", Span()),
-						)
-					)
+			# One shared total outcome with the value-use finalizer —
+			# capture rejection / cannot-infer / typed thin function.
+			_classify_and_type_pending(_pend_bid, _pend_lam, None)
 		if fnptr_consts_by_node_id:
 			_apply_fnptr_consts(body)
 		if drift_debug.enabled("local_types_trace") and getattr(fn_id, "module", None) == "main" and getattr(fn_id, "name", None) == "run":

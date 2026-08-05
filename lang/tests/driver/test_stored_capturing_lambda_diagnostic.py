@@ -16,8 +16,11 @@ vehicle.  But the rejection was unusable, three stacked defects deep:
      same poisoned binding.
 
 Fixed: HLambda carries a stamped `loc`; the Unknown-cascade diagnostics are
-suppressed when a prior error already explains the poisoned type.  The result
-is exactly ONE actionable, properly-spanned diagnostic.
+suppressed by EXACT causal provenance — the rejection primary is recorded as
+the poisoned binding's cause (`unknown_cause_by_binding`), and only consumers
+of that specific binding/expression suppress (unrelated Unknowns still trip
+E-COPY-UNKNOWN; see test_causal_unknown_provenance.py).  The result is
+exactly ONE actionable, properly-spanned diagnostic.
 
 Companion LANGUAGE_BUG (same slice): DIVERGENT lambda bodies.  A lambda whose
 body throws on every path was only accepted in the flat trailing-throw form;

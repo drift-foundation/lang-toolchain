@@ -1,189 +1,359 @@
-# Plan: causally scoped Unknown cascade suppression
+# Plan: causal Unknown provenance + callable-value finalization/materialization
 
-Refreshed: 2026-08-04 against the committed pending-`0.35.0` tree.
+Refreshed: 2026-08-05 against committed pending `0.35.0`; planning round 2
+selected expression-aware cause flow and exposed two additional
+callable-materialization boundary failures.
 
-This is a research-backed work order, not an authoritative patch recipe. The
-implementer owns `PROGRESS.md`, must reproduce the failures, and should record
-where code evidence contradicts the reviewer. While the current full suite is
-active, Slawomir authorizes only isolated probe additions/runs inside this
-finding directory; those probes may invoke the compiler. Shared compiler,
-repository-test, fixture, spec, history, and infrastructure files remain
-read-only until the suite clears and Slawomir starts the implementation slice.
+Status: ready for implementation. Planning was accepted by reviewer and
+implementer on 2026-08-05, and the exact existing-test comment ledger was
+approved by Slawomir. Slawomir intentionally stopped the preceding
+`run_all_tests.sh` run after its observed phases remained clean and explicitly
+cleared that start gate on 2026-08-05. This is a human gate waiver, not a claim
+that the interrupted suite reached its terminal summary. The full scope is
+deliberately deferred until the last queued finding is fixed, when one final
+full-suite run will validate the accumulated train. Shared implementation is
+authorized under the accepted plan; retain this finding tree through that
+deferred run rather than cleaning it up after the current slice.
 
-## Phase 0 — mandatory start gates
+This is a falsifiable work order. K owns `PROGRESS.md`, should preserve prior
+empirical results, and should replace any proposed design that current traces
+or red tests disprove.
 
-1. Read `FINDING.md`, `EVIDENCE.md`, this plan, and the work-only probe in full.
-2. Read current `AGENTS.md` and `AGENTS-MAILBOX-PROTO.md`.
-3. Scan `doc/refactor_triggers.md` at actual start. The reviewer found no match
-   on 2026-08-04; K must make the independent current-tree determination.
-4. Check `/tmp/drift-announce/` and current version/certification state.
-5. Create implementer-owned `PROGRESS.md`; separate observed facts, hypotheses,
-   and decisions. Do not edit reviewer `review-*.md` files.
+## Phase 0 — start gates
 
-## Phase 1 — reproduce before compiler edits
+1. Read parent `FINDING.md`, `EVIDENCE.md`, implementer `PROGRESS.md`, and the
+   nested value-finalization child's `FINDING.md`/`PLAN.md`.
+2. Confirm the active full suite has completed cleanly before shared edits.
+3. Read current `AGENTS.md` and `AGENTS-MAILBOX-PROTO.md`; use Baton for every
+   handoff.
+4. Re-scan `doc/refactor_triggers.md`. The 2026-08-05 reviewer scan found no
+   matching trigger; this must be independently current at implementation.
+5. Check `/tmp/drift-announce/`, `DRIFTC_VERSION`, ABI, and certification state.
+6. Record whether the parent and child remain one implementation slice. A
+   split is allowed, but must name the proven boundary rather than merely
+   choosing the smallest diff.
 
-Run the existing work probe and retain the complete diagnostic lists:
+## Phase 1 — preserve and rerun the red baselines
+
+Run the existing work-only probes first and retain complete ordered diagnostic
+streams:
 
 ```sh
 ./.venv/bin/python3 -m pytest -q work/finding-causal-unknown-cascade-suppression/probe_causal_unknown_suppression.py
+./.venv/bin/python3 work/finding-causal-unknown-cascade-suppression/probe_preflight_hypotheses.py
+./.venv/bin/python3 work/finding-causal-unknown-cascade-suppression/probe_pending_alias_matrix.py
+./.venv/bin/python3 work/finding-causal-unknown-cascade-suppression/probe_txn_and_value_positions.py
 ```
 
-Expected from the last executed baseline: two failures because only the
-unrelated first copy diagnostic survives. If either test is now green, stop and
-explain which intervening change invalidated the finding before implementing.
+Revalidate each script's invocation contract before running; some are pytest
+modules and some are standalone probes. If a baseline changed after the
+rollback child, explain the mechanism before adapting expectations.
 
-Run unchanged same-binding guards:
+Run unchanged compatibility guards:
 
 ```sh
 ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_stored_capturing_lambda_diagnostic.py
 ./.venv/bin/python3 -m pytest -q lang/tests/driver/test_uninvoked_stored_lambda.py
 ./.venv/bin/python3 -m pytest -q lang/tests/type_checker/test_type_checker_copy_unknown.py
+./.venv/bin/python3 -m pytest -q lang/tests/checker/test_pending_lambda_probe_barrier.py
 ```
 
-Record exact counts/messages/spans for the relevant cases, not only pass/fail.
+## Phase 2 — preserve the resolved planning matrix
 
-## Phase 2 — design and run isolated work probes
+Planning rounds 1 and 2 resolved the following decisions with work-only
+probes. Preserve them as red-first input; do not reinterpret the current
+one-primary output as evidence that the global suppression implementation is
+sound:
 
-While the full suite remains active, place every new probe under this finding
-directory. Probe the `HInvoke`, ordinary diagnosed producer, pending value-read,
-one-hop alias, concrete recovery, and shadowing cases from `EVIDENCE.md`. Keep
-the invocations narrow and record complete diagnostic streams in `PROGRESS.md`.
-Do not edit shared tests or compiler code in this phase.
+1. **Poisoned call result:** `bad = missing_name; x = bad(); x();` — planning
+   review confirmed the suppressed binding-call node must carry cause into its
+   receiving HLet.
+2. **Transparent wrappers:** direct alias, `move bad`, and a literal-selected
+   ternary all carry the poisoned value without another primary today. This
+   disproves binding-only and call-result-only provenance.
+3. **Pending HVar contexts:** annotated captureless pending binding referenced
+   by ordinary alias, `return`, compatible Fn/Callback argument, explicit
+   `move`, borrow, and discarded `f;`.
+4. **Contextual callback alias:** inspect post-check HIR/marks, not only rc=0,
+   to prove callback wrapping remains lowering-visible and the original
+   binding is a thin function pointer.
+5. **Capturing first reference:** implicit borrow and explicit copy/move/share
+   bare storage followed by alias/call. Count primary diagnostics and capture
+   effects; verify the approved bare-storage rejection stays authoritative.
+6. **Unconstrained params:** no context, concrete Fn context, and Callback
+   context. Ensure no `LambdaFnSpec` with Unknown ABI types is published.
+7. **Shadowing/recovery:** same source name/different ids and pending-to-
+   concrete transition.
+8. **True compatible bare-HVar argument:** passing pending `f` into a concrete
+   Callback slot currently stamps the binding as the interface without
+   constructing it, then fails MIR validation on a move from an uninitialized
+   interface local. The accepted result requires thin-fn finalization followed
+   by a real callback wrapper at the argument slot.
+9. **Function-pointer borrow control:** borrowing an already-finalized stored
+   fnptr compiles and runs, selecting finalize-and-accept for pending `&f`.
+   Borrowing a named function currently raises `AttributeError` after its
+   `HVar` becomes `HFnPtrConst`; repair that boundary in the nested
+   `finding-fnptr-borrow-materialization` child.
 
-## Phase 3 — add in-tree red regressions after the suite gate
+Still pin a non-literal ternary join before implementing cause propagation.
+The goal is not exhaustive syntax enumeration: it is to define a conservative
+join rule under which a result is marked caused only when every reachable
+Unknown-producing path is already explained. One caused arm must never silence
+an uncaused arm.
 
-Prefer a new file such as
-`lang/tests/type_checker/test_causal_unknown_cascade_suppression.py` so the
-strict existing-test approval gate is not crossed. Add, before the fix:
+## Phase 3 — install new in-tree regressions red-first
 
-1. unrelated first error + independent preseeded Unknown `HVar` value use →
-   `E-COPY-UNKNOWN` must still appear;
-2. unrelated first error + independent preseeded Unknown `HCall(fn=HVar)` → one
-   call-target diagnostic must still appear;
-3. ordinary source producer (`val bad = missing_name; bad();`) → primary only,
-   if the isolated probe confirms that contract;
-4. same diagnosed stored-lambda binding through `HCall` → primary only;
-5. same diagnosed binding through synthetic `HInvoke` → decide and pin parity;
-6. shadowed same-name/different-id bindings → no cross-suppression;
-7. pending captureless lambda resolving concrete → no stale cause.
+Prefer new files, for example:
 
-Before choosing the representation, add focused source or synthetic probes for:
+- `lang/tests/type_checker/test_causal_unknown_provenance.py`;
+- `lang/tests/driver/test_pending_lambda_value_finalization.py`.
 
-- bare value read of a pending capturing lambda before final flush;
-- one-hop alias from a diagnosed Unknown binding, then copy/call through the
-  alias.
+Before production edits, pin:
 
-These two probes decide whether exact-binding marking is total, needs explicit
-cause propagation, or should be split into a child finding. They must not be
-silently ignored because the minimal two-test patch happens to pass.
+### Causal negatives/controls
 
-If modifying any existing test/comment becomes necessary, publish an
-`APPROVAL-PENDING-*` proposal with exact paths/assertions and wait for
-Slawomir's approval. Adding new tests does not authorize rewriting old ones.
+- unrelated error does not suppress independent Unknown copy;
+- unrelated error does not suppress independent Unknown HCall;
+- same-binding diagnosed Unknown is quiet through HCall and HInvoke;
+- direct alias cause propagation;
+- shadowing isolation and concrete clearing;
+- poisoned call-result behavior selected in Phase 2.
+- HVar, move, suppressed-call result, literal-selected ternary, and the
+  non-literal ternary join matrix; do not silently regress today's one-primary
+  presentation.
 
-## Phase 4 — trace the state boundary
+### Pending positives/negatives
 
-Audit all current writes from the inventory in `EVIDENCE.md`. For each write,
-answer:
+- captureless alias full compile/run;
+- contextual callback alias full compile/run plus structural wrapper mark;
+- resolve-after-alias order independence;
+- unconstrained alias one clean primary;
+- capturing alias one approved primary for implicit and explicit capture
+  classes;
+- return/argument and any additional HVar contexts the Phase 2 evidence says
+  the shared hook promises.
+- borrowed pending value behavior against the concrete fnptr control.
 
-- Can it leave this binding `Unknown`?
-- Was a new primary error emitted by this producer visit?
-- Can the write occur during a deferred resolver transaction?
-- Can it overwrite a previously marked binding with a concrete type?
-- Can another binding inherit this Unknown without a new diagnostic?
+### Callback materialization boundary
 
-Also trace all three `make_call_ctx(...)` sites and the separate `HInvoke`
-branch. Do not route causality through `binding_id_by_name` when the expression
-already carries its lexical binding id.
+- direct typed-Callback HLet full compile/run and structural wrapper pin;
+- bare pending HVar passed to a Callback parameter full compile/run;
+- the original pending binding remains a thin function type while the slot
+  contains a synthesized callback HCall;
+- raw HLambda and uninitialized interface locals never reach MIR;
+- explicit wraps do not double-wrap; capture/throw/arity diagnostics remain on
+  their established authorities.
 
-## Phase 5 — select the authority
+### Function-pointer borrow boundary
 
-The current leading candidate is an `FnCheckState`-owned `_TxnDict` keyed by
-binding id and storing an immutable cause description. Requirements:
+- pending `&f` finalizes and compiles/runs like the finalized-binding control;
+- `&named_function` compiles/runs without turning an `HPlaceExpr.base` into an
+  `HFnPtrConst` or otherwise violating the canonical-place invariant;
+- a genuine non-addressable/illegal mutable-borrow negative retains a clean
+  source diagnostic.
 
-- include the table in `OWNED_TABLES`, so transaction logs and
-  `state_fingerprint()` cover it;
-- mark only from producer-local evidence (new primary error and Unknown result,
-  or a separately justified guaranteed-later primary state);
-- clear on concrete resolution;
-- propagate only where a regression establishes causal value flow;
-- expose a read-only exact-binding predicate to `CallResolverContext`;
-- do not place transaction wrappers on returned `TypedFn`/`TypeCheckResult`.
+Every newly accepted lowering-visible shape needs a full compile/run companion.
+Checker-only rc=0 is insufficient.
 
-Reject this design if the Phase 2 probes show that binding identity cannot
-represent the necessary provenance. In that case, document the smallest
-node/expression provenance authority that can, and reassess scope before code.
+Existing-test changes are frozen separately in the authorization ledger below.
 
-## Phase 6 — implement consumers and producers
+## Phase 4 — trace ownership and mutation order
 
-Suggested order, conditional on the selected design:
+Before code, write the exact mutation sequence for current HCall, HInvoke,
+HVar, and final drain:
 
-1. Add the transaction-owned cause state and small mark/clear/query helpers.
-2. Mark ordinary diagnosed-Unknown `HLet` producers using a local diagnostic
-   watermark; do not infer cause from preexisting diagnostics.
-3. Mark/clear pending-lambda `HCall` and `HInvoke` resolution around the one
-   real `type_expr(pending, expected_type=...)` visit.
-4. Mark final-flush rejections for state totality, even if no later source
-   statement can consume them.
-5. Implement explicitly justified alias/pending propagation discovered by the
-   red probes.
-6. Replace `_require_copy_value`'s global scan with an exact-cause query for
-   binding-backed Unknown values. Leave unmarked/non-binding Unknown values as
-   tripwires unless separate provenance proves suppression.
-7. Thread the predicate into every `make_call_ctx(...)` construction and
-   replace the resolver's global scan.
-8. Apply the same deliberate policy to `HInvoke`; do not duplicate a second
-   causality authority.
-9. Remove or rewrite the two comments that currently claim a causal relation
-   their predicates do not prove. If those comments are in existing test files,
-   obtain approval first; source-comment corrections are in scope.
+- pending owner lookup/barrier;
+- lambda node stamping and typing;
+- diagnostics emitted;
+- binding type update;
+- Unknown cause mark/clear;
+- pending retirement;
+- `_lambda_fn_specs`/fnptr publication;
+- final HIR rewrite.
 
-Do not add a broad “diagnostics nonempty” fallback for missing cause state. A
-missing marker should fail toward emitting the tripwire, which is the behavior
-this finding is restoring.
+The barrier must happen first. A correct cause-table rollback does not make an
+external HLambda mutation safe.
 
-## Phase 7 — transaction and invariant teeth
+Audit all relevant binding-type writes. For each, record:
 
-In a new focused test where possible, prove:
+- can it leave Unknown?
+- did this producer emit a local primary?
+- can it inherit a cause without a new primary?
+- can it run inside `CheckerStateTxn`?
+- can it overwrite a caused Unknown with concrete type?
 
-- cause-table mutation rolls back to byte-for-byte-equivalent fingerprint;
-- committed mutation remains;
-- nested transaction commit followed by outer rollback restores the original;
-- the cause table is named in `state_fingerprint()`;
-- no `_TxnDict`/owner leaks through public result objects;
-- rebinding/shadowing cannot inherit a cause by source name.
+Trace all three `make_call_ctx(...)` sites (`type_checker.py` currently near
+8612, 10097, and 10404) plus the separate HInvoke fallback.
 
-If production never mutates the cause table inside today's allowed probe
-shapes, keep the rollback test anyway: membership in `FnCheckState` is an
-explicit future-safety contract, not a claim about current reachability.
+## Phase 5 — install the selected causal authority
 
-## Phase 8 — focused verification
+Add transaction-owned binding-id and expression-node provenance to
+`FnCheckState`; include both `_TxnDict`s in `OWNED_TABLES`. Expose small
+mark/propagate/clear/query helpers and store immutable cause metadata, not a
+bare global flag or mutable Diagnostic object. No transaction wrapper may
+escape through `TypedFn` or `TypeCheckResult`.
 
-Minimum focused commands, adjusted for new paths:
+The initial explicit expression-flow set is:
+
+- HVar read of an exactly caused binding;
+- HMove of a caused subject;
+- an HCall whose exact caused callee makes the call-target diagnostic a
+  suppressed cascade;
+- HTernary under a reachability-aware all-reachable-arms-caused join.
+
+For a literal condition, only the selected arm participates. For a general
+condition, mark the ternary only when every reachable Unknown result arm is
+caused; if causes differ, retain sufficient immutable roots for explanation or
+use a deterministic joined category. Any uncaused reachable Unknown fails
+toward the downstream tripwire. HLet attaches expression cause only when its
+actual inferred result remains Unknown and clears it on a concrete result.
+
+Do not approximate causality by name, source order, “any child is Unknown,” or
+function-global diagnostic state. Unproven expression shapes deliberately do
+not propagate. Preseeded Unknown bindings remain unmarked.
+
+## Phase 6 — centralize pending finalization
+
+Extract one authority shared by HCall, HInvoke, ordinary HVar references, and
+final drain, unless tracing proves a justified split. Required behavior:
+
+1. Exact binding id enters `PendingLambdaOwner.begin_resolution()`.
+2. Derive contextual function parameters/return/throw mode when available.
+3. Type the lambda through the existing primary authority exactly once.
+4. Captureless success installs a concrete thin-function type and clears cause.
+5. Capturing/unconstrained failure emits one primary, installs diagnosed
+   Unknown cause, and publishes no invalid ABI spec.
+6. Retire only after the outcome is total.
+7. Preserve fnptr spec/const publication and `_apply_fnptr_consts` lowering.
+
+Do not store a Callback interface type on the original captureless binding;
+normal callback wrapping must remain an explicit HIR/lowering-visible action.
+
+Do not add a second body-inference path in the call resolver.
+
+Coordinate this helper with the typed-let Callback child. That child restores
+the established implicit-wrap contract at all concrete Callback slots reached
+by this slice; the pending-alias/argument paths must feed the same
+lowering-visible wrapper once the HVar finalizes to a thin function type.
+
+## Phase 6A — restore Callback slot materialization
+
+Do not fix the typed-let case by merely changing its recorded TypeId. Route a
+direct HLambda through the existing WRAPPED/REJECTED/SKIP callback authority
+before equality can bypass conversion. The wrapper must be constructed before
+the inner lambda is typed so capture-capable Callback contexts use the
+callback intrinsic's `allow_capture_invoke` path rather than the captureless
+fnptr-coercion branch.
+
+Apply the same contract to call arguments after pending HVar finalization:
+retain the thin function type on the binding, synthesize and splice the
+callback HCall in the argument slot, then record the slot's Callback type and
+CallInfo. Audit every direct/static/free/method argument route reached by the
+tests; remove any interface-label-only shortcut that can accept a lambda/fnptr
+without a lowering-visible construction.
+
+## Phase 6B — repair function-reference borrow materialization
+
+Trace `&named_function` across stage1 borrow materialization, place
+canonicalization, `fnptr_consts_by_node_id`, `_apply_fnptr_consts`, borrow
+checking, and MIR lowering. The leading static hypothesis is that syntactic
+stage1 treats the name as an HVar place, while semantic function-reference
+replacement later puts `HFnPtrConst` into `HPlaceExpr.base`, violating the
+documented HVar-only invariant. Confirm with a structural red test.
+
+Repair the earliest authority that knows this is an rvalue function constant,
+so the borrow gets real temporary storage (or another already-supported
+lowering-visible representation). Do not teach canonical places to accept
+arbitrary rvalue bases and do not catch the AttributeError. Preserve normal
+local-fnptr borrowing and targeted invalid-borrow diagnostics.
+
+## Phase 7 — replace consumers
+
+1. `_require_copy_value`: suppress Unknown only when the exact HVar binding (or
+   proven expression provenance) has a cause.
+2. HCall local function value: query exact `binding_id`; remove the global
+   diagnostics scan.
+3. HInvoke: apply the same tested causal predicate.
+4. Correct the two source comments that currently overclaim causality.
+5. Keep unmarked/non-binding Unknown values as tripwires.
+
+## Phase 8 — invariant teeth
+
+Pin cause state through:
+
+- mutation + rollback;
+- inner commit + outer rollback;
+- commit persistence;
+- inclusion in `state_fingerprint()`;
+- exact identity under shadowing;
+- concrete clear;
+- plain-dict/non-wrapper public result objects.
+
+Extend the pending rollback test only if a new file cannot prove the new state
+without editing an existing test; existing-test edits need approval.
+
+## Existing-test edit authorization ledger
+
+Slawomir approved this exact list on 2026-08-05. New test files are listed
+separately above and do not require approval.
+
+Currently proposed existing-test edits are comment/docstring corrections only;
+no existing assertion, fixture source, expected diagnostic, test name, or test
+helper is proposed to change:
+
+1. `lang/tests/driver/test_implicit_callback_wrap.py`
+   - replace the Site-1 “NOT WRAPPED” / “silent interface coercion” narrative
+     and the Site-1 no-double-wrap docstring with the restored canonical
+     wrapper contract;
+   - rewrite the Site-2, Site-5, and Site-6 docstrings that describe raw
+     iface-coercion failure as current behavior into historical regression
+     descriptions;
+   - update the arity-mismatch/out-of-scope note only if the red/green matrix
+     proves that the shared argument authority closes it.
+2. `lang/tests/driver/test_stored_capturing_lambda_diagnostic.py`
+   - replace “a prior error already explains” with exact causal binding/node
+     provenance; assertions remain unchanged.
+
+The historical lifecycle prose in
+`lang/tests/driver/test_uninvoked_stored_lambda.py` remains accurate for its
+0.34.2 regression and final-drain coverage. The call-probe-specific prose and
+assertions in `lang/tests/checker/test_pending_lambda_probe_barrier.py` also
+remain accurate. Neither file is approved or planned for editing.
+
+K confirmed this list is complete in planning round 3. Any assertion, fixture,
+expected-output change, test/helper rename, deletion, conditional contingency,
+or additional existing test file remains unapproved until explicitly added and
+approved by Slawomir.
+
+## Phase 9 — focused verification
+
+Minimum, adjusted to actual new paths:
 
 ```sh
-./.venv/bin/python3 -m pytest -q work/finding-causal-unknown-cascade-suppression/probe_causal_unknown_suppression.py
-./.venv/bin/python3 -m pytest -q lang/tests/type_checker/test_causal_unknown_cascade_suppression.py
-./.venv/bin/python3 -m pytest -q lang/tests/type_checker/test_type_checker_copy_unknown.py
-./.venv/bin/python3 -m pytest -q lang/tests/driver/test_stored_capturing_lambda_diagnostic.py
-./.venv/bin/python3 -m pytest -q lang/tests/driver/test_uninvoked_stored_lambda.py
+./.venv/bin/python3 -m pytest -q lang/tests/type_checker/test_causal_unknown_provenance.py
+./.venv/bin/python3 -m pytest -q lang/tests/driver/test_pending_lambda_value_finalization.py
+./.venv/bin/python3 -m pytest -q lang/tests/driver/test_callback_slot_materialization.py
+./.venv/bin/python3 -m pytest -q lang/tests/driver/test_fnptr_borrow_materialization.py
+./.venv/bin/python3 -m pytest -q lang/tests/checker/test_pending_lambda_probe_barrier.py
 ./.venv/bin/python3 -m pytest -q lang/tests/checker/test_defer_probe_state_transaction.py
+./.venv/bin/python3 -m pytest -q lang/tests/driver/test_stored_capturing_lambda_diagnostic.py
+./.venv/bin/python3 -m pytest -q lang/tests/driver/test_uninvoked_stored_lambda.py
+./.venv/bin/python3 -m pytest -q lang/tests/type_checker/test_type_checker_copy_unknown.py
 ```
 
-Then run the checker/type-checker/driver suites proportionate to touched code.
-Do not start another full suite or corpus run until review converges and the
-user schedules it.
+Then run checker/type-checker/driver suites proportionate to the touched code.
+Do not start another full suite or corpus run until review converges and
+Slawomir schedules it.
 
-## Phase 9 — version/history and handoff
+## Phase 10 — version/history/handoff
 
-- No spec change unless Slawomir explicitly approves one.
-- ABI remains 22 unless actual compiler/runtime boundary evidence requires an
-  ABI change.
-- If `0.35.0` is still unreleased/uncertified, keep that version and fold this
-  user-visible diagnostic fix into its existing history entry. Otherwise apply
-  the mandatory pre-1.0 minor-bump rule from the current release state.
-- Record red/green evidence, exact files, disagreements, approval needs, and
-  unresolved children in `PROGRESS.md`.
-- Publish `work/IMPL-PENDING-<timestamp>` only when the implementation and
-  focused verification are ready for review. Its sole payload is the relative
-  path to `PROGRESS.md`.
+- No spec change without Slawomir's explicit approval; none is currently
+  needed.
+- ABI stays 22 unless actual compiler/runtime boundary evidence contradicts
+  the current analysis.
+- If 0.35.0 remains unreleased/uncertified, retain it and fold both fixes into
+  its pending history entry. Otherwise take the mandatory minor bump.
+- K records evidence and disagreements in implementer-owned `PROGRESS.md`.
+- Publish the implementation handoff through Baton only when focused gates are
+  complete. The reviewer may recurse into a child finding if implementation
+  exposes a genuinely separate bug.

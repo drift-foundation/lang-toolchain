@@ -1,197 +1,241 @@
-# Evidence: causal Unknown cascade suppression
+# Evidence: causal Unknown provenance and pending-lambda value finalization
 
-Evidence split:
+Refreshed: 2026-08-05.
 
-- **Executed baseline:** 2026-08-03 work-only probe result.
-- **Static refresh:** 2026-08-04 committed pending-`0.35.0` source.
-- **Not yet established:** the pending-value-read, alias propagation, and
-  `HInvoke` parity hypotheses identified during refresh.
+This file separates executed observations from current static facts and open
+probes. Detailed ordered streams from K's preflight remain in implementer-owned
+`PROGRESS.md`; this reviewer evidence does not rewrite that channel.
 
-The 2026-08-04 refresh ran no probe or compiler command because the repository
-full suite was already consuming the tree and CPU. This file does not present
-static deductions as executed results.
+## Executed observations
 
-## Executed red baseline (2026-08-03)
+### Original causal tripwires (2026-08-03; rerun by K 2026-08-04)
 
-Command used then:
+`probe_causal_unknown_suppression.py` has two deliberately red cases. Each
+creates an exact preseeded binding whose type is canonical Unknown and whose
+producer emitted no diagnostic. A separate invalid copy first creates an
+unrelated error.
 
-```sh
-./.venv/bin/python3 -m pytest -q work/finding-causal-unknown-cascade-suppression/probe_causal_unknown_suppression.py
-```
+Observed in both cases: only the unrelated copy diagnostic remained.
 
-Observed result: `2 failed`. In both cases the diagnostic stream contained only
-the deliberately unrelated first error:
+Missing independent diagnostics:
 
-```text
-copy operand must be an addressable place in v1 (local/param/field/index)
-```
+- `E-COPY-UNKNOWN` for a later read of the separate Unknown binding;
+- `call target is not a function value` for a later call through it.
 
-Missing diagnostics:
+This proves function-global suppression at the public `check_function`
+boundary. It does not prove the proposed representation.
 
-- copy boundary: no `E-COPY-UNKNOWN` for the separate preseeded Unknown binding;
-- call boundary: no `call target is not a function value` for that binding.
+### Same-source and HInvoke parity
 
-The probe uses public `check_function` preseed maps to isolate a last-line
-checker invariant. It proves the suppression is function-global at this
-boundary. It does not prove that the proposed binding-cause table is the only
-or best implementation.
+K's `probe_preflight_hypotheses.py` established:
 
-## Static source facts (2026-08-04)
+- ordinary HCall through a causally poisoned binding: primary only;
+- equivalent synthetic HInvoke: primary plus call-target cascade;
+- pending captureless lambda resolving by direct call: concrete recovery is
+  clean on later calls.
 
-### Function-global copy suppression remains
+The desired HCall result currently occurs for the wrong reason (any prior
+error); HInvoke proves the policy has drifted across consumers.
 
-At `lang/driftc/type_checker.py:4012-4036`, `_require_copy_value` still has:
+### Pending-value and alias matrix
+
+K's executed `probe_pending_alias_matrix.py` established:
+
+| Shape | Current result | Contract implication |
+|---|---|---|
+| annotated/inferable captureless `f`, then `val g = f` | sole `E-COPY-UNKNOWN` | valid non-capturing fnptr alias is rejected |
+| pending `f`, then contextual `Callback1` alias | sole `E-COPY-UNKNOWN` | expected callback shape never reaches pending lambda |
+| unannotated `|x| => x`, then alias | copy cascade, then cannot-infer primary | presentation order is inverted; invalid ABI must remain rejected |
+| alias first, direct resolving call later | earlier copy error remains | behavior is source-order dependent |
+| `bad = missing_name; bad()` | one unknown-name primary | desired same-source suppression, presently global |
+| explicit capturing lambda then alias | copy cascade, then approved bare-storage primary | same one-primary requirement as implicit capture |
+
+The earlier implicit-borrow alias probe produced the same cascade-first shape.
+
+### Additional value positions and transaction surface
+
+K's `probe_txn_and_value_positions.py` established:
+
+- `return f` on pending captureless binding sees Unknown and emits
+  `E-COPY-UNKNOWN`;
+- `sink(f)` with an incompatible concrete parameter reports overload failure
+  with `[Unknown]`, demonstrating argument positions also consume the
+  placeholder (this source is not itself a positive contract);
+- HCall through a pending lambda can occur under deferred-call probes;
+- before the barrier fix, pending resolution mutated unowned external state.
+
+The later `test_pending_lambda_probe_barrier.py` red-first audit proved the
+actual rollback leak with a forcing nested generic call. The committed fix now
+bars all pending-owner mutation before external state changes, preserves exact
+state identity, propagates nested barriers, and converts only at the outermost
+probe. The focused module passed 8/8 independently at terminal review.
+
+## Current static facts
+
+### Function-global copy suppression
+
+At `lang/driftc/type_checker.py:4124`:
 
 ```python
 if ty_id == self._unknown and any(getattr(d, "severity", None) == "error" for d in diagnostics):
-	return
+    return
 ```
 
-The adjacent comment says the Unknown value's failure is already diagnosed,
-but the predicate proves only that some earlier function diagnostic exists.
-The helper receives `expr`; its main `HVar` use sites pass the bound node, whose
-`binding_id` has already been resolved.
+`_require_copy_value` receives the expression. For HVar callers, lexical
+`binding_id` has already been established.
 
-### Function-global `HCall(fn=HVar)` suppression remains
+### Function-global HCall suppression
 
-At `lang/driftc/checker/call_resolver.py:6623-6719`, the local binding branch:
+At `lang/driftc/checker/call_resolver.py:6786`, the local-binding HCall route
+has the same function-global predicate. Its exact `binding_id` remains in
+scope. `CallResolverContext` needs a read-only causal query if the authority
+stays in the type checker.
 
-1. obtains/stamps `binding_id`;
-2. calls `type_expr(expr.fn, used_as_value=True)`;
-3. handles a real function type;
-4. otherwise suppresses the call-target error when the result is Unknown and
-   any earlier error exists.
+### HInvoke opposite policy
 
-The exact binding id is still in scope at the suppression point, so a causal
-predicate can cross the checker/resolver boundary without name re-resolution.
+At `lang/driftc/type_checker.py:10204`, HInvoke appends the call-target
+diagnostic unconditionally after a non-function result. It is a real internal
+boundary even though ordinary stored source parses as HCall(fn=HVar).
 
-### `HInvoke` is a distinct consumer
+### Pending lifecycle
 
-At `lang/driftc/type_checker.py:10010-10115`, `HInvoke` resolves a pending
-`HVar` lambda, re-types its callee, and unconditionally emits the same
-call-target message when the callee is not a function. This is not evidence of
-the reported over-suppression, but it is evidence that fixing only
-`call_resolver.py` can leave inconsistent same-binding cascade behavior.
+- owner: `PendingLambdaOwner`, `type_checker.py:606+`;
+- per-function instance: `:2787`;
+- HCall resolution: `:10080`;
+- HInvoke resolution: `:10113`;
+- registration: `:12418`;
+- final drain: `:13854`.
 
-### Current context boundary
+The HCall and HInvoke blocks currently duplicate expected-function assembly,
+lambda typing, binding update, and retirement. The final drain separately
+duplicates capture discovery/rejection, unconstrained-parameter rejection,
+binding update, and spec validation.
 
-`CallResolverContext` is a frozen dataclass at
-`lang/driftc/checker/call_resolver.py:810+`. The only direct constructor is
-`make_call_ctx(**kwargs)`; current call sites are in `type_checker.py` near
-lines 8518, 10003, and 10310. A new non-default context predicate requires all
-three sites; a defaulted predicate must still fail safely rather than silently
-reintroduce the global heuristic.
+### HVar consumption
+
+The HVar branch around `type_checker.py:7350+` reads `binding_types` and calls
+`_require_copy_value`; it does not consult the pending owner. Consequently
+every non-call reference sees the declaration's Unknown placeholder.
+
+`used_as_value` and `defer_value_use` control Copy diagnostics, but they do not
+provide a pending-lambda type. A total finalizer must not mistake “do not copy
+here” for “do not resolve the binding.”
 
 ### Transaction owner
 
-At `lang/driftc/type_checker.py:438-506`, `FnCheckState.OWNED_TABLES` lists the
-transaction-aware mutable tables. Each map is `_TxnDict`, diagnostics is
-`_TxnList`, and `state_fingerprint()` enumerates the owned names. The deferred
-call resolver opens `CheckerStateTxn` for allowlisted expression shapes and can
-commit or roll back diagnostics, HIR changes, tables, and allocator cells.
+`FnCheckState.OWNED_TABLES` at `type_checker.py:462+` drives both `_TxnDict`
+undo logging and `state_fingerprint()`. Mutable cause state written during
+expression typing belongs there. Returned `TypedFn` detaches current owned
+tables into plain dicts; a private cause table need not be returned at all.
 
-Therefore any mutable cause table written during expression typing must be
-owned here. Whether current lambda-producer paths are admitted by the shape
-gate is not a reason to create an untracked state channel.
+### Context construction
 
-### Binding producer inventory
+Three `make_call_ctx(...)` sites currently occur near `type_checker.py:8612`,
+`:10097`, and `:10404`. A required causal predicate must reach all three; a
+defaulted predicate must fail toward emitting the tripwire.
 
-The current `binding_types[...]` writes show these relevant paths:
+## Specification evidence
 
-| Path | Current behavior | Diagnostic timing |
-|---|---|---|
-| Pending stored lambda declaration (`12318-12331`) | writes `Unknown`, records pending lambda | none yet |
-| Pending `HCall` resolution (`9986-10001`) | writes typed function or `Unknown`, pops pending | lambda typing may diagnose before write |
-| Pending `HInvoke` resolution (`10019-10033`) | same | lambda typing may diagnose before write |
-| Ordinary `HLet` (`12331-12464`) | stores initializer/declared type | initializer may diagnose before write |
-| Final pending flush (`13760-13823`) | rejects capture/unconstrained cases as `Unknown`, or stores inferred function type | direct primary diagnostic at rejection |
+The approved current specification is already sufficient; no spec edit is
+needed:
 
-Other writes found by the static inventory seed params/binders or use the
-dedicated `Error` type. They should not be folded into one “Unknown after any
-error” rule without producer-specific evidence.
+- `doc/design/drift-lang-spec.md` §22.0.1: non-capturing function pointers may
+  be stored/returned freely; capturing literals need a supported representation.
+- §22.2.3: bare stored capturing lambdas are invalid even if never used.
+- §22.3: non-capturing closures lower to thin function pointers and are Copy.
 
-## Existing in-tree guards
+Thus “captureless alias compiles” and “capturing bare storage rejects cleanly”
+are two sides of one existing contract, not a new language decision.
 
-`lang/tests/driver/test_stored_capturing_lambda_diagnostic.py` currently pins
-the invoked implicit-borrow capture case:
+## Refactor-trigger and announcement evidence
 
-- one primary borrowed-capture rejection;
-- real source span;
-- no `E-COPY-UNKNOWN`;
-- no repeated call-target message.
+`doc/refactor_triggers.md` was scanned on 2026-08-05. No registered trigger
+matches causal diagnostic provenance or pending-lambda finalization.
 
-This is the essential same-binding positive suppression guard. Its module
-comment uses broad wording (“a prior error already explains”), but no edit is
-needed to run it. Editing that existing comment or test requires explicit
-human approval.
+No files were reported under `/tmp/drift-announce/` during the refresh.
 
-`lang/tests/driver/test_uninvoked_stored_lambda.py` pins final-flush rejection
-for implicit borrow, explicit borrow, and value capture. It also has a
-`move f` case, which intentionally bypasses copy-value checking and therefore
-does not cover a bare value read of the pending Unknown binding.
+Version at refresh: `DRIFTC_VERSION = 0.35.0`, ABI 22.
 
-`lang/tests/type_checker/test_type_checker_copy_unknown.py` proves
-`E-COPY-UNKNOWN` is a live tripwire for unresolved generic copy cases, but it
-does not place an unrelated diagnostic first.
+## Open evidence required before design selection
 
-`lang/tests/checker/test_defer_probe_state_transaction.py` pins rollback,
-fingerprint coverage, nested transaction behavior, and wrapper detachment for
-the existing owner. If a new regression file can exercise the same public
-state contract, no existing-test edit is needed; otherwise request approval
-before modifying this file.
+1. Does cause need to cross a poisoned call result before HLet assigns it?
+2. Which wrapper expressions are causally transparent, if any?
+3. Does a single HVar pending hook cover explicit move/borrow/discarded reads
+   without ownership or lowering regressions?
+4. Does contextual Callback aliasing retain a thin original binding and insert
+   a lowering-visible callback wrapper?
+5. Can capture discovery/rejection in the shared finalizer avoid applying
+   capture effects for a bare representation that is already illegal?
+6. Can no-context unconstrained finalization reject before publishing any
+   `LambdaFnSpec` with Unknown ABI types?
+7. Does finalizing during a deferred argument probe take exactly the new
+   barrier/rollback/retry route, with no second mutation channel?
 
-## Work-only probe construction
+These are work for red-first probes, not assumptions to bury in implementation.
 
-`probe_causal_unknown_suppression.py` creates binding id 41 with the table's
-canonical Unknown type using:
+## Planning-review evidence (2026-08-05)
 
-- `preseed_binding_types`;
-- `preseed_binding_names`;
-- `preseed_scope_env`;
-- `preseed_scope_bindings`.
+K added and ran the localized `probe_planning_review_matrix.py` during the
+full-suite gate. Observed:
 
-It then emits an unrelated `HCopy(HLiteralInt(1))` error followed by either an
-`HVar` value read or `HCall(fn=HVar)`. The binding has no causal marker by
-construction. A correct causal patch should make both assertions green without
-treating every preseeded Unknown as diagnosed poison.
+- `bad = missing_name; x = bad(); x();` emits only `E-UNKNOWN-NAME` today.
+  A causal replacement must mark the suppressed `bad()` call node and carry
+  that cause into `x`, or it regresses presentation.
+- `val g = move f; g()` over pending `f` reaches the same Unknown/cascade
+  family. A pending HVar hook must run even when Copy consumption is disabled.
+- `val r = &f` over pending `f` is silently accepted. This is not proof that
+  borrowing a function pointer is invalid; a concrete/named-fn control is
+  needed to establish the intended post-finalization contract.
+- discarded `f;` is later finalized by drain and stays clean.
+- direct typed-let `val cb: core.Callback1<Int, Int> = |x: Int| => x` reaches
+  MIR as raw HLambda and emits an internal lowering-contract failure.
+- the unconstrained uninvoked case emits one cannot-infer primary with an empty
+  LambdaFnSpec registry.
 
-## Red-first probes still required
+The direct Callback behavior is already governed by permanent evidence:
 
-These are proposed probes, not observed failures:
+- `doc/history.md` 2026-04-26 / release 0.31.17 explicitly added implicit
+  wrapping at typed-let initializer Site 5;
+- `lang/tests/driver/test_implicit_callback_wrap.py::test_site5_typed_let_bare_lambda_to_callback1`
+  pins clean acceptance, but only through its current compile helper and did
+  not prevent the raw-HLambda MIR regression.
 
-1. **`HInvoke` same-binding parity.** Construct a diagnosed Unknown binding,
-   then `HInvoke(callee=HVar(...))`; determine whether only the primary should
-   remain.
-2. **Ordinary diagnosed producer.** Compile `val bad = missing_name; bad();`
-   and determine whether the unknown-name primary remains the only diagnostic.
-   This separates the general causal contract from stored-lambda scheduling.
-3. **Pending lambda bare value read.** Store a capturing lambda and read `f` as
-   a value before final flush. Count/order diagnostics and rule whether the
-   early `E-COPY-UNKNOWN` is a cascade or an independent contract error.
-4. **One-hop alias.** Initialize a new binding from a diagnosed Unknown binding,
-   then use/call the alias. Determine whether cause propagation is required.
-5. **Concrete recovery.** A pending captureless lambda resolves successfully;
-   later uses must not see a stale cause.
-6. **Shadowing.** Two bindings share a source name but have different ids; a
-   cause on one must not suppress the other.
-7. **Rollback.** Mutate the chosen cause table inside a checker transaction,
-   then verify rollback and commit independently through `state_fingerprint()`.
+Therefore the direct-form child restores implicit wrap and adds a new full
+compile/run boundary pin. It does not request a new wrap-versus-reject language
+ruling.
 
-If probes 2 or 3 reveal a larger provenance problem, K may create a nested
-child finding at any point. The implementation slice should either fix it while
-the causal authority is open or state precisely why it is independent.
+## Planning round-2 evidence (2026-08-05)
 
-## Expected affected-file boundary
+K added and ran `probe_planning_round2.py` under the finding tree while the
+shared full suite continued. Observed:
 
-Likely, subject to K's revalidation:
+- `bad = missing_name; m = move bad; m()` emits only the unknown-name primary;
+- `bad = missing_name; t = (true ? bad : bad); t()` also emits only that
+  primary;
+- passing a pending captureless `f` directly to `Callback0<Int>` reaches MIR
+  as a move from an uninitialized interface local;
+- after first finalizing stored `f` by call, `&f` compiles and runs;
+- `&seven` for a named function raises raw `AttributeError` because an
+  `HFnPtrConst` is consumed by a path expecting `.name`;
+- direct typed Callback HLet has Callback binding type, raw HLambda initializer,
+  and no checker diagnostic.
 
-- `lang/driftc/type_checker.py`: causal state authority, producer updates,
-  copy and `HInvoke` consumers, transaction ownership, resolver wiring;
-- `lang/driftc/checker/call_resolver.py`: context predicate and local
-  `HCall(fn=HVar)` consumer;
-- new focused checker/driver tests;
-- `doc/history.md`: concise entry folded into pending `0.35.0` if still
-  unreleased.
+The first two observations select expression-node provenance in addition to
+exact binding causes. The third and sixth are two manifestations of a
+lowering-invisible Callback conversion. The borrow pair selects
+finalize-and-accept for pending `&f` and exposes a separate function-reference
+materialization boundary defect.
 
-No lowering, runtime, stdlib, language-spec, or ABI edit is presently
-supported by evidence.
+Static review confirms the typed-HLet equality bypass: HLambda typing may
+return the expected Callback interface itself; the later HLet callback-wrap
+branch runs only for `inferred_ty != declared_ty`. Any fix must construct the
+wrapper before the inner lambda is typed through the callback intrinsic,
+otherwise capturing Callback literals risk being rejected by the captureless
+function-pointer branch.
+
+Static review also finds a plausible named-function-borrow chain: stage1
+classifies a bare HVar syntactically as a place, while `_apply_fnptr_consts`
+recursively replaces marked HNodes without protecting an `HPlaceExpr.base`.
+Since the canonical-place contract requires that base to remain HVar, a
+structural regression must confirm the exact transition before the repair is
+selected.

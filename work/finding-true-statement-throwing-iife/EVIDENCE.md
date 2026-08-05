@@ -58,3 +58,30 @@ If it is red, the likely starting seam is
 `lang/driftc/stage2/hir_to_mir.py::_visit_stmt_HExprStmt` and
 `_lower_lambda_immediate_call`; do not assume that diagnosis without inspecting
 the actual failure.
+
+## 2026-08-05 static refresh
+
+Current symbols and contracts:
+
+- `lang/driftc/stage2/hir_to_mir.py::_visit_expr_HCall` still recognizes
+  `HCall(fn=HLambda)` before ordinary call resolution and delegates to
+  `_lower_lambda_immediate_call`.
+- `_visit_stmt_HExprStmt` still excludes `HLambda` from both its `HCall` and
+  `HInvoke` statement fast paths, with the nearby comment explicitly naming
+  double throw checking as the reason.
+- `_lower_indirect_call` still rejects a raw `HLambda` with a labeled internal
+  assertion. This remains a tripwire only; it does not prove the positive route.
+- The existing `test_throwing_iife_statement_in_try_runs` still places the IIFE
+  under `val x = try ...`, so the misleading name/comment and missing true
+  statement pin remain unresolved.
+
+Coverage inventory found independent expression-position IIFE/try cases in
+`lang/tests/driver/test_try_expr_immediate_lambda.py` and broader throwing-IIFE
+cases in `test_stored_capturing_lambda_diagnostic.py`. No other test found by
+the current search spells the proposed discarded throwing IIFE followed by an
+observable post-statement return.
+
+The work-only repro was not executed during this refresh because
+`run_all_tests.sh` was actively using the shared compiler/runtime resources.
+Its 2026-08-03 compile/run exit-0 observation remains historical evidence only;
+the implementer must re-run it after the active suite gate completes.

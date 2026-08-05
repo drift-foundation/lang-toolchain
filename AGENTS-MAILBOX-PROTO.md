@@ -1,188 +1,170 @@
 # Agent Mailbox Protocol
 
-Protocol version: **3**
+Protocol version: **4**
 Status: **active local trial in `drift-lang`**
 
 ## Purpose and scope
 
-This protocol is the repository-wide notification and exclusive-claim contract for review findings under `work/finding-*`. Finding details remain in their top-level or nested finding folders. Every ready handoff and every active claim appears in the repository's flat `work/` mailbox.
+Baton is the repository-wide notification and exclusive-claim protocol for coordination under `work/`. Directed handoffs may point to details in a top-level or nested `work/finding-*` folder or to another regular file beneath `work/`. The flat `work/` mailbox exposes every ready handoff, active claim, and live broadcast without recursive discovery.
 
-The mailbox provides four properties under concurrent agents:
+Protocol v4 provides:
 
-- atomic publication, so no reader sees a partial handoff;
-- immutable evidence, so published meaning cannot change underneath a reader;
-- an atomic single-winner claim, so only one eligible agent works a token;
-- visible ownership, so observers can answer whether work is unclaimed or active and who claimed it.
+- arbitrary repository-configured roles rather than hard-coded reviewer/implementer routing;
+- explicit sender and recipient roles in every directed filename;
+- atomic single-winner claims for directed work;
+- immutable, non-claimable broadcasts with recipient-local seen receipts;
+- author-owned expiration cleanup for broadcasts;
+- immutable JSON envelopes whose routing fields are checked against their filenames.
 
-## Authorities and ownership
+Use `tools/baton/baton` for all mailbox discovery, publication, claims, responses, notice observation, and cleanup. Do not manually recreate those transitions.
 
-- `review-YYYY-MM-DDTHH-MM-SSZ.md` is permanently immutable reviewer input in the relevant finding or child-finding root.
-- `PROGRESS.md` is implementer-owned. It may evolve between handoffs, but its contents are frozen while any pending or claimed `IMPL`/`APPROVAL` token points to it.
-- A mailbox token is a notification pointer. Its target remains the content authority.
-- The reviewer never edits `PROGRESS.md`; the implementer never edits an existing `review-*.md`.
-- A consumed token is removed; its review, response, progress snapshot, and evidence are not deleted merely because the notification was consumed.
+## Roles and identities
 
-## Actor identity and agent seed
+Roles are data declared in `tools/baton/roles.json`. Baton contains no role-specific routing table. Adding a planner, designer, security reviewer, linter, or other participant means adding its role configuration, not adding role-specific actions.
 
-Every agent that can claim work has:
+A role slug uses lowercase ASCII letters, digits, and underscores, begins with a letter, and contains no hyphen: `[a-z][a-z0-9_]*`. `all` is reserved as the broadcast selector and cannot be configured as a role.
 
-- an `actor-slug`: a stable, human-readable identity answering **who** claimed it, such as `k`, `reviewer-root`, or `slawomir`; use lowercase ASCII letters, digits, and hyphens;
-- an `agent-seed`: a collision-resistant identity for that live agent instance, generated once per session and reused for all its claims. Use at least 128 random bits rendered as lowercase hexadecimal. Do not use a timestamp, PID, hostname, or role name alone.
+Each configured role chooses one identity mode:
 
-The actor slug is attribution; the seed distinguishes simultaneous instances of the same actor. This is a coordination identity, not an authentication or security credential.
+- `agent`: the invocation supplies a stable actor slug and a per-live-instance seed of at least 128 random bits as lowercase hexadecimal;
+- `singleton`: the configuration names its one actor, and invocations supply neither `--actor` nor `--seed`.
 
-## Mailbox token names
+Actor slugs use lowercase letters, digits, hyphens, or underscores. The actor answers **who** acted; the seed distinguishes concurrent live instances of the same actor. Seeds are coordination identities, not security credentials.
 
-Unclaimed handoffs are direct children of `work/`:
+## Directed message names
 
-- `work/REVIEW-PENDING-<UTC-timestamp>`
-- `work/IMPL-PENDING-<UTC-timestamp>`
-- `work/APPROVAL-PENDING-<UTC-timestamp>`
-
-Use UTC timestamps in `YYYY-MM-DDTHH-MM-SSZ` form. Every pending-token name is unique and never reused.
-
-An active claim is the same token atomically renamed in place:
+An unclaimed directed handoff is a direct child of `work/`:
 
 ```text
-work/CLAIMED--<original-token-basename>--BY-<actor-slug>--SEED-<agent-seed>--AT-<UTC-timestamp>
+PENDING-FROM-<sender-role>-TO-<recipient-role>-<UTC-timestamp>-<message-id>
 ```
 
-Example:
+An active claim is the exact pending file atomically renamed in place:
 
 ```text
-work/CLAIMED--REVIEW-PENDING-2026-08-04T21-48-05Z--BY-k--SEED-a3f91c2e8d4b47f1a902bc77d63e1054--AT-2026-08-04T22-01-00Z
+CLAIMED-FROM-<sender-role>-TO-<recipient-role>-<UTC-timestamp>-<message-id>-BY-<actor>-SEED-<seed>-AT-<UTC-timestamp>
 ```
 
-The original token basename identifies the work. `BY-*` answers who claimed it. `SEED-*` identifies the exact concurrent agent instance. `AT-*` records claim time.
+Singleton claimants omit the `-SEED-<seed>` component. Separators are single hyphens; v4 does not use doubled `--` separators. Timestamps use `YYYY-MM-DDTHH-MM-SSZ`, and message IDs are collision-resistant lowercase hexadecimal values generated by Baton.
 
-Everyone monitors the top level of `work/` for both `*-PENDING-*` and `CLAIMED--*`. Do not rely on recursive scans or out-of-band chat to discover ownership.
+Only the role named by `TO` may claim a directed handoff. The filename alone exposes routing and ownership; the envelope independently repeats and validates them.
 
-## Token payload contract
+## Broadcast notice names
 
-Pending and claimed tokens have identical immutable contents: exactly one newline-terminated relative path, resolved from `work/`, to the authoritative detail file.
+A broadcast is a direct child of `work/`:
 
-The target must:
+```text
+NOTICE-FROM-<sender-role>-TO-ALL-<UTC-timestamp>-<message-id>
+```
 
-- already exist before the pending token is published;
-- be a regular non-symlink file inside a top-level `work/finding-*/` tree, including a valid nested child finding;
-- remain inside `work/` after path and symlink resolution.
+`ALL` is a reserved audience marker, not a role. A broadcast notice:
 
-Absolute paths, `..` components, extra lines, directories, symlink escapes, missing targets, and malformed payloads are protocol violations. Raise an alarm rather than silently ignoring or guessing.
+- is immutable and cannot be claimed or renamed to `CLAIMED-*`;
+- is visible to every configured role and agent instance except the exact author instance;
+- carries a required `expires_at` value in its envelope;
+- is observed independently by each recipient through an immutable local seen receipt;
+- does not establish exclusive work ownership;
+- may be removed after expiration only by the exact original author instance through `baton expire`.
 
-## Published-handoff immutability
+A response requested by a broadcast is a new ordinary directed message; the broadcast itself is never converted into work. If the author identity or its publication receipt is lost, the expired notice remains until Slawomir explicitly authorizes recovery.
 
-Publication creates an immutable handoff snapshot:
+## Immutable envelope
 
-- The sender never edits, replaces, retargets, truncates, renames, removes, or recreates a published token.
-- The sender never edits its frozen target or a document to which that target delegates material handoff content.
-- The only ordinary rename permitted after publication is the target recipient's atomic `PENDING -> CLAIMED` transition.
-- After claiming, no party edits, replaces, retargets, or renames the claimed token. Only its successful claimant may pop it, after completing the response protocol.
-- Never fix a typo, omitted constraint, changed authorization, stale path, or other mistake in place.
+Every v4 mailbox file contains one newline-terminated JSON object. Directed handoffs contain exactly:
 
-Corrections and addenda always use a new immutable detail and a new uniquely timestamped pending token. The new detail states what it supersedes or augments. It does not make earlier tokens or evidence disappear.
+- `protocol_version`: `4`;
+- `message_type`: `handoff`;
+- `message_id`;
+- `from_role` and `to_role`;
+- `created_at`;
+- `target`: a normalized path relative to `work/`;
+- `kind`: a caller-selected semantic label;
+- `thread_id`: stable across a request/reply chain;
+- `author_actor` and `author_seed`.
 
-If ongoing research needs mutable notes, a published review must contain the complete actionable snapshot itself or delegate to a dedicated immutable evidence snapshot. Do not publish a pointer whose meaning can change underneath concurrent readers.
+Broadcasts use `message_type: notice`, `to_role: ALL`, and add the required `expires_at` timestamp. Singleton authors encode `author_seed` as `null`.
 
-## Atomic publication
+The envelope routing, timestamp, and message ID must match the filename. The target must already exist as a regular non-symlink file beneath the real `work/` directory. Absolute paths, traversal components, symlink escapes, missing targets, extra or missing envelope fields, unknown roles, and malformed timestamps are protocol errors.
 
-Publish the authoritative detail first and the pending token second. Publish each atomically:
+## Content authorities
 
-1. Write the complete file under a unique hidden temporary name in the same directory as its final name. A token temporary name must not match pending/claimed scanner patterns.
-2. Flush/close and validate the temporary file, its complete contents, delegated paths, and intended final destination.
-3. Confirm the final name is absent. Atomically rename the temporary file to the final name without clobbering an existing path, then verify the temporary path disappeared and final contents match exactly. If publication loses a race, leave the existing path untouched, choose a new timestamp, and republish.
-4. Publish the token only after the authoritative target has reached its final immutable name.
+- `review-YYYY-MM-DDTHH-MM-SSZ.md` remains immutable reviewer input when the repository finding workflow requires that convention.
+- `PROGRESS.md` remains implementer-owned. If a handoff points directly to it, its contents are frozen for the lifetime of that pending or claimed snapshot.
+- A mailbox file is an immutable notification envelope and pointer. Its target remains the substantive content authority.
+- A consumed directed token is removed, but its detail and evidence remain.
+- Broadcast expiration removes only the notice envelope. Its target detail remains unless separately cleaned under the repository's ordinary finding lifecycle.
 
-Never create or rewrite a final token with direct redirection, an in-place editor, `touch`, or a non-atomic copy. The same atomic-snapshot rule applies to review targets and to `PROGRESS.md` immediately before its pending token is published.
+## Atomic publication and immutability
 
-After a token appears, further material information belongs in a new timestamped detail and token even if the receiver has probably not scanned yet. “Probably unread” is not synchronization.
+Baton publishes a detail first and its mailbox envelope second. Each file is written completely under a unique hidden temporary name in the same directory, flushed, validated, and atomically renamed into its absent final name with `renameat2(RENAME_NOREPLACE)`. A race never replaces an existing path.
 
-## Atomic exclusive claim
+After publication:
 
-An eligible recipient must claim a pending token before reading its authoritative target or beginning work. Merely observing or opening the mailbox filename grants no ownership.
+- nobody edits, truncates, retargets, replaces, or recreates the mailbox file or its frozen target;
+- corrections and addenda use a new detail and a new message ID;
+- only a directed recipient may perform its atomic `PENDING -> CLAIMED` rename;
+- only that exact claimant instance may publish the response and pop its claim;
+- only a broadcast's exact author instance may remove it, and only after its recorded expiry and hash checks pass.
 
-1. Choose the claim destination using the exact original basename, canonical actor slug, this agent instance's seed, and current UTC claim timestamp.
-2. Keep source and destination directly under the same `work/` directory so the operation is a same-filesystem atomic rename, never a copy/delete fallback.
-3. Confirm the destination is absent. Atomically rename the original pending token to the claim destination.
-4. Verify the rename succeeded: the original source is absent, this agent's exact claim path exists as a regular non-symlink file, and its payload/target satisfy the token contract.
-5. Only after that verification may the winner read the authoritative target or perform work.
+The final rule is the sole ordinary sender-removal exception. Directed senders never withdraw or pop their own messages.
 
-The original source can be renamed only once. Concurrent agents may observe it, but only one rename succeeds; every loser must stop immediately and rescan the mailbox. Never infer success solely from a permissive `mv --no-clobber` exit status—verify the exact source and claimant-specific destination state.
+## Directed PUSH -> CLAIM -> PUSH -> POP lifecycle
 
-Role eligibility is exact:
+Every directed handoff follows this state machine:
 
-- implementer claims `REVIEW-PENDING-*`;
-- reviewer claims `IMPL-PENDING-*`;
-- Slawomir, or an agent explicitly carrying out his recorded decision, claims `APPROVAL-PENDING-*`.
+1. **PUSH detail:** sender atomically publishes the complete immutable detail.
+2. **PUSH pending:** sender atomically publishes the matching `PENDING-FROM-X-TO-Y-*` envelope.
+3. **CLAIM:** one instance of role `Y` wins the same-filesystem no-clobber rename.
+4. **WORK:** only that claimant processes the frozen snapshot.
+5. **PUSH response:** `reply` atomically publishes a response detail and outgoing directed envelope before consuming the incoming claim. The recipient defaults to the incoming sender but may be explicitly forwarded with `--to`. `close` publishes its immutable terminal detail and deliberately creates no outgoing envelope.
+6. **POP claim:** only the exact claimant removes its claim and claim receipt, after the response or close detail is safely published.
 
-A wrong-role claim is a protocol violation, not a way to reserve work.
+Claims have no timeout. Long reviews, research, compilation, and test runs are normal. Elapsed time never authorizes stealing, deleting, or requeueing another instance's claim.
 
-## Strict PUSH -> CLAIM -> PUSH -> POP lifecycle
+## Broadcast lifecycle
 
-Every handoff follows this state machine:
+1. The author uses `send all`; Baton publishes the immutable detail and `NOTICE-FROM-X-TO-ALL-*` envelope, then records an author receipt containing the notice and target hashes.
+2. `scan` reports unexpired notices not yet seen by the invoking identity.
+3. `wait` records a seen receipt and returns the notice when no directed handoff was claimed. `see` performs that operation for an exact notice basename. Neither action mutates the notice.
+4. At `expires_at`, the notice stops being delivered as unseen.
+5. The author invokes `expire` with the exact notice basename. Baton validates role, actor, seed, expiry, author receipt, notice hash, and target hash before removing only the notice and author receipt.
 
-1. **PUSH detail:** sender atomically publishes the immutable detail.
-2. **PUSH pending:** sender atomically publishes the immutable pending token.
-3. **CLAIM:** one eligible recipient wins the atomic rename and becomes the visible exclusive claimant.
-4. **WORK:** only that claimant processes the frozen snapshot. Other agents do not duplicate the pass.
-5. **PUSH response:** claimant atomically publishes its immutable response detail and outgoing pending token before consuming the incoming claim. A terminal signoff publishes an immutable signoff review detail but deliberately no outgoing pending token.
-6. **POP claim:** only the successful claimant removes its exact claimed token, and only after the response/signoff or other requested outcome is safely published. Popping never deletes the target/evidence.
+Recipient seen receipts and author receipts live outside the repository under Baton's per-repository `/tmp` receipt directory. Losing the author receipt fails closed and requires explicit human recovery; Baton does not infer or steal authorship from filename text alone.
 
-There is no sender-side withdraw, replace, cleanup, acknowledgement, or token removal. If a sender notices a malformed/stale handoff, it pushes a correction and alerts the recipient; it never edits or removes the original.
+## Generic action surface
 
-Mailbox state is intentionally observable:
+All roles use the same actions:
 
-- `*-PENDING-*` with no claim: ready but unclaimed;
-- `CLAIMED--*--BY-<actor>--SEED-<seed>--AT-*`: actively owned by that actor instance;
-- outgoing response present while incoming claim remains: response publication is in progress;
-- incoming claim absent after outgoing publication: handoff completed and popped.
+- `send TO_ROLE DESTINATION [BODY_FILE|-]`: publish a directed handoff; `TO_ROLE=all` publishes a broadcast notice;
+- `scan`: report directed work, unseen notices, expired notices owned by the caller, and active claims;
+- `claim [PENDING]`: atomically claim the named handoff, or the next handoff addressed to the role when omitted;
+- `wait`: use `inotify`, with a defensive 60-second rescan by default, until it claims one directed handoff or records one unseen notice;
+- `see NOTICE`: record and return one broadcast without claiming it;
+- `reply CLAIM [BODY_FILE|-]`: publish the response first, then pop the incoming claim;
+- `close CLAIM [BODY_FILE|-]`: publish a terminal detail without an outgoing message, then pop the claim;
+- `expire NOTICE`: author-clean one expired broadcast;
+- `doctor`: validate recognized mailbox state.
 
-## Handoff directions
+`--kind`, `--thread`, and `--outcome` carry workflow meaning without introducing role-specific verbs. Human approval is therefore a normal reply such as `human reply ... --outcome approved`, not a hard-coded `approve` action.
 
-### Reviewer to implementer
+Except for `wait`, every action performs one bounded transition and exits. Do not pass `--interval 60`; 60 seconds is already the default. Specify `--interval` only when deliberately choosing another defensive rescan interval.
 
-After publishing a changes-requested `review-<timestamp>.md`, publish `work/REVIEW-PENDING-<same-timestamp>` pointing to it. The implementer claims it, records/implements the response, pushes an implementation handoff, then pops its claim.
+`wait` is a consumer and claim operation, not a passive notification watcher. One actor/seed instance must run exactly one consumer path at a time: either one `wait`, one argument-less `claim`, or one explicit `claim PENDING`. Never leave `wait` active while issuing a manual claim, and never run two waits with the same actor/seed. When `wait` returns `status: claimed`, that returned claim is the instance's active work; process it and `reply`/`close` before starting another consumer. If duplicate invocations race, the single winning claim remains valid and the loser fails with the existing-claim guard; do not claim again or repair the mailbox.
 
-To start the next serial finding, publish an initial immutable review in that finding describing readiness and requested action, then publish its review token.
+## Failure and recovery
 
-### Implementer to reviewer
+Malformed messages, missing receipts, hash drift, ownership mismatches, and lost atomic races fail closed. Do not edit, remove, recreate, or manually requeue the affected path. Preserve exact state and ask Slawomir for a recovery ruling naming the specific message and action.
 
-When implementation/research and the relevant immutable response snapshot are ready, publish a uniquely timestamped `work/IMPL-PENDING-*`. The reviewer claims it, reviews it, pushes the next review handoff or terminal signoff detail, then pops the claim.
+Protocol-v3 `REVIEW-PENDING`, `IMPL-PENDING`, `APPROVAL-PENDING`, and doubled-separator `CLAIMED--*` files are not valid v4 work and cannot be consumed by Baton. `doctor` reports them as obsolete state requiring explicit human recovery. V4 provides no legacy publication mode, compatibility alias, or dual reader.
 
-### Human approval gate
+## Terminal reviews and finding lifecycle
 
-When only Slawomir can resolve a decision—existing-test edits, language/spec rulings, or another explicit gate—the implementer publishes the complete immutable proposal and an `APPROVAL-PENDING-*` token.
-
-No gated work proceeds while the approval is pending or claimed but undecided. Slawomir supplies the decision in his own words. The human or agent explicitly carrying out that decision records/publishes it before popping the approval claim. The requester cannot withdraw or self-approve its own request.
-
-## Consuming handoffs safely
-
-At the start of a pass:
-
-1. Enumerate eligible pending tokens and existing claims.
-2. Atomically claim exactly one intended token; do not batch-rename or glob.
-3. Validate the claimed token payload and immutable target.
-4. Process only the claimed snapshot. New pending tokens belong to later claims.
-5. Atomically push the response detail and outgoing token.
-6. Revalidate the exact claimed filename/payload, then pop only that claim.
-
-Multiple token types and findings may coexist. Handle each by exact filename and target. Coexistence is not an error; duplicate processing of an already claimed token is.
-
-## Stale and malformed claims
-
-Claims have no automatic timeout. Long builds and reviews are normal; elapsed time alone never authorizes stealing, deleting, or requeueing a claim.
-
-If a claimant crashes or a claimed token is malformed, leave it visible and raise an alarm. Recovery requires Slawomir's explicit ruling naming the exact claim and action. A recovery may atomically requeue the unchanged token under its original pending basename or retire it after immutable evidence is published; never perform silent recovery.
-
-## Terminal reviews and lifecycle
-
-- A review requesting changes pushes a new review detail/token before popping the implementation claim.
-- A signing-off review atomically publishes its immutable signoff `review-*.md`, pushes no pending review token, then pops the implementation claim.
+- A review requesting more work uses `reply` before its implementation claim is popped.
+- A signing-off review uses `close`; it creates no pending response and therefore cannot deadlock in a final-review loop.
 - On terminal signoff, the reviewer ends the user-facing handoff with exactly `finished`.
-- Intermediate notes that are not ready for the other role create no pending token.
-- Never delete, archive, or relocate a finding while any pending or claimed token points into it.
+- Never delete, archive, or relocate a finding while any directed message, claim, or unexpired notice points into it.
+- Finding details remain subject to the ownership, nesting, review-journal, and cleanup rules in `AGENTS.md`.
 
-## Trial, versioning, and distribution
+## Trial and distribution
 
-Version 3 adds the atomic single-winner claim transition and visible claimant identity (`actor-slug` plus per-agent seed). It replaces v2's direct pending-token consumption with `PENDING -> CLAIMED -> POP`.
-
-By Slawomir's explicit instruction, v3 is currently a local trial in `drift-lang`. Peer repositories remain on protocol v2 until he approves distribution after practical use. This is an authorized temporary exception to the normal rule that semantic protocol changes are distributed byte-for-byte to every participating repository. Do not silently apply v3 behavior in a peer repository whose local protocol still says v2.
+Version 4 replaces role-specific v3 token types with configured roles and full `FROM/TO` routing, replaces doubled separators with single hyphens, and adds expiring non-claimable broadcasts. It is currently a local trial in `drift-lang`. Peer repositories remain on their presently distributed protocol until Slawomir explicitly approves v4 distribution.

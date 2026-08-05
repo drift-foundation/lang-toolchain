@@ -463,6 +463,19 @@ def _implicit_callback_wrap(
 			f"(arity={callback_arity}, is_throw={is_throw}); "
 			f"max arity is {_CALLBACK_ARITY_MAX}"
 		)
+	# Static-callback splice: MIR's callback construction is static-only in
+	# v1 (fnptr const or lambda literal — no runtime-fn-pointer callback
+	# ABI).  When the arg is an fn-typed HVar whose binding was finalized
+	# from a captureless pending lambda, the static fnptr const IS known —
+	# wrap that CONSTANT instead of the variable read.  Centralized here
+	# because this helper is the sole constructor for implicit wrap nodes.
+	if isinstance(arg, H.HVar):
+		_fp_lookup = getattr(ctx, "fnptr_const_for_binding", None)
+		if _fp_lookup is not None:
+			_fp = _fp_lookup(getattr(arg, "binding_id", None))
+			if _fp is not None:
+				_fp_ref, _fp_sig = _fp
+				arg = H.HFnPtrConst(fn_ref=_fp_ref, call_sig=_fp_sig)
 	cb_var = H.HVar(name=cb_name, module_id="std.core")
 	cb_call = H.HCall(fn=cb_var, args=[arg], kwargs=[])
 	cb_call._is_implicit_wrap = True
@@ -746,6 +759,11 @@ class MethodResolverContext:
 	# the for-in (`for_iter`/`for_next`) desugaring to require std.iter.Iterable /
 	# SinglePassIterator.  `traits_in_scope` alone does not exclude inherent.
 	required_trait_key: TraitKey | None = None
+	# Causal-Unknown cascade suppression (see the same fields on
+	# CallResolverContext): absent predicates FAIL TOWARD THE TRIPWIRE.
+	binding_unknown_cause: Callable[[int | None], bool] | None = None
+	mark_node_unknown_cause: Callable[[int | None, str], None] | None = None
+	expr_unknown_is_caused: Callable[[object], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -927,6 +945,21 @@ class CallResolverContext:
 	# (propagate, never silently convert).  None → the deferral falls back
 	# to the legacy silent bail (no probe).
 	begin_state_txn: Callable[[object], object] | None = None
+	# Exact-binding lookup for the STATIC fnptr const of a binding finalized
+	# from a captureless pending lambda (`binding_id -> (fn_ref, call_sig) |
+	# None`).  Consumed by the implicit Callback wrap so an fn-typed HVar in
+	# a Callback slot wraps the CONSTANT (MIR callback construction is
+	# static-only in v1).  Optional: absent/None lookups leave the HVar
+	# unspliced and MIR reports the v1 static-callback limitation.
+	fnptr_const_for_binding: Callable[[int | None], object] | None = None
+	# Exact-binding causal-Unknown predicate + node cause marker (causal
+	# cascade suppression; see type_checker's unknown_cause tables).  Both
+	# optional: absent predicates FAIL TOWARD THE TRIPWIRE (no suppression).
+	binding_unknown_cause: Callable[[int | None], bool] | None = None
+	mark_node_unknown_cause: Callable[[int | None, str], None] | None = None
+	# Expression-level cause query (node cause OR caused-binding HVar read);
+	# used by receiver-position suppression in `resolve_method_call`.
+	expr_unknown_is_caused: Callable[[object], bool] | None = None
 
 
 def _require_preseed_type_params(ctx: CallResolverContext) -> dict:
@@ -944,7 +977,7 @@ def _make_resolver_ctx(ctx: CallResolverContext, **overrides) -> ResolverContext
 
 def _make_method_ctx(ctx: CallResolverContext, *, diagnostics: list, traits_in_scope: Callable[[], list[TraitKey]], trait_key: TraitKey | None, required_trait_key: TraitKey | None = None) -> MethodResolverContext:
 	preseed_type_params = _require_preseed_type_params(ctx)
-	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id, required_trait_key=required_trait_key)
+	return MethodResolverContext(type_table=ctx.type_table, diagnostics=diagnostics, current_module_name=ctx.current_module_name, current_module=ctx.current_module, default_package=ctx.default_package, module_packages=ctx.module_packages, type_param_map=ctx.type_param_map, preseed_type_params=preseed_type_params, type_param_names=ctx.type_param_names, current_fn_id=ctx.current_fn_id, int_ty=ctx.int_ty, uint_ty=ctx.uint_ty, byte_ty=ctx.byte_ty, bool_ty=ctx.bool_ty, float_ty=ctx.float_ty, string_ty=ctx.string_ty, void_ty=ctx.void_ty, error_ty=ctx.error_ty, unknown_ty=ctx.unknown_ty, signatures_by_id=ctx.signatures_by_id, callable_registry=ctx.callable_registry, trait_index=ctx.trait_index, trait_impl_index=ctx.trait_impl_index, impl_index=ctx.impl_index, visible_modules=ctx.visible_modules, visible_trait_world=ctx.visible_trait_world, global_trait_world=ctx.global_trait_world, trait_scope_by_module=ctx.trait_scope_by_module, require_env_local=ctx.require_env_local, fn_require_assumed=ctx.fn_require_assumed, traits_in_scope=traits_in_scope, trait_key_for_id=ctx.trait_key_for_id, tc_diag=ctx.tc_diag, type_expr=ctx.type_expr, optional_variant_type=ctx.optional_variant_type, unwrap_ref_type=ctx.unwrap_ref_type, struct_base_and_args=ctx.struct_base_and_args, receiver_place=ctx.receiver_place, receiver_can_mut_borrow=ctx.receiver_can_mut_borrow, receiver_compat=ctx.receiver_compat, receiver_preference=ctx.receiver_preference, args_match_params=ctx.args_match_params, coerce_args_for_params=ctx.coerce_args_for_params, can_ref_to_value_coerce=ctx.can_ref_to_value_coerce, ref_to_value_coerce_applies=ctx.ref_to_value_coerce_applies, rewrite_ref_to_value=ctx.rewrite_ref_to_value, find_thunk_spec_by_id=ctx.find_thunk_spec_by_id, fnptr_consts_by_node_id=ctx.fnptr_consts_by_node_id, infer_receiver_arg_type=ctx.infer_receiver_arg_type, instantiate_sig_with_subst=ctx.instantiate_sig_with_subst, apply_autoborrow_args=ctx.apply_autoborrow_args, label_typeid=ctx.label_typeid, trait_label=ctx.trait_label, require_for_fn=ctx.require_for_fn, extract_conjunctive_facts=ctx.extract_conjunctive_facts, subject_name=ctx.subject_name, normalize_type_key=ctx.normalize_type_key, collect_trait_subjects=ctx.collect_trait_subjects, require_failure=ctx.require_failure, format_failure_message=ctx.format_failure_message, failure_code=ctx.failure_code, pick_best_failure=ctx.pick_best_failure, requirement_notes=ctx.requirement_notes, param_scope_map=ctx.param_scope_map, candidate_key_for_decl=ctx.candidate_key_for_decl, visibility_note=ctx.visibility_note, intrinsic_method_fn_id=ctx.intrinsic_method_fn_id, instantiate_sig=ctx.instantiate_sig, self_mode_from_sig=ctx.self_mode_from_sig, match_impl_type_args=ctx.match_impl_type_args, format_infer_failure=ctx.format_infer_failure, visibility_provenance=ctx.visibility_provenance, module_ids_by_name=ctx.module_ids_by_name, record_instantiation=ctx.record_instantiation, alloc_callsite_id=ctx.alloc_callsite_id, alloc_node_id=ctx.alloc_node_id, binding_unknown_cause=getattr(ctx, "binding_unknown_cause", None), mark_node_unknown_cause=getattr(ctx, "mark_node_unknown_cause", None), expr_unknown_is_caused=getattr(ctx, "expr_unknown_is_caused", None), required_trait_key=required_trait_key)
 
 
 def declared_ref_formal(
@@ -2256,6 +2289,22 @@ def resolve_method_call(ctx: MethodResolverContext, expr: object, *, expected_ty
 	for idx, arg in enumerate(expr.args):
 		if isinstance(arg, H.HLambda):
 			continue
+
+	if recv_ty == ctx.unknown_ty:
+		_caused_pred = getattr(ctx, "expr_unknown_is_caused", None)
+		if _caused_pred is not None and _caused_pred(expr.receiver):
+			# Causal suppression: the receiver's Unknown is already
+			# explained by a diagnosed primary — a "no matching method"
+			# on an Unknown receiver would be a cascade.  Placed AFTER
+			# ordinary argument typing so independent argument primaries
+			# still surface (only the receiver-derived resolution noise
+			# is suppressed).  Mark the call node so downstream consumers
+			# see the cause chain; an absent predicate FAILS TOWARD THE
+			# TRIPWIRE (diagnose).
+			_mark = getattr(ctx, "mark_node_unknown_cause", None)
+			if _mark is not None:
+				_mark(getattr(expr, "node_id", None), "caused-receiver-method")
+			return MethodCallResult(ctx.unknown_ty, None)
 
 	recv_def = ctx.type_table.get(recv_ty)
 	# Borrowed interface receivers (&Interface, &mut Interface) are valid:
@@ -6505,6 +6554,119 @@ def resolve_call_expr(
 				arg_types = list(_updated)
 				if _had_assoc_ab_err:
 					return record_expr(expr, ctx.unknown_ty)
+			# Site 1 — assoc/static call (`Type::fn(...)`) canonical
+			# Callback wrap.  Pre-fix, a bare lambda / fn-typed value at a
+			# concrete `Callback*` param passed through
+			# `coerce_args_for_params`' silent INTERFACE retyping with NO
+			# wrapper: checker-clean, but lowering received a raw
+			# non-interface value under an interface-typed slot — invalid
+			# LLVM IR for lambdas, an internal vtable NotImplementedError
+			# for named fns.  Route through the SAME wrapper authority as
+			# ctor fields / typed-let / return (Sites 2/5/6).  A SKIP for
+			# such an arg is an ARITY mismatch the silent retyping used to
+			# swallow — fail closed with a real diagnostic instead of
+			# emitting invalid IR.
+			_s1_params = list(method_res.call_info.sig.param_types)
+			if len(_s1_params) == len(expr.args):
+				for _s1_idx, _s1_want in enumerate(_s1_params):
+					_s1_kind = _callback_param_kind(ctx.type_table, _s1_want)
+					if _s1_kind is None:
+						continue
+					_s1_arg = expr.args[_s1_idx]
+					if _is_explicit_callback_wrap_call(_s1_arg):
+						continue
+					_s1_have = arg_types[_s1_idx] if _s1_idx < len(arg_types) else None
+					_s1_have_def = ctx.type_table.get(_s1_have) if _s1_have is not None else None
+					if not isinstance(_s1_arg, H.HLambda):
+						_s1_fp = (ctx.fnptr_consts_by_node_id or {}).get(getattr(_s1_arg, "node_id", None))
+						if _s1_fp is None and isinstance(_s1_arg, H.HVar):
+							# Stored named-function / finalized-lambda
+							# BINDING (`val f = add1; S::take_cb(f)`): the
+							# static provenance lives on the binding, not
+							# the argument node (the read was silently
+							# labeled as the interface).
+							_s1_fpb = getattr(ctx, "fnptr_const_for_binding", None)
+							if _s1_fpb is not None:
+								_s1_fp = _s1_fpb(getattr(_s1_arg, "binding_id", None))
+						if _s1_fp is not None:
+							# The name-as-value path already registered the arg's
+							# STATIC fnptr const but recorded the interface label
+							# (the silent coercion) — synthesize the thin fn type
+							# from the const's call_sig so the wrap helper sees
+							# the real arity.
+							_s1_sig = _s1_fp[1]
+							_s1_have = ctx.type_table.ensure_function(
+								list(_s1_sig.param_types),
+								_s1_sig.user_ret_type,
+								can_throw=bool(_s1_sig.can_throw),
+							)
+							_s1_have_def = ctx.type_table.get(_s1_have)
+						elif _s1_have is None or _s1_have == ctx.unknown_ty:
+							# A bare fn NAME types as a fn value only under an
+							# expected fn shape — derive it from the interface's
+							# instantiated type args (params + return last;
+							# throw-ness from the interface kind), the same
+							# derivation as the free-fn candidate concretization.
+							# This also registers the name's static fnptr const.
+							_s1_arity, _s1_throw = _s1_kind
+							_s1_inst = ctx.type_table.get_interface_instance(_s1_want)
+							if (
+								_s1_inst is not None
+								and _s1_inst.type_args
+								and len(_s1_inst.type_args) == _s1_arity + 1
+							):
+								_s1_exp_fn = ctx.type_table.ensure_function(
+									list(_s1_inst.type_args[:-1]),
+									_s1_inst.type_args[-1],
+									can_throw=bool(_s1_throw),
+								)
+								_s1_have = type_expr(_s1_arg, expected_type=_s1_exp_fn)
+								_s1_have_def = ctx.type_table.get(_s1_have) if _s1_have is not None else None
+						if (
+							_s1_fp is None
+							and isinstance(_s1_arg, H.HVar)
+							and _s1_have_def is not None
+							and _s1_have_def.kind is TypeKind.INTERFACE
+						):
+							# The arg node was silently LABELED as the
+							# interface; distinguish a genuine Callback value
+							# (its binding types as the interface — no wrap
+							# needed) from a runtime-only fn value (binding
+							# types as a thin FUNCTION with no static const —
+							# v1 cannot construct a callback from it; fail
+							# closed HERE instead of reaching the MIR
+							# iface-init invariant).
+							_s1_probe = type_expr(_s1_arg)
+							_s1_probe_def = ctx.type_table.get(_s1_probe) if _s1_probe is not None else None
+							if _s1_probe_def is not None and _s1_probe_def.kind is TypeKind.FUNCTION:
+								diagnostics.append(_tc_diag(
+									message=(
+										"callback argument must be a statically-known function in v1 "
+										"(a lambda literal, a named function, or an immutable `val` binding of one); "
+										"a mutable or runtime-computed function value cannot construct a callback"
+									),
+									severity="error",
+									span=getattr(_s1_arg, "loc", None) or getattr(expr, "loc", Span()),
+								))
+								return record_expr(expr, ctx.unknown_ty)
+						if not (_s1_have_def is not None and _s1_have_def.kind is TypeKind.FUNCTION):
+							continue
+					_s1_res = _try_wrap_arg_for_callback_field(ctx, arg=_s1_arg, have_ty=_s1_have, want_ty=_s1_want)
+					if _s1_res.is_wrapped:
+						expr.args[_s1_idx] = _s1_res.cb_call
+						arg_types[_s1_idx] = _s1_res.cb_ty
+						continue
+					if _s1_res.is_rejected:
+						return record_expr(expr, ctx.unknown_ty)
+					diagnostics.append(_tc_diag(
+						message=(
+							f"function value arity does not match callback parameter "
+							f"'{ctx.label_typeid(_s1_want)}'"
+						),
+						severity="error",
+						span=getattr(_s1_arg, "loc", None) or getattr(expr, "loc", Span()),
+					))
+					return record_expr(expr, ctx.unknown_ty)
 			intent.arg_expected_types = _expected_arg_types_for_call(list(method_res.call_info.sig.param_types), len(expr.args))
 			_propagate_arg_expected_types(intent, arg_types)
 			setattr(expr, "_resolved_method_call_info", (list(method_res.call_info.sig.param_types), method_res.return_type, bool(method_res.call_info.sig.can_throw), method_res.call_info.target, bool(getattr(method_res.call_info.sig, "declared_terminal_throws", False))))
@@ -6783,11 +6945,39 @@ def resolve_call_expr(
 						print(f"[debug] call target not function (binding call) fn={expr.fn} module={current_module_name} binding_id={binding_id}", file=_debug_stderr)
 					except Exception:
 						pass
-				if fn_val_ty == ctx.unknown_ty and any(getattr(d, "severity", None) == "error" for d in diagnostics):
-					# Cascade suppression: the callee binding is Unknown because an
-					# earlier error already poisoned it (e.g. a rejected capturing
-					# lambda) — repeating "call target is not a function value"
-					# over the poisoned slot is noise, not signal.
+				# Independent argument primaries must surface even when the
+				# call target itself is bad or causally suppressed: ONE
+				# shared argument observation serving both the suppression
+				# arm and the tripwire below (each returns; the FUNCTION
+				# path above types args itself).  Bare lambda args are
+				# skipped — without a callable target there is no context
+				# to type them against, and an unconstrained-inference
+				# error here would itself be a cascade.  Args whose FIRST
+				# visit already produced a causal primary (marked node /
+				# caused binding read) are skipped too: the pending-callee
+				# consumer pre-types arguments, and re-visiting a diagnosed
+				# arg would re-emit its primary.
+				_arg_cause_q = getattr(ctx, "expr_unknown_is_caused", None)
+				for _a in expr.args:
+					if isinstance(_a, H.HLambda):
+						continue
+					if _arg_cause_q is not None and _arg_cause_q(_a):
+						continue
+					_type_user_arg(type_expr, _a)
+				_cause_pred = getattr(ctx, "binding_unknown_cause", None)
+				if fn_val_ty == ctx.unknown_ty and _cause_pred is not None and _cause_pred(binding_id):
+					# Cascade suppression by EXACT causal provenance: THIS
+					# callee binding's Unknown is explained by its own
+					# already-diagnosed primary (rejected capturing lambda,
+					# unknown name, propagated poison) — repeating "call
+					# target is not a function value" over it is noise.  An
+					# uncaused Unknown callee (or an absent predicate) falls
+					# through to the tripwire below.  The call NODE inherits
+					# the cause so a binding initialized from this result can
+					# propagate it.
+					_mark_cause = getattr(ctx, "mark_node_unknown_cause", None)
+					if _mark_cause is not None:
+						_mark_cause(getattr(expr, "node_id", None), "caused-callee-call")
 					return record_expr(expr, ctx.unknown_ty)
 				diagnostics.append(_tc_diag(message="call target is not a function value", severity="error", span=getattr(expr, "loc", Span())))
 				return record_expr(expr, ctx.unknown_ty)

@@ -81,9 +81,12 @@ def test_owned_result_iife_statement_discard_runs(tmp_path: Path) -> None:
 	assert subprocess.run([str(tmp_path / "owned")]).returncode == 0
 
 
-def test_throwing_iife_statement_in_try_runs(tmp_path: Path) -> None:
-	# Can-throw statement-position IIFE: immediate-call lowering checks and
-	# propagates internally (no double-wrapped throw checking on this route).
+def test_throwing_iife_value_in_try_runs(tmp_path: Path) -> None:
+	# Can-throw IIFE as the VALUE operand of a try expression (`val x =
+	# try (...)() catch { 7 }`): this is EXPRESSION lowering — the IIFE is
+	# not an HExprStmt — and the immediate-call lowering checks and
+	# propagates internally (no double-wrapped throw checking on the value
+	# route).  The true statement-position twin is pinned separately below.
 	src = _PRELUDE + (
 		"pub error MyExc { kind: Int }\n"
 		"pub fn main() nothrow -> Int {\n"
@@ -93,3 +96,26 @@ def test_throwing_iife_statement_in_try_runs(tmp_path: Path) -> None:
 	r = _compile(tmp_path, src, out="throwing")
 	assert r.returncode == 0, r.stderr
 	assert subprocess.run([str(tmp_path / "throwing")]).returncode == 0
+
+
+def test_throwing_iife_true_statement_position_runs(tmp_path: Path) -> None:
+	# TRUE statement position: the throwing IIFE is a discarded HExprStmt
+	# inside a throwing fn.  Pins the statement fast-path EXCLUSION in
+	# `_visit_stmt_HExprStmt` (lambda callees fall through to the generic
+	# expression tail → `_lower_lambda_immediate_call`, which owns the
+	# throw check/unwrap); the indirect statement path would ICE on the
+	# raw HLambda ("No MIR lowering") and double-wrap throw checking.  On
+	# Err, `fire()` propagates and main's try observes the thrown error.
+	src = _PRELUDE + (
+		"pub error MyExc { kind: Int }\n"
+		"fn fire() -> Int {\n"
+		"\t(|| -> Int => { throw MyExc(kind = 1); })();\n"
+		"\treturn 99;\n}\n"
+		"pub fn main() nothrow -> Int {\n"
+		"\tval x = try fire() catch { 7 };\n"
+		"\treturn x - 7;\n}\n"
+	)
+	r = _compile(tmp_path, src, out="throwing_stmt")
+	assert r.returncode == 0, r.stderr
+	assert "No MIR lowering" not in r.stderr, r.stderr
+	assert subprocess.run([str(tmp_path / "throwing_stmt")]).returncode == 0

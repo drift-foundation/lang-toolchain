@@ -1,0 +1,18 @@
+{
+  "protocol_version": 4,
+  "roles": {
+    "human": {
+      "detail_prefix": "approval-decision",
+      "identity": "singleton",
+      "singleton_actor": "slawomir"
+    },
+    "implementer": {
+      "detail_prefix": "implementation-response",
+      "identity": "agent"
+    },
+    "reviewer": {
+      "detail_prefix": "review",
+      "identity": "agent"
+    }
+  }
+}

@@ -8,6 +8,12 @@
 - **Do not** wrap long lines (calls with many arguments, long expressions) for readability; avoid indentation churn, specially if code is deeply nested.
 - **Do not** edit exisit tests without a clear confirmation it's OK. No bending around tests to patch compiler/infra deficiencies.
 
+## Full-suite execution ownership
+
+- Agents run focused, targeted, and smoke verification, then report when a change is ready for the full repository suite.
+- Slawomir runs `run_all_tests.sh` by default. An agent must not start the full suite unless Slawomir explicitly delegates that particular run.
+- This execution-ownership rule is project-specific; do not copy it into the Baton mailbox protocol or protocol release announcements.
+
 ## Announcements
 - Read and publish cross-team announcements from/to /tmp/drift-announce/<iso-utc-datetime>-<repo>-release-notes.md
 

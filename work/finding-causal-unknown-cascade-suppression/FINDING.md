@@ -2,252 +2,340 @@
 
 Date filed: 2026-08-03
 
-Refreshed: 2026-08-04 against the committed, pending `0.35.0` tree while the
-repository full suite was running. This refresh changed finding documents only;
-it deliberately did not run probes or touch compiler/test files.
+Refreshed: 2026-08-05 against the committed pending-`0.35.0` tree after the
+pending-lambda probe-rollback barrier landed and received terminal review. The
+repository full suite for that committed slice is still running. This refresh
+changes finding material only; it does not edit compiler code, shared tests,
+the language specification, or implementer-owned `PROGRESS.md`.
 
 Origin: R5 static review of `finding-nonflat-divergent-lambda`.
 
-Status: queued as the next substantive finding after the current full-suite
-gate. `finding-true-statement-throwing-iife` remains separate because it is a
-small coverage audit of already-landed IIFE routing, whereas this finding is a
-checker diagnostic-state defect with its own state/transaction boundary.
+Status: next substantive compiler finding after the active full-suite gate.
+The parent diagnostic-causality bug is still open. Its newly recorded child,
+`findings/finding-pending-lambda-value-finalization`, is a distinct
+`LANGUAGE_BUG` exposed by the preflight matrix, but it is a strong fold-in
+candidate because both bugs need one total pending-lambda finalization path.
+Planning review also confirmed a second child,
+`findings/finding-typed-let-callback-wrap-regression`: direct bare-lambda
+initialization of a typed Callback slot reaches MIR unwrapped, regressing an
+explicitly documented/tested 0.31.17 contract. It should restore implicit
+wrapping; clean rejection is not an open language choice.
+Planning round 2 widened that child from typed HLet to one materialization
+contract: a pending thin-function value passed to a Callback parameter is
+instead mislabeled as an already-built interface, producing an uninitialized
+interface-local MIR failure. The same round found
+`findings/finding-fnptr-borrow-materialization`: `&named_function` lets
+function-reference replacement violate the HVar-only canonical-place boundary
+and ends in a raw AttributeError. Both are folded family children, subject to
+red-first structural confirmation rather than the leading mechanism being
+treated as authoritative.
+The earlier probe-rollback child is implementation-complete and review-signed
+off; its mutation barrier is now a precondition of this design, not work to
+reimplement.
 
-`PROGRESS.md` remains implementer-owned and is intentionally absent until K
-starts the pass. Every claim below is evidence or a patch hypothesis, not an
-instruction to trust the reviewer over the code. K should reproduce the red
-boundary and reject or revise the proposed design if a narrower invariant or a
-counterexample emerges.
+All claims below distinguish executed evidence, current static facts, and
+design hypotheses. The implementer should reject or revise any proposal that
+does not survive red-first probes or current source tracing.
 
 ## Classification
 
-**Statically reconfirmed on 2026-08-04:** two guards suppress a diagnostic when
-*any* earlier error exists in the current function:
+### A. Confirmed LANGUAGE_BUG: unrelated errors suppress independent errors
 
-- `lang/driftc/type_checker.py:4012-4036`, `_require_copy_value`: an
-  `Unknown` value bypasses `E-COPY-UNKNOWN` after a function-global scan of
-  `diagnostics`.
-- `lang/driftc/checker/call_resolver.py:6623-6719`, the local-binding
-  `HCall(fn=HVar)` route: an `Unknown` callee bypasses `call target is not a
-  function value` under the same function-global condition.
+Two live guards treat “some error already exists in this function” as proof
+that a particular `Unknown` value has already been diagnosed:
 
-Neither guard checks whether the earlier error came from the expression,
-binding, or producer responsible for the `Unknown` being consumed.
+- `lang/driftc/type_checker.py:4124`, `_require_copy_value`, suppresses
+  `E-COPY-UNKNOWN` when `diagnostics` contains any earlier error.
+- `lang/driftc/checker/call_resolver.py:6786`, the local-binding
+  `HCall(fn=HVar)` fallback, suppresses `call target is not a function value`
+  under the same function-global condition.
 
-**Previously reproduced, not rerun during the active full suite:** the two
-work-only boundary probes fail because an unrelated bad copy is the sole
-diagnostic; the independent Unknown-copy and Unknown-callee tripwires vanish.
+The exact binding id is available at both sites, but neither predicate checks
+it. Executed work probes prove that an unrelated earlier copy error suppresses
+both independent tripwires on a separate preseeded `Unknown` binding.
 
-**Provisional classification:** `LANGUAGE_BUG` in diagnostic soundness. An
-invalid program can lose an independent error solely because another error was
-reported earlier. This changes user-visible compiler output, not successful
-program semantics.
+`HInvoke(callee=HVar)` has the opposite drift at
+`type_checker.py:10204`: it always emits the call-target diagnostic, even when
+the same binding already has a causal primary. The two function-value call
+routes therefore disagree.
 
-This classification remains falsifiable. If K finds a documented one-error-per-
-function policy, or proves that the checker boundary cannot contain an
-undiagnosed `Unknown`, that evidence should replace this finding's premise.
-The current comments claim the narrower condition—an earlier error explains the
-same poisoned slot—and the preseed boundary is explicitly supported by
-`check_function`, so the present evidence points the other way.
+This is user-visible diagnostic unsoundness. Invalid programs can lose an
+independent error because another source line happened to fail first.
 
-## Required distinction
+### B. Confirmed LANGUAGE_BUG child: pending captureless values do not finalize
 
-The patch must preserve three cases rather than replacing one global heuristic
-with another:
+The preflight matrix independently established that every non-call value read
+of a pending stored lambda sees the placeholder `Unknown` rather than
+finalizing the lambda:
 
-1. **Diagnosed same-source poison.** A producer emitted a primary diagnostic and
-   left a particular binding `Unknown`. Copy/call complaints over that same
-   poisoned value are normally cascades and should remain absent.
-2. **Independent Unknown.** A different expression emitted an earlier error,
-   while this `Unknown` binding has no causal diagnosis. Copy/call tripwires for
-   this binding must still fire.
-3. **Concrete recovery.** If a deferred binding later resolves to a concrete
-   function type, no stale poison state may suppress a real later error.
+- an inferable captureless lambda cannot be aliased;
+- a contextual `CallbackN` alias does not propagate its expected shape;
+- a later successful direct call does not repair an earlier alias read;
+- pending lambdas in return and argument positions surface unrelated
+  `Unknown`-based presentations.
 
-The existing stored-capturing-lambda driver test pins case 1. The work-only
-probe pins case 2. Case 3 and transaction/shadowing isolation still need red-
-first coverage if the chosen representation can retain state.
+This conflicts with the approved v1 specification:
 
-A non-lambda source companion should also pin case 1 independently of closure
-machinery, for example `val bad = missing_name; bad();`: the unknown-name
-diagnostic causally explains `bad`'s Unknown type, so copy/call noise over
-`bad` should be suppressed even though no pending lambda is involved. This is
-a proposed contract probe; confirm its current diagnostics before adopting the
-expected count.
+- §22.0.1: non-capturing function pointers may be stored and returned freely;
+- §22.2.3: only a *capturing* literal lacks a bare stored representation;
+- §22.3: non-capturing closures lower to thin, `Copy` function pointers.
 
-## Confirmed consumers and adjacent parity surface
+The child is not merely diagnostic polish: valid captureless programs are
+rejected. See `findings/finding-pending-lambda-value-finalization/FINDING.md`.
 
-### Copy consumer
+### C. Confirmed LANGUAGE_BUG child: Callback slots accept labels without values
 
-`_require_copy_value` receives the current `expr`. For `HVar`, the already-
-resolved `binding_id` is available; no name lookup or syntax guess is needed.
-Calls for constants/projections do not always carry a binding expression, so a
-binding-level cause must not accidentally suppress an unrelated non-binding
-Unknown.
+Two distinct sources prove the same checker/lowering breach:
 
-### `HCall(fn=HVar)` consumer
+- a direct bare lambda in a typed Callback HLet is recorded as Callback while
+  the initializer remains raw HLambda;
+- a pending captureless lambda passed as a bare HVar to a Callback parameter
+  causes MIR to move an uninitialized interface local because the binding was
+  stamped as the interface without a callback object construction.
 
-The call resolver computes `binding_id` before typing the callee and retains it
-through its non-function fallback. A read-only predicate on
-`CallResolverContext` can therefore ask about the exact binding. All current
-`make_call_ctx(...)` construction sites are in `type_checker.py` (currently
-near lines 8518, 10003, and 10310); every constructor must be updated if a new
-required context field is introduced.
+Both must converge on the existing implicit `core.callbackN(...)` wrapper
+authority. The original binding remains a thin function pointer; each Callback
+slot owns its explicit HIR construction.
 
-### `HInvoke` parity audit
+### D. Confirmed LANGUAGE_BUG child: named-function borrow breaks place shape
 
-**New static observation:** `type_checker.py:10010-10115` contains a separate
-`HInvoke` non-function fallback that always appends `call target is not a
-function value`. It is not one of the two function-global suppressors, but it
-can consume the same pending/poisoned binding. Parsed stored-lambda calls are
-currently pinned as `HCall(fn=HVar)`, while `HInvoke` remains a real internal
-boundary used by synthetic tests. K should add a parity probe before deciding
-whether the causal predicate belongs in both consumers. Do not silently leave
-two different cascade policies for semantically equivalent function-value
-calls.
+Borrowing an already-finalized stored fnptr compiles and runs, establishing
+that shared borrow of a function-pointer value is accepted. The corresponding
+`&named_function` source raises raw `AttributeError: 'HFnPtrConst' object has
+no attribute 'name'`. Static evidence points to late fnptr replacement inside
+an HVar-only canonical place, but the exact repair remains falsifiable. See
+`findings/finding-fnptr-borrow-materialization`.
 
-## Producer/state inventory
+## Current-tree facts after the rollback child
 
-Current binding writes worth auditing (line numbers are navigational):
+The just-landed rollback fix changed the safe design space:
 
-- `type_checker.py:12318-12331`: an unannotated stored `HLambda` is deferred
-  with binding type `Unknown` and **no diagnostic yet**.
-- `type_checker.py:9986-10001`: first `HCall` through a pending lambda types the
-  lambda, stores its function type or `Unknown`, then removes it from the
-  pending table.
-- `type_checker.py:10019-10033`: analogous `HInvoke` path.
-- `type_checker.py:12331-12464`: an ordinary `HLet` types its initializer and
-  records the resulting binding type. A diagnosed initializer can therefore
-  create a non-lambda poisoned binding.
-- `type_checker.py:13760-13823`: end-of-function pending-lambda flush emits the
-  bare-capture/unconstrained-type primary diagnostics and leaves rejected
-  bindings `Unknown`.
-- Parameter, catch-binder, and match-binder writes elsewhere in the file use
-  concrete or `Error` types; do not mark them merely because an unrelated
-  diagnostic exists.
+- `PendingLambdaOwner` is the sole pending-state owner
+  (`type_checker.py:606+`). Registration, mutation-intent lookup, retirement,
+  and drain are exact-binding operations over a private map.
+- `begin_resolution()` raises `PendingLambdaBarrier` before external mutation
+  whenever a deferred-call probe transaction is active.
+- nested probes roll back and propagate; only the outermost converts the
+  barrier into ordinary expected-context deferral.
+- current HCall/HInvoke pending resolution remains duplicated around
+  `type_checker.py:10080` and `:10113`.
+- declarations register the placeholder at `:12418`; unresolved entries drain
+  at `:13854`.
 
-`FnCheckState` currently owns every mutable side table that a deferred call
-probe may touch. `OWNED_TABLES` drives both transaction rollback and
-`state_fingerprint()`. If causal state is mutable during expression typing, it
-belongs in that owner as `_TxnDict`, even if today's shape gate makes some
-producer paths unreachable from probes. A plain closure `dict` would create a
-future rollback leak.
+Therefore a shared first-reference finalizer can be considered without
+reopening the proven rollback leak, but it must enter through
+`PendingLambdaOwner.begin_resolution()` before touching the lambda, binding
+tables, captures, or `_lambda_fn_specs`. A helper that uses `peek()` and then
+mutates would defeat the barrier.
 
-## Additional suspected edge: use before pending-lambda flush
+`FnCheckState.OWNED_TABLES` remains the transaction authority
+(`type_checker.py:462+`). Any mutable Unknown-cause state belongs there as a
+`_TxnDict`, so rollback and `state_fingerprint()` cover it. The pending owner
+itself deliberately remains outside the undo log because mutation is barred,
+not rolled back.
 
-This was not in the original finding and has not been executed during the
-current suite, so treat it as a hypothesis requiring a red-first probe:
+No registered entry in `doc/refactor_triggers.md` matches diagnostic
+provenance or pending-lambda finalization as of this refresh. The implementer
+must repeat the scan when starting the LANGUAGE_BUG fix.
+
+## Required diagnostic invariants
+
+The patch must preserve all of these cases:
+
+1. **Same-source poison:** a producer emitted a primary diagnostic and left
+   binding `b` as `Unknown`; copy/call complaints over `b` are cascades.
+2. **Independent Unknown:** binding `u` has no causal primary; an error on
+   another line must not silence `u`'s copy/call tripwires.
+3. **Alias propagation:** `g` initialized directly from causally poisoned `b`
+   remains causally poisoned even if no new diagnostic is emitted at `g`'s
+   initializer.
+4. **Concrete recovery:** when pending `b` resolves to a concrete function
+   type, any prior/pending cause state is absent.
+5. **Lexical identity:** shadowed bindings with the same source spelling never
+   share a cause.
+6. **Consumer parity:** HCall and HInvoke deliberately apply the same causal
+   rule for the same function-value binding unless a tested semantic reason
+   proves they differ.
+7. **No global fallback:** absence of provenance fails toward the tripwire,
+   never toward suppression.
+
+The existing stored-capturing-lambda tests pin case 1. The executed work probe
+pins case 2. The preflight alias matrix proves case 3 is needed. Cases 4–6 need
+in-tree red/green coverage in the implementation slice.
+
+## Required pending-lambda invariants
+
+The finalizer must distinguish pending from poisoned; `Pending` must never be
+treated as “already diagnosed Unknown.”
+
+For an exact pending binding id:
+
+1. Enter through `PendingLambdaOwner.begin_resolution()`.
+2. Resolve at most once, using a contextual function shape when one is
+   actually available.
+3. Store the *thin function type* on an accepted captureless binding. If the
+   consumer expects `CallbackN`, normal callback wrapping must still be
+   represented in HIR; the binding itself must not be mislabeled as an
+   interface object.
+4. Retire the pending entry only after the result is made total: concrete
+   function type, or clean primary diagnostic plus diagnosed-Unknown cause.
+5. Clear cause state on every concrete result.
+6. Reject bare capturing lambdas with the approved v1 primary, anchored at the
+   original lambda/binding, and make later uses quiet for that same cause.
+7. With no contextual parameter types, an unconstrained lambda must receive
+   one clean “cannot infer” primary; never publish a `LambdaFnSpec` containing
+   `Unknown` ABI parameters.
+8. Preserve `fnptr_consts_by_node_id`/`LambdaFnSpec` publication and the final
+   `_apply_fnptr_consts` rewrite so accepted aliases lower as actual function
+   pointers.
+
+The HVar hook should be considered for *any reference to a pending binding*,
+not only `_copy_use=True`: `defer_value_use`, explicit `move`, borrow, discarded
+reads, return values, and call arguments change Copy policy but do not make an
+`Unknown` placeholder a valid value type. Exact contexts still need empirical
+coverage before declaring this one hook total.
+
+## Selected causal-state shape (details remain falsifiable)
+
+Planning round 2 disproved a binding-only table: caused Unknown values remain
+quiet through HMove and a ternary before being rebound. Use `FnCheckState`-
+owned binding-id and expression-node maps, storing immutable cause metadata
+rather than booleans. A useful minimum is:
+
+- cause category;
+- root producer binding id;
+- producer node id or stable source span;
+- primary diagnostic code/category when available.
+
+Operations:
+
+- `mark(binding_id, cause)` only from producer-local evidence;
+- mark/query expression nodes only for the tested transparent value flow;
+- `propagate(dst, expr)` only when the initializer's effective type remains
+  Unknown and that exact expression carries a cause;
+- `clear(binding_id)` whenever the binding becomes concrete;
+- `query(binding_id)` at copy/HCall/HInvoke consumers.
+
+Producer-local evidence means a diagnostic watermark around that producer,
+not a scan of the whole function. Ordinary `HLet` needs two paths:
+
+- new primary emitted and result remains Unknown → create cause;
+- no new primary, but a direct source expression already carries a cause →
+  propagate it.
+
+The original required red probe was:
 
 ```drift
-val x = 1;
-val f = || => { x }; // stored lambda: binding is Unknown, no diagnostic yet
-val alias = f;       // ordinary HVar value read happens before final flush
+val bad = missing_name;
+val x = bad();
+x();
 ```
 
-Static control flow suggests `_require_copy_value` can emit `E-COPY-UNKNOWN` at
-`alias = f` before the final flush later emits the primary borrowed-capture
-rejection. If confirmed, a table containing only "a diagnostic has already
-been emitted for this binding" cannot by itself preserve the intended one-
-primary presentation. Possible resolutions include resolving/rejecting the
-pending lambda at its first value use, representing a narrowly-scoped
-"primary diagnosis is guaranteed at flush" state, or treating the early copy
-error as independently meaningful. K must determine the contract from source
-behavior and existing v1 closure rules rather than assuming this review's
-preferred outcome.
+The cause must cross the HCall node before `HLet` can attach it to `x`.
 
-Also probe one alias hop from an already diagnosed binding. A new binding that
-inherits `Unknown` from a causally poisoned `HVar` may need cause propagation;
-otherwise the first binding is quiet but use of its alias can produce a fresh
-cascade. If that occurs, either define an explicit propagation rule or keep the
-patch deliberately narrow and record the uncovered case as a child finding.
-Do not infer causality from “some descendant is Unknown” or from a name match.
+Planning review confirmed the call-result example: current global suppression
+keeps only the original unknown-name diagnostic. The minimum proven extension
+is therefore a cause mark on the *suppressed binding-call node*, propagated by
+its receiving HLet. Round 2 then proved caused HMove and literal-selected
+HTernary propagation as well. The ternary authority must be reachability-aware:
+one caused arm may not silence a distinct uncaused Unknown arm.
 
-## Proposed patch shapes (not authoritative)
+Do not extend this into a generic “Unknown child means caused parent” rule.
+Unproven shapes fail toward the downstream tripwire; the test matrix governs
+future additions.
 
-### Narrow binding-cause table
+## Likely shared finalization authority
 
-The smallest design matching the confirmed red boundary is a transaction-aware
-map keyed by integer binding id, for example
-`unknown_cause_by_binding: _TxnDict[int, UnknownCause]`.
+Current HCall and HInvoke each duplicate pending-lambda resolution. The child
+now adds non-call HVar uses. The leading consolidation is one local helper in
+`check_function`, conceptually:
 
-Useful cause data would include at least a stable category/reason and producer
-node or diagnostic identity. A bare boolean is sufficient for suppression but
-makes propagation and debugging ambiguous. The semantic invariant should be:
+```text
+finalize_pending_lambda(binding_id, expected_value_type, reason)
+    -> concrete function type | diagnosed Unknown | not pending
+```
 
-> A binding is present only when its current `Unknown` type is causally
-> explained by a specific primary failure (or, if separately justified, a
-> pending producer whose final primary failure is guaranteed).
+This is intentionally a contract sketch, not a required signature. It should:
 
-Likely operations:
+- derive an expected *function* shape from a concrete Fn/Callback context;
+- type the HLambda once through the primary lambda authority;
+- own capture rejection, unconstrained-parameter rejection, binding update,
+  cause mark/clear, pending retirement, and spec/fnptr publication;
+- serve HCall, HInvoke, ordinary HVar references, and final drain;
+- preserve the outer probe barrier behavior instead of adding a second
+  transaction policy.
 
-- mark after a producer-local diagnostic watermark observes a new error and the
-  producer leaves this binding `Unknown`;
-- propagate only through explicitly justified value-flow shapes;
-- clear whenever the binding becomes concrete;
-- query by exact `binding_id` in `_require_copy_value`, `HCall`, and—if the
-  parity probe proves it—`HInvoke`;
-- never seed preexisting/preseeded Unknown bindings automatically.
+If K proves that call-directed inference and value-directed finalization need
+separate helpers, the split should still share one mutation/retirement
+authority and one diagnostic contract.
 
-### Wider expression provenance
+## Acceptance matrix
 
-If source probes show causes must flow through calls, casts, aliases, or other
-Unknown-producing expressions, a binding-only map may be an attractive but
-incorrect local patch. A node-level Unknown provenance table, or a structured
-typing result, may be the sounder authority. That is a larger change and is not
-justified by the two current failures alone. Prefer the narrow design only if
-the regression matrix proves it total for the promised suppression surface.
+### Diagnostic causality
 
-In either design, a diagnostic watermark is necessary but not sufficient:
-checking `diagnostics[start:]` prevents an unrelated *earlier* error from being
-misattributed, but a recursive producer can emit several errors and aliasing
-can carry a cause without emitting a new one.
+- unrelated-error + independent preseeded Unknown copy → `E-COPY-UNKNOWN`;
+- unrelated-error + independent preseeded Unknown HCall → call-target error;
+- ordinary diagnosed producer `val bad = missing_name; bad();` → primary only;
+- same diagnosed binding through HCall and HInvoke → primary only;
+- one-hop direct alias of diagnosed Unknown → primary only at later use;
+- shadowed same-name bindings → no cross-suppression;
+- cause-table rollback, nested rollback, commit, fingerprint, and detached
+  public-result contracts are pinned.
 
-## Acceptance criteria
+### Pending finalization
 
-- Existing invoked and uninvoked stored-capturing-lambda cases retain exactly
-  one primary, spanned diagnostic; no `E-COPY-UNKNOWN` or redundant call-target
-  message appears for the same poisoned binding.
-- An unrelated earlier error does not suppress `E-COPY-UNKNOWN` for a distinct,
-  uncaused `Unknown` binding.
-- An unrelated earlier error does not suppress `call target is not a function
-  value` for a distinct, uncaused `Unknown` binding.
-- `HCall(fn=HVar)` and `HInvoke(callee=HVar)` have deliberately tested parity,
-  or the implementer documents why their contracts differ.
-- A binding that resolves from pending `Unknown` to a concrete function type
-  has no stale cause marker.
-- Shadowed bindings with the same source name do not share cause state.
-- Any transaction-owned cause state commits/rolls back exactly and is included
-  in the owner fingerprint. Returned `TypedFn`/`TypeCheckResult` objects must
-  not retain transaction wrappers.
-- The pending-lambda value-read and one-hop alias hypotheses are tested and
-  either handled in this slice or recorded explicitly as child findings with a
-  justified scope boundary.
-- No function-global `any(error in diagnostics)` remains as an Unknown-cascade
-  causality test.
+- inferable captureless alias compiles and runs;
+- contextually typed callback alias compiles/runs and records its real wrapper;
+- unconstrained alias yields one clean cannot-infer primary;
+- later direct call after an earlier alias is no longer order-sensitive;
+- explicit and implicit capturing bare bindings yield one approved primary,
+  without earlier `E-COPY-UNKNOWN`;
+- return, argument, move/borrow, and discarded-reference positions have
+  deliberate tests or documented exclusions;
+- direct HCall/HInvoke behavior remains green;
+- lowering-visible positives include full compile/run companions.
 
-## Test-edit boundary
+## Scope and guardrails
 
-New regression files may be added regression-first. Existing test files and
-their comments must not be edited without Slawomir's explicit approval. The
-existing stored-lambda tests can be run unchanged as compatibility guards. If
-K concludes an existing assertion/comment needs correction, use the mailbox
-approval protocol before editing it.
+- New regression files are preferred. Existing tests/comments require
+  Slawomir's explicit approval before editing.
+- No language-spec change is proposed or authorized. The captureless child
+  implements the already-approved callable contract.
+- No runtime/ABI shape change is currently supported; ABI should remain 22.
+- Both diagnostic output and accepted captureless programs are user-visible.
+  If `0.35.0` remains unreleased/uncertified, keep it and fold the history note
+  into that pending entry. Otherwise apply the repository's mandatory minor
+  bump rule.
+- Do not patch stdlib or user programs around either defect.
+- Do not remove or weaken the newly landed `PendingLambdaBarrier` to make
+  first-reference finalization convenient.
 
-## Version/spec/ABI
+## Scheduling
 
-- No language-spec change is proposed or authorized.
-- No compiler/runtime ABI shape change is expected; ABI should remain 22 unless
-  implementation evidence finds a real boundary change.
-- Diagnostic behavior is user-visible. If this lands on the still-unreleased,
-  uncertified `0.35.0` train, keep `DRIFTC_VERSION` at `0.35.0` and fold a
-  concise note into that pending history entry. If `0.35.0` is certified or
-  released first, reapply the repository's mandatory minor-bump rule rather
-  than assuming this old work order controls versioning.
+The parent and value-finalization child should be implemented together if the
+shared finalizer remains the narrowest sound authority. K may split them after
+red-first evidence if the child requires a materially broader callable
+contract or lowering change. Either direction must be recorded; this research
+does not decide it by assertion.
 
-## Refactor-trigger and announcement scan
+## Planning review round 1 (2026-08-05)
 
-`doc/refactor_triggers.md` was statically rescanned on 2026-08-04. No registered
-entry matches causal diagnostic provenance. K must scan it again at actual
-LANGUAGE_BUG start, because the registry can change.
+K's localized `probe_planning_review_matrix.py` produced five useful results:
 
-No files were present in `/tmp/drift-announce/` at refresh time.
+- binding-only causality is disproved by a suppressed-call-result → HLet →
+  later-call chain;
+- pending references under `move` still inherit Unknown, and borrowing a
+  pending binding is silently accepted as Unknown storage;
+- direct typed Callback initialization reaches MIR as a raw HLambda;
+- rejected bare captures show no current evidence of wrapper construction or
+  capture effects, but the no-effect contract still needs a regression;
+- unconstrained final drain rejects before publishing any LambdaFnSpec.
+
+The plan is not ready yet. Remaining planning evidence is deliberately narrow:
+
+1. caused-Unknown propagation through `move` and a literal-selected ternary;
+2. a true compatible *bare pending HVar argument* (not `f()` as an argument);
+3. a named/concrete function-pointer borrow control establishing what `&f`
+   should type/lower as;
+4. direct Callback typed-let structural confirmation sufficient to design the
+   restoration without changing its established contract.

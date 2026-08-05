@@ -109,3 +109,38 @@ current `LANGUAGE_BUG`.
 - Does the current tree pass the repro only because the outer function has an
   explicit `return 99` after the divergent statement? If so, add an all-terminal
   variant only if it exercises a distinct lowering path already in scope.
+
+## Current-tree refresh (2026-08-05)
+
+**Confirmed:** the lowering seam remains structurally unchanged on the pending
+0.35.0 tree. `_visit_expr_HCall` routes a literal `HLambda` directly to
+`_lower_lambda_immediate_call`; `_visit_stmt_HExprStmt` excludes literal lambda
+callees from both ordinary call fast paths; and `_lower_indirect_call` retains
+the assertion that a raw `HLambda` reaching it is a compiler bug. The proposed
+source therefore still targets a live, deliberate boundary rather than dead
+implementation history.
+
+**Confirmed:** expression-position immediate-throw coverage is independently
+present in `test_try_expr_immediate_lambda.py` and
+`test_stored_capturing_lambda_diagnostic.py`. The existing test should still be
+renamed accurately rather than deleted: it is a compact same-file parity guard,
+but it is not the only expression-route pin.
+
+**Decision:** do not add the all-terminal variant. The explicit `return 99`
+deliberately isolates statement-IIFE error dispatch from the separate
+terminal-flow/divergent-finalization authority. If the IIFE is incorrectly
+discarded as nothrow, `fire()` returns 99 and `main()` exits 92 instead of 0;
+the runtime oracle remains discriminating.
+
+**Decision:** a separate structural parser/HIR assertion is not required for
+this slice. The new test source visibly places `(HLambda)();` as its own
+semicolon-terminated statement, and the mandatory compile/link/run outcome
+tests the lowering behavior. Avoid adding a second parser/flattening harness to
+the driver file unless implementation evidence shows the source no longer
+lowers to `HExprStmt(HCall(fn=HLambda))`.
+
+**Refactor-trigger result:** all entries in `doc/refactor_triggers.md` were
+re-scanned on 2026-08-05. None matches a missing regression for the direct-IIFE
+statement route. If the refreshed repro is red, reclassify it as a
+`LANGUAGE_BUG`, but no registered larger refactor is currently triggered by
+that shape.
