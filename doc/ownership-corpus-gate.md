@@ -7,16 +7,27 @@ accepted universe and counters. The lifecycle is:
 
 ```
 committed golden baseline
-  → local projected candidate   (ownership-corpus-check)
-  → fresh validated candidate   (ownership-corpus-promote)
+  → fresh verified observation + promotion candidate  (ownership-corpus-verify)
+  → fast validation + install, ZERO compiles          (ownership-corpus-promote)
   → committed golden baseline
 ```
 
-CI reads the committed golden state only — it never creates, approves, or
-installs a candidate. There are three public recipes, all driven by
-`tools/drift_corpus_check.py`. Every one compiles into a fresh temporary
-directory per invocation and requires the toolchain+universe fingerprint
-captured at the start to equal the one re-captured at the finish.
+`ownership-corpus-check` remains the quick incremental/projected iteration
+lane (report-only: it never mints the candidate).  The complete
+discovery-to-install workflow performs **exactly one full-universe
+compile** — verify's — and promote is fast-or-fail: it validates and
+installs the verified candidate or fails immediately and requires a new
+verify.
+
+CI reads the committed golden state only — it never approves or installs a
+candidate (the verify gate does publish the reviewable candidate under
+build/tmp as a side effect of every valid observation; installing it is
+always a separate human-invoked promote).  There are three public recipes,
+all driven by `tools/drift_corpus_check.py`.  The compiling lanes (check,
+verify) build into a fresh temporary directory per invocation and require
+the toolchain+universe fingerprint captured at the start to equal the one
+re-captured at the finish; promote compiles nothing and probes the current
+identity passively.
 
 ## The one authority for what a compile is
 
@@ -45,55 +56,77 @@ Fast, resumable, always full-universe (default work dir
 - Reused successes *and* failures are accounted (the `observed` / `projected`
   partitions cover both). It reports exact projected deltas against the golden
   baseline.
-- After stable start/end tree identity, it atomically exports the local
-  candidate to `build/tmp/ownership-corpus-projection.json`. **The handoff is not
-  authority and never changes the committed baseline.**
+- REPORT-ONLY: after stable start/end tree identity it writes its work-dir
+  `report.json` and prints the projected deltas.  **It never mints the
+  canonical promotion candidate and never changes the committed baseline** —
+  fresh promotable evidence comes from `ownership-corpus-verify` alone.
 
-`--fresh` forces a full recompile (ignore cache + seeds) for a broad change.
+A full fresh run is `ownership-corpus-verify`'s job — the single fresh
+authority.  (The old `--fresh` developer flag is retired.)
 
-## `just ownership-corpus-verify` — CI / cert gate (the only one)
+## `just ownership-corpus-verify` — CI / cert gate AND candidate producer
 
-The single corpus command used by `just certify`.
+The single corpus command used by `just certify`, and the single fresh
+authority for promotion candidates.
 
-- Ignores the developer cache **and** the handoff completely — even a valid,
-  malformed, stale, or delta-proposing handoff.
+- Ignores the developer cache and never CONSUMES the handoff — a pre-existing
+  candidate (valid, malformed, stale, or delta-proposing) is invalidated at
+  the start of the run, so no earlier candidate can masquerade as this run's
+  output.
 - One fresh full-universe compile; stable start/end fingerprint.
 - Compares **exactly** to the committed reviewed baseline: inclusion rule,
   fixture names + source hashes, exclusions + reasons, compiled/failed buckets,
   every per-fixture projection, aggregate counters, and zero hard gates.
-- On any drift, **fails loudly** and retains the fresh actual under
-  `build/tmp/ownership-corpus-actual/` for diagnosis. It **never** calls
-  installation code or modifies any tracked baseline file — committed data stays
-  byte-identical. A golden clean clone passes `just certify` with no `check`
-  or `promote` first and with zero tracked diffs.
+- Every COMPLETE, stable, zero-hard-gate observation atomically republishes
+  the promotion candidate `build/tmp/ownership-corpus-projection.json` —
+  exact matches included (exit 0; promotion simply unnecessary).  Hard-gate
+  and aborted/invalid runs (exit 2) publish **nothing**.
+- On drift, **fails loudly** (exit 1) and retains the fresh actual under
+  `build/tmp/ownership-corpus-actual/` for diagnosis; the exported candidate
+  is the SAME observation packaged for `promote`, which validates and
+  installs it with zero compiles after review.  Verify **never** calls
+  installation code or modifies any tracked baseline file — committed data
+  stays byte-identical. A golden clean clone passes `just certify` with no
+  `check` or `promote` first and with zero tracked diffs.
+- With NO reviewed baseline at all (bootstrap), verify performs the same
+  discovery run and emits the initial candidate (exit 1); a present but
+  unreadable/malformed baseline still fails closed (exit 2, no candidate).
+- `check`, `verify`, and `promote` serialize on one coarse advisory lock
+  (`build/tmp/ownership-corpus.lock`).
 
-## `just ownership-corpus-promote` — manual re-baseline
+## `just ownership-corpus-promote` — fast-or-fail install (zero compiles)
 
 A deliberate maintainer action, **never** wired into CI / `just test` /
-`just certify`.
+`just certify`.  It performs **no corpus compilation at all** and accepts
+no worker count.
 
-- Requires the canonical projection handoff (missing, malformed, or stale is an
-  error — never a baseline fallback); its toolchain and run-snapshot composites
-  must match the current tree. Never reads developer cache files.
-- One fresh full-universe compile in isolated scratch; stable start/end
-  fingerprint; must **exactly reproduce** the reviewed candidate (universe +
-  hashes, exclusions, buckets, per-fixture projections, aggregate, zero hard
-  gates).
-- Unexpected fresh results fail and are retained separately; they never
-  overwrite the handoff or become implicitly approved. Only exact agreement
-  reaches staged baseline installation (a byte-preserving no-op when already
-  identical), and the installed bundle is reloaded and proven equal to the fresh
-  result. Invoking promote is the explicit authorization to install after fresh
-  reproduction; the resulting Git diff is reviewed and committed, and that
-  becomes the new golden baseline.
+- Requires the canonical fresh-verify candidate (missing, malformed,
+  corrupted-digest, wrong-kind, projected/non-exhaustive, hard-gate-bearing,
+  or stale is an immediate error — never a baseline fallback, never a
+  compile).  Never reads developer cache files.
+- Validates the candidate's schema, digest seal, producer kind, exhaustive
+  observation, and internal consistency, then recomputes the CURRENT
+  toolchain/universe snapshot (hashing every fixture source — the staleness
+  protection) and requires exact identity with the candidate.
+- On agreement, stages/installs the candidate's exact observation with the
+  existing post-install reload/equality/fingerprint proofs; the verify
+  run's snapshot and measured metadata install VERBATIM (a delayed
+  promotion never absorbs the review gap into `duration_s`).  A
+  byte-identical baseline is a validated no-op.  Invoking promote is the
+  explicit authorization to install the reviewed observation; the
+  resulting Git diff is reviewed and committed, and that becomes the new
+  golden baseline.
 
 ## Re-baselining
 
 ```
-just ownership-corpus-check         # iterate; review report.json + projected deltas
-just ownership-corpus-promote       # fresh full compile reproduces the candidate, installs
+just ownership-corpus-verify        # THE full compile: gate + promotion candidate
+just ownership-corpus-promote       # fast validation + install; zero compiles
 git add lang/tests/ownership_corpus/reviewed-baseline && git commit
 ```
+
+(`just ownership-corpus-check` remains available for quick incremental
+iteration before the fresh verify; it is never required for re-baselining.)
 
 ## Bootstrap / migration
 

@@ -228,6 +228,37 @@ address is the borrow result — the same semantics as `val f = seven; &f`;
 Pinned in `lang/tests/driver/test_fnptr_borrow_materialization.py`
 (structural transition trace + compile/run + mut rejection).
 
+**Also in this release (tooling): the ownership-corpus lifecycle is
+one fresh compile plus fast-or-fail promotion.**  Re-baselining
+previously needed up to three full-universe compiles (`verify` withheld
+the promotion handoff, forcing a redundant `check --fresh`, and
+`promote` recompiled everything to reproduce it).  The final contract:
+`ownership-corpus-verify` is the SINGLE fresh authority — every
+complete, stable, zero-hard-gate observation (exact matches included;
+absent-baseline bootstrap included) atomically republishes the
+promotion candidate, while hard-gate and aborted/invalid runs publish
+nothing and a pre-existing candidate is invalidated at run start.  The
+candidate is a digest-sealed, self-validating schema-2 observation
+carrying the FULL run-snapshot object and the verify run's measured
+metadata.  `ownership-corpus-promote` is fast-or-fail with ZERO
+compilation and ZERO builds: it validates the candidate fail-closed
+(schema, seal, producer kind, exhaustive observation, hard gates,
+internal consistency), probes the current toolchain/universe identity
+PASSIVELY (`toolchain_fingerprint_passive` — a missing artifact fails
+toward a fresh verify, never a rebuild; stale content is caught by the
+composite identity comparison), requires exact
+identity, and installs via the existing staged proofs with the verify
+snapshot and metadata VERBATIM (a delayed promotion never absorbs the
+review gap into `duration_s`); an explicitly supplied `-j/--jobs` with
+`--promote` is rejected.  `ownership-corpus-check` stays the
+incremental/projected iteration lane, now REPORT-ONLY (it never mints
+the candidate); the `check --fresh` flag is REMOVED under the pre-1.0
+one-contract rule.  check/verify/promote serialize on one coarse
+advisory lock (`build/tmp/ownership-corpus.lock`).  Contract pins in
+`lang/tests/tools/test_corpus_verify_candidate.py` (+ migrated promote
+family); lifecycle docs (`doc/ownership-corpus-gate.md`, justfile, tool
+docstrings) state the one-compile lifecycle.
+
 **Versioning:** `DRIFTC_VERSION` **0.35.0** (user-visible fix: valid
 programs move from compiler failure/traceback or silent wrong result to
 correct execution; inconsistent inferred lambdas are now rejected at the

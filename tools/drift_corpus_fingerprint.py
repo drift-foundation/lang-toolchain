@@ -12,12 +12,18 @@ Two identities:
     + version), the native link libraries (-lz, debug-lane) identity, the
     platform, the exact driftc argv template, and the NORMALIZED compile
     environment.
-  * RUN SNAPSHOT — toolchain fingerprint + the static-universe digest.  What
-    --promote compares at START and FINISH of the fresh full run.
+  * RUN SNAPSHOT — toolchain fingerprint + the static-universe digest.  The
+    compiling lanes (check/verify) compare it at START and FINISH of a run;
+    fast promotion recomputes it ONCE, passively, for candidate identity.
 
-How the two lanes use these differs by design:
-  * PROMOTE requires a stable start==end run snapshot and produces exhaustive
-    fresh evidence — the toolchain fingerprint is load-bearing there.
+How the lanes use these differs by design:
+  * VERIFY requires a stable start==end run snapshot and produces exhaustive
+    fresh evidence — the toolchain fingerprint is load-bearing there (it
+    PREBUILDS the runtime through the production authority before
+    fingerprinting).  PROMOTE probes the same identity WITHOUT building
+    anything: `toolchain_fingerprint_passive` resolves and hashes the
+    already-existing runtime artifact and fails toward a fresh verify when
+    it is absent or stale.
   * The DEVELOPER cache keys each fixture record by its CONTENT HASH alone, so a
     toolchain-fingerprint move does NOT invalidate the cache (no full rebuild);
     the toolchain composite recorded on a record is used only to CLASSIFY it as a
@@ -237,6 +243,51 @@ def prebuild_runtime(root: Path, extra_args=()) -> dict:
 	}
 
 
+def resolve_runtime_identity(root: Path, extra_args=()) -> dict:
+	"""PASSIVE twin of `prebuild_runtime` for the fast-or-fail promotion
+	path: resolve and hash the EXISTING runtime archive without ever
+	invoking the build authority.  Raises RuntimeError when the artifact is
+	absent — the caller must fail and request a fresh
+	`ownership-corpus-verify` (which prebuilds via the production
+	authority), never build here.
+
+	Staleness is CONTENT IDENTITY, not cache mtime: the archive's bytes
+	hash joins the toolchain composite alongside the compile-source/stdlib
+	digests (which cover the runtime sources), so a source change flips
+	the composite and the candidate identity check rejects — while a
+	content-identical archive with a touched mtime, or a deployed
+	read-only archive, promotes fine.  No freshness heuristic is copied
+	from the build authority."""
+	from lang.language_runtime import (runtime_archive_cache_root,
+	                                   runtime_archive_path)
+	cc = _contract()
+	variant = cc.runtime_variant(extra_args)
+	archive_path = runtime_archive_path(root, variant=variant)
+	if not archive_path.is_file():
+		raise RuntimeError(
+			f"runtime archive {archive_path} does not exist; promotion never "
+			f"builds — run `ownership-corpus-verify` first")
+	archive_sha = _file_sha256(archive_path)
+	if not _is_hex64(archive_sha):
+		# Existing-but-unreadable (or racing) artifact: fail closed rather
+		# than letting a None/garbage identity join the composite.
+		raise RuntimeError(
+			f"runtime archive {archive_path} could not be hashed; promotion "
+			f"never builds — run `ownership-corpus-verify`")
+	cache_root = runtime_archive_cache_root(root)
+	return {
+		"variant": variant,
+		"archive_relpath": str(archive_path.relative_to(cache_root))
+		                   if _is_relative_to(archive_path, cache_root)
+		                   else archive_path.name,
+		"archive_sha256": archive_sha,
+		"cache_root_settings": {
+			"DRIFT_RUNTIME_LIB_CACHE_DIR": os.environ.get("DRIFT_RUNTIME_LIB_CACHE_DIR"),
+			"DRIFT_RUNTIME_BUILD_ROOT": os.environ.get("DRIFT_RUNTIME_BUILD_ROOT"),
+		},
+	}
+
+
 def _is_relative_to(p: Path, base: Path) -> bool:
 	try:
 		p.relative_to(base)
@@ -255,11 +306,16 @@ def composite_hash(components: dict) -> str:
 	return hashlib.sha256(canonical_json(components).encode()).hexdigest()
 
 
-def collect_toolchain_components(root: Path, *, extra_args) -> dict:
-	"""Every compile-result-relevant input, ALL via the single contract
-	(side-effecting: prebuilds the runtime, runs `--version`/`-print-file-name`)."""
+def collect_toolchain_components(root: Path, *, extra_args, runtime=None) -> dict:
+	"""Every compile-result-relevant input, ALL via the single contract.
+	Side-effecting by default: PREBUILDS the runtime through the production
+	authority (verify/check) and runs read-only `--version` /
+	`-print-file-name` probes.  A caller that must never build (fast
+	promotion) passes a precomputed PASSIVE `runtime` identity from
+	`resolve_runtime_identity` instead."""
 	cc = _contract()
-	runtime = prebuild_runtime(root, extra_args)
+	if runtime is None:
+		runtime = prebuild_runtime(root, extra_args)
 	return {
 		"contract_schema": cc.CONTRACT_SCHEMA_VERSION,
 		"compile_source": _compile_source_digest(root),
@@ -277,6 +333,26 @@ def collect_toolchain_components(root: Path, *, extra_args) -> dict:
 
 def toolchain_fingerprint(root: Path, *, extra_args=(), git_rev: "str | None" = None) -> dict:
 	components = collect_toolchain_components(root, extra_args=extra_args)
+	return {
+		"schema_version": FINGERPRINT_SCHEMA_VERSION,
+		"kind": "toolchain",
+		"components": components,
+		"composite": composite_hash(components),
+		"diagnostic": {"git_rev": git_rev},
+	}
+
+
+def toolchain_fingerprint_passive(root: Path, *, extra_args=(), git_rev: "str | None" = None) -> dict:
+	"""Fingerprint the CURRENT toolchain without building anything: the
+	runtime identity comes from `resolve_runtime_identity` (existing
+	artifact only; RuntimeError when missing/unreadable — stale CONTENT
+	surfaces as a composite mismatch downstream).  Identical output shape
+	to `toolchain_fingerprint` — an unchanged tree yields the SAME
+	composite, which is exactly what fast promotion's identity check
+	needs."""
+	components = collect_toolchain_components(
+		root, extra_args=extra_args,
+		runtime=resolve_runtime_identity(root, extra_args))
 	return {
 		"schema_version": FINGERPRINT_SCHEMA_VERSION,
 		"kind": "toolchain",

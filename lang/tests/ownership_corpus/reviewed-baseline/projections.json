@@ -2311,7 +2311,7 @@
     "c3_moveout_unreachable_block": 2,
     "c3_moveout_zero_safe": 3,
     "events": 3159,
-    "fns": 1286,
+    "fns": 1285,
     "pre_post_verdict_drift": 52,
     "site_class:drop_before_overwrite_site4": 5,
     "site_class:materialized_lastuse_release": 702,

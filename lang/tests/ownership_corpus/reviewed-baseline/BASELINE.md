@@ -8,18 +8,21 @@ clean-clone seeding and exact per-fixture verification.
 
 ## Provenance
 
-Produced ONLY by `just ownership-corpus-promote`: a fresh full compile that
-EXACTLY reproduced a reviewed developer candidate (the projection handoff),
-under a stable start==end toolchain fingerprint with every hard gate at zero,
-then installed via staged writes.  CI/cert (`ownership-corpus-verify`) NEVER
-writes this baseline.  The Git commit that lands these files IS the approval;
-reviewer identity and date come from Git history.
+Produced ONLY by `just ownership-corpus-promote` (fast-or-fail, ZERO
+compiles): the complete fresh observation came from a single
+`ownership-corpus-verify` run — stable start==end toolchain fingerprint,
+every hard gate at zero — published as the digest-sealed candidate,
+reviewed, validated against the then-current tree identity, and installed
+via staged writes with the verify run's snapshot and metadata verbatim.
+CI/cert (`ownership-corpus-verify`) NEVER writes this baseline.  The Git
+commit that lands these files IS the approval; reviewer identity and date
+come from Git history.
 
 | field | value |
 |---|---|
-| driftc / ABI | **0.34.2** / **ABI 22** |
-| run snapshot composite | `8b100d170f4f34ef12217e38472d112da027ee178946f7f37a8f300c57a3bb95` |
-| toolchain composite | `59a61c8e6333ddbe61b365e4631666cfa1d257ed46b05c3e8b5c64fc338a5e33` |
+| driftc / ABI | **0.35.0** / **ABI 22** |
+| run snapshot composite | `0b9b0a242e4d8df15c80cef69a810cc612cdd98652bcb821f4bbd07d6f6c640d` |
+| toolchain composite | `d9ac0d8ea5d4fd655a84b0a2587945196b08501e0e38ad5fb29255913a9ea371` |
 | discovered fixtures | 1338 included / 49 rule-excluded |
 | counter keys | 14 |
 

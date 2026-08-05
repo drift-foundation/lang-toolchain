@@ -7,14 +7,18 @@ baseline, never a real compilation):
   developer  full-universe expectation; records keyed on fixture CONTENT HASH so
              a compiler-fingerprint move keeps old observations as PROJECTED
              (never a full rebuild); only new/edited/--select'd fixtures
-             recompile; reused successes AND failures are accounted; the
-             expectation is exported to a cache-independent handoff.
+             recompile; reused successes AND failures are accounted;
+             REPORT-ONLY (work-dir report + printed deltas — it never mints
+             the promotion candidate).  A full FRESH run is verify's job
+             (the single fresh authority; the retired --fresh lane is
+             gone).
 
-  promote    no work dir; never reads records; expectation = handoff if present
-             (error on malformed/stale), else the reviewed baseline; ONE fresh
-             full compile; exact agreement installs (byte-preserving no-op if
-             already equal), disagreement retains a fresh actual + does not
-             mutate the baseline.
+  promote    no work dir; never reads records; FAST-OR-FAIL: requires the
+             schema-2 fresh-verify candidate (digest-sealed; malformed/stale/
+             wrong-kind/projected/hard-gate is an immediate error, never a
+             baseline fallback), probes the current identity PASSIVELY (zero
+             compiles, zero builds), and installs the candidate's observation
+             verbatim (byte-preserving no-op if already equal).
 """
 from __future__ import annotations
 
@@ -81,6 +85,9 @@ class Harness:
 		                    lambda only: ([d for d in dirs if only is None or d.name in only], []))
 		monkeypatch.setattr(_audit, "_fixture_hash", lambda f: self._hashes[f.name])
 		monkeypatch.setattr(_check, "_toolchain", self._tc)
+		# Fast promotion probes identity through the PASSIVE path; in the
+		# synthetic harness both resolve to the same mocked toolchain.
+		monkeypatch.setattr(_check, "_toolchain_passive", self._tc)
 		monkeypatch.setattr(_check, "_compile_and_project", self._compile)
 		# redirect the fixed handoff/actual paths into the tmp tree
 		monkeypatch.setattr(_check, "HANDOFF_PATH", tmp_path / "handoff.json")
@@ -180,21 +187,6 @@ def test_select_forces_recompile(tmp_path, monkeypatch):
 	assert h.compiles == ["a"]                           # forced despite unchanged
 
 
-def test_fresh_forces_full_recompile_ignoring_cache(tmp_path, monkeypatch):
-	names = ["a", "b", "c"]
-	h = Harness(monkeypatch, tmp_path, _mk_fixtures(tmp_path, names), _projs(names))
-	work = tmp_path / "work"
-	_check.run_check(work, select=set(), jobs=2, extra=[], baseline=None)
-	assert len(h.compiles) == 3
-	h.seed = "tc-CHANGED"                       # would otherwise all be projected/reused
-	h.compiles.clear()
-	assert _check.run_check(work, select=set(), jobs=2, extra=[], baseline=None,
-	                        fresh=True) == 0
-	assert sorted(h.compiles) == names          # --fresh recompiled everything
-	rep = json.loads((work / "report.json").read_text())
-	assert rep["observed"] == names and rep["projected"] == []
-
-
 def test_reused_failures_are_accounted(tmp_path, monkeypatch):
 	names = ["a", "b"]
 	h = Harness(monkeypatch, tmp_path, _mk_fixtures(tmp_path, names),
@@ -209,22 +201,23 @@ def test_reused_failures_are_accounted(tmp_path, monkeypatch):
 	assert rep["compile_failed"] == ["b"] and "b" in rep["projected"]   # failure accounted as projected
 
 
-def test_handoff_exported_and_cache_independent(tmp_path, monkeypatch):
+def test_check_is_report_only_never_writes_candidate(tmp_path, monkeypatch):
+	# The incremental lane may carry PROJECTED (stale) results, which are
+	# never fresh evidence: check writes its work-dir report but must not
+	# mint (or overwrite) the canonical promotion candidate — verify is
+	# the sole producer.
 	names = ["a", "b"]
 	h = Harness(monkeypatch, tmp_path, _mk_fixtures(tmp_path, names), _projs(names))
 	work = tmp_path / "work"
 	_check.run_check(work, select=set(), jobs=2, extra=[], baseline=None)
-	handoff = json.loads(_check.HANDOFF_PATH.read_text())
-	assert handoff["schema_version"] == _check.HANDOFF_SCHEMA_VERSION
-	assert sorted(handoff["projections"]) == names
-	assert handoff["universe"]["compiled_ok"] == names
-	assert handoff["origin"]["work_dir"] == str(work)   # originating dir recorded diagnostically
+	assert (work / "report.json").is_file()
+	assert not _check.HANDOFF_PATH.exists()
 
 
 def test_dev_lane_universe_drift_is_informational_not_fatal(tmp_path, monkeypatch):
 	"""The developer lane prints baseline deltas but never fails on them — a
-	changed universe is expected during development, and the handoff is still
-	exported."""
+	changed universe is expected during development.  It stays report-only:
+	no canonical candidate is minted (verify is the sole producer)."""
 	dirs = _mk_fixtures(tmp_path, ["a", "b"])
 	Harness(monkeypatch, tmp_path, dirs, _projs(["a", "b"]))
 	# baseline covers a DIFFERENT universe (only 'a') -> _compare would return 2
@@ -234,7 +227,8 @@ def test_dev_lane_universe_drift_is_informational_not_fatal(tmp_path, monkeypatc
 	_audit._emit_run(base, _audit._universe_dict(only_a, []), ["a"], [], {"cnt": 1}, 0.0, 1)
 	work = tmp_path / "work"
 	assert _check.run_check(work, select=set(), jobs=2, extra=[], baseline=base) == 0
-	assert _check.HANDOFF_PATH.is_file()             # handoff still exported
+	assert (work / "report.json").is_file()
+	assert not _check.HANDOFF_PATH.exists()          # report-only: no candidate
 
 
 def test_clean_clone_seeds_from_baseline_no_compile(tmp_path, monkeypatch):
@@ -264,19 +258,27 @@ def _make_baseline(tmp_path, dirs, projections, failed, seed="tc0", name="baseli
 
 
 def _write_handoff(path, dirs, projections, failed, seed="tc0"):
+	# Schema-2 fresh-verify candidate (kind + full snapshot + verbatim
+	# run_meta + payload digest seal).
 	universe = _audit._universe_dict(dirs, [])
 	tc = _tc_for(seed)
 	snap = _check._snapshot(tc, universe)
-	handoff = {
+	payload = {
 		"schema_version": _check.HANDOFF_SCHEMA_VERSION,
+		"kind": _check.CANDIDATE_KIND,
 		"origin": {"work_dir": "x", "toolchain_composite": tc["composite"],
 		           "run_snapshot_composite": snap["composite"]},
+		"snapshot": snap,
+		"run_meta": {"started_unix": 111.0, "duration_s": 42.5, "jobs": 2,
+		             "repo_root": "x", "python": "3.13.7"},
 		"universe": {"inclusion_rule": universe["inclusion_rule"], "fixtures": universe["fixtures"],
 		             "excluded": universe["excluded"], "compiled_ok": sorted(projections), "failed": sorted(failed)},
 		"projections": {k: dict(sorted(v.items())) for k, v in projections.items()},
 		"counters": _audit._merge_counters(projections.values()),
 		"observed": sorted(projections) + sorted(failed), "projected": [],
 	}
+	handoff = {**payload, "payload_sha256": hashlib.sha256(
+		_fp.canonical_json(payload).encode()).hexdigest()}
 	path.write_text(json.dumps(handoff))
 
 
@@ -288,7 +290,7 @@ def test_promote_rejects_handoff_from_different_toolchain(tmp_path, monkeypatch)
 	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [], seed="tc-OLD-COMPILER")
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2
+	assert _check.run_promote(base, extra=[]) == 2
 	assert h.compiles == []                                       # rejected before compiling
 
 
@@ -299,7 +301,7 @@ def test_promote_requires_handoff_no_baseline_fallback(tmp_path, monkeypatch):
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
 	before = (base / "aggregate.json").read_bytes()
 	assert not _check.HANDOFF_PATH.exists()
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2        # no handoff -> error
+	assert _check.run_promote(base, extra=[]) == 2        # no handoff -> error
 	assert h.compiles == []                                       # failed before compiling
 	assert (base / "aggregate.json").read_bytes() == before       # baseline untouched
 
@@ -311,7 +313,7 @@ def test_promote_byte_preserving_noop_when_handoff_equals_baseline(tmp_path, mon
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
 	before = {f.name: (base / f.name).read_bytes() for f in base.iterdir() if f.is_file()}
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0        # fresh == handoff == baseline
+	assert _check.run_promote(base, extra=[]) == 0        # fresh == handoff == baseline
 	after = {f.name: (base / f.name).read_bytes() for f in base.iterdir() if f.is_file()}
 	assert before == after                                        # byte-preserving no-op
 
@@ -322,24 +324,11 @@ def test_promote_handoff_expectation_installs(tmp_path, monkeypatch):
 	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 5}), "b": (True, {"cnt": 2})})
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])   # OLD: a=1
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 5}, "b": {"cnt": 2}}, [])  # reviewed: a=5
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
-	assert len(h.compiles) == 2                                   # full universe, once
+	assert _check.run_promote(base, extra=[]) == 0
+	assert h.compiles == []                                       # fast promote: ZERO compiles
 	agg = json.loads((base / "aggregate.json").read_text())
 	assert agg["counters"] == {"cnt": 7}
 	assert (base / "projections.json").is_file()                 # per-fixture retained for seeding
-
-
-def test_promote_unexpected_flip_fails_without_mutation(tmp_path, monkeypatch):
-	names = ["a", "b"]
-	dirs = _mk_fixtures(tmp_path, names)
-	# handoff expects a=5,b=2 but the fresh compile also flips b to 9
-	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 5}), "b": (True, {"cnt": 9})})
-	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
-	before = (base / "aggregate.json").read_bytes()
-	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 5}, "b": {"cnt": 2}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 1
-	assert (base / "aggregate.json").read_bytes() == before      # baseline untouched
-	assert (_check.ACTUAL_DIR / "aggregate.json").is_file()      # fresh actual retained separately
 
 
 def test_promote_stale_handoff_fails_not_baseline_fallback(tmp_path, monkeypatch):
@@ -360,7 +349,7 @@ def test_promote_stale_handoff_fails_not_baseline_fallback(tmp_path, monkeypatch
 		"counters": {"cnt": 4}, "observed": ["a", "b", "zzz"], "projected": [],
 	}
 	_check.HANDOFF_PATH.write_text(json.dumps(stale))
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2       # stale handoff = error
+	assert _check.run_promote(base, extra=[]) == 2       # stale handoff = error
 	assert h.compiles == []                                      # failed before compiling
 
 
@@ -370,17 +359,8 @@ def test_promote_malformed_handoff_fails(tmp_path, monkeypatch):
 	h = Harness(monkeypatch, tmp_path, dirs, _projs(names))
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
 	_check.HANDOFF_PATH.write_text("{ not json")
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2
+	assert _check.run_promote(base, extra=[]) == 2
 	assert h.compiles == []
-
-
-def test_promote_start_finish_mismatch_aborts(tmp_path, monkeypatch):
-	names = ["a", "b"]
-	dirs = _mk_fixtures(tmp_path, names)
-	h = Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
-	h.finish_seed = "tc-SHIFTED"
-	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2
 
 
 def test_promote_hard_gate_fails(tmp_path, monkeypatch):
@@ -390,7 +370,8 @@ def test_promote_hard_gate_fails(tmp_path, monkeypatch):
 	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {gate: 1})})
 	base = _make_baseline(tmp_path, dirs, {"a": {gate: 1}}, [])
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {gate: 1}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 1       # nonzero hard gate
+	assert _check.run_promote(base, extra=[]) == 2       # gate-bearing candidate is not promotable
+	assert not (base / ".baseline.staging").exists()
 
 
 # ── consistency + CLI discipline ─────────────────────────────────────
@@ -411,7 +392,7 @@ def test_expectation_consistency_rejects_bad_merge(tmp_path, monkeypatch):
 	}
 	_check.HANDOFF_PATH.write_text(json.dumps(handoff))
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 2
+	assert _check.run_promote(base, extra=[]) == 2
 
 
 def test_reject_nonpositive_jobs():
@@ -438,7 +419,7 @@ def test_staged_install_leaves_no_staging_dir(tmp_path, monkeypatch):
 	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 5})})
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 5}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _check.run_promote(base, extra=[]) == 0
 	assert not (base.parent / f".{base.name}.staging").exists()
 	# post-install bundle reloads + validates exactly (incl per-fixture projections)
 	installed = _check._read_baseline(base)
@@ -447,17 +428,35 @@ def test_staged_install_leaves_no_staging_dir(tmp_path, monkeypatch):
 
 # ── exact handoff-schema validator ───────────────────────────────────
 
+def _seal(h: dict) -> dict:
+	# Recompute the payload digest after a deliberate mutation so the
+	# targeted validation branch (not the digest seal) is exercised.
+	payload = {k: v for k, v in h.items() if k != "payload_sha256"}
+	return {**payload, "payload_sha256": hashlib.sha256(
+		_fp.canonical_json(payload).encode()).hexdigest()}
+
+
 def _valid_handoff() -> dict:
-	return {
+	# The embedded snapshot must be GENUINELY valid: the validator now
+	# routes it through _fp.validate_fingerprint (recomputed composites).
+	universe = {"inclusion_rule": "r",
+	            "fixtures": [{"name": "a", "sha256": _hx("a")}, {"name": "b", "sha256": _hx("b")}],
+	            "excluded": [], "compiled_ok": ["a"], "failed": ["b"]}
+	tc = _tc_for("tc0")
+	snap = _check._snapshot(tc, {k: universe[k] for k in ("inclusion_rule", "fixtures", "excluded")})
+	return _seal({
 		"schema_version": _check.HANDOFF_SCHEMA_VERSION,
-		"origin": {"work_dir": "w", "toolchain_composite": "a" * 64, "run_snapshot_composite": "b" * 64},
-		"universe": {"inclusion_rule": "r",
-		             "fixtures": [{"name": "a", "sha256": _hx("a")}, {"name": "b", "sha256": _hx("b")}],
-		             "excluded": [], "compiled_ok": ["a"], "failed": ["b"]},
+		"kind": _check.CANDIDATE_KIND,
+		"origin": {"work_dir": "w", "toolchain_composite": tc["composite"],
+		           "run_snapshot_composite": snap["composite"]},
+		"snapshot": snap,
+		"run_meta": {"started_unix": 1.0, "duration_s": 2.0, "jobs": 2,
+		             "repo_root": "w", "python": "3.13.7"},
+		"universe": universe,
 		"projections": {"a": {"cnt": 3}},
 		"counters": {"cnt": 3},
 		"observed": ["a", "b"], "projected": [],
-	}
+	})
 
 
 def test_valid_handoff_accepted():
@@ -478,12 +477,36 @@ def test_valid_handoff_accepted():
 	(lambda h: h.update(counters={"cnt": 99}), "merge"),
 	(lambda h: h["projections"].update(b={"cnt": 1}), "compiled_ok bucket"),
 	(lambda h: h.update(observed="a,b"), "list of strings"),
+	(lambda h: h.update(kind="developer_check"), "candidate kind"),
+	(lambda h: h["origin"].update(run_snapshot_composite="c" * 64), "disagree"),
+	(lambda h: h["run_meta"].pop("duration_s"), "verify-run metadata"),
+	# Resealed nested tamper: a mutated toolchain component under the OLD
+	# composite fails the central fingerprint authority, not the seal.
+	(lambda h: h["snapshot"]["toolchain"]["components"].update(stdlib="0" * 64), "not a valid run snapshot"),
+	(lambda h: h["snapshot"].pop("static_universe_digest"), "not a valid run snapshot"),
+	# run_meta VALUE validation (booleans/non-finite/negative/nonpositive).
+	(lambda h: h["run_meta"].update(started_unix=True), "verify-run metadata"),
+	(lambda h: h["run_meta"].update(duration_s=float("inf")), "verify-run metadata"),
+	(lambda h: h["run_meta"].update(duration_s=-1.0), "verify-run metadata"),
+	(lambda h: h["run_meta"].update(jobs=0), "verify-run metadata"),
+	(lambda h: h["run_meta"].update(python=""), "verify-run metadata"),
 ])
 def test_invalid_handoffs_rejected(mutate, needle):
 	h = _valid_handoff()
 	mutate(h)
-	problem = _check._validate_handoff(h)
+	problem = _check._validate_handoff(_seal(h))
 	assert problem is not None and needle in problem
+
+
+def test_corrupted_candidate_digest_rejected():
+	# WITHOUT resealing: a semantic payload mutation fails on the digest
+	# seal before deeper interpretation (the seal covers the canonical
+	# PARSED payload — whitespace/key-order re-serialization is
+	# intentionally digest-neutral).
+	h = _valid_handoff()
+	h["counters"] = {"cnt": 4}
+	problem = _check._validate_handoff(h)
+	assert problem is not None and "digest" in problem
 
 
 def test_handoff_malformed_nested_does_not_raise():
@@ -535,7 +558,7 @@ def test_promote_upgrades_legacy_baseline(tmp_path, monkeypatch):
 	_audit._emit_run(base, _audit._universe_dict(dirs, []), ["a"], [], {"cnt": 1}, 0.0, 1)
 	assert not (base / "projections.json").exists()
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _check.run_promote(base, extra=[]) == 0
 	assert (base / "projections.json").is_file()               # upgraded
 	assert (base / "fingerprint.json").is_file()
 
@@ -567,7 +590,10 @@ def _baseline_files(base):
 	return {str(p.relative_to(base)): p.read_bytes() for p in base.rglob("*") if p.is_file()}
 
 
-def test_verify_matches_baseline_no_handoff(tmp_path, monkeypatch):
+def test_verify_match_is_exit_0_baseline_byte_identical(tmp_path, monkeypatch):
+	# Exact match: exit 0 and the committed baseline stays byte-identical.
+	# (The candidate this run also publishes is pinned separately in
+	# test_corpus_verify_candidate.py.)
 	dirs = _mk_fixtures(tmp_path, ["a", "b"])
 	Harness(monkeypatch, tmp_path, dirs, {"a": (True, {"cnt": 1}), "b": (True, {"cnt": 2})})
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [])
@@ -588,7 +614,9 @@ def test_verify_ignores_handoff(tmp_path, monkeypatch, handoff):
 		_check.HANDOFF_PATH.write_text("{ not json")
 	else:  # stale (old toolchain)
 		_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}, "b": {"cnt": 2}}, [], seed="tc-OLD")
-	# verify checks against the BASELINE and ignores the handoff entirely
+	# verify compares against the BASELINE only — the pre-existing handoff
+	# is never consumed as comparison authority (it is invalidated at run
+	# start and republished from THIS run's observation)
 	assert _check.run_verify(base, jobs=2, extra=[]) == 0
 
 
@@ -647,7 +675,7 @@ def test_promote_missing_fingerprint_forces_install(tmp_path, monkeypatch):
 	_check._atomic_json(base / "projections.json", {"a": {"cnt": 1}})
 	assert not (base / "fingerprint.json").exists()
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _check.run_promote(base, extra=[]) == 0
 	assert (base / "fingerprint.json").is_file()          # install created it
 
 
@@ -659,7 +687,7 @@ def test_promote_stale_fingerprint_forces_install(tmp_path, monkeypatch):
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [], seed="tc-OLD")
 	old_fp = json.loads((base / "fingerprint.json").read_text())["composite"]
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _check.run_promote(base, extra=[]) == 0
 	new_fp = json.loads((base / "fingerprint.json").read_text())["composite"]
 	assert new_fp != old_fp                               # refreshed to current toolchain
 
@@ -670,7 +698,7 @@ def test_promote_current_fingerprint_is_true_noop(tmp_path, monkeypatch):
 	base = _make_baseline(tmp_path, dirs, {"a": {"cnt": 1}}, [])       # fingerprint == current
 	_write_handoff(_check.HANDOFF_PATH, dirs, {"a": {"cnt": 1}}, [])
 	before = _baseline_files(base)
-	assert _check.run_promote(base, jobs=2, extra=[]) == 0
+	assert _check.run_promote(base, extra=[]) == 0
 	assert _baseline_files(base) == before               # true byte-preserving no-op
 
 

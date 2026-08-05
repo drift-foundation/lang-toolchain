@@ -1,0 +1,64 @@
+Reviewer verification of K's session-local corpus evidence
+Timestamp: 2026-08-05T15:05:10Z
+
+Evidence source inspected read-only:
+/tmp/claude-1000/-home-sl-src-drift-lang/e4c1d7fc-641e-4ef2-a914-5b3ac936ddf8/scratchpad/corpus
+
+Fresh extraction of sorted `record == "fn"` names:
+
+  baseline commit 2b81980d: 1286
+  current acb8c4ab:          1285
+  f150cbce:                  1286
+  0c9413dd:                  1285
+
+`comm -3` produced exactly one name for both baseline -> current and
+f150cbce -> 0c9413dd, and no names for 0c9413dd -> current:
+
+  std.core::std.core.arc.Arc<T>::Borrow<T>::borrow__inst__703503d992a3c867
+
+Verbose-audit JSONL SHA-256:
+
+  336b99ef1e34c0caa83b79a69e03461f30d6d36b4bc92fd910dcf4e3b7d1ff70  base.jsonl
+  489c36b8b37fe6bce507a5dcc57d5145aeb3a438c492e0fa12eb6ee1c5448232  current.jsonl
+  489c36b8b37fe6bce507a5dcc57d5145aeb3a438c492e0fa12eb6ee1c5448232  current2.jsonl
+  336b99ef1e34c0caa83b79a69e03461f30d6d36b4bc92fd910dcf4e3b7d1ff70  f150cbce.jsonl
+  489c36b8b37fe6bce507a5dcc57d5145aeb3a438c492e0fa12eb6ee1c5448232  0c9413dd.jsonl
+
+Thus the full verbose audit is byte-identical baseline == f150cbce and
+current == 0c9413dd; a second current compile is also byte-identical.
+
+The baseline JSONL record for the removed function is:
+
+  [drift:string_arc_audit] {"events": 0, "fn": "std.core::std.core.arc.Arc<T>::Borrow<T>::borrow__inst__703503d992a3c867", "record": "fn"}
+
+LLVM inventory checks:
+
+  baseline definition count for the symbol: 1
+  baseline call count for the symbol:       0
+  current mention count for the symbol:     0
+
+The baseline definition begins at fixture_base.ll:113060 as a
+`define linkonce_odr` function. Both captured fixture binaries returned exit 0.
+
+Fixture artifact SHA-256:
+
+  3279e58df7c7b3a1d51b10220deccbc20f94f1a1e372de40ec7c12a6663b31e2  fixture_base
+  1009cd4b407730f5b12ee7313262f15c80fd5323542a327f58c8aa5b6402337e  fixture_current
+  cfd39299a362cba0de29011d7a8bf5cc262208a59b4f4ba3cbfd3fe1d100bb3d  fixture_base.ll
+  8f44757ccb2968cb798c0effd2e55f844dca157996d3b616cd6059c2a9f718e0  fixture_current.ll
+
+Static attribution checked in commit 0c9413dd:
+
+- `TypeChecker._owned_callsite_ids` walks the finalized body.
+- `TypedFn.call_info_by_callsite_id` and
+  `TypedFn.instantiations_by_callsite_id` retain only finalized-body-owned
+  callsite IDs.
+- The live maps remain available for deferred hidden-lambda snapshots.
+- Hidden lambdas independently re-check and `_queue_instantiations` on their
+  own `TypedFn`, so required nested-body instantiations still enter emission.
+- `test_nested_lambda_callinfo_ownership.py` pins extracted-body partitioning,
+  parent/extracted coexistence, IIFE retention, full compile/run behavior, and
+  the absence of finalized-parent orphans.
+
+Conclusion supported by this evidence: the removed Arc Borrow monomorph was a
+dead parent-side-table leak, not a callable body removed from the program.

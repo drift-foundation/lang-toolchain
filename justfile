@@ -145,7 +145,8 @@ perf-protocols:
 # compile-audit against the checked-in reviewed baseline
 # (lang/tests/ownership_corpus/reviewed-baseline/, provenance in BASELINE.md).
 # Deliberately NOT part of `just test`.  Fast PROJECTIONS during development;
-# read-only FRESH VERIFICATION in CI; explicit MANUAL re-baseline.
+# FRESH VERIFICATION + candidate production in one run (tracked baseline
+# stays read-only); explicit MANUAL re-baseline.
 #
 #   just ownership-corpus-check [<dir>]
 #       Fast developer lane (default work dir build/tmp/ownership-corpus-work).
@@ -153,30 +154,36 @@ perf-protocols:
 #       projections; recompiles only new / source-edited / `--select`ed
 #       fixtures; a compiler-fingerprint move keeps old observations PROJECTED
 #       (never a full rebuild).  Reused successes AND failures are accounted
-#       (observed vs projected).  Exports the local candidate to the
-#       cache-independent handoff build/tmp/ownership-corpus-projection.json.
-#       The handoff is not authority and never changes the committed baseline.
+#       (observed vs projected).  REPORT-ONLY: writes its work-dir report and
+#       prints projected deltas; it never mints the promotion candidate
+#       (only `ownership-corpus-verify` does).
 #
-#   just ownership-corpus-verify            (CI / certify — the ONLY corpus gate)
-#       Read-only.  IGNORES the developer cache AND the handoff entirely.  One
-#       fresh full-universe compile compared EXACTLY to the committed reviewed
+#   just ownership-corpus-verify            (CI / certify gate AND candidate producer)
+#       IGNORES the developer cache and never CONSUMES the handoff (a
+#       pre-existing candidate is invalidated up front).  One fresh
+#       full-universe compile compared EXACTLY to the committed reviewed
 #       baseline (inclusion rule, hashes, exclusions, buckets, every per-fixture
-#       projection, aggregate, zero hard gates).  Fails loudly on any drift and
-#       NEVER writes a baseline file — a golden clean clone passes with zero
-#       tracked diffs.
+#       projection, aggregate, zero hard gates).  Every complete, stable,
+#       zero-hard-gate observation republishes the promotion candidate —
+#       exact matches included; hard-gate/aborted runs publish nothing.
+#       Absent baseline = bootstrap (initial candidate).  Fails loudly on any
+#       drift and NEVER writes a baseline file — a golden clean clone passes
+#       with zero tracked diffs.  Discovery-to-install is exactly ONE full
+#       compile — this one; promote validates and installs with zero.
 #
-#   just ownership-corpus-promote           (manual maintainer re-baseline)
-#       Deliberate.  REQUIRES the projection handoff (missing/malformed/stale is
-#       an error — never falls back to the baseline); never reads developer
-#       records.  One fresh full compile that must EXACTLY reproduce the
-#       reviewed candidate, then installs via staged writes (byte-preserving
-#       no-op when already equal).  On disagreement it does NOT mutate the
-#       baseline and retains the fresh actual for diagnosis.  NEVER wired into
-#       CI / just test / just certify.
+#   just ownership-corpus-promote           (fast-or-fail install; ZERO compiles)
+#       Deliberate.  REQUIRES the fresh-verify candidate (missing/malformed/
+#       corrupt/wrong-kind/projected/hard-gate/stale is an immediate error —
+#       never a baseline fallback, never a compile; accepts no worker count).
+#       Validates the candidate (schema, digest seal, producer kind,
+#       exhaustive observation), recomputes the CURRENT snapshot (source
+#       hashing only) and requires exact identity, then installs the
+#       candidate's observation via staged writes with verify's snapshot and
+#       measured metadata VERBATIM (byte-preserving no-op when already
+#       equal).  NEVER wired into CI / just test / just certify.
 # Args pass straight through to the tool (argparse sorts the optional <dir>
-# positional from flags like --fresh / --select).  Examples:
+# positional from flags like --select).  Examples:
 #   just ownership-corpus-check                    # default work dir
-#   just ownership-corpus-check --fresh            # force a full recompile
 #   just ownership-corpus-check build/tmp/altwork  # override the work dir
 ownership-corpus-check *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
@@ -188,12 +195,13 @@ ownership-corpus-verify *ARGS:
 
 ownership-corpus-promote *ARGS:
 	PYTHONPATH=. ./.venv/bin/python3 tools/drift_corpus_check.py \
-		--promote -j "${DRIFT_TEST_JOBS:-{{PYTEST_AUTO_JOBS}}}" {{ARGS}}
+		--promote {{ARGS}}
 
 # ── Certification entrypoint ─────────────────────────────────────────
-# The ownership corpus EXACTLY ONCE, read-only: a fresh full compile VERIFIED
-# against the checked-in reviewed baseline (clean tree -> zero tracked diffs).
-# Never promotes/installs. 
+# The ownership corpus EXACTLY ONCE: a fresh full compile VERIFIED against
+# the checked-in reviewed baseline (clean tree -> zero tracked diffs; the
+# tracked baseline stays read-only — only the untracked build/tmp candidate
+# is republished).  Never promotes/installs.
 certify: ownership-corpus-verify
 	@echo "lang certify: Success."
 

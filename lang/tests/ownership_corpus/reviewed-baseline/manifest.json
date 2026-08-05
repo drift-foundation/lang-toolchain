@@ -1,7 +1,7 @@
 {
   "environment": {
     "abi": "22",
-    "driftc_version": "0.34.2",
+    "driftc_version": "0.35.0",
     "tool_version": "1.7.1"
   },
   "universe": {
@@ -1868,7 +1868,7 @@
       },
       {
         "name": "autoborrow_owned_rvalue_field_method_drops_once",
-        "sha256": "e0aef735bf5de196f03f288269c25a800f38f9619ec10925e8964ea376541aaf"
+        "sha256": "fd7aaea1a4fdcbfa257a580d8bab95783a606f020d5a294be3b4f141d165eab7"
       },
       {
         "name": "bad_index",

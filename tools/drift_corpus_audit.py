@@ -298,7 +298,8 @@ def _stable_json(obj) -> str:
 
 def _emit_run(run_dir: Path, universe: dict,
               compiled_ok: list[str], failed: list[str],
-              counters: dict[str, int], started: float, jobs: int) -> None:
+              counters: dict[str, int], started: float, jobs: int,
+              metadata: "dict | None" = None) -> None:
 	"""Write the manifest/aggregate/metadata run files from an ALREADY-CAPTURED
 	universe dict (the resumable check passes the exact universe it validated at
 	the start of the run, so the manifest can never describe re-hashed source
@@ -324,7 +325,10 @@ def _emit_run(run_dir: Path, universe: dict,
 			"tool_version": TOOL_VERSION,
 		},
 	}))
-	(run_dir / "metadata.json").write_text(_stable_json({
+	# `metadata` (when given) is installed VERBATIM: fast promotion passes
+	# the verify run's measured metadata so the review gap never leaks into
+	# duration_s.
+	(run_dir / "metadata.json").write_text(_stable_json(metadata if metadata is not None else {
 		"started_unix": started,
 		"duration_s": round(time.time() - started, 1),
 		"jobs": jobs,

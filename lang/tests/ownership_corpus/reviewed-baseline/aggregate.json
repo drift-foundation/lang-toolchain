@@ -7,7 +7,7 @@
     "c3_moveout_unreachable_block": 1942,
     "c3_moveout_zero_safe": 2998,
     "events": 3099996,
-    "fns": 1237062,
+    "fns": 1237061,
     "pre_post_verdict_drift": 50499,
     "site_class:drop_before_overwrite_site4": 4859,
     "site_class:materialized_lastuse_release": 681954,
