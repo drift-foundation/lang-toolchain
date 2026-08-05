@@ -919,8 +919,13 @@ class CallResolverContext:
 	# diagnostics sink, and the node/callsite/binding allocator cells —
 	# the resolver never enumerates state channels itself.  Called as
 	# `begin_state_txn(probe_expr)`; returns an object with `commit()` /
-	# `rollback()`.  None → the deferral falls back to the legacy silent
-	# bail (no probe).
+	# `rollback()` / `rollback_report_outer()` (roll back AND report
+	# whether an enclosing probe transaction remains open — the
+	# pending-lambda barrier's nested/outermost decision; depth stays
+	# owned by the transaction layer).  A transaction lacking
+	# `rollback_report_outer` makes the barrier handler FAIL CLOSED
+	# (propagate, never silently convert).  None → the deferral falls back
+	# to the legacy silent bail (no probe).
 	begin_state_txn: Callable[[object], object] | None = None
 
 
@@ -4715,17 +4720,74 @@ _DEFER_PROBE_SAFE_NODES = (
 	H.HMapLiteral, H.HMapEntry, H.HArrayLiteral, H.HUnsafeExpr,
 )
 
+class PendingLambdaBarrier(BaseException):
+	"""Private structured transaction-barrier signal (NOT a diagnostic).
+
+	Raised by the pending-lambda owner (`type_checker.PendingLambdaOwner`)
+	when a mutating pending-lambda operation — stamp/type/pop/rebind or
+	global spec publication — would run while a `CheckerStateTxn` probe is
+	open.  Pending resolution mutates state OUTSIDE the transaction owner
+	(the stored HLambda elsewhere in the function body, frame binding
+	dicts, the checker-global `_lambda_fn_specs` registry), so a rollback
+	would leak it; the barrier forces the probe to give up BEFORE any such
+	mutation.
+
+	Handling contract (probe machinery below): the probe that catches it
+	rolls back; a NESTED probe re-raises so the signal reaches the
+	OUTERMOST active probe, which alone converts it into the ordinary
+	silent expected-type deferral — no diagnostic, no
+	`_defer_probe_hard_error` marker, no `rollbacks_exception` increment.
+	Derives from BaseException deliberately so broad `except Exception`
+	guards in typing code cannot swallow it.
+	"""
+
+
 # Probe frequency / outcome counters (perf + behavior measurement; read by
 # tools and the corpus timing harness — cheap unconditional increments).
+# Barrier counters are split so corpus deltas stay interpretable:
+#   deferrals_pending_barrier — OUTERMOST probes that converted the
+#     pending-lambda barrier into the ordinary silent deferral (one per
+#     affected candidate; the retry with expected context follows);
+#   pending_barrier_nested — inner-probe plumbing re-raises only (never a
+#     user-visible outcome by itself).
 _DEFER_PROBE_STATS = {
 	"probes": 0,
 	"commits_complete": 0,
 	"commits_hard_error": 0,
 	"rollbacks_needs_expected": 0,
 	"rollbacks_exception": 0,
+	"deferrals_pending_barrier": 0,
+	"pending_barrier_nested": 0,
 	"gated_shape": 0,
 	"legacy_no_txn": 0,
 }
+
+
+def _consume_pending_barrier(txn: object) -> bool:
+	"""One probe's `PendingLambdaBarrier` handling (the production catch
+	path delegates here so the branch is directly testable).
+
+	Rolls the transaction back and returns True when the caller is the
+	OUTERMOST probe and must convert the barrier into the ordinary silent
+	expected-type deferral (counted `deferrals_pending_barrier`), or
+	False when the caller must RE-RAISE: either a NESTED probe (counted
+	`pending_barrier_nested`) or — FAIL CLOSED — a transaction object
+	that does not implement `rollback_report_outer()`, in which case the
+	plain rollback runs and NO counter moves (the barrier propagates
+	rather than being silently converted on a guessed depth).  The
+	nested/outermost decision itself is owned by the transaction layer
+	(`CheckerStateTxn.rollback_report_outer`), never inferred here from
+	private fields.
+	"""
+	_rb_report = getattr(txn, "rollback_report_outer", None)
+	if _rb_report is None:
+		txn.rollback()
+		return False
+	if _rb_report():
+		_DEFER_PROBE_STATS["pending_barrier_nested"] += 1
+		return False
+	_DEFER_PROBE_STATS["deferrals_pending_barrier"] += 1
+	return True
 
 
 def _defer_probe_shape_safe(expr: object) -> bool:
@@ -6572,6 +6634,17 @@ def resolve_call_expr(
 			expr.defer_infer_diag = False
 			try:
 				_probe_result = resolve_call_expr(ctx, expr, None, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
+			except PendingLambdaBarrier:
+				# Pending-lambda transaction barrier: the candidate reached a
+				# mutating pending-lambda resolution.  The shared authority
+				# below rolls THIS probe back and decides nested/outermost;
+				# True → outermost, converted to the ordinary silent
+				# expected-type deferral (no diagnostic, no hard-error
+				# marker); False → propagate to the enclosing probe (or fail
+				# closed on an unsupported transaction object).
+				if _consume_pending_barrier(_txn):
+					return record_expr(expr, ctx.unknown_ty)
+				raise
 			except BaseException:
 				_DEFER_PROBE_STATS["rollbacks_exception"] += 1
 				_txn.rollback()

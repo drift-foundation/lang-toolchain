@@ -227,7 +227,7 @@ from lang.driftc.traits.linked_world import (
 	link_trait_worlds,
 )
 from lang.driftc.method_resolver import MethodResolution, ResolutionError
-from lang.driftc.checker.call_resolver import MethodCallResult, _try_wrap_arg_for_callback_field, make_call_ctx, make_method_ctx, make_resolver_ctx, resolve_call_expr, resolve_method_call, resolve_qualified_member_call, resolve_qualified_member_ufcs
+from lang.driftc.checker.call_resolver import MethodCallResult, PendingLambdaBarrier, _try_wrap_arg_for_callback_field, make_call_ctx, make_method_ctx, make_resolver_ctx, resolve_call_expr, resolve_method_call, resolve_qualified_member_call, resolve_qualified_member_ufcs
 from lang.driftc.parser import ast as parser_ast
 from lang.driftc.traits.solver import (
 	Env as TraitEnv,
@@ -564,6 +564,19 @@ class CheckerStateTxn:
 		retained for any enclosing transaction's rollback."""
 		self._close()
 
+	def rollback_report_outer(self) -> bool:
+		"""Pending-lambda barrier support: roll THIS transaction back and
+		report whether an ENCLOSING probe transaction remains open.
+
+		This is the nested/outermost decision for `PendingLambdaBarrier`
+		handling, owned by the transaction layer (the resolver must not
+		infer nesting by reaching through private fields): True → the
+		caller is a nested probe and must propagate the barrier; False →
+		the caller is the outermost probe and converts it to the ordinary
+		silent expected-context deferral."""
+		self.rollback()
+		return self._state._txn_depth > 0
+
 	def rollback(self) -> None:
 		"""NEEDS_EXPECTED / exception: restore owned tables (reverse undo
 		replay), allocator cells, and the probed HIR subtree in place."""
@@ -588,6 +601,83 @@ class CheckerStateTxn:
 		st._txn_depth -= 1
 		if st._txn_depth == 0:
 			st._undo = None
+
+
+class PendingLambdaOwner:
+	"""Explicit owner of a function's pending (deferred) stored lambdas.
+
+	One instance per `check_function` frame.  EVERY pending-lambda state
+	transition — registration at the storing `HLet`, exact-binding
+	resolution at the first `HCall`/`HInvoke` (and any future value-use
+	totalization), retirement, and the end-of-function drain — routes
+	through this owner; the backing map is private, so a direct pop/write
+	is structurally unavailable to consumers.
+
+	The owner is the MUTATION-SITE TRANSACTION BARRIER for speculative
+	call probes (`CheckerStateTxn`): resolving a pending lambda mutates
+	state a probe rollback cannot restore — the stored HLambda node
+	elsewhere in the function body (outside the probed subtree's HIR
+	snapshot), the plain frame dicts (`binding_types`,
+	`binding_for_var`), and the checker-global `_lambda_fn_specs`
+	registry (whose spec retains the live call-info map).  Proven by the
+	forcing audit in the pending-lambda-probe-rollback finding.  Every
+	MUTATING entry point therefore raises `PendingLambdaBarrier` while a
+	probe transaction is active — BEFORE the external HLambda is stamped,
+	typed, popped, rebound, or published.  Read-only `peek` stays
+	barrier-free.  A missing/None `txn_active` fails CLOSED (barrier
+	assumed inactive only when explicitly told so — construction wires
+	the live owner predicate).
+	"""
+
+	__slots__ = ("_by_binding", "_txn_active")
+
+	def __init__(self, txn_active: "Callable[[], bool]") -> None:
+		self._by_binding: dict[int, "H.HLambda"] = {}
+		self._txn_active = txn_active
+
+	def _barrier(self) -> None:
+		if self._txn_active():
+			raise PendingLambdaBarrier()
+
+	def peek(self, binding_id: int | None) -> "H.HLambda | None":
+		if binding_id is None:
+			return None
+		return self._by_binding.get(binding_id)
+
+	def register(self, binding_id: int, lam: "H.HLambda") -> None:
+		self._barrier()
+		self._by_binding[binding_id] = lam
+
+	def begin_resolution(self, binding_id: int | None) -> "H.HLambda | None":
+		"""Exact-binding lookup DECLARING INTENT TO MUTATE: returns the
+		pending lambda (or None) and raises the barrier first when a probe
+		transaction is active.  Callers must obtain the lambda through this
+		— never `peek` — before stamping/typing it."""
+		if binding_id is None:
+			return None
+		lam = self._by_binding.get(binding_id)
+		if lam is None:
+			return None
+		self._barrier()
+		return lam
+
+	def retire(self, binding_id: int | None) -> None:
+		if binding_id is None:
+			return
+		if binding_id in self._by_binding:
+			self._barrier()
+			self._by_binding.pop(binding_id, None)
+
+	def drain(self) -> "list[tuple[int, H.HLambda]]":
+		"""End-of-function flush: take EVERYTHING (barrier-checked for
+		totality even though no probe can be active at flush time)."""
+		self._barrier()
+		items = list(self._by_binding.items())
+		self._by_binding.clear()
+		return items
+
+	def __len__(self) -> int:
+		return len(self._by_binding)
 
 
 # Identifier aliases for clarity.
@@ -2690,7 +2780,11 @@ class TypeChecker:
 		# Binding identity kind (param vs local). Binding ids share a single counter,
 		# but we still track the origin kind to keep place reasoning explicit.
 		binding_place_kind: Dict[int, PlaceKind] = {}
-		pending_lambda_by_binding: Dict[int, H.HLambda] = {}
+		# Pending stored lambdas: EXPLICIT owner (mutation-site transaction
+		# barrier).  All registration/resolution/consumption/drain routes
+		# through it; see PendingLambdaOwner.  The predicate reads the live
+		# FnCheckState probe-transaction depth.
+		pending_lambdas = PendingLambdaOwner(txn_active=lambda: fn_state._txn_depth > 0)
 		# Block-scope const binding ids: these re-materialize at each use site,
 		# so the Copy check is skipped (non-Copy types like String are allowed).
 		local_const_binding_ids: Set[int] = set()
@@ -9983,7 +10077,7 @@ class TypeChecker:
 							expr.fn.binding_id = _cand
 							break
 				if isinstance(expr.fn, H.HVar) and expr.fn.binding_id is not None:
-					pending = pending_lambda_by_binding.get(expr.fn.binding_id)
+					pending = pending_lambdas.begin_resolution(expr.fn.binding_id)
 					if pending is not None:
 						setattr(pending, "expected_fn_inferred", True)
 						arg_types = [type_expr(a) for a in expr.args]
@@ -9998,7 +10092,7 @@ class TypeChecker:
 								ret = td.param_types[-1] if td.param_types else self._unknown
 								typed = self.type_table.ensure_function(params, ret, can_throw=False)
 						binding_types[expr.fn.binding_id] = typed if typed is not None else self._unknown
-						pending_lambda_by_binding.pop(expr.fn.binding_id, None)
+						pending_lambdas.retire(expr.fn.binding_id)
 				preseed = preseed_type_params or {}
 				call_ctx = make_call_ctx(type_table=self.type_table, diagnostics=diagnostics, current_module_name=current_module_name, current_module=current_module, default_package=default_package, module_packages=module_packages, type_param_map=type_param_map, preseed_type_params=preseed, type_param_names=type_param_names, current_fn_id=fn_id, int_ty=self._int, uint_ty=self._uint, uint64_ty=self._uint64, byte_ty=self.type_table.ensure_byte(), bool_ty=self._bool, float_ty=self._float, string_ty=self._string, void_ty=self._void, error_ty=self._error, unknown_ty=self._unknown, signatures_by_id=signatures_by_id, callable_registry=callable_registry, trait_index=trait_index, trait_impl_index=trait_impl_index, impl_index=impl_index, visible_modules=visible_modules, visible_trait_world=visible_trait_world, global_trait_world=global_trait_world, trait_scope_by_module=trait_scope_by_module, require_env_local=require_env_local, fn_require_assumed=fn_require_assumed, binding_mutable=binding_mutable, binding_id_by_name={name: bid for bid, name in binding_names.items()}, traits_in_scope=_traits_in_scope, trait_key_for_id=trait_key_for_id, tc_diag=_tc_diag, type_expr=type_expr, optional_variant_type=self._optional_variant_type, unwrap_ref_type=_unwrap_ref_type, struct_base_and_args=_struct_base_and_args, receiver_place=_receiver_place, receiver_can_mut_borrow=_receiver_can_mut_borrow, receiver_compat=_receiver_compat, receiver_preference=_receiver_preference, args_match_params=_args_match_params, coerce_args_for_params=_coerce_args_for_params, can_ref_to_value_coerce=_can_ref_to_value_coerce, ref_to_value_coerce_applies=_ref_to_value_coerce_applies, rewrite_ref_to_value=_rewrite_ref_to_value, find_thunk_spec_by_id=self.find_thunk_spec_by_id, fnptr_consts_by_node_id=fnptr_consts_by_node_id, infer_receiver_arg_type=_infer_receiver_arg_type, instantiate_sig_with_subst=_instantiate_sig_with_subst, apply_autoborrow_args=_apply_autoborrow_args, label_typeid=_label_typeid, trait_label=_trait_label, require_for_fn=_require_for_fn, extract_conjunctive_facts=_extract_conjunctive_facts, subject_name=_subject_name, normalize_type_key=_normalize_type_key, collect_trait_subjects=_collect_trait_subjects, require_failure=_require_failure, format_failure_message=_format_failure_message, failure_code=_failure_code, requirement_notes=_requirement_notes, pick_best_failure=_pick_best_failure, param_scope_map=_param_scope_map, candidate_key_for_decl=_candidate_key_for_decl, visibility_note=_visibility_note, intrinsic_method_fn_id=_intrinsic_method_fn_id, instantiate_sig=_instantiate_sig, self_mode_from_sig=_self_mode_from_sig, match_impl_type_args=_match_impl_type_args, fixed_width_allowed=_fixed_width_allowed, reject_zst_array=_reject_zst_array, pretty_type_name=self._pretty_type_name, format_ctor_signature_list=self._format_ctor_signature_list, enforce_struct_requires=_enforce_struct_requires, ensure_field_visible=_ensure_field_visible, visible_modules_for_free_call=_visible_modules_for_free_call, module_ids_by_name=module_ids_by_name, visibility_provenance=visibility_provenance, infer=_infer, format_infer_failure=_format_infer_failure, lambda_can_throw=_lambda_can_throw, record_call_resolution=record_call_resolution, record_iface_coercion=record_iface_coercion, record_ptr_to_ref_coercion=record_ptr_to_ref_coercion, iface_assignable=iface_assignable, record_instantiation=record_instantiation, alloc_callsite_id=_alloc_callsite_id, alloc_node_id=_assign_node_id, allow_unsafe=unsafe_allowed_module, unsafe_context=unsafe_context, allow_unsafe_without_block=allow_unsafe_without_block_local, allow_rawbuffer=self._is_toolchain_trusted_module(current_module_name), typed_catch_binder_ids=frozenset(self._typed_catch_binders), begin_state_txn=_begin_defer_probe_txn)
 				return resolve_call_expr(call_ctx, expr, expected_type, record_expr=record_expr, record_call_info=record_call_info, record_invoke_call_info=record_invoke_call_info)
@@ -10016,7 +10110,7 @@ class TypeChecker:
 						pass
 				arg_types = [type_expr(a) for a in expr.args]
 				if isinstance(expr.callee, H.HVar) and expr.callee.binding_id is not None:
-					pending = pending_lambda_by_binding.get(expr.callee.binding_id)
+					pending = pending_lambdas.begin_resolution(expr.callee.binding_id)
 					if pending is not None:
 						setattr(pending, "expected_fn_inferred", True)
 						fn_params = [t if t is not None else self._unknown for t in arg_types]
@@ -10030,7 +10124,7 @@ class TypeChecker:
 								ret = td.param_types[-1] if td.param_types else self._unknown
 								typed = self.type_table.ensure_function(params, ret, can_throw=False)
 						binding_types[expr.callee.binding_id] = typed if typed is not None else self._unknown
-						pending_lambda_by_binding.pop(expr.callee.binding_id, None)
+						pending_lambdas.retire(expr.callee.binding_id)
 				kw_pairs = list(getattr(expr, "kwargs", []) or [])
 				if getattr(expr, "type_args", None):
 					diagnostics.append(
@@ -12321,7 +12415,7 @@ class TypeChecker:
 					and not getattr(stmt, "is_placeholder", False)
 				):
 					val_ty = self._unknown
-					pending_lambda_by_binding[stmt.binding_id] = stmt.value
+					pending_lambdas.register(stmt.binding_id, stmt.value)
 					scope_env[-1][stmt.name] = val_ty
 					scope_bindings[-1][stmt.name] = stmt.binding_id
 					binding_types[stmt.binding_id] = val_ty
@@ -13757,8 +13851,7 @@ class TypeChecker:
 		# 3. otherwise -> ordinary no-expectation typing (LambdaFnSpec +
 		#    fnptr const, rewritten below); an Unknown in the RESULT function
 		#    type is diagnosed for the same ABI reason.
-		for _pend_bid, _pend_lam in list(pending_lambda_by_binding.items()):
-			pending_lambda_by_binding.pop(_pend_bid, None)
+		for _pend_bid, _pend_lam in pending_lambdas.drain():
 			_pend_caps = list(getattr(_pend_lam, "captures", []) or [])
 			if not _pend_caps and _pend_lam.explicit_captures is None:
 				_pend_res = discover_captures(_pend_lam)

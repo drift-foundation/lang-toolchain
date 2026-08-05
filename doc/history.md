@@ -123,6 +123,28 @@ re-check).  The validator stays strict; the live maps stay unpruned for
 compile/run, parent+extracted coexistence, immediate-IIFE
 counter-boundary, structural ownership pin).
 
+**Also fixed (transaction-contract breach): pending-lambda resolution
+inside speculative call probes.**  A deferred-call probe's
+`CheckerStateTxn` snapshots the owned tables and the probed subtree, but
+a probe-admitted candidate can semantically reach a PENDING stored
+lambda through its callee binding; resolving it mutated state a rollback
+could not restore (the stored HLambda outside the subtree, plain frame
+binding dicts, and a checker-global `LambdaFnSpec` publication retaining
+the live call-info map) — proven by an independent forcing audit.
+Pending-lambda state now has one explicit owner
+(`PendingLambdaOwner`: registration / exact-binding resolution /
+consumption / drain; the backing map is private), and every mutating
+operation raises the private `PendingLambdaBarrier` while a probe is
+active — BEFORE any external mutation.  Nested probes roll back and
+re-raise; only the outermost converts the signal to the ordinary silent
+expected-type deferral (new `deferrals_pending_barrier` /
+`pending_barrier_nested` counters; never a diagnostic, hard-error
+marker, or `rollbacks_exception`).  Accepted B5 COMPLETE resolutions are
+preserved through the expected-context retry.  Pinned red-first in
+`lang/tests/checker/test_pending_lambda_probe_barrier.py` (full
+state-identity audit incl. the `_lambda_fn_specs` live-map alias, B5
+control, owner unit contract, nested-gating pin).
+
 **Versioning:** `DRIFTC_VERSION` **0.35.0** (user-visible fix: valid
 programs move from compiler failure/traceback or silent wrong result to
 correct execution; inconsistent inferred lambdas are now rejected at the
