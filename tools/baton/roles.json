@@ -1,5 +1,5 @@
 {
-  "protocol_version": 4,
+  "protocol_version": 5,
   "roles": {
     "human": {
       "detail_prefix": "approval-decision",

@@ -210,17 +210,25 @@ class Mailbox:
 		self.repo_root = repo_root.resolve(strict=True)
 		self.work = self.repo_root / "work"
 		if not self.work.is_dir() or self.work.is_symlink():
-			raise MailboxError(f"mailbox root must be a real directory: {self.work}")
+			raise MailboxError(f"work root must be a real directory: {self.work}")
+		self.mailbox = self.work / "mailbox"
+		try:
+			self.mailbox.mkdir(mode=0o770)
+		except FileExistsError:
+			pass
+		if not self.mailbox.is_dir() or self.mailbox.is_symlink():
+			raise MailboxError(f"mailbox root must be a real directory: {self.mailbox}")
+		resolved_work = self.work.resolve(strict=True)
+		resolved_mailbox = self.mailbox.resolve(strict=True)
+		if resolved_mailbox.parent != resolved_work:
+			raise MailboxError(f"mailbox root escapes work/: {self.mailbox}")
 		self.roles = self._load_roles()
 		root_key = hashlib.sha256(os.fsencode(self.repo_root)).hexdigest()[:24]
 		self.receipts = Path("/tmp") / f"drift-baton-{os.getuid()}" / root_key
 		self.receipts.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 	def _load_roles(self) -> dict[str, dict[str, str]]:
-		# Development uses a side-by-side v5 configuration so the active v4
-		# wrapper remains usable until the live v4 mailbox is drained.  The
-		# cutover renames this to roles.json and removes the v4 implementation.
-		path = Path(__file__).with_name("roles_v5.json")
+		path = Path(__file__).with_name("roles.json")
 		_regular_nonsymlink(path, label="Baton role configuration")
 		try:
 			data = json.loads(path.read_text(encoding="utf-8"))
@@ -265,12 +273,14 @@ class Mailbox:
 
 	def _detail_dir(self, rel: str) -> Path:
 		if rel in ("", "."):
-			return self.work
+			raise MailboxError("durable messages require a detail subdirectory beneath work/; use transient retention for generic coordination")
 		if "\x00" in rel or "\\" in rel:
 			raise MailboxError(f"invalid detail destination: {rel!r}")
 		pure = PurePosixPath(rel)
 		if pure.is_absolute() or ".." in pure.parts or "." in pure.parts:
 			raise MailboxError(f"detail destination must be normalized beneath work/: {rel!r}")
+		if pure.parts[0] == "mailbox":
+			raise MailboxError("durable details cannot be published inside work/mailbox/")
 		path = self.work.joinpath(*pure.parts)
 		try:
 			st = path.lstat()
@@ -290,6 +300,8 @@ class Mailbox:
 		pure = PurePosixPath(rel)
 		if pure.is_absolute() or ".." in pure.parts or "." in pure.parts:
 			raise MailboxError(f"target must be a normalized relative path beneath work/: {rel!r}")
+		if pure.parts[0] == "mailbox":
+			raise MailboxError("durable message targets cannot be inside work/mailbox/")
 		target = self.work.joinpath(*pure.parts)
 		_regular_nonsymlink(target, label="message target")
 		resolved = target.resolve(strict=True)
@@ -395,7 +407,7 @@ class Mailbox:
 
 	def _pending(self, role: str) -> list[Path]:
 		out: list[Path] = []
-		for path in self.work.iterdir():
+		for path in self.mailbox.iterdir():
 			match = PENDING_RE.fullmatch(path.name)
 			if match is not None and match.group("to") == role:
 				self._validate_v5(path)
@@ -405,7 +417,7 @@ class Mailbox:
 
 	def _claims(self) -> list[Path]:
 		out: list[Path] = []
-		for path in self.work.iterdir():
+		for path in self.mailbox.iterdir():
 			if CLAIMED_RE.fullmatch(path.name):
 				_regular_nonsymlink(path, label="claimed token")
 				out.append(path)
@@ -413,7 +425,7 @@ class Mailbox:
 
 	def _notices(self) -> list[Path]:
 		out: list[Path] = []
-		for path in self.work.iterdir():
+		for path in self.mailbox.iterdir():
 			if NOTICE_RE.fullmatch(path.name):
 				self._validate_v5(path)
 				out.append(path)
@@ -510,7 +522,7 @@ class Mailbox:
 		if to_role != role:
 			raise MailboxError(f"pending handoff is addressed to {to_role!r}, not {role!r}")
 		self._ensure_no_existing_claim(identity, live_seed)
-		source = self.work / token_name
+		source = self.mailbox / token_name
 		try:
 			before = _regular_nonsymlink(source, label="pending token")
 		except MailboxError:
@@ -522,14 +534,14 @@ class Mailbox:
 		if live_seed is not None:
 			identity_part += f"-SEED-{live_seed}"
 		claim_name = f"CLAIMED-FROM-{pending.group('from')}-TO-{pending.group('to')}-{pending.group('created')}-{pending.group('id')}{identity_part}-AT-{at}"
-		claim = self.work / claim_name
+		claim = self.mailbox / claim_name
 		_rename_noreplace(source, claim)
 		if source.exists() or source.is_symlink():
 			raise MailboxError(f"claim source still exists after rename: {source}")
 		after = _regular_nonsymlink(claim, label="claimed token")
 		if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
 			raise MailboxError("claim rename changed token identity")
-		_fsync_dir(self.work)
+		_fsync_dir(self.mailbox)
 		envelope, target = self._validate_message(claim)
 		receipt = self._write_claim_receipt(claim, role=role, actor=identity, seed=live_seed, original=token_name, envelope=envelope, target=target)
 		return {"status": "claimed", "claim": claim.name, "retention": envelope["retention"], "target": envelope.get("target"), "body": envelope.get("body"), "from": envelope["from_role"], "to": envelope["to_role"], "kind": envelope["kind"], "thread_id": envelope["thread_id"], "receipt": str(receipt)}
@@ -554,7 +566,7 @@ class Mailbox:
 		identity, live_seed = self._identity(role, actor, seed)
 		if NOTICE_RE.fullmatch(notice_name) is None:
 			raise MailboxError(f"not a broadcast-notice basename: {notice_name!r}")
-		notice = self.work / notice_name
+		notice = self.mailbox / notice_name
 		envelope, target = self._validate_v5(notice)
 		if _parse_timestamp(envelope["expires_at"]) <= _utc_now():
 			raise MailboxError(f"notice has expired: {notice_name}", EXIT_NONE)
@@ -569,7 +581,7 @@ class Mailbox:
 			raise MailboxError("--interval must be greater than 0 and no more than 86400 seconds")
 		identity, live_seed = self._identity(role, actor, seed)
 		self._ensure_no_existing_claim(identity, live_seed)
-		fd = _open_work_watch(self.work)
+		fd = _open_work_watch(self.mailbox)
 		try:
 			while True:
 				try:
@@ -589,7 +601,7 @@ class Mailbox:
 
 	def _load_claim(self, role: str, claim_name: str, *, actor: str | None, seed: str | None) -> tuple[dict[str, Any], Path | None, Path, Path]:
 		identity, live_seed = self._identity(role, actor, seed)
-		claim = self.work / claim_name
+		claim = self.mailbox / claim_name
 		envelope, target = self._validate_message(claim)
 		if envelope["to_role"] != role:
 			raise MailboxError(f"claim is addressed to {envelope['to_role']!r}, not {role!r}")
@@ -688,7 +700,7 @@ class Mailbox:
 			name = f"NOTICE-FROM-{role}-TO-ALL-{timestamp}-{message_id}"
 		else:
 			name = f"PENDING-FROM-{role}-TO-{to_role}-{timestamp}-{message_id}"
-		token = self.work / name
+		token = self.mailbox / name
 		_atomic_publish_bytes(token, _json_bytes(envelope))
 		if to_role == "ALL":
 			receipt = self._notice_receipt_path(name, role, actor, seed, "author")
@@ -763,7 +775,7 @@ class Mailbox:
 			outgoing = self._publish_envelope(role=role, to_role=envelope_to, actor=identity, seed=live_seed, retention=response_retention, target=detail, body=body_text, timestamp=timestamp, message_id=message_id, kind=kind, thread_id=thread, outcome=outcome, responds_to=claim_name, ttl=ttl)
 		self._load_claim(role, claim_name, actor=actor, seed=seed)
 		claim.unlink()
-		_fsync_dir(self.work)
+		_fsync_dir(self.mailbox)
 		receipt_path.unlink()
 		_fsync_dir(receipt_path.parent)
 		return {"status": "closed" if close else "replied", "retention": response_retention, "detail": detail.relative_to(self.repo_root).as_posix() if detail is not None else None, "outgoing_message": outgoing.relative_to(self.repo_root).as_posix() if outgoing is not None else None, "popped_claim": claim_name}
@@ -772,7 +784,7 @@ class Mailbox:
 		identity, live_seed = self._identity(role, actor, seed)
 		if NOTICE_RE.fullmatch(notice_name) is None:
 			raise MailboxError(f"not a broadcast-notice basename: {notice_name!r}")
-		notice = self.work / notice_name
+		notice = self.mailbox / notice_name
 		envelope, target = self._validate_v5(notice)
 		if envelope["from_role"] != role or envelope["author_actor"] != identity or envelope["author_seed"] != live_seed:
 			raise MailboxError("only the exact original author instance may expire a broadcast notice")
@@ -790,7 +802,7 @@ class Mailbox:
 			notice.unlink()
 		except FileNotFoundError as exc:
 			raise MailboxError(f"notice disappeared during expiration: {notice_name}", EXIT_RACE) from exc
-		_fsync_dir(self.work)
+		_fsync_dir(self.mailbox)
 		receipt.unlink()
 		_fsync_dir(receipt.parent)
 		return {"status": "expired", "notice": notice_name, "retention": envelope["retention"], "target_retained": envelope.get("target"), "transient_body_removed": envelope["retention"] == RETENTION_TRANSIENT}
@@ -799,6 +811,12 @@ class Mailbox:
 		checked: list[str] = []
 		errors: list[str] = []
 		for path in sorted(self.work.iterdir(), key=lambda item: item.name):
+			if path == self.mailbox:
+				continue
+			if OBSOLETE_V3_RE.match(path.name) or PENDING_RE.fullmatch(path.name) or NOTICE_RE.fullmatch(path.name) or CLAIMED_RE.fullmatch(path.name):
+				checked.append(path.name)
+				errors.append(f"{path.name}: mailbox transport is outside work/mailbox/ and requires explicit human recovery")
+		for path in sorted(self.mailbox.iterdir(), key=lambda item: item.name):
 			if OBSOLETE_V3_RE.match(path.name):
 				checked.append(path.name)
 				errors.append(f"{path.name}: obsolete protocol-v3 mailbox state requires explicit human recovery")

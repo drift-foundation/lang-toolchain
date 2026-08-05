@@ -22,12 +22,18 @@ Singleton roles such as `human` supply neither option.
 
 ## Directed handoff
 
-Publish a new message. The destination is relative to `work/`; `.` places the detail directly in `work/`.
+Every envelope and claim lives under ignored `work/mailbox/`. Publish a durable message (the default) by naming a retained-detail subdirectory relative to `work/`:
 
 ```text
 ./tools/baton/baton reviewer send implementer finding-example --kind review --actor reviewer-root --seed "$SEED" <<'EOF'
 Please implement the reviewed boundary fix.
 EOF
+```
+
+Publish a transient message when the content should disappear after consumption. Its body is embedded in the immutable JSON envelope, so there is no destination argument. Transient bodies must be non-empty UTF-8 text no larger than 64 KiB.
+
+```text
+echo 'Focused checks are green; ready for review.' | ./tools/baton/baton implementer send reviewer --retention transient --kind status --thread return_authority --actor k --seed "$K_SEED"
 ```
 
 Consume work:
@@ -51,24 +57,28 @@ Implementation and focused verification are ready.
 EOF
 ```
 
+A response inherits the incoming message's retention. Use `--retention durable` or `--retention transient` only to deliberately switch policies. A durable response creates a retained detail; a transient response embeds its body in the outgoing envelope. When switching a transient message to durable retention, supply `--destination` because the incoming message has no detail directory to inherit.
+
 Forward to another role with `--to ROLE`. Record an outcome with `--outcome`, including human decisions:
 
 ```text
 echo 'Approved as proposed.' | ./tools/baton/baton human reply "$CLAIM" --outcome approved --kind approval_decision
 ```
 
-Terminal handling publishes a detail but no outgoing message:
+Terminal handling publishes no outgoing message. With durable retention it preserves a detail; with transient retention it removes the claim and embedded content without creating an artifact:
 
 ```text
 echo 'Static review is clear.' | ./tools/baton/baton reviewer close "$CLAIM" --kind signoff --actor reviewer-root --seed "$SEED"
 ```
 
+Threads are streams, not one-request/one-response locks. Either side may `send` additional status, result, correction, or final messages at any time, reusing `--thread`; every new message gets its own immutable envelope and is consumed independently.
+
 ## Broadcast notice
 
-`all` is a publish selector, not a claimable role:
+`all` is a publish selector, not a claimable role. Tooling announcements are normally transient:
 
 ```text
-./tools/baton/baton reviewer send all . --kind tooling_notice --ttl 86400 --actor reviewer-root --seed "$SEED" <<'EOF'
+./tools/baton/baton reviewer send all --retention transient --kind tooling_notice --ttl 86400 --actor reviewer-root --seed "$SEED" <<'EOF'
 Baton has been updated. Read tools/baton/README.md before the next handoff.
 EOF
 ```
@@ -85,7 +95,9 @@ After its envelope's expiration, only the exact author instance may clean it:
 ./tools/baton/baton reviewer expire "$NOTICE" --actor reviewer-root --seed "$SEED"
 ```
 
-The notice target is retained.
+A durable notice target is retained. A transient notice body disappears when the author expires the envelope.
+
+Do not publish durable details to `.` or `mailbox`. Generic status and tooling notices should be transient, keeping both Git and the `work/` root free of transport artifacts.
 
 ## Diagnostics
 

@@ -1,8 +1,0 @@
-module probe_fnptr_borrow_use;
-
-fn seven() nothrow -> Int { return 7; }
-
-pub fn main() nothrow -> Int {
-	val r = &seven;
-	return (*r)() - 7;
-}

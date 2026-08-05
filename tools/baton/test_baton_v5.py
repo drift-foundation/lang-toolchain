@@ -17,7 +17,10 @@ def _mailbox(tmp_path: Path) -> tuple[baton.Mailbox, Path]:
 	work = tmp_path / "work"
 	finding = work / "finding-example"
 	finding.mkdir(parents=True)
-	return baton.Mailbox(tmp_path), finding
+	box = baton.Mailbox(tmp_path)
+	assert box.mailbox == work / "mailbox"
+	assert box.mailbox.is_dir()
+	return box, finding
 
 
 def test_directed_handoff_claim_and_reply_are_role_addressed(tmp_path: Path) -> None:
@@ -26,6 +29,8 @@ def test_directed_handoff_claim_and_reply_are_role_addressed(tmp_path: Path) -> 
 	message_name = Path(published["message"]).name
 	assert message_name.startswith("PENDING-FROM-reviewer-TO-implementer-")
 	envelope = json.loads((tmp_path / published["message"]).read_text(encoding="utf-8"))
+	assert Path(published["message"]).parent == Path("work/mailbox")
+	assert not any(path.name.startswith("PENDING-") for path in (tmp_path / "work").iterdir())
 	assert envelope["from_role"] == "reviewer"
 	assert envelope["to_role"] == "implementer"
 	assert envelope["thread_id"] == "return_authority"
@@ -45,7 +50,7 @@ def test_directed_handoff_claim_and_reply_are_role_addressed(tmp_path: Path) -> 
 	assert replied["retention"] == "durable"
 	assert (tmp_path / replied["detail"]).is_file()
 	assert Path(replied["outgoing_message"]).name.startswith("PENDING-FROM-implementer-TO-reviewer-")
-	assert not (tmp_path / "work" / claimed["claim"]).exists()
+	assert not (tmp_path / "work" / "mailbox" / claimed["claim"]).exists()
 
 
 def test_broadcast_is_seen_not_claimed_and_only_author_expires_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,7 +77,7 @@ def test_broadcast_is_seen_not_claimed_and_only_author_expires_it(tmp_path: Path
 	monkeypatch.setattr(baton, "_utc_now", lambda: dt.datetime(2100, 1, 1, tzinfo=dt.timezone.utc))
 	expired = box.expire("reviewer", notice_name, actor="reviewer-root", seed=REVIEWER_SEED)
 	assert expired["status"] == "expired"
-	assert not (tmp_path / "work" / notice_name).exists()
+	assert not (tmp_path / "work" / "mailbox" / notice_name).exists()
 	assert (tmp_path / "work" / expired["target_retained"]).is_file()
 
 
@@ -104,7 +109,7 @@ def test_transient_handoff_embeds_body_and_inherited_reply_is_consumable(tmp_pat
 	replied = box.respond("implementer", claimed["claim"], b"Short-lived response.\n", actor="k", seed=IMPLEMENTER_SEED, close=False, to_role=None, destination_rel=None, retention=None, kind="status", thread_id=None, outcome="ready", ttl=86400)
 	assert replied["retention"] == "transient"
 	assert replied["detail"] is None
-	assert not (tmp_path / "work" / claimed["claim"]).exists()
+	assert not (tmp_path / "work" / "mailbox" / claimed["claim"]).exists()
 	outgoing = tmp_path / replied["outgoing_message"]
 	outgoing_envelope = json.loads(outgoing.read_text(encoding="utf-8"))
 	assert outgoing_envelope["body"] == "Short-lived response.\n"
@@ -116,7 +121,7 @@ def test_transient_handoff_embeds_body_and_inherited_reply_is_consumable(tmp_pat
 	assert closed["retention"] == "transient"
 	assert closed["detail"] is None
 	assert closed["outgoing_message"] is None
-	assert not (tmp_path / "work" / reviewer_claim["claim"]).exists()
+	assert not (tmp_path / "work" / "mailbox" / reviewer_claim["claim"]).exists()
 	assert list(finding.iterdir()) == []
 
 
@@ -148,7 +153,7 @@ def test_response_switch_from_transient_to_durable_requires_destination(tmp_path
 	claimed = box.claim("implementer", Path(published["message"]).name, actor="k", seed=IMPLEMENTER_SEED)
 	with pytest.raises(baton.MailboxError, match="requires --destination"):
 		box.respond("implementer", claimed["claim"], b"Durable report.\n", actor="k", seed=IMPLEMENTER_SEED, close=False, to_role=None, destination_rel=None, retention="durable", kind="implementation", thread_id=None, outcome=None, ttl=86400)
-	assert (tmp_path / "work" / claimed["claim"]).is_file()
+	assert (tmp_path / "work" / "mailbox" / claimed["claim"]).is_file()
 	replied = box.respond("implementer", claimed["claim"], b"Durable report.\n", actor="k", seed=IMPLEMENTER_SEED, close=False, to_role=None, destination_rel="finding-example", retention="durable", kind="implementation", thread_id=None, outcome=None, ttl=86400)
 	assert replied["retention"] == "durable"
 	assert (tmp_path / replied["detail"]).is_file()
@@ -163,7 +168,7 @@ def test_transient_broadcast_body_is_removed_when_author_expires_notice(tmp_path
 	monkeypatch.setattr(baton, "_utc_now", lambda: dt.datetime(2100, 1, 1, tzinfo=dt.timezone.utc))
 	expired = box.expire("reviewer", notice_name, actor="reviewer-root", seed=REVIEWER_SEED)
 	assert expired == {"status": "expired", "notice": notice_name, "retention": "transient", "target_retained": None, "transient_body_removed": True}
-	assert not (tmp_path / "work" / notice_name).exists()
+	assert not (tmp_path / "work" / "mailbox" / notice_name).exists()
 	assert list(finding.iterdir()) == []
 
 
@@ -192,3 +197,21 @@ def test_cli_transient_send_takes_body_file_without_destination(tmp_path: Path, 
 	assert result["detail"] is None
 	envelope = json.loads((tmp_path / result["message"]).read_text(encoding="utf-8"))
 	assert envelope["body"] == "Inline envelope body.\n"
+
+
+def test_durable_details_cannot_use_work_root_or_mailbox(tmp_path: Path) -> None:
+	box, _ = _mailbox(tmp_path)
+	common = {"actor": "reviewer-root", "seed": REVIEWER_SEED, "retention": "durable", "kind": "review", "thread_id": "detail_boundary", "outcome": None, "ttl": 86400}
+	with pytest.raises(baton.MailboxError, match="detail subdirectory"):
+		box.send("reviewer", "implementer", ".", b"Do not publish at work root.\n", **common)
+	with pytest.raises(baton.MailboxError, match="work/mailbox"):
+		box.send("reviewer", "implementer", "mailbox", b"Do not retain in transport.\n", **common)
+
+
+def test_doctor_reports_transport_stranded_at_old_work_root(tmp_path: Path) -> None:
+	box, _ = _mailbox(tmp_path)
+	stranded = tmp_path / "work" / "PENDING-FROM-reviewer-TO-implementer-2026-08-05T00-00-00Z-0123456789ab"
+	stranded.write_text("{}\n", encoding="utf-8")
+	result = box.doctor()
+	assert result["checked"] == [stranded.name]
+	assert result["errors"] == [f"{stranded.name}: mailbox transport is outside work/mailbox/ and requires explicit human recovery"]

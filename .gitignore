@@ -8,6 +8,7 @@ staged
 .claude
 test_all.sh
 work/ownership-ledger
+/work/mailbox/
 # Defense-in-depth: transient ownership-ledger scratch must live
 # under `build/ownership-ledger/triage/`, not under source trees.
 # The ignore rule below is a backstop in case a helper regresses —
