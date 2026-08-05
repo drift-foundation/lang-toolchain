@@ -122,7 +122,7 @@ Every directed handoff follows this state machine:
 1. **PUSH content:** for durable retention, the sender atomically publishes the complete immutable detail; for transient retention, the body is prepared for the envelope.
 2. **PUSH pending:** the sender atomically publishes the matching `PENDING-FROM-X-TO-Y-*` envelope.
 3. **CLAIM:** one instance of role `Y` wins the same-filesystem no-clobber rename.
-4. **WORK:** only that claimant processes the frozen snapshot.
+4. **WORK immediately:** only that claimant processes the frozen snapshot. Claim only when ready to start; if occupied with another task, leave the handoff pending for later. A claimed-but-unworked handoff blocks every other eligible consumer and is a workflow deadlock even though the claim has no timeout.
 5. **PUSH response:** `reply` atomically publishes the outgoing content and directed envelope before consuming the incoming claim. The recipient defaults to the incoming sender but may be explicitly forwarded with `--to`. A response inherits the incoming retention unless `--retention` explicitly selects the other policy. `close` deliberately creates no outgoing envelope; a durable close retains its terminal detail, while a transient close retains nothing.
 6. **POP claim:** only the exact claimant removes its claim and claim receipt after the response or close transition is safe.
 
@@ -163,7 +163,7 @@ All roles use the same actions:
 
 Except for `wait`, every action performs one bounded transition and exits. Do not pass `--interval 60`; 60 seconds is already the default. Specify `--interval` only when deliberately choosing another defensive rescan interval.
 
-`wait` is a consumer and claim operation, not a passive notification watcher. One actor/seed instance must run exactly one consumer path at a time: either one `wait`, one argument-less `claim`, or one explicit `claim PENDING`. Never leave `wait` active while issuing a manual claim, and never run two waits with the same actor/seed. When `wait` returns `status: claimed`, that returned claim is the instance's active work; process it and `reply`/`close` before starting another consumer. If duplicate invocations race, the single winning claim remains valid and the loser fails with the existing-claim guard; do not claim again or repair the mailbox.
+`wait` is a consumer and claim operation, not a passive notification watcher. One actor/seed instance must run exactly one consumer path at a time: either one `wait`, one argument-less `claim`, or one explicit `claim PENDING`. Never leave `wait` active while issuing a manual claim, and never run two waits with the same actor/seed. Arm `wait` only when the actor is prepared to interrupt other non-claimed work and immediately process whatever it claims; otherwise postpone consumption and leave the message pending. An armed subprocess is not sufficient monitoring when the agent interface does not wake automatically: the responsible agent must keep its turn active and continuously harvest the wait result, rather than finalize and rely on a later user prompt. When `wait` returns `status: claimed`, that returned claim is the instance's active work: begin processing it immediately and `reply`/`close` before starting another consumer. If duplicate invocations race, the single winning claim remains valid and the loser fails with the existing-claim guard; do not claim again or repair the mailbox.
 
 ## Failure and recovery
 

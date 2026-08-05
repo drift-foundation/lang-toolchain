@@ -47,7 +47,7 @@ Consume work:
 
 `wait` already defaults to a 60-second safety rescan. Do not spell `--interval 60`; use `--interval` only for a deliberate non-default.
 
-Choose exactly one of the consumer commands above. `wait` is not a passive watcher: it atomically claims directed work before returning. Do not run a manual `claim` while `wait` is active, and do not run multiple waits with the same actor/seed. A returned `status: claimed` is already the actor instance's active claim; answer or close it before starting another consumer.
+Choose exactly one of the consumer commands above. `wait` is not a passive watcher: it atomically claims directed work before returning. Arm it only when ready to interrupt other non-claimed work and process the result immediately; otherwise leave the handoff pending until later. If the agent interface does not wake when the subprocess exits, keep the turn active and continuously harvest the wait result—an armed but unpolled process is not monitoring. Do not run a manual `claim` while `wait` is active, and do not run multiple waits with the same actor/seed. A returned `status: claimed` is already the actor instance's active claim; begin work immediately and answer or close it before starting another consumer. Claiming and postponing the work deadlocks every other eligible consumer.
 
 Reply to the incoming sender and atomically pop the claim after publication:
 
