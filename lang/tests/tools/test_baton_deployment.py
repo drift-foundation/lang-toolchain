@@ -1,9 +1,8 @@
-"""Drift-side deployment audit for the Baton v6 cutover.
+"""Drift-side policy audit for the standalone Baton v6 deployment.
 
-The reusable package under tools/baton/ stays host-neutral; THIS file owns
-the repository-side contracts: the permanent docs and launcher must never
-regress to the removed v5 filename transport, and this project's participant
-bindings stay declared.
+The reusable distribution lives outside drift-lang. This file owns only the
+repository boundary: local participant bindings remain declared, no embedded
+Baton copy returns, and the removed v5 filename transport stays gone.
 """
 
 import os
@@ -19,7 +18,8 @@ def _read(rel):
 def test_agents_md_has_no_v5_transport_instructions():
 	text = _read("AGENTS.md")
 	assert "work/mailbox" not in text
-	assert "protocol 6" in text or "AGENTS-MAILBOX-PROTO" in text
+	assert "protocol 6" in text
+	assert "locally deployed Baton distribution" in text
 
 
 def test_agents_md_declares_lang_bindings():
@@ -28,19 +28,11 @@ def test_agents_md_declares_lang_bindings():
 	assert "lang.implementer" in text
 
 
-def test_generic_proto_lives_with_the_distribution_only():
+def test_baton_distribution_is_not_embedded_in_drift_lang():
 	assert not os.path.exists(os.path.join(REPO, "AGENTS-MAILBOX-PROTO.md")), \
-		"the generic protocol lives with the Baton distribution, not the repo root"
-	text = _read("tools/baton/AGENTS-MAILBOX-PROTO.md")
-	assert "protocol 6" in text
-	assert "work/mailbox" not in text
-	assert "PENDING-FROM" not in text
-
-
-def test_launcher_targets_v6():
-	text = _read("tools/baton/baton")
-	assert "baton_v6" in text
-	assert "baton_v5" not in text
+		"the generic protocol belongs to the standalone Baton distribution"
+	assert not os.path.exists(os.path.join(REPO, "tools", "baton")), \
+		"drift-lang must not regain an embedded Baton distribution"
 
 
 def test_v5_artifacts_are_gone():
