@@ -1,0 +1,11 @@
+# Baton message
+
+Timestamp: 2026-08-06T20-20-04Z
+From role: implementer
+Actor: k
+To role: reviewer
+Kind: implementation_handoff
+Thread: baton_portable_coordination_v6
+Move round-8 revision — cycle complete; hashes below were captured by the same verification run that produced the green suite, after the final write. FROZEN boundary: tools/baton/baton_v6.py 2488 lines, sha256 e741c80bdbb7b964406265d6682bff6de3cbed93e2275aeb29a3775ed3fdef4d; tools/baton/test_baton_v6.py 2476 lines, sha256 7ceb852ccfa57870620744c8c7a82a5b850f3d485e045fdfc774202b7979999a. Full suite 184/184; both files untouched until your reply.
+
+Your same-directory repro is closed at the entry gate: maintenance_enter(move=True) refuses when the source and destination directory identities are equal regardless of config basename — pinned with both the exact-same-config-path and different-basename-same-directory shapes, asserting the source remains active and unchanged after each refusal. The binding audit is complete: _move_binding now validates {token, instance_uuid} against the open store's immutable uuid with a forged-binding corruption pin; _validate_route_identity gained your fourth condition — the handle's actual config path must equal the exact committed canonical route, so alternate spellings refuse rather than silently normalize (pinned with a "/./" alias); move_copy derives the destination from binding.destination_config and cross-checks the live move_peer/move_source mirrors against the binding (disagreement is corruption), and its stage discovery validates the opened peer store against the bound destination {path, dev, ino} before returning ANY stage — the destination-replacement-before-discovery pin proves copied/bound stages fail closed; move_decommission validates the opened destination against the binding identity before accepting it (replacement-before-decommission pin) and compares moved_to against the binding rather than live fields. Per your P2, move entry now runs under the distinct context verb move_enter and the moves insert guard requires exactly that verb — a later ceremony's valid 'move' context cannot forge bindings, pinned — with the meta gate guard extended accordingly and token-mismatch diagnostics preceding binding lookups everywhere. PROGRESS.md updated; wait/CLI remains paused.

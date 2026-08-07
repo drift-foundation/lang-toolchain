@@ -1,112 +1,63 @@
-# Baton
+# baton — portable coordination over one transactional authority
 
-`baton` is a small command-line helper for atomic, role-addressed repository handoffs. Each invocation performs one bounded operation and exits; only `wait` blocks, using Linux `inotify` plus a defensive 60-second rescan.
+Baton is a standalone, stdlib-only coordination tool: role-addressed
+handoffs, broadcast notices, and audited administrative ceremonies over a
+single SQLite database. It has no dependency on any host project; every
+instance is defined entirely by one explicitly passed strict-JSON config.
 
-Read [`AGENTS-MAILBOX-PROTO.md`](../../AGENTS-MAILBOX-PROTO.md) before using it. The protocol is the authority; this file is the quick command reference.
+Floors (fail-closed, documented exit code 2): Python >= 3.11, the sqlite3
+module, SQLite library >= 3.37.0. Linux, local filesystems only.
 
-## Roles and identity
+## Instance
 
-Roles are declared in `tools/baton/roles.json`. Any configured role uses the same action surface:
+An instance is a directory holding `baton.json` (the config, always passed
+explicitly via `--config`) and `mailbox.sqlite3` (the single authority; its
+WAL/SHM siblings belong to SQLite). There is no other authoritative file.
+Create one with:
 
-```text
-./tools/baton/baton ROLE ACTION [ARGUMENTS] [OPTIONS]
-```
+    baton --config /abs/path/instance/baton.json init
 
-Agent roles supply one stable actor slug and one random seed of at least 128 bits for the life of that agent instance:
+See `example-baton.json` for the config shape: participants are dotted
+addresses with `identity` `agent` (any actor) or `singleton` (one bound
+actor); administrative authority is granted ONLY by an explicit
+`capabilities` list (`recovery`, `config`) — never inferred from identity.
+`roots` name the directories attachments may reference. `retention_days`
+bounds transient-metadata garbage collection.
 
-```text
---actor reviewer-root --seed "$SEED"
-```
+## Core commands
 
-Singleton roles such as `human` supply neither option.
+`send` (body from stdin/file XOR `--attach ROOT:REL/PATH`), `send-notice`
+(finite TTL, default 86400s), `claim` / `wait` (one lossless delivery shape:
+claim metadata plus envelope with base64+sha256 body or pinned attachment
+tuple), `reply` / `close` (effectively-once: retries redeliver the committed
+disposition and mismatches fail closed), `see` / `expire` (notices),
+`recover-claim` (requires the `recovery` capability and a reason), `gc`,
+`regen` (accept a generation+1 config; requires `config`), `scan`,
+`doctor`, `dump`, `inspect`, `materialize`.
 
-## Directed handoff
+Projections: `materialize --dir DIR --prefix P` re-emits a durable body as a
+byte-exact `P-<created>-<id>.md` file. The prefix is an EXPLICIT caller
+choice; participants' configured `projection_prefix`/`projection_dir` define
+which files `doctor` owns and inventories (orphans are warnings).
 
-Every envelope and claim lives under ignored `work/mailbox/`. Publish a durable message (the default) by naming a retained-detail subdirectory relative to `work/`:
+## Maintenance and moves
 
-```text
-./tools/baton/baton reviewer send implementer finding-example --kind review --actor reviewer-root --seed "$SEED" <<'EOF'
-Please implement the reviewed boundary fix.
-EOF
-```
+`maintenance-enter/exit` gate the instance (exit refuses during a move).
+A move binds one source and one destination config path plus their directory
+identities immutably at entry; `move-copy`, `move-bind`, `move-activate`,
+`move-decommission`, and `abort-move` are exact-token audited ceremonies —
+at most one instance with a given UUID can ever be active through the API.
 
-Publish a transient message when the content should disappear after consumption. Its body is embedded in the immutable JSON envelope, so there is no destination argument. Transient bodies must be non-empty UTF-8 text no larger than 64 KiB.
+## Exit codes
 
-```text
-echo 'Focused checks are green; ready for review.' | ./tools/baton/baton implementer send reviewer --retention transient --kind status --thread return_authority --actor k --seed "$K_SEED"
-```
+0 success · 2 environment floor · 3 nothing eligible · 4 validation/usage ·
+5 race/busy · 6 integrity damage · 7 gated (maintenance/moved).
 
-Consume work:
+## Distribution
 
-```text
-./tools/baton/baton implementer scan --actor k --seed "$K_SEED"
-./tools/baton/baton implementer claim --actor k --seed "$K_SEED"
-./tools/baton/baton implementer wait --actor k --seed "$K_SEED"
-./tools/baton/baton implementer claim "$PENDING" --actor k --seed "$K_SEED"
-```
-
-`wait` already defaults to a 60-second safety rescan. Do not spell `--interval 60`; use `--interval` only for a deliberate non-default.
-
-Choose exactly one of the consumer commands above. `wait` is not a passive watcher: it atomically claims directed work before returning. Arm it only when ready to interrupt other non-claimed work and process the result immediately; otherwise leave the handoff pending until later. If the agent interface does not wake when the subprocess exits, keep the turn active and continuously harvest the wait result—an armed but unpolled process is not monitoring. Do not run a manual `claim` while `wait` is active, and do not run multiple waits with the same actor/seed. A returned `status: claimed` is already the actor instance's active claim; begin work immediately and answer or close it before starting another consumer. Claiming and postponing the work deadlocks every other eligible consumer.
-
-Reply to the incoming sender and atomically pop the claim after publication:
-
-```text
-./tools/baton/baton implementer reply "$CLAIM" --kind implementation --actor k --seed "$K_SEED" <<'EOF'
-Implementation and focused verification are ready.
-EOF
-```
-
-A response inherits the incoming message's retention. Use `--retention durable` or `--retention transient` only to deliberately switch policies. A durable response creates a retained detail; a transient response embeds its body in the outgoing envelope. When switching a transient message to durable retention, supply `--destination` because the incoming message has no detail directory to inherit.
-
-Forward to another role with `--to ROLE`. Record an outcome with `--outcome`, including human decisions:
-
-```text
-echo 'Approved as proposed.' | ./tools/baton/baton human reply "$CLAIM" --outcome approved --kind approval_decision
-```
-
-Terminal handling publishes no outgoing message. With durable retention it preserves a detail; with transient retention it removes the claim and embedded content without creating an artifact:
-
-```text
-echo 'Static review is clear.' | ./tools/baton/baton reviewer close "$CLAIM" --kind signoff --actor reviewer-root --seed "$SEED"
-```
-
-Threads are streams, not one-request/one-response locks. Either side may `send` additional status, result, correction, or final messages at any time, reusing `--thread`; every new message gets its own immutable envelope and is consumed independently.
-
-## Broadcast notice
-
-`all` is a publish selector, not a claimable role. Tooling announcements are normally transient:
-
-```text
-./tools/baton/baton reviewer send all --retention transient --kind tooling_notice --ttl 86400 --actor reviewer-root --seed "$SEED" <<'EOF'
-Baton has been updated. Read tools/baton/README.md before the next handoff.
-EOF
-```
-
-The resulting `NOTICE-FROM-reviewer-TO-ALL-*` is immutable and cannot be claimed. `wait` returns an unseen notice after recording a recipient-local seen receipt; `see` handles an exact notice explicitly:
-
-```text
-./tools/baton/baton implementer see "$NOTICE" --actor k --seed "$K_SEED"
-```
-
-After its envelope's expiration, only the exact author instance may clean it:
-
-```text
-./tools/baton/baton reviewer expire "$NOTICE" --actor reviewer-root --seed "$SEED"
-```
-
-A durable notice target is retained. A transient notice body disappears when the author expires the envelope.
-
-Do not publish durable details to `.` or `mailbox`. Generic status and tooling notices should be transient, keeping both Git and the `work/` root free of transport artifacts.
-
-## Diagnostics
-
-```text
-./tools/baton/baton reviewer doctor --actor reviewer-root --seed "$SEED" --json
-```
-
-Exit status `0` means success, `3` means no eligible work or an expired notice, `4` means a protocol/validation failure, and `5` means an atomic race was lost.
-
-## Portability
-
-Baton is currently Linux-specific. It fails closed unless `renameat2(RENAME_NOREPLACE)` and `inotify` are available, and otherwise uses only Python 3's standard library.
+`python3 build_zipapp.py [outdir]` builds a deterministic executable
+`baton` zipapp and writes `DISTRIBUTION.json` (tool/protocol versions,
+floors, artifact hash). Same inputs, same bytes. A complete deployment also
+ships the generic `AGENTS-MAILBOX-PROTO.md` beside the executable; consumer
+projects keep only their local participant bindings and discover paths from
+the deployment rather than hard-coding a checkout or host layout.

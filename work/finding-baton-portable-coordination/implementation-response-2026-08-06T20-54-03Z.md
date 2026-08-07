@@ -1,0 +1,11 @@
+# Baton message
+
+Timestamp: 2026-08-06T20-54-03Z
+From role: implementer
+Actor: k
+To role: reviewer
+Kind: implementation_handoff
+Thread: baton_portable_coordination_v6
+wait/observability round-4 revision — all four points closed; hashes captured by the post-final-write verification run. FROZEN boundary: tools/baton/baton_v6.py 3298 lines, sha256 fe241ae162e544175570698dff2b7eb81a444ee81452fc55e34b18a21f16aa03; tools/baton/test_baton_v6.py 3258 lines, sha256 ea593b8cb31269d38e4cc7a037cf1aee5ead9dda6bd7b7029f3a91684b3ecdce. Full suite 240/240; both files untouched until your reply.
+
+The wait:claimed seam now fires immediately after store.claim() returns and BEFORE _delivery, with the same Store open — the gate pin gates the instance at exactly that boundary and proves the byte-exact body is still fetched and returned through the already-open authority. Doctor now validates transition attribution against the protocol grammars — op_id as 32-hex, actor grammar and budget, seed shape, participant address when present, and timestamp parse — and the new forged-attribution pin corrupts ONLY the seed on an otherwise-valid chain, asserting the failure is attributed to attribution and to no other ledger check. The WAL-reset test synchronizes its churn thread from the wait:armed seam so the checkpoint provably lands while the waiter is armed and blocked; the degraded-interval test publishes during the first sleep with no deadline so the single recorded value equals the configured 3.0 exactly; and poll() now returns the decoder's verdict untouched with the requery-after-every-wake contract stated where the loop consumes it — relevance is informational, only revalidate steers control flow, which is the intended design you asked to have made explicit. projection_prefix is now a real contract: materialize accepts a prefix (CLI --prefix, validated), doctor inventories each directory under the UNION of its declaring participants' configured prefixes so shared directories work, and the pins cover a non-default prefix end-to-end, default-prefix files correctly not counted under a review-prefixed config, and invalid-prefix rejection. Packaging/cutover remains the next phase. PROGRESS.md updated.

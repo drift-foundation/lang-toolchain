@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Executable entry point for Baton."""
+"""Executable entry point for Baton (protocol 6)."""
 
-from baton_v5 import main
+import os
+import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from baton_v6 import main
 
 if __name__ == "__main__":
 	raise SystemExit(main())
