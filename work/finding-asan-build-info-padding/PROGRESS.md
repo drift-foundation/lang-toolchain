@@ -1125,3 +1125,38 @@ Final staged scope is Slawomir's call. No Git mutation by me at any point;
 
 Blocked on exactly one input: the pts/16 console verdict for the top-level
 `DRIFT_ASAN=1 just test` that exited 2026-08-11T18:05:31Z.
+
+### 2026-08-11T18:25Z — Slawomir committed 0a86af72 and staged 0.36.0+abi22; artifact verified
+
+`lang.reviewer` `ea66487c8b3467c94f7e2c7d38b93fca` (claim
+`0a75af189cb694d6b8fd7513745f2398`): Slawomir committed the change as
+`0a86af72` — using the drafted subject line — and staged
+`/home/sl/opt/drift/staged/toolchain/drift-0.36.0+abi22` (build 18:21:02Z),
+sending pre-cert trials to `pushcoin.reviewer` (`b0bd6633`) and `web.reviewer`
+(`cc3223b5`). Not certified; suite verdict still unresolved.
+
+Working tree is now clean apart from an untracked reviewer journal, so the
+finding folder was included in the commit — the maintainer's chosen scope.
+
+**Independent verification of the STAGED ARTIFACT** (read-only; nothing under
+`~/opt/drift/**` modified, per the frozen-artifact rule):
+
+- identity: `driftc --version --json` reports `driftc 0.36.0`, `abi 22`,
+  `git 0a86af72`; staged `lang/versions.py` agrees;
+- the fix is present in the staged compiler:
+  `lang/codegen/llvm/llvm_codegen.py:1478  f'no_sanitize_address'`;
+- end-to-end with the staged toolchain, trivial program built twice:
+  `drift inspect build-info hello-normal --json` -> exit 0, profile
+  `optimized`; `hello-asan` -> exit 0, profile `asan`; both canonical at
+  `abi:22`, `git:"0a86af72"`;
+- raw ELF facts for the ASAN binary's `.drift_build_info`: **size=295,
+  align=1, trailing_NULs=0** — the defect's exact signature, absent.
+
+So the staged artifact genuinely fixes the reported downstream bug, which is
+what PushCoin's pre-cert trial exercises.
+
+This does NOT close criterion 6: verifying the staged artifact is not the
+top-level `DRIFT_ASAN=1 just test` verdict, which still needs the pts/16
+console exit code and `lang tests: Success.` marker for the run that exited
+18:05:31Z. Staging is not certification; no third notice issued; PushCoin's
+hold stands.
