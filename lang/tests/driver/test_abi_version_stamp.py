@@ -676,6 +676,85 @@ def test_build_info_survives_link(tmp_path: Path) -> None:
 	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
 
 
+def test_build_info_survives_asan_link(tmp_path: Path, monkeypatch) -> None:
+	"""The `.drift_build_info` section must survive an ADDRESS-SANITIZED
+	link byte-for-byte, exactly as it does on the normal lane.
+
+	The section contract is "exactly the canonical UTF-8 JSON document —
+	no magic, no framing, no NUL terminator" (lang/build_info.py). ASAN's
+	global instrumentation rewrites instrumented globals into
+	`{ original, [redzone x i8] }` and carries the original section name
+	onto the padded struct, so the emitted section grows past the
+	document and the fail-closed reader correctly rejects the trailing
+	NULs. That is a PRODUCER defect: the reader must not be weakened to
+	tolerate padding.
+
+	This is the linked-binary companion to test_build_info_survives_link
+	above. It deliberately goes through the repository's real ASAN lane —
+	the `asan` runtime archive variant plus `-fsanitize=address -g`, the
+	same flags driftc uses (see `asan_flags` in lang/driftc/driftc.py) —
+	and reads the result through the production `extract_build_info`
+	path. A synthetic padded-byte string would not reproduce it: the
+	compiler emits an exact-length `align 1` array and the mutation
+	happens afterwards, inside the sanitizer's IR transform.
+
+	The whole ASAN lane is exercised, not just the link: `DRIFT_ASAN=1`
+	is set for the COMPILE step so the stamped `build.profile` is the
+	`asan` value `_resolve_build_profile` produces, which is the field
+	downstream ASAN build-validation gates actually read. Linking an
+	optimized-profile module with `-fsanitize=address` would still pin
+	the byte contract, but would leave `profile` reading `optimized` and
+	the profile assertion below vacuous.
+	"""
+	import json as _json
+	from lang.driftc.driftc_versions import DRIFTC_VERSION
+	from lang.build_info import extract_build_info
+	# Lane signal for the whole test body: the profile is resolved during
+	# codegen (not at link time), and leaving it set also lets the
+	# sanitizer_timeout() call below apply its ASAN multiplier. monkeypatch
+	# restores the prior value at teardown, including an outer DRIFT_ASAN=1
+	# when the suite itself runs under the sanitizer lane.
+	monkeypatch.setenv("DRIFT_ASAN", "1")
+	ir = _compile_simple_program(tmp_path, enforce_entrypoint=True)
+	clang = shutil.which("clang")
+	assert clang, "clang not available"
+	variant = runtime_archive_variant(debug_style=False, asan_enabled=True, alloc_track_enabled=False)
+	archive = build_runtime_archive(ROOT, clang=clang, variant=variant)
+	ir_path = tmp_path / "buildinfo-asan.ll"
+	bin_path = tmp_path / "buildinfo-asan.out"
+	ir_path.write_text(ir)
+	link_libs = (
+		_link_flags_for_lib("dw")
+		+ _link_flags_for_lib("unwind")
+		+ _link_flags_for_lib("unwind-x86_64")
+		+ _link_flags_for_lib("elf")
+		+ _link_flags_for_lib("z")
+	)
+	link_cmd = [
+		clang, "-pthread",
+		"-fsanitize=address", "-g",
+		"-x", "ir", str(ir_path),
+		"-x", "none", str(archive),
+		*link_libs,
+		"-Wl,--as-needed",
+		"-o", str(bin_path),
+	]
+	result = subprocess.run(
+		link_cmd, capture_output=True, text=True, cwd=ROOT,
+		timeout=sanitizer_timeout(120),
+	)
+	assert result.returncode == 0, f"asan link failed: {result.stderr[:500]}"
+	# The production reader is the contract: exactly one named section,
+	# full schema, canonical encoding, no surrounding bytes.
+	doc = _json.loads(extract_build_info(bin_path))
+	assert doc["toolchain"]["driftc"] == DRIFTC_VERSION
+	assert doc["toolchain"]["abi"] == DRIFT_RT_ABI_VERSION
+	# The field downstream ASAN build-validation gates read. This is the
+	# acceptance criterion: an ASAN artifact must be inspectable AND
+	# self-describe as ASAN.
+	assert doc["build"]["profile"] == "asan"
+
+
 def test_abi14_binary_contains_no_dv_runtime_symbols(tmp_path: Path) -> None:
 	"""Slice 7c-1 (0.31.64, ABI 14, 2026-05-06): a production binary
 	produced at ABI 14 must NOT reference any of the deleted DV

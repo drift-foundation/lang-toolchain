@@ -1,5 +1,81 @@
 # Drift development history
 
+## 2026-08-11 (0.36.0: AddressSanitizer no longer pads the `.drift_build_info` section; ABI 22 unchanged)
+
+**LANGUAGE_BUG (compiler-produced artifact violated the toolchain's own
+executable metadata contract).**  An executable built with
+AddressSanitizer could not be read through the supported interface:
+`drift inspect build-info <binary> --json` exited 1 with `build-info
+payload is not valid JSON: Extra data`.  The `.drift_build_info` section
+contract is EXACTLY the canonical UTF-8 JSON document — no magic, no
+framing, no length prefix, no NUL terminator; the section header is the
+framing.  On an ASAN build the section instead held the valid document
+followed by NUL padding, and the fail-closed reader correctly rejected
+it.  Downstream impact: an application team's ASAN build-validation step
+was blocked, with no approved application-side workaround, while normal
+(non-sanitized) artifacts were never affected.
+
+**Root cause: ASAN's global instrumentation, at COMPILE time — not the
+linker.**  AddressSanitizer rewrites an instrumented global into
+`{ original, [redzone x i8] }` and carries the original custom section
+name onto the padded struct, so the emitted section grows past the
+document.  The compiler emitted the contract shape correctly
+(`@__drift_build_info = internal constant [N x i8] [...], section
+".drift_build_info", align 1`); running that IR through
+`-fsanitize=address` produced `{ [267 x i8], [85 x i8] }` and an
+`@__asan_global___drift_build_info` descriptor recording `size=267,
+size_with_redzone=352`.  The instrumented object file already measured
+352 bytes / align 32 / 85 trailing NULs before any linking, while the
+non-sanitized object measured 267 / align 1 / 0.  The redzone bought
+nothing: this section is pure metadata that nothing loads at runtime, so
+instrumenting it added no memory-safety coverage and only broke the byte
+contract.
+
+**Fix (producer-only; the reader is untouched).**
+`LlvmModuleBuilder.emit_build_info` now emits the `no_sanitize_address`
+LLVM global attribute on the stamp global, exempting that ONE global from
+AddressSanitizer's global instrumentation.  The section name, exact array
+length, `align 1`, and `@llvm.used` retention are unchanged.  No NUL
+trimming, tolerance path, compatibility reader, or second contract was
+added to `lang/build_info.py`, and no stdlib or application change was
+made.  The exemption is narrow and verified as such: the build-info ASAN
+descriptor disappears while thousands of other globals remain
+instrumented and the ASAN module constructor is still emitted — the
+sanitizer is not disabled.  Section facts after the fix are 267 bytes /
+align 1 / 0 trailing NULs on every profile; ASAN and ASAN+UBSAN were the
+affected pair, and standalone UBSAN was never affected.
+
+**Tests.**  `lang/tests/driver/test_abi_version_stamp.py::test_build_info_survives_asan_link`
+— the linked-binary companion to the existing normal-link regression.  It
+goes through the repository's real ASAN lane (the `asan` runtime archive
+variant plus the driver's own `-fsanitize=address -g`) and reads the
+final executable through the production `extract_build_info` path.  A
+synthetic padded-payload test would not reproduce the defect, which is
+introduced after the exact IR constant is emitted.  The regression was
+observed RED before the producer change and GREEN after.  Focused
+verification ran both build-info test files whole — 63 passed — keeping
+the schema, canonicalization, malformed-payload, duplicate-section and
+trailing-content negatives green, which is the direct evidence that the
+reader was not weakened.  End to end, `drift inspect build-info` now
+succeeds on both a normal and an ASAN binary, reporting the `optimized`
+and `asan` profiles respectively.
+
+**Version and ABI.**  `DRIFTC_VERSION` moves 0.35.0 → 0.36.0: the fix is
+user-visible (ASAN artifacts become inspectable through the supported
+interface), and before 1.0 user-visible impact bumps MINOR and resets
+PATCH.  `DRIFT_RT_ABI_VERSION` stays 22 — the change adds one attribute
+to one internal metadata global and alters no exported runtime helper
+signature, no cross-boundary data layout, no calling convention, and no
+ownership/drop contract.  No downstream source migration or workaround is
+required; downstream artifacts are not forced to rebuild by this release.
+
+**Verification scope.**  Confirmed on the build host's deployed compiler,
+Ubuntu clang 20.1.8, the only clang installed there; no broader
+compiler-version matrix is claimed.  The `no_sanitize_address` textual
+global attribute requires LLVM 15 or newer.  Focused verification is
+green as described above; the full repository suite is run by the
+maintainer and had not yet run when this entry was written.
+
 ## 2026-08-04 (0.35.0: hidden-lambda block value tails reach the return authority; exact causal Unknown provenance; total pending-lambda finalization; ABI 22 unchanged)
 
 **LANGUAGE_BUG (three shapes; coupled hidden-return authority leaks).**

@@ -13,7 +13,7 @@
 # ownership/drop contract changes.
 # Do not bump for pure internal refactors with no boundary change.
 
-DRIFTC_VERSION: str = "0.35.0"
+DRIFTC_VERSION: str = "0.36.0"
 DRIFT_RT_ABI_VERSION: int = 22
 
 # Build-time source commit stamp.  Empty in the source tree; populated by

@@ -1460,9 +1460,22 @@ class LlvmModuleBuilder:
 		raw = encode_build_info(payload)
 		n = len(raw)
 		byte_csv = ", ".join(f"i8 {b}" for b in raw)
+		# `no_sanitize_address` is part of the section contract, not an
+		# optimization: AddressSanitizer's global instrumentation rewrites
+		# an instrumented global into `{ original, [redzone x i8] }` and
+		# carries the custom section name onto the padded struct, so the
+		# emitted `.drift_build_info` section grows past the canonical
+		# document (267 -> 352 bytes, align 1 -> 32, trailing NULs) and the
+		# fail-closed reader correctly rejects it.  This stamp is pure
+		# metadata — nothing loads it at runtime — so a redzone around it
+		# buys no memory-safety coverage and only breaks the exact-byte
+		# contract.  Excluding this one global does NOT disable the
+		# sanitizer for the module, and @llvm.used retention is unaffected.
+		# Regression: test_build_info_survives_asan_link.
 		self.consts.append(
 			f'@{BUILD_INFO_SYMBOL} = internal constant [{n} x i8] '
-			f'[{byte_csv}], section "{BUILD_INFO_SECTION}", align 1'
+			f'[{byte_csv}], section "{BUILD_INFO_SECTION}", align 1, '
+			f'no_sanitize_address'
 		)
 		self._llvm_used.append(f'ptr @{BUILD_INFO_SYMBOL}')
 
